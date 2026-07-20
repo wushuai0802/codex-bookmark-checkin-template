@@ -1,6 +1,6 @@
 {
-  "mobileFolderNames": ["移动设备书签", "Mobile bookmarks", "Mobile Bookmarks"],
-  "targetFolderNames": ["签到", "公益站", "Check-in", "Daily check-in"],
+  "mobileFolderNames": [],
+  "targetFolderNames": [],
   "relatedCandidateUrls": {},
   "logicalCheckinGroups": {},
   "knownNoCheckinFeatureOrigins": [],

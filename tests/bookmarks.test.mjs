@@ -3,7 +3,28 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readBookmarkPlan } from "../src/bookmarks.mjs";
+import { listBookmarkFolderCandidates, readBookmarkPlan } from "../src/bookmarks.mjs";
+
+test("不预设名称时列出候选书签目录供用户选择", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-candidates-"));
+  const file = path.join(directory, "Bookmarks");
+  await fs.writeFile(file, JSON.stringify({
+    roots: {
+      custom: {
+        id: "1", type: "folder", name: "我的自动任务", children: [{
+          id: "2", type: "folder", name: "每日领取", children: [
+            { id: "3", type: "url", name: "示例", url: "https://example.test/daily" },
+          ],
+        }],
+      },
+    },
+  }));
+  const candidates = await listBookmarkFolderCandidates(file);
+  const container = candidates.find((value) => value.name === "我的自动任务");
+  assert.ok(container);
+  assert.equal(container.descendantUrlCount, 1);
+  assert.deepEqual(container.childFolders, [{ name: "每日领取", urlCount: 1 }]);
+});
 
 test("合并两个移动设备书签并按来源与站点去重", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-bookmarks-"));

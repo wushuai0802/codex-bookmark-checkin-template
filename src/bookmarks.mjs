@@ -29,6 +29,33 @@ function collectUrls(node, result = []) {
   return result;
 }
 
+export async function listBookmarkFolderCandidates(bookmarksPath) {
+  const raw = JSON.parse(await fs.readFile(bookmarksPath, "utf8"));
+  const candidates = [];
+  for (const root of Object.values(raw.roots ?? {})) {
+    walkFolders(root, [], (folder, folderPath) => {
+      const childFolders = (folder.children ?? [])
+        .filter(isFolder)
+        .map((child) => ({
+          name: nodeName(child),
+          urlCount: collectUrls(child, []).length,
+        }))
+        .filter((child) => child.name);
+      const descendantUrlCount = collectUrls(folder, []).length;
+      if (descendantUrlCount === 0 && childFolders.length === 0) return;
+      candidates.push({
+        name: nodeName(folder),
+        path: folderPath.join(" / "),
+        descendantUrlCount,
+        childFolders,
+      });
+    });
+  }
+  return candidates
+    .sort((left, right) => right.descendantUrlCount - left.descendantUrlCount || left.path.localeCompare(right.path))
+    .slice(0, 100);
+}
+
 export function normalizeHttpUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);

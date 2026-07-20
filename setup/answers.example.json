@@ -1,7 +1,7 @@
 {
   "chromeProfile": "Auto",
-  "mobileFolderNames": ["移动设备书签", "Mobile bookmarks"],
-  "targetFolderNames": ["签到", "公益站"],
+  "mobileFolderNames": [],
+  "targetFolderNames": [],
   "schedule": "08:05",
   "useBuiltInSiteRules": true,
   "syncChromeSavedLogins": true,

@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    [string[]]$ContainerFolderNames = @(),
+    [string[]]$TargetFolderNames = @()
+)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -7,6 +10,9 @@ $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
 $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
 $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
 $pythonCommand = Get-Command python,python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch 'WindowsApps\\python(?:3)?\.exe$' } | Select-Object -First 1
+$quoteCharacters = [char[]]@([char]39, [char]34)
+$resolvedContainerNames = @($ContainerFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })
+$resolvedTargetNames = @($TargetFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })
 
 if (-not $nodeCommand) {
     [ordered]@{
@@ -25,7 +31,18 @@ if (-not $nodeCommand) {
     return
 }
 
-$raw = & $nodeCommand.Source (Join-Path $root 'src\preflight.mjs')
+$nodeArguments = @((Join-Path $root 'src\preflight.mjs'))
+if ($resolvedContainerNames.Count -gt 0 -or $resolvedTargetNames.Count -gt 0) {
+    if ($resolvedContainerNames.Count -eq 0 -or $resolvedTargetNames.Count -eq 0) {
+        throw 'ContainerFolderNames 和 TargetFolderNames 必须同时提供。'
+    }
+    $scope = [ordered]@{
+        mobileFolderNames = @($resolvedContainerNames)
+        targetFolderNames = @($resolvedTargetNames)
+    } | ConvertTo-Json -Compress
+    $nodeArguments += @('--scope-json', $scope)
+}
+$raw = & $nodeCommand.Source @nodeArguments
 if ($LASTEXITCODE -ne 0) { throw '环境预检程序运行失败。' }
 $report = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
 $report.checks | Add-Member -NotePropertyName powershellSupported -NotePropertyValue ($PSVersionTable.PSVersion.Major -ge 5) -Force

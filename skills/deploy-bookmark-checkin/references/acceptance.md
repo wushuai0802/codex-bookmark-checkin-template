@@ -3,7 +3,7 @@
 Deployment is complete only when all applicable checks pass:
 
 - Preflight has no unaccepted blocking item.
-- The chosen Chrome profile and every matching mobile bookmark source are listed.
+- The user explicitly chose the Chrome profile, parent/container folders, and target child folders; every matching source is listed.
 - Dry run discovers and deduplicates expected targets.
 - The isolated profile is initialized without copying plaintext secrets.
 - Every enabled site is `signed` or `already_signed`; `not_available` requires a current authoritative signal.

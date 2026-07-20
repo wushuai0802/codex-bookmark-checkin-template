@@ -54,6 +54,11 @@ const defaults = await readJson(path.join(root, "config", "defaults.json"));
 const answers = await readJson(answersPath);
 if (!answers) throw new Error(`未找到问卷答案：${answersPath}`);
 if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(answers.schedule ?? defaults.schedule))) throw new Error("schedule 必须为 HH:mm");
+for (const [field, value] of [["mobileFolderNames", answers.mobileFolderNames], ["targetFolderNames", answers.targetFolderNames]]) {
+  if (!Array.isArray(value) || value.length === 0 || value.some((name) => !String(name).trim())) {
+    throw new Error(`${field} 必须由用户提前确认，并至少包含一个非空文件夹名称`);
+  }
+}
 
 const publicRules = answers.useBuiltInSiteRules === false
   ? {}

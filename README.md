@@ -1,6 +1,6 @@
 # Codex Bookmark Check-in
 
-一个可由 Codex 部署的 Windows + Chrome 每日书签签到模板。它会在每次运行时重新读取 Chrome 书签，合并所有“移动设备书签”下的“签到”和“公益站”目录，自动执行签到、登录恢复、验证码/问答处理、异常重试和结果汇总。
+一个可由 Codex 部署的 Windows + Chrome 每日书签签到模板。它会先询问用户签到书签所在的上级文件夹和目标子文件夹，再在每次运行时重新读取这些目录，自动执行签到、登录恢复、验证码/问答处理、异常重试和结果汇总。项目不预设任何用户的文件夹名称。
 
 公开仓库只保存通用引擎和站点适配器。账号、密码、Cookie、PIN、本机路径、签到结果、截图和通知密钥都只留在本机并被 Git 忽略。
 
@@ -9,14 +9,22 @@
 1. 在 Windows 10/11 上安装 Chrome 和 Codex。
 2. 克隆本仓库并用 Codex 打开仓库目录。
 3. 对 Codex 说：`按照 AGENTS.md，使用仓库内 deploy-bookmark-checkin 技能为我部署每日书签自动签到。`
-4. Codex 会先运行只读环境预检。存在缺项时，它会解释影响和可选补全方式，得到你的选择后才继续。
-5. 回答分组问卷。不要在对话或配置文件中提供明文密码、Cookie、Token 或 PIN；优先使用 Chrome 已保存登录信息或操作系统的安全存储。
+4. Codex 会先运行不假设文件夹名称的只读环境预检，并列出候选 Chrome 书签目录。存在环境缺项时，它会解释影响和可选补全方式。
+5. 在读取签到目标前，Codex 会优先询问使用哪个 Chrome 配置、哪个上级书签文件夹、哪些目标子文件夹；确认后才验证范围并继续其他问卷。不要在对话或配置文件中提供明文密码、Cookie、Token 或 PIN。
 6. Codex 完成可见登录测试、逐站验收、异常恢复测试和隐藏调度安装后，才会宣布部署完成。
 
 也可以先手动运行只读预检：
 
 ```powershell
 pwsh -NoProfile -File .\scripts\Test-Environment.ps1
+```
+
+确认文件夹名称后，可再次验证所选范围：
+
+```powershell
+pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
+  -ContainerFolderNames '你的上级文件夹' `
+  -TargetFolderNames '目录一','目录二'
 ```
 
 ## 运行模型
