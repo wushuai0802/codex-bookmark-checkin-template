@@ -1,4 +1,9 @@
 {
+  "configuredTargets": [
+    { "title": "Example", "url": "https://example.com/account/check-in", "folderName": "已确认的目标文件夹名" }
+  ],
+  "disabledCheckinOrigins": [],
+  "loginAsCheckinOrigins": [],
   "relatedCandidateUrls": {
     "https://example.com": ["https://example.com/account/check-in"]
   },

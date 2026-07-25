@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyPageText, formatDailyReason, scoreActionText, solveArithmeticQuestion } from "../src/detector.mjs";
+import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, scoreActionText, solveArithmeticQuestion } from "../src/detector.mjs";
 
 test("识别已签到状态", () => {
   assert.equal(classifyPageText({ bodyText: "您今日已签到，请明天再来" }).status, "already_signed");
@@ -82,4 +82,15 @@ test("只计算简单安全整数算式", () => {
   assert.equal(solveArithmeticQuestion("请回答 12 × 3"), "36");
   assert.equal(solveArithmeticQuestion("10 / 4"), null);
   assert.equal(solveArithmeticQuestion("没有算式"), null);
+});
+
+test("普通首页投票不会被当成签到问答", () => {
+  assert.equal(isCheckinSingleChoiceChallenge({
+    contextText: "你更喜欢哪种视频规格？ 选项 A 选项 B 投票",
+    submitTexts: ["投票"],
+  }), false);
+  assert.equal(isCheckinSingleChoiceChallenge({
+    contextText: "签到答题 [单选] 请选择正确答案",
+    submitTexts: ["提交"],
+  }), true);
 });

@@ -33,6 +33,38 @@ function Compress-Text([object]$Value, [int]$MaximumLength = 120) {
     return $text
 }
 
+function Get-LogicalSiteKey($Result) {
+    $origin = [string]$Result.origin
+    if ($null -ne $config.logicalCheckinGroups) {
+        $property = $config.logicalCheckinGroups.PSObject.Properties[$origin]
+        if ($null -ne $property -and [string]$property.Value) { return [string]$property.Value }
+    }
+    return $origin
+}
+
+function Get-LogicalStatusPriority($Result) {
+    $status = [string]$Result.status
+    if ($status -eq 'signed') { return 100 }
+    if ($status -eq 'already_signed') { return 95 }
+    if ($status -in @('interactive_challenge', 'login_required', 'needs_attention', 'managed_challenge_timeout')) { return 90 }
+    if ($status -in @('error', 'failed', 'no_action', 'visited', 'clicked')) { return 80 }
+    if ($status -eq 'deferred') { return 70 }
+    if ($status -eq 'not_available' -and $Result.disabledByConfig -eq $true) { return 61 }
+    if ($status -eq 'not_available') { return 60 }
+    return 50
+}
+
+function Merge-LogicalResults([object[]]$Items) {
+    $selected = [ordered]@{}
+    foreach ($item in @($Items)) {
+        $key = Get-LogicalSiteKey $item
+        if (-not $selected.Contains($key) -or (Get-LogicalStatusPriority $item) -gt (Get-LogicalStatusPriority $selected[$key])) {
+            $selected[$key] = $item
+        }
+    }
+    return @($selected.Values)
+}
+
 if ($ReportPath) {
     $resolvedReport = (Resolve-Path -LiteralPath $ReportPath).Path
     $logsRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'logs'))
@@ -42,7 +74,8 @@ if ($ReportPath) {
     $results = @($report.results)
 }
 
-$statuses = @($results | ForEach-Object { [string]$_.status })
+$reportingResults = @(Merge-LogicalResults $results)
+$statuses = @($reportingResults | ForEach-Object { [string]$_.status })
 $reportRunState = if ($null -ne $report) { [string]$report.runState } else { '' }
 $plannedTotal = if ($null -ne $report -and $null -ne $report.plannedTotal) { [int]$report.plannedTotal } else { $results.Count }
 $processedTotal = if ($null -ne $report -and $null -ne $report.processedTotal) { [int]$report.processedTotal } else { $results.Count }
@@ -53,31 +86,40 @@ $isCompleteFinalReport = $null -ne $report `
     -and $processedTotal -ge $plannedTotal `
     -and $results.Count -ge $plannedTotal
 $isPartialReport = $null -ne $report -and -not $isCompleteFinalReport
+$logicalPlannedTotal = if ($null -ne $report -and $null -ne $report.bookmarkSummary -and $null -ne $report.bookmarkSummary.targets) {
+    @($report.bookmarkSummary.targets | ForEach-Object { Get-LogicalSiteKey $_ } | Select-Object -Unique).Count
+}
+elseif ($isCompleteFinalReport) { $reportingResults.Count }
+else { $plannedTotal }
+$logicalProcessedTotal = $reportingResults.Count
 $done = @($statuses | Where-Object { $_ -in @('signed', 'already_signed') }).Count
-$notAvailable = @($statuses | Where-Object { $_ -eq 'not_available' }).Count
-$problems = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
+$disabled = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -eq $true }).Count
+$notAvailable = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -ne $true }).Count
+$problems = @($reportingResults | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
 $attentionCount = @($problems | Where-Object { $_.status -in @('interactive_challenge', 'login_required', 'needs_attention') }).Count
 $timeoutCount = @($problems | Where-Object { $_.status -eq 'managed_challenge_timeout' }).Count
 $hardFailureCount = @($problems | Where-Object { $_.status -in @('error', 'failed') }).Count
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
-elseif ($results.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'signed') { $status = 'success' }
-elseif ($results.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'already_signed') { $status = 'already_done' }
-elseif ($results.Count -gt 0 -and $problems.Count -eq 0) { $status = 'skipped' }
-elseif ($results.Count -gt 0 -and $attentionCount -gt 0) { $status = 'needs_attention' }
-elseif ($results.Count -gt 0 -and ($done -gt 0 -or $notAvailable -gt 0)) { $status = 'unconfirmed' }
-elseif ($results.Count -gt 0 -and $timeoutCount -eq $results.Count) { $status = 'timeout' }
-elseif ($results.Count -gt 0 -and $hardFailureCount -eq $results.Count) { $status = 'failed' }
-elseif ($results.Count -gt 0 -and $statuses -contains 'deferred') { $status = 'skipped' }
-elseif ($results.Count -gt 0) { $status = 'unconfirmed' }
+elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'signed') { $status = 'success' }
+elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'already_signed') { $status = 'already_done' }
+elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0) { $status = 'skipped' }
+elseif ($reportingResults.Count -gt 0 -and $attentionCount -gt 0) { $status = 'needs_attention' }
+elseif ($reportingResults.Count -gt 0 -and ($done -gt 0 -or $notAvailable -gt 0 -or $disabled -gt 0)) { $status = 'unconfirmed' }
+elseif ($reportingResults.Count -gt 0 -and $timeoutCount -eq $reportingResults.Count) { $status = 'timeout' }
+elseif ($reportingResults.Count -gt 0 -and $hardFailureCount -eq $reportingResults.Count) { $status = 'failed' }
+elseif ($reportingResults.Count -gt 0 -and $statuses -contains 'deferred') { $status = 'skipped' }
+elseif ($reportingResults.Count -gt 0) { $status = 'unconfirmed' }
 elseif ($RunnerStatus -eq 'failed') { $status = 'failed' }
 elseif ($RunnerStatus -eq 'skipped') { $status = 'skipped' }
 else { $status = 'unconfirmed' }
 
-$summary = if ($results.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
-    $heading = if ($isCompleteFinalReport) { "共 $plannedTotal 站：" } else { "已处理 $processedTotal/$plannedTotal 站（任务未完成）：" }
-    "$heading`n$done 个签到正常`n$notAvailable 个未开放签到"
+$summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
+    $heading = if ($isCompleteFinalReport) { "共 $logicalPlannedTotal 站：" } else { "已处理 $logicalProcessedTotal/$logicalPlannedTotal 站（任务未完成）：" }
+    $summaryValue = "$heading`n$done 个签到正常`n$notAvailable 个未开放签到"
+    if ($disabled -gt 0) { $summaryValue += "`n$disabled 个已取消签到" }
+    $summaryValue
 }
 else { Compress-Text $RunnerMessage 160 }
 if ($problems.Count -gt 0) {
@@ -116,8 +158,8 @@ $taskId = if ($notification.taskId) { [string]$notification.taskId } else { 'boo
 $name = if ($notification.name) { [string]$notification.name } else { '浏览器书签签到' }
 $source = if ($notification.source) { [string]$notification.source } else { 'browser-codex' }
 
-$stateParts = @($results | Sort-Object origin | ForEach-Object {
-    "$([string]$_.origin)=$([string]$_.status):$([string]$_.retryCause)"
+$stateParts = @($reportingResults | Sort-Object { Get-LogicalSiteKey $_ } | ForEach-Object {
+    "$(Get-LogicalSiteKey $_)=$([string]$_.status):$([string]$_.retryCause)"
 })
 $stateMaterial = if ($stateParts.Count -gt 0) { "$status|$reportRunState|$($stateParts -join '|')" } else { "$status|$RunnerStatus" }
 $stateBytes = [System.Text.Encoding]::UTF8.GetBytes($stateMaterial)
@@ -127,11 +169,11 @@ $eventKey = "external:$source`:$taskId`:$((Get-Date).ToString('yyyy-MM-dd')):$st
 $payload = [ordered]@{
     status = $status
     summary = $summary
-    siteCount = $results.Count
+    siteCount = $reportingResults.Count
     problemCount = $problems.Count
     runState = $reportRunState
-    plannedTotal = $plannedTotal
-    processedTotal = $processedTotal
+    plannedTotal = $logicalPlannedTotal
+    processedTotal = $logicalProcessedTotal
     isComplete = [bool]$isCompleteFinalReport
     eventKey = $eventKey
     mode = $mode

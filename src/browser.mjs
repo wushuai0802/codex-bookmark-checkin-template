@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { classifyPageText, formatDailyReason, normalizeText, scoreActionText } from "./detector.mjs";
+import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText } from "./detector.mjs";
 import { assertBookmarkNavigation, safeErrorMessage, safeLogUrl } from "./security.mjs";
 import { recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
 import { solveU2VisualChallenge } from "./u2-vision.mjs";
@@ -51,6 +51,24 @@ export function shouldPersistSiteStorage(result) {
   return STORAGE_CONFIRMED.has(result?.status);
 }
 
+export function configuredTargetSkip(target, config = {}) {
+  if (!(config.disabledCheckinOrigins ?? []).includes(target?.origin)) return null;
+  return {
+    status: "not_available",
+    reason: "已按配置取消该站签到任务",
+    url: target.origin,
+    disabledByConfig: true,
+  };
+}
+
+export function configuredLoginCompletion(activeOrigin, config = {}) {
+  if (!(config.loginAsCheckinOrigins ?? []).includes(activeOrigin)) return null;
+  return {
+    status: "signed",
+    reason: "站点登录成功，按配置视为签到完成",
+  };
+}
+
 export function candidateHistoryEntry(candidateUrl, result, attempt) {
   return {
     attempt,
@@ -78,7 +96,7 @@ async function snapshotState(page) {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-    });
+    }) || document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]') !== null;
     return { bodyText, passwordInputs, challengeSelectors };
   }, CHALLENGE_SELECTOR);
   return classifyPageText({
@@ -121,6 +139,115 @@ async function acceptConfiguredTerms(page, state, activeOrigin, config) {
   return acceptedState.status === "login_required"
     ? { ...acceptedState, reason: "已同意新版服务条款，继续执行自动登录" }
     : acceptedState;
+}
+
+export async function tryBmapiCheckinStatus(page, activeOrigin, successStatus = "already_signed") {
+  if (activeOrigin !== "https://bmapi.020212.xyz") return null;
+  const response = await page.evaluate(async () => {
+    try {
+      const value = await fetch("/api/v1/checkin/status?timezone=Asia%2FShanghai", {
+        credentials: "include",
+        headers: { accept: "application/json" },
+      });
+      return { ok: value.ok, status: value.status, body: await value.json() };
+    } catch {
+      return null;
+    }
+  }).catch(() => null);
+  if (!response?.ok || response.body?.code !== 0 || !response.body?.data) return null;
+  const data = response.body.data;
+  if (data.enabled === false) {
+    return { status: "not_available", reason: "斑马 API 签到接口确认未启用" };
+  }
+  if (data.checked_in === true) {
+    return {
+      status: successStatus,
+      reason: successStatus === "signed"
+        ? "斑马 API 接口确认签到成功"
+        : "斑马 API 接口确认今天已经签到",
+    };
+  }
+  return { status: "ready", reason: "斑马 API 接口确认今日尚未签到" };
+}
+
+async function classifyManualAttention(page, state, activeOrigin, config) {
+  if (state.status === "interactive_challenge"
+    && (config.autoClickTurnstileOrigins ?? []).includes(activeOrigin)) {
+    const response = page.locator('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+    let lastClickAt = Date.now() - 4000;
+    const deadline = Date.now() + Math.min(30000, Number(config.cloudflareWaitMs) || 30000);
+    while (Date.now() < deadline) {
+      const token = await response.first().inputValue({ timeout: 1000 }).catch(() => "");
+      if (token.length <= 20 && Date.now() - lastClickAt >= 4000) {
+        let clickAttempted = false;
+        for (const frame of page.frames()) {
+          const checkbox = frame.locator('#checkbox, input[type="checkbox"], [role="checkbox"]').first();
+          if (await checkbox.count().catch(() => 0) === 1 && await checkbox.isVisible().catch(() => false)) {
+            clickAttempted = await checkbox.click({ timeout: 5000 }).then(() => true).catch(() => false);
+            if (clickAttempted) break;
+          }
+        }
+        if (!clickAttempted) {
+          const widgetSurface = page.locator(
+            '.turnstile-container iframe, iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile" i], .turnstile-container',
+          ).first();
+          const box = await widgetSurface.boundingBox().catch(() => null);
+          if (box && box.width >= 250 && box.height >= 50) {
+            clickAttempted = await page.mouse.click(box.x + 25, box.y + box.height / 2)
+              .then(() => true).catch(() => false);
+          }
+        }
+        lastClickAt = clickAttempted ? Date.now() : Date.now() - 3000;
+      }
+      const apiStatus = await tryBmapiCheckinStatus(page, activeOrigin, "signed");
+      if (apiStatus && apiStatus.status !== "ready") return apiStatus;
+      const refreshed = await snapshotState(page);
+      if (["signed", "already_signed", "login_required", "deferred", "not_available"].includes(refreshed.status)) {
+        return refreshed;
+      }
+      await sleep(1000);
+    }
+    return { status: "needs_attention", reason: "Turnstile 自动验证未在 30 秒内完成" };
+  }
+  if (state.status === "interactive_challenge"
+    && ((config.manualChallengeOrigins ?? []).includes(activeOrigin)
+      || (config.autoClickHcaptchaOrigins ?? []).includes(activeOrigin))) {
+    if ((config.autoClickHcaptchaOrigins ?? []).includes(activeOrigin)) {
+      const response = page.locator('textarea[name="h-captcha-response"]');
+      const checkbox = page.frameLocator('iframe[src*="hcaptcha" i]').locator("#checkbox");
+      if (await checkbox.count().catch(() => 0) === 1 && await checkbox.isVisible().catch(() => false)) {
+        await checkbox.click({ timeout: 10000 }).catch(() => {});
+      }
+      const deadline = Date.now() + Math.min(20000, Number(config.cloudflareWaitMs) || 20000);
+      while (Date.now() < deadline) {
+        const token = await response.inputValue({ timeout: 1000 }).catch(() => "");
+        if (token.length > 20) return { status: "ready", reason: "hCaptcha 简单确认已自动通过" };
+        await sleep(1000);
+      }
+    }
+    return { status: "needs_attention", reason: "复杂视觉 hCaptcha 需要当次确认" };
+  }
+  return acceptConfiguredTerms(page, state, activeOrigin, config);
+}
+
+export async function dismissBlockingModal(page, config) {
+  const dismissed = [];
+  const labels = ["标记已读", "今天关闭", "今日关闭", "不再提示", "我知道了", "知道了", "关闭"];
+  for (let pass = 0; pass < 5; pass += 1) {
+    let clicked = null;
+    for (const label of labels) {
+      const button = page.getByRole("button", { name: label, exact: true });
+      if (await button.count() > 0 && await button.first().isVisible().catch(() => false)) {
+        await button.first().click({ timeout: 10000 });
+        await sleep(Math.max(500, Number(config.actionWaitMs) || 0));
+        clicked = label;
+        dismissed.push(label);
+        break;
+      }
+    }
+    if (!clicked) break;
+  }
+  return dismissed;
 }
 
 async function passLeichiConfirmation(page, config) {
@@ -286,6 +413,28 @@ async function findCheckinDiscoveryUrls(page, expectedOrigin) {
     .map((link) => link.href);
 }
 
+async function navigateDiscoveryUrl(page, candidateUrl, allowedOrigins, config) {
+  const destination = assertBookmarkNavigation(candidateUrl, allowedOrigins);
+  const links = page.locator("a[href]");
+  const matches = await links.evaluateAll((elements, expected) => elements
+    .map((element, index) => ({ index, href: element.href }))
+    .filter((item) => item.href === expected), destination);
+  if (matches.length === 1) {
+    await links.nth(matches[0].index).click({ timeout: 10000 });
+    await sleep(Math.max(500, Number(config.actionWaitMs) || 0));
+    return;
+  }
+  try {
+    await page.goto(destination, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+  } catch (error) {
+    const current = assertBookmarkNavigation(page.url(), allowedOrigins);
+    if (!/ERR_ABORTED/i.test(String(error?.message ?? error)) || new URL(current).origin !== new URL(destination).origin) {
+      throw error;
+    }
+    await sleep(Math.max(500, Number(config.actionWaitMs) || 0));
+  }
+}
+
 async function findMatchingQaRule(page, rules, origin) {
   const bodyText = normalizeText(await page.locator("body").innerText({ timeout: 5000 })).slice(0, 30000);
   return rules.find((rule) => {
@@ -334,27 +483,50 @@ async function applyQaRule(page, rule) {
 async function readSingleChoiceChallenge(page) {
   const radios = page.locator('input[type="radio"]');
   if (await radios.count() < 2) return null;
-  return radios.evaluateAll((elements) => {
+  const groups = await radios.evaluateAll((elements) => {
     const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
-    const options = elements.map((element, index) => {
-      let text = "";
-      let sibling = element.nextSibling;
-      while (sibling && sibling.nodeName !== "BR" && !(sibling instanceof HTMLInputElement)) {
-        text += ` ${sibling.textContent || ""}`;
-        sibling = sibling.nextSibling;
-      }
-      return { index, text: normalize(text) };
-    }).filter((option) => option.text);
-    if (options.length < 2) return null;
-    const container = elements[0].closest("form") || elements[0].closest("table") || elements[0].parentElement;
-    let question = normalize(container?.innerText || "");
-    const firstOptionIndex = question.indexOf(options[0].text);
-    if (firstOptionIndex > 0) question = question.slice(0, firstOptionIndex);
-    const markers = [question.lastIndexOf("请问"), question.lastIndexOf("請問"), question.lastIndexOf("[单选]"), question.lastIndexOf("[單選]")];
-    const marker = Math.max(...markers);
-    if (marker >= 0) question = question.slice(marker);
-    return { question: normalize(question).slice(-320), options: options.map((option) => option.text) };
+    const grouped = new Map();
+    for (const [index, element] of elements.entries()) {
+      const container = element.closest("form") || element.closest("table") || element.parentElement;
+      if (!container) continue;
+      if (!grouped.has(container)) grouped.set(container, []);
+      grouped.get(container).push({ element, index });
+    }
+    return [...grouped.entries()].map(([container, entries]) => {
+      const options = entries.map(({ element, index }) => {
+        let text = "";
+        const label = element.closest("label")
+          || (element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`) : null);
+        if (label) text = label.innerText || label.textContent || "";
+        if (!normalize(text)) {
+          let sibling = element.nextSibling;
+          while (sibling && sibling.nodeName !== "BR" && !(sibling instanceof HTMLInputElement)) {
+            text += ` ${sibling.textContent || ""}`;
+            sibling = sibling.nextSibling;
+          }
+        }
+        return { index, text: normalize(text) };
+      }).filter((option) => option.text);
+      if (options.length < 2) return null;
+      const contextText = normalize(container.innerText || container.textContent || "");
+      const submitTexts = [...container.querySelectorAll('input[type="submit"], button[type="submit"], button')]
+        .map((element) => normalize(element.value || element.innerText || element.textContent || ""))
+        .filter(Boolean);
+      let question = contextText;
+      const firstOptionIndex = question.indexOf(options[0].text);
+      if (firstOptionIndex > 0) question = question.slice(0, firstOptionIndex);
+      const markers = [question.lastIndexOf("请问"), question.lastIndexOf("請問"), question.lastIndexOf("[单选]"), question.lastIndexOf("[單選]")];
+      const marker = Math.max(...markers);
+      if (marker >= 0) question = question.slice(marker);
+      return {
+        question: normalize(question).slice(-320),
+        options: options.map((option) => option.text),
+        contextText: contextText.slice(0, 2000),
+        submitTexts,
+      };
+    }).filter(Boolean);
   });
+  return groups.find(isCheckinSingleChoiceChallenge) ?? null;
 }
 
 async function clickQaChange(page, config) {
@@ -661,6 +833,11 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
   const u2Result = await tryU2Captcha(page, activeOrigin, config);
   if (u2Result) return { ...u2Result, url: safeLogUrl(page.url()) };
 
+  const initialBmapiStatus = await tryBmapiCheckinStatus(page, activeOrigin);
+  if (initialBmapiStatus && initialBmapiStatus.status !== "ready") {
+    return { ...initialBmapiStatus, url: safeLogUrl(page.url()) };
+  }
+
   // New API exposes an authoritative current-day status endpoint.  Query it
   // before interpreting generic page copy such as “每日签到可获得奖励”, which is
   // a feature description rather than proof that today's check-in succeeded.
@@ -676,8 +853,12 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     }
   }
   let state = await waitForManagedChallenge(page, config);
-  state = await acceptConfiguredTerms(page, state, activeOrigin, config);
+  state = await classifyManualAttention(page, state, activeOrigin, config);
   if (state.status !== "ready") return { ...state, url: safeLogUrl(page.url()) };
+  await dismissBlockingModal(page, config);
+
+  const directLoginCompletion = configuredLoginCompletion(activeOrigin, config);
+  if (directLoginCompletion) return { ...directLoginCompletion, url: safeLogUrl(page.url()) };
 
   const hddolbyResult = await tryHddolbyPostRedirectVerification(page, activeOrigin, config);
   if (hddolbyResult) return { ...hddolbyResult, url: safeLogUrl(page.url()) };
@@ -714,13 +895,14 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     const discoveryUrls = await findCheckinDiscoveryUrls(page, activeOrigin);
     for (const discoveryUrl of discoveryUrls) {
       if (discoveryUrl === page.url()) continue;
-      await page.goto(assertBookmarkNavigation(discoveryUrl, allowedOrigins), { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+      await navigateDiscoveryUrl(page, discoveryUrl, allowedOrigins, config);
       await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
       activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
       activeOrigin = new URL(activeUrl).origin;
       state = await waitForManagedChallenge(page, config);
-      state = await acceptConfiguredTerms(page, state, activeOrigin, config);
+      state = await classifyManualAttention(page, state, activeOrigin, config);
       if (state.status !== "ready") return { ...state, url: safeLogUrl(page.url()) };
+      await dismissBlockingModal(page, config);
       action = await findCheckinAction(page, allowedOrigins);
       if (action) break;
     }
@@ -731,8 +913,12 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
     activeOrigin = new URL(activeUrl).origin;
     state = await waitForManagedChallenge(page, config);
-    state = await acceptConfiguredTerms(page, state, activeOrigin, config);
-    if (["signed", "already_signed", "login_required", "interactive_challenge", "managed_challenge_timeout", "deferred"].includes(state.status)) {
+    state = await classifyManualAttention(page, state, activeOrigin, config);
+    const confirmedBmapiStatus = await tryBmapiCheckinStatus(page, activeOrigin, "signed");
+    if (confirmedBmapiStatus && confirmedBmapiStatus.status !== "ready") {
+      return { ...confirmedBmapiStatus, action: action.text, url: safeLogUrl(page.url()) };
+    }
+    if (["signed", "already_signed", "login_required", "needs_attention", "interactive_challenge", "managed_challenge_timeout", "deferred"].includes(state.status)) {
       return { ...state, action: action.text, url: safeLogUrl(page.url()) };
     }
     if (state.status === "ready") {
@@ -752,7 +938,7 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
       activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
       activeOrigin = new URL(activeUrl).origin;
       state = await waitForManagedChallenge(page, config);
-      state = await acceptConfiguredTerms(page, state, activeOrigin, config);
+      state = await classifyManualAttention(page, state, activeOrigin, config);
       if (["signed", "already_signed", "login_required", "needs_attention", "interactive_challenge", "managed_challenge_timeout", "deferred"].includes(state.status)) {
         return { ...state, action: `${action.text} → ${secondAction.text}`, url: safeLogUrl(page.url()) };
       }
@@ -827,10 +1013,10 @@ export async function launchAutomationContext(config) {
     await context.addInitScript(({ expectedOrigin, localEntries, sessionEntries }) => {
       if (location.origin !== expectedOrigin) return;
       for (const [key, item] of localEntries) {
-        if (localStorage.getItem(key) === null) localStorage.setItem(key, item);
+        localStorage.setItem(key, item);
       }
       for (const [key, item] of sessionEntries) {
-        if (sessionStorage.getItem(key) === null) sessionStorage.setItem(key, item);
+        sessionStorage.setItem(key, item);
       }
     }, { expectedOrigin: origin, localEntries: local, sessionEntries: session });
   }
@@ -878,6 +1064,8 @@ async function persistSiteStorage(page, target, config, result) {
 }
 
 export async function processTarget(context, target, config, qaRules, logDirectory) {
+  const configuredSkip = configuredTargetSkip(target, config);
+  if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
   let lastResult = null;
   const candidateHistory = [];
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {

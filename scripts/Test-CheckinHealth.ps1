@@ -22,11 +22,15 @@ $runValue = try {
 } catch { $null }
 $schedulerScript = Join-Path $PSScriptRoot 'Start-UserScheduler.ps1'
 $watchdogScript = Join-Path $PSScriptRoot 'Ensure-UserScheduler.ps1'
+$supervisorScript = Join-Path $PSScriptRoot 'UserSchedulerSupervisor.vbs'
 $schedulerCount = @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -in @('pwsh.exe', 'powershell.exe') -and $_.CommandLine -like "*-File*$schedulerScript*"
 }).Count
 $watchdogCount = @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -in @('pwsh.exe', 'powershell.exe') -and $_.CommandLine -like "*-File*$watchdogScript*"
+}).Count
+$supervisorCount = @(Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -eq 'wscript.exe' -and $_.CommandLine -like "*$supervisorScript*"
 }).Count
 $latest = if (Test-Path -LiteralPath $latestPath) { Get-Content -Raw -Encoding UTF8 -LiteralPath $latestPath | ConvertFrom-Json } else { $null }
 $schedulerStatePath = Join-Path $root 'data\scheduler-state.json'
@@ -48,7 +52,7 @@ $checks = [ordered]@{
     notificationReady = [bool]$notificationReady
     notificationOutboxClean = $notificationQuarantinedCount -eq 0
     schedulerReady = [bool]$scheduledTask -or [bool]$runValue
-    schedulerUnique = if ($scheduledTask) { $true } else { $schedulerCount -eq 1 -and $watchdogCount -eq 1 }
+    schedulerUnique = if ($scheduledTask) { $true } else { $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1 }
     schedulerHeartbeatFresh = [bool]$heartbeatFresh
     latestResultPresent = [bool]$latest
     latestResultConfirmed = $null -ne $problemCount -and $problemCount -eq 0
@@ -61,6 +65,7 @@ $checks = [ordered]@{
     schedulerMode = if ($scheduledTask) { 'windows_task' } elseif ($runValue) { 'user_scheduler' } else { 'none' }
     schedulerProcessCount = $schedulerCount
     watchdogProcessCount = $watchdogCount
+    supervisorProcessCount = $supervisorCount
     latestRunId = if ($latest) { [string]$latest.runId } else { $null }
     latestSiteCount = if ($latest) { @($latest.results).Count } else { $null }
     latestProblemCount = $problemCount

@@ -46,6 +46,11 @@ async function trySavedLinuxDoLogin(page) {
     // LinuxDO also exposes a Google login button.  Once the dedicated Chrome
     // has a valid Google session this is the simplest unattended recovery
     // path and does not require handling a password or Windows Hello prompt.
+    const modalClose = page.locator('button.modal-close[title="关闭"]:visible');
+    if (await modalClose.count() === 1) {
+      await modalClose.click({ timeout: 5000 });
+      await page.waitForTimeout(300);
+    }
     const googleButton = page.getByRole("button", { name: "使用 Google 登录", exact: true });
     if (await googleButton.count() === 1) {
       await googleButton.click();
@@ -72,6 +77,30 @@ async function trySavedLinuxDoLogin(page) {
   return finalLocation.hostname !== "linux.do" || !/^\/login(?:[/?#]|$)/i.test(finalLocation.pathname);
 }
 
+async function findVisibleProviderButton(page, providerLabels, providerAltLabels) {
+  for (const label of providerLabels) {
+    const candidate = page.getByText(label, { exact: true });
+    if (await candidate.count() === 1 && await candidate.isVisible()) return candidate;
+  }
+  for (const label of providerAltLabels) {
+    const candidate = page.locator(`img[alt="${label}"]`);
+    if (await candidate.count() === 1 && await candidate.isVisible()) return candidate;
+  }
+  return null;
+}
+
+async function revealAlternateLoginOptions(page) {
+  const labels = ["其他登录选项", "第三方登录", "Other login options", "Other sign-in options"];
+  for (const label of labels) {
+    const candidate = page.getByText(label, { exact: true });
+    if (await candidate.count() !== 1 || !await candidate.isVisible()) continue;
+    await candidate.click();
+    await page.waitForTimeout(300);
+    return true;
+  }
+  return false;
+}
+
 const context = await launchAutomationContext(config);
 try {
   let page = await context.newPage();
@@ -91,22 +120,9 @@ try {
   const providerAltLabels = /linux\s*do/i.test(provider)
     ? ["LINUX DO", "Linux DO", "LinuxDO"]
     : [provider, `${provider}登录`, `${provider}登入`];
-  let providerButton = null;
-  for (const label of providerLabels) {
-    const candidate = page.getByText(label, { exact: true });
-    if (await candidate.count() === 1 && await candidate.isVisible()) {
-      providerButton = candidate;
-      break;
-    }
-  }
-  if (!providerButton) {
-    for (const label of providerAltLabels) {
-      const candidate = page.locator(`img[alt="${label}"]`);
-      if (await candidate.count() === 1 && await candidate.isVisible()) {
-        providerButton = candidate;
-        break;
-      }
-    }
+  let providerButton = await findVisibleProviderButton(page, providerLabels, providerAltLabels);
+  if (!providerButton && await revealAlternateLoginOptions(page)) {
+    providerButton = await findVisibleProviderButton(page, providerLabels, providerAltLabels);
   }
   if (!providerButton) throw new Error(`没有找到唯一的 ${provider} 登录按钮`);
   const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);

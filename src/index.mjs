@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { readBookmarkPlan, publicBookmarkReport } from "./bookmarks.mjs";
-import { launchAutomationContext, processTarget } from "./browser.mjs";
+import { configuredTargetSkip, launchAutomationContext, processTarget } from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
@@ -16,6 +16,7 @@ import {
   writeSiteState,
 } from "./site-state.mjs";
 import { loadQaCache, updateQaCache, writeQaCache } from "./qa-solver.mjs";
+import { selectPreflightOrigins } from "./preflight-policy.mjs";
 import {
   TERMINAL_STATUSES,
   advanceAttemptedDeferredRetries,
@@ -23,6 +24,7 @@ import {
   isCurrentLocalRunId,
   isRetryEligible,
   nextDeferredRetryAt,
+  resumeSelectedOrigins,
 } from "./retry-policy.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +39,7 @@ const localQaConfig = await fs.readFile(path.join(rootDirectory, "config", "qa-r
     throw error;
   });
 const dryRun = process.argv.includes("--dry-run");
+const printPreflightOrigins = process.argv.includes("--preflight-origins");
 const ignoreNativePreflight = process.argv.includes("--ignore-native-preflight");
 const limitIndex = process.argv.indexOf("--limit");
 const offsetIndex = process.argv.indexOf("--offset");
@@ -107,7 +110,9 @@ try {
   const reportPath = path.join(rootDirectory, "outputs", "bookmark-comparison.json");
   await atomicWriteJson(reportPath, report);
 
-  if (dryRun) {
+  if (printPreflightOrigins) {
+    console.log(JSON.stringify(selectPreflightOrigins(plan, config)));
+  } else if (dryRun) {
     console.log(JSON.stringify(report, null, 2));
   } else {
     const profileMarker = path.join(config.automationUserDataDir, "Local State");
@@ -128,12 +133,7 @@ try {
       if (!Array.isArray(resumeBase?.results)) throw new Error("续跑报告缺少站点结果");
       if (!isCurrentLocalRunId(resumeBase.runId)) throw new Error("续跑报告不是今天生成的，拒绝复用旧签到结果");
       if (!selectedOrigins) {
-        const currentOrigins = new Set(plan.targets.map((target) => target.origin));
-        const previousOrigins = new Set(resumeBase.results.map((result) => result.origin));
-        selectedOrigins = new Set([
-          ...resumeBase.results.filter((result) => isRetryEligible(result)).map((result) => result.origin),
-          ...[...currentOrigins].filter((origin) => !previousOrigins.has(origin)),
-        ]);
+        selectedOrigins = resumeSelectedOrigins(plan.targets, resumeBase.results, config);
       }
     }
     await cleanupOldLogs(logsRoot, config.logRetentionDays);
@@ -185,7 +185,9 @@ try {
     };
 
     await writeProgress("initial");
-    const context = selectedTargets.length > 0 ? await launchAutomationContext(config) : null;
+    const context = selectedTargets.some((target) => !configuredTargetSkip(target, config))
+      ? await launchAutomationContext(config)
+      : null;
 
     const rememberLogicalCompletion = (target, result) => {
       const group = config.logicalCheckinGroups?.[target.origin];

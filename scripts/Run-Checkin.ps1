@@ -171,8 +171,15 @@ try {
                 if ($null -ne $resumeCandidate) {
                     $preflightOrigins = @($resumeCandidate.Report.results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') } | ForEach-Object { [string]$_.origin })
                 }
-                if ($preflightOrigins.Count -gt 0) { & (Join-Path $PSScriptRoot 'Prepare-NativeWafSession.ps1') -Origins $preflightOrigins }
-                elseif ($attempt -eq 1) { & (Join-Path $PSScriptRoot 'Prepare-NativeWafSession.ps1') }
+                elseif ($attempt -eq 1) {
+                    $preflightOutput = & $node (Join-Path $root 'src\index.mjs') '--preflight-origins'
+                    if ($LASTEXITCODE -ne 0) { throw '无法根据已校验书签计划生成原生预热范围。' }
+                    try { $preflightOrigins = @($preflightOutput | ConvertFrom-Json) }
+                    catch { throw '原生预热范围输出无效。' }
+                }
+                if ($preflightOrigins.Count -gt 0) {
+                    & (Join-Path $PSScriptRoot 'Prepare-NativeWafSession.ps1') -Origins $preflightOrigins
+                }
             }
 
             Write-Output "开始签到任务级尝试 $attempt/$runAttempts。"

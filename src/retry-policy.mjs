@@ -125,6 +125,16 @@ export function isRetryEligible(result, now = new Date()) {
   return !Number.isFinite(next) || next <= now.getTime();
 }
 
+export function resumeSelectedOrigins(currentTargets, previousResults, config = {}, now = new Date()) {
+  const currentOrigins = new Set((currentTargets ?? []).map((target) => target.origin));
+  const previousOrigins = new Set((previousResults ?? []).map((result) => result.origin));
+  return new Set([
+    ...(previousResults ?? []).filter((result) => isRetryEligible(result, now)).map((result) => result.origin),
+    ...[...currentOrigins].filter((origin) => !previousOrigins.has(origin)),
+    ...(config.disabledCheckinOrigins ?? []).filter((origin) => currentOrigins.has(origin)),
+  ]);
+}
+
 export function nextDeferredRetryAt(results, now = new Date()) {
   const values = (results ?? []).filter((result) => result?.status === "deferred")
     .map((result) => Date.parse(result.nextEligibleAt ?? ""))

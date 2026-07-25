@@ -33,9 +33,11 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 相同来源和相同逻辑签到入口会去重，仍为每个书签保留结果。
 - 内置适配器覆盖 NexusPHP、New API、Linux DO OAuth、图片验证码、站内问答、Cloudflare/Turnstile，以及将“申请额度”作为每日签到动作的公益站流程。
 - 未知站点先走通用入口发现；Codex 只把经过页面成功确认的规则写入本机 `config/config.local.json`。
+- 书签暂未同步时可用本机 `configuredTargets` 临时补入 HTTPS 目标；复杂验证站可用 `disabledCheckinOrigins` 明确取消，登录成功即算完成的站点可用 `loginAsCheckinOrigins` 配置。三者默认均为空。
+- 原生 WAF/验证预热只处理已校验书签计划中的站点；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。
 - 单站重试、异常复查和任务级断点续跑只重新访问未确认目标。
 - 限频站点会记录 `nextEligibleAt` 并按时间定向补跑；超时续跑只接受当天的新检查点，避免复用旧日报或重复整批执行。
-- Windows 计划任务从签到时间起按小时做无副作用探测，用户级调度器按分钟探测；两者都受每日次数上限和运行锁保护。
+- Windows 计划任务从签到时间起按小时做无副作用探测，用户级调度器按分钟探测；用户级模式由独立守护、PowerShell 看门狗和调度器三层恢复，两种模式都受每日次数上限和运行锁保护。
 - 主 Chrome 配置只作为只读来源；后台运行始终使用独立配置，并为原生登录窗口禁用同步。
 - 默认不配置外部通知。用户可选择安全的命令型通知器，敏感值应从环境变量或凭据管理器读取。
 - 主 Chrome 保存密码同步和外部问答搜索默认关闭；初始化问卷获得明确授权后才启用，未授权时不会读取密码库或访问搜索引擎。
@@ -75,6 +77,6 @@ pwsh -NoProfile -File .\scripts\Export-PublicBundle.ps1
 
 项目目前面向 Windows 10/11 与桌面版 Chrome。电脑休眠或关机错过计划时间后，用户级调度器会在当天恢复登录后补跑。
 
-自定义通知器应接受参数数组，支持 `{status}`、`{summary}`、`{taskId}`、`{name}`、`{source}` 和 `{eventKey}` 占位符。`{eventKey}` 按“日期 + 站点状态指纹”生成：相同结果重复执行会去重，异常解决后的新结果仍可发送。`executable` 只直接接受原生 `.exe/.com`；脚本通知应使用 `pwsh.exe -File script.ps1` 或 `node.exe script.mjs` 的参数形式，避免站点文本经过命令解释器。通知先原子写入本地 `data/notification-outbox`，再由独立投递器执行命令；命令需返回包含 `accepted=true` 或 `duplicate=true` 的 JSON 才算送达。缺失或不匹配 `payloadHash` 的条目会进入 `quarantine`，失败只按退避时间重发通知，不会重新运行浏览器签到。`mode=none` 和预览模式不会发送、也不会创建 outbox 条目。实现不会使用 `Invoke-Expression`，也不会读取任何 Telegram Bot Token。
+自定义通知器应接受参数数组，支持 `{status}`、`{summary}`、`{taskId}`、`{name}`、`{source}` 和 `{eventKey}` 占位符。`{eventKey}` 按“日期 + 站点状态指纹”生成：相同结果重复执行会去重，异常解决后的新结果仍可发送。`executable` 只直接接受原生 `.exe/.com`；脚本通知应使用 `pwsh.exe -File script.ps1` 或 `node.exe script.mjs` 的参数形式，避免站点文本经过命令解释器。通知先原子写入本地 `data/notification-outbox`，再由独立投递器用逐参数 API 执行命令；同一任务同一天只投递最新回执，旧状态会标记为 `superseded`。命令需返回包含 `accepted=true` 或 `duplicate=true` 的 JSON 才算送达。缺失或不匹配 `payloadHash` 的条目会进入 `quarantine`，失败只按退避时间重发通知，不会重新运行浏览器签到。`mode=none` 和预览模式不会发送、也不会创建 outbox 条目。实现不会使用 `Invoke-Expression`，也不会读取任何 Telegram Bot Token。
 
 签到进程锁同时校验 PID、进程启动时间和随机 nonce。进程崩溃、PID 被系统复用或外层超时强杀后，旧锁会安全回收；仍在运行的签到进程会继续阻止并发访问同一个自动化 Chrome 配置。

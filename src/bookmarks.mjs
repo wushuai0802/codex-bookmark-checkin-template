@@ -136,6 +136,33 @@ export async function readBookmarkPlan(bookmarksPath, options = {}) {
     sources.push({ id: mobile.id, path: mobile.path, sections });
   }
 
+  const configuredSections = {};
+  for (const configured of options.configuredTargets ?? []) {
+    const folderName = String(configured?.folderName ?? "").trim();
+    const rawUrl = String(configured?.url ?? "").trim();
+    let parsed;
+    try { parsed = new URL(rawUrl); } catch { parsed = null; }
+    if (!targetNames.has(folderName)) throw new Error(`显式站点目录无效：${folderName || "<empty>"}`);
+    if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      throw new Error(`显式站点地址必须使用无凭据 HTTPS：${rawUrl}`);
+    }
+    const normalizedUrl = normalizeHttpUrl(rawUrl);
+    const entry = {
+      title: String(configured?.title ?? "").trim() || parsed.hostname,
+      url: normalizedUrl,
+      normalizedUrl,
+      folderName,
+      sourceId: "configured",
+      sourcePath: "显式站点配置",
+    };
+    configuredSections[folderName] ??= [];
+    configuredSections[folderName].push(entry);
+    allEntries.push(entry);
+  }
+  if (Object.keys(configuredSections).length > 0) {
+    sources.push({ id: "configured", path: "显式站点配置", sections: configuredSections });
+  }
+
   const exactMap = new Map();
   for (const entry of allEntries) {
     const existing = exactMap.get(entry.normalizedUrl);
@@ -242,11 +269,14 @@ export async function findBookmarkTarget(bookmarksPath, requestedOrigin, options
 export async function readBookmarkPlanWithBackup(bookmarksPath, options = {}) {
   const candidates = [bookmarksPath, `${bookmarksPath}.bak`];
   const failures = [];
+  const minimumTargets = Math.max(1, Number(options.minimumBookmarkTargetCount) || 1);
   for (let index = 0; index < candidates.length; index += 1) {
     try {
       const plan = await readBookmarkPlan(candidates[index], options);
-      if (plan.targetCount > 0) return { ...plan, bookmarkPath: candidates[index], recoveredFromBackup: index > 0 };
-      failures.push(`${index > 0 ? "Bookmarks.bak" : "Bookmarks"} 中没有签到目标`);
+      if (plan.targetCount >= minimumTargets) {
+        return { ...plan, bookmarkPath: candidates[index], recoveredFromBackup: index > 0 };
+      }
+      failures.push(`${index > 0 ? "Bookmarks.bak" : "Bookmarks"} 中只有 ${plan.targetCount} 个签到目标，低于最低 ${minimumTargets} 个`);
     } catch (error) {
       failures.push(`${index > 0 ? "Bookmarks.bak" : "Bookmarks"}：${error.message}`);
     }

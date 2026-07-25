@@ -6,39 +6,53 @@ $root = Split-Path -Parent $PSScriptRoot
 $schedulerScript = Join-Path $PSScriptRoot 'Start-UserScheduler.ps1'
 $configPath = Join-Path $root 'config\config.json'
 $heartbeatPath = Join-Path $root 'data\scheduler-heartbeat.json'
+$schedulerLogPath = Join-Path $root 'logs\scheduler.log'
+$watchdogHeartbeatPath = Join-Path $root 'data\scheduler-watchdog-heartbeat.json'
+[System.IO.Directory]::CreateDirectory((Split-Path -Parent $schedulerLogPath)) | Out-Null
+[System.IO.Directory]::CreateDirectory((Split-Path -Parent $watchdogHeartbeatPath)) | Out-Null
+$config = Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath | ConvertFrom-Json
+$shell = if ($config.powershellExecutable) { [string]$config.powershellExecutable } else {
+    (Get-Command pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+}
+if (-not $shell) { throw '未找到 PowerShell 可执行文件。' }
 $mutexCreated = $false
 $mutex = [System.Threading.Mutex]::new($true, 'Local\CodexBookmarkDailyCheckinWatchdog', [ref]$mutexCreated)
 if (-not $mutexCreated) { exit 0 }
 
 function Write-Heartbeat {
-    $path = Join-Path $root 'data\scheduler-watchdog-heartbeat.json'
-    $temp = "$path.$PID.tmp"
+    $temp = "$watchdogHeartbeatPath.$PID.tmp"
     [System.IO.File]::WriteAllText($temp, ([ordered]@{ processId = $PID; updatedAt = (Get-Date).ToString('o') } | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $path -Force
+    Move-Item -LiteralPath $temp -Destination $watchdogHeartbeatPath -Force
 }
 
 try {
     while ($true) {
-        Write-Heartbeat
-        $processes = @(Get-CimInstance Win32_Process | Where-Object {
-            $_.Name -in @('pwsh.exe', 'powershell.exe') -and $_.CommandLine -like "*-File*$schedulerScript*"
-        })
-        $fresh = $false
-        if (Test-Path -LiteralPath $heartbeatPath) {
-            try {
-                $heartbeat = Get-Content -Raw -Encoding UTF8 $heartbeatPath | ConvertFrom-Json
-                $maxMinutes = 5
-                if ([string]$heartbeat.phase -eq 'running_checkin') {
-                    $config = Get-Content -Raw -Encoding UTF8 $configPath | ConvertFrom-Json
-                    $taskTimeoutMinutes = if ($null -ne $config.taskTimeoutMinutes) { [int]$config.taskTimeoutMinutes } else { 25 }
-                    $maxMinutes = $taskTimeoutMinutes + 10
-                }
-                $fresh = (Get-Date) - [datetime]$heartbeat.updatedAt -lt [timespan]::FromMinutes($maxMinutes)
-            } catch { $fresh = $false }
+        try {
+            Write-Heartbeat
+            $processes = @(Get-CimInstance Win32_Process | Where-Object {
+                $_.Name -in @('pwsh.exe', 'powershell.exe') -and $_.CommandLine -like "*-File*$schedulerScript*"
+            })
+            $fresh = $false
+            if (Test-Path -LiteralPath $heartbeatPath) {
+                try {
+                    $heartbeat = Get-Content -Raw -Encoding UTF8 $heartbeatPath | ConvertFrom-Json
+                    $maxMinutes = 5
+                    if ([string]$heartbeat.phase -eq 'running_checkin') {
+                        $taskTimeoutMinutes = if ($null -ne $config.taskTimeoutMinutes) { [int]$config.taskTimeoutMinutes } else { 25 }
+                        $maxMinutes = $taskTimeoutMinutes + 10
+                    }
+                    $fresh = (Get-Date) - [datetime]$heartbeat.updatedAt -lt [timespan]::FromMinutes($maxMinutes)
+                } catch { $fresh = $false }
+            }
+            if ($processes.Count -eq 0 -or -not $fresh) {
+                $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+                Start-Process -FilePath $shell -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$schedulerScript`"") -WindowStyle Hidden
+                Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗已重启调度器。" -Encoding UTF8
+            }
         }
-        if ($processes.Count -eq 0 -or -not $fresh) {
-            $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            Start-Process -FilePath 'pwsh.exe' -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',$schedulerScript) -WindowStyle Hidden
+        catch {
+            $message = ([string]$_.Exception.Message) -replace '[\r\n\t]+', ' '
+            try { Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗异常：$message" -Encoding UTF8 } catch { }
         }
         Start-Sleep -Seconds 60
     }

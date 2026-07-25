@@ -1,7 +1,7 @@
 {
   "_meta": {
     "schemaVersion": 1,
-    "lastVerifiedAt": "2026-07-20"
+    "lastVerifiedAt": "2026-07-26"
   },
   "relatedCandidateUrls": {
     "https://x666.me": ["https://up.x666.me/"],
@@ -32,6 +32,12 @@
   "autoDetectOAuthOrigins": [
     "https://free.lyclaude.site"
   ],
+  "loginAsCheckinOrigins": [
+    "https://agentrouter.org"
+  ],
+  "autoClickTurnstileOrigins": [
+    "https://bmapi.020212.xyz"
+  ],
   "knownNoCheckinFeatureOrigins": [
     "https://ai-cf.ailinyu.de",
     "https://muyuan.do",
@@ -47,7 +53,8 @@
   ],
   "nativeChallengePreflight": [
     { "url": "https://audiences.me/attendance.php", "waitSeconds": 20 },
-    { "url": "https://ourbits.club/attendance.php", "waitSeconds": 30 }
+    { "url": "https://ourbits.club/attendance.php", "waitSeconds": 30 },
+    { "url": "https://bmapi.020212.xyz/dashboard", "waitSeconds": 45, "action": "checkin" }
   ],
   "oauthRedirectOverrides": {
     "https://free.lyclaude.site": {

@@ -27,6 +27,16 @@ export function formatDailyReason(template, now = new Date()) {
   return String(template ?? "").replaceAll("{date}", date);
 }
 
+export function isCheckinSingleChoiceChallenge({ contextText = "", submitTexts = [] } = {}) {
+  const context = normalizeText(contextText);
+  const submits = submitTexts.map(normalizeText).filter(Boolean);
+  const hasCheckinMarker = /(签到|簽到|答题|答題|验证码|驗證碼|安全验证|安全驗證|\[单选\]|\[單選\])/i.test(context);
+  const isPlainPoll = submits.some((text) => /^(投票|vote)$/i.test(text)) && !hasCheckinMarker;
+  if (isPlainPoll) return false;
+  return hasCheckinMarker
+    || submits.some((text) => /^(提交|确认|確認|确定|確定|签到|簽到|check[ -]?in)$/i.test(text));
+}
+
 export function classifyPageText({ url = "", title = "", bodyText = "", hasPassword = false, challengeSelectors = false }) {
   const text = normalizeText(`${title}\n${bodyText}`).slice(0, 30000);
   const lowerUrl = String(url).toLowerCase();

@@ -86,7 +86,9 @@ let config = deepMerge(deepMerge(deepMerge(defaults, publicRules), {
 }), localRules);
 
 const sourceUserDataDir = path.join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "User Data");
-const profiles = await discoverProfiles(sourceUserDataDir, config);
+// Explicit local targets are independent of the Chrome profile and must not
+// make an otherwise empty profile win automatic profile selection.
+const profiles = await discoverProfiles(sourceUserDataDir, { ...config, configuredTargets: [] });
 if (profiles.length === 0) throw new Error("没有找到可读取的 Chrome 书签配置文件");
 let selected;
 if (answers.chromeProfile && answers.chromeProfile !== "Auto") {

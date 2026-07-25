@@ -7,6 +7,7 @@ param(
     [int]$BaseRetryMinutes = 0,
     [int]$MaxRetryMinutes = 0,
     [int]$TimeoutSeconds = 0,
+    [switch]$ForceDue,
     [string]$MutexName = ''
 )
 
@@ -102,30 +103,80 @@ function Quarantine-OutboxFile([System.IO.FileInfo]$File) {
     catch { }
 }
 
+function ConvertTo-WindowsCommandLineArgument([string]$Value) {
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    $builder = [System.Text.StringBuilder]::new()
+    $quote = [char]34
+    $slash = [char]92
+    [void]$builder.Append($quote)
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq $slash) {
+            $backslashes++
+            continue
+        }
+        if ($character -eq $quote) {
+            [void]$builder.Append((('\' * ($backslashes * 2 + 1)) -join ''))
+            [void]$builder.Append($quote)
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) { [void]$builder.Append((('\' * $backslashes) -join '')) }
+        [void]$builder.Append($character)
+        $backslashes = 0
+    }
+    if ($backslashes -gt 0) { [void]$builder.Append((('\' * ($backslashes * 2)) -join '')) }
+    [void]$builder.Append($quote)
+    return $builder.ToString()
+}
+
 function Invoke-NotificationCommand([string]$ExecutablePath, [string[]]$Arguments) {
-    $nonce = [guid]::NewGuid().ToString('N')
-    $stdoutPath = Join-Path $env:TEMP "codex-checkin-notify-$nonce.out"
-    $stderrPath = Join-Path $env:TEMP "codex-checkin-notify-$nonce.err"
     $process = $null
     try {
-        $process = Start-Process -FilePath $ExecutablePath -ArgumentList $Arguments -PassThru -WindowStyle Hidden `
-            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $ExecutablePath
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        if ($null -ne $startInfo.PSObject.Properties['ArgumentList']) {
+            foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add([string]$argument) }
+        }
+        else {
+            $startInfo.Arguments = (@($Arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument ([string]$_) })) -join ' '
+        }
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) { throw '通知进程未能启动。' }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         $finished = $process.WaitForExit($TimeoutSeconds * 1000)
         if (-not $finished) {
             try { $process.Kill($true) } catch { try { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } catch { } }
             [void]$process.WaitForExit(5000)
-            return [pscustomobject]@{ TimedOut = $true; ExitCode = 124; Output = @(); Error = @() }
+            return [pscustomobject]@{
+                TimedOut = $true
+                ExitCode = 124
+                Output = @($stdoutTask.GetAwaiter().GetResult())
+                Error = @($stderrTask.GetAwaiter().GetResult())
+            }
         }
         return [pscustomobject]@{
             TimedOut = $false
             ExitCode = $process.ExitCode
-            Output = @(Get-Content -Raw -LiteralPath $stdoutPath -ErrorAction SilentlyContinue)
-            Error = @(Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue)
+            Output = @($stdoutTask.GetAwaiter().GetResult())
+            Error = @($stderrTask.GetAwaiter().GetResult())
         }
     }
     finally {
-        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+        if ($null -ne $process) { $process.Dispose() }
     }
+}
+
+function Get-OutboxLogicalScope([object]$Item) {
+    $match = [regex]::Match([string]$Item.eventKey, ':(\d{4}-\d{2}-\d{2}):[^:]+$')
+    if (-not $match.Success) { return [string]$Item.eventKey }
+    return "$([string]$Item.source)|$([string]$Item.taskId)|$($match.Groups[1].Value)"
 }
 
 $mutexCreated = $false
@@ -140,27 +191,52 @@ $delivered = 0
 $deferred = 0
 $invalid = 0
 $quarantined = 0
+$superseded = 0
 try {
+    $pendingItems = [System.Collections.Generic.List[object]]::new()
     $dueItems = [System.Collections.Generic.List[object]]::new()
     foreach ($file in @(Get-ChildItem -LiteralPath $OutboxPath -Filter '*.json' -File -ErrorAction SilentlyContinue)) {
         try {
             $item = Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName | ConvertFrom-Json
             if ($item.delivered -eq $true) { continue }
+            $computedHash = Get-PayloadHash $item
+            $storedHash = [string]$item.payloadHash
+            if ($storedHash -notmatch '^[a-f0-9]{64}$' -or $storedHash -ne $computedHash) {
+                $invalid++
+                Quarantine-OutboxFile $file
+                continue
+            }
             $dueAt = if ($item.nextAttemptAt) { ([datetime]$item.nextAttemptAt).ToUniversalTime() } else { [datetime]::MinValue }
-            if ($dueAt -le $now) { $dueItems.Add([pscustomobject]@{ File = $file; Item = $item; DueAt = $dueAt }) }
+            $createdAt = try { ([datetimeoffset]$item.createdAt).ToUniversalTime() } catch { [datetimeoffset]$file.LastWriteTimeUtc }
+            $pendingItems.Add([pscustomobject]@{
+                File = $file
+                Item = $item
+                DueAt = $dueAt
+                CreatedAt = $createdAt
+                Scope = Get-OutboxLogicalScope $item
+            })
         }
         catch { $invalid++; Quarantine-OutboxFile $file }
     }
 
+    foreach ($group in @($pendingItems | Group-Object Scope)) {
+        $ordered = @($group.Group | Sort-Object CreatedAt, @{ Expression = { $_.File.Name } } -Descending)
+        $latest = $ordered | Select-Object -First 1
+        foreach ($stale in @($ordered | Select-Object -Skip 1)) {
+            $stale.Item.delivered = $true
+            $stale.Item.deliveredAt = $now.ToString('o')
+            $stale.Item.updatedAt = $now.ToString('o')
+            $stale.Item.disposition = 'superseded'
+            $stale.Item.nextAttemptAt = $null
+            $stale.Item.lastError = $null
+            Write-OutboxItemAtomic $stale.File.FullName $stale.Item
+            $superseded++
+        }
+        if ($null -ne $latest -and ($ForceDue -or $latest.DueAt -le $now)) { $dueItems.Add($latest) }
+    }
+
     foreach ($entry in @($dueItems | Sort-Object DueAt, @{ Expression = { $_.File.Name } } | Select-Object -First $MaxItems)) {
         $item = $entry.Item
-        $computedHash = Get-PayloadHash $item
-        $storedHash = [string]$item.payloadHash
-        if ($storedHash -notmatch '^[a-f0-9]{64}$' -or $storedHash -ne $computedHash) {
-            $invalid++
-            Quarantine-OutboxFile $entry.File
-            continue
-        }
         $item.attempts = [int]$item.attempts + 1
         $item.updatedAt = $now.ToString('o')
         $acknowledgement = $null
@@ -223,5 +299,6 @@ finally {
 
 [pscustomobject]@{
     processed = $processed; delivered = $delivered; deferred = $deferred;
-    invalid = $invalid; quarantined = $quarantined; disabled = $false; busy = $false
+    invalid = $invalid; quarantined = $quarantined; superseded = $superseded;
+    disabled = $false; busy = $false
 } | ConvertTo-Json -Compress

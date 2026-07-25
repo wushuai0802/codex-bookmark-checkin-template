@@ -6,8 +6,12 @@ import path from "node:path";
 import {
   CHALLENGE_SELECTOR,
   candidateHistoryEntry,
+  configuredLoginCompletion,
+  configuredTargetSkip,
+  dismissBlockingModal,
   preferCandidateResult,
   shouldPersistSiteStorage,
+  tryBmapiCheckinStatus,
   writeSiteStorageSnapshot,
 } from "../src/browser.mjs";
 
@@ -52,6 +56,75 @@ test("只有已确认签到结果允许保存站点会话", () => {
   for (const status of ["login_required", "error", "no_action", "unconfirmed", "not_available"]) {
     assert.equal(shouldPersistSiteStorage({ status }), false);
   }
+});
+
+test("配置取消的站点直接返回终止状态", () => {
+  const result = configuredTargetSkip(
+    { origin: "https://captcha.example" },
+    { disabledCheckinOrigins: ["https://captcha.example"] },
+  );
+  assert.deepEqual(result, {
+    status: "not_available",
+    reason: "已按配置取消该站签到任务",
+    url: "https://captcha.example",
+    disabledByConfig: true,
+  });
+  assert.equal(configuredTargetSkip(
+    { origin: "https://enabled.example" },
+    { disabledCheckinOrigins: ["https://captcha.example"] },
+  ), null);
+});
+
+test("配置为登录即完成的站点返回签到成功", () => {
+  assert.deepEqual(
+    configuredLoginCompletion("https://login-only.example", {
+      loginAsCheckinOrigins: ["https://login-only.example"],
+    }),
+    { status: "signed", reason: "站点登录成功，按配置视为签到完成" },
+  );
+  assert.equal(configuredLoginCompletion("https://other.example", {
+    loginAsCheckinOrigins: ["https://login-only.example"],
+  }), null);
+});
+
+test("连续关闭标记已读和今日关闭弹窗", async () => {
+  const visibleLabels = ["标记已读", "今日关闭"];
+  const clicked = [];
+  const page = {
+    getByRole(_role, options) {
+      const matches = () => visibleLabels[0] === options.name;
+      const locator = {
+        count: async () => matches() ? 1 : 0,
+        first: () => locator,
+        isVisible: async () => matches(),
+        click: async () => {
+          assert.equal(matches(), true);
+          clicked.push(options.name);
+          visibleLabels.shift();
+        },
+      };
+      return locator;
+    },
+  };
+
+  const dismissed = await dismissBlockingModal(page, { actionWaitMs: 0 });
+  assert.deepEqual(dismissed, ["标记已读", "今日关闭"]);
+  assert.deepEqual(clicked, dismissed);
+});
+
+test("斑马签到使用接口确认最终状态", async () => {
+  const page = {
+    evaluate: async () => ({
+      ok: true,
+      status: 200,
+      body: { code: 0, data: { enabled: true, checked_in: true } },
+    }),
+  };
+  assert.deepEqual(
+    await tryBmapiCheckinStatus(page, "https://bmapi.020212.xyz", "signed"),
+    { status: "signed", reason: "斑马 API 接口确认签到成功" },
+  );
+  assert.equal(await tryBmapiCheckinStatus(page, "https://other.example"), null);
 });
 
 test("站点会话更新前会把旧内容保留为 bak", async () => {

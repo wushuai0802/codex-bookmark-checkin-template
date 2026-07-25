@@ -2,6 +2,7 @@
   "mobileFolderNames": [],
   "targetFolderNames": [],
   "minimumBookmarkTargetCount": 1,
+  "configuredTargets": [],
   "quotaRequestRules": {
     "https://new.sharedchat.cc": {
       "minimumReasonLength": 10,
@@ -30,6 +31,9 @@
   "autoAcceptUpdatedTermsOrigins": [],
   "manualChallengeOrigins": [],
   "autoClickHcaptchaOrigins": [],
+  "autoClickTurnstileOrigins": [],
+  "disabledCheckinOrigins": [],
+  "loginAsCheckinOrigins": [],
   "syncSavedLoginOrigins": [],
   "syncBookmarkSavedLogins": false,
   "qaMaxQuestionChanges": 1,
