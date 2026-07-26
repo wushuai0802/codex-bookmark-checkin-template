@@ -67,6 +67,93 @@ test("合并两个移动设备书签并按来源与站点去重", async () => {
   assert.deepEqual(bTarget.allowedOrigins, ["https://b.example"]);
 });
 
+test("合并 Chrome 与 Edge 书签并跨浏览器去重", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-browser-sources-"));
+  const chromeFile = path.join(directory, "ChromeBookmarks");
+  const edgeFile = path.join(directory, "EdgeBookmarks");
+  try {
+    await fs.writeFile(chromeFile, JSON.stringify({
+      roots: { synced: { id: "1", type: "folder", name: "我的自动任务", children: [{
+        id: "2", type: "folder", name: "每日领取", children: [
+          { id: "3", type: "url", name: "共同站点", url: "https://shared.example/checkin" },
+        ],
+      }] } },
+    }));
+    await fs.writeFile(edgeFile, JSON.stringify({
+      roots: { synced: { id: "10", type: "folder", name: "Edge收藏", children: [{
+        id: "11", type: "folder", name: "每日领取", children: [
+          { id: "12", type: "url", name: "共同站点", url: "https://shared.example/checkin" },
+          { id: "13", type: "url", name: "Edge 新站", url: "https://edge-only.example/console" },
+        ],
+      }] } },
+    }));
+
+    const plan = await readBookmarkPlan(chromeFile, {
+      bookmarkSourceName: "Chrome",
+      additionalBookmarkSources: [{
+        name: "Edge",
+        path: edgeFile,
+        mobileFolderNames: ["Edge收藏"],
+        targetFolderNames: ["每日领取"],
+        optional: true,
+      }],
+      mobileFolderNames: ["我的自动任务"],
+      targetFolderNames: ["每日领取"],
+    });
+
+    assert.equal(plan.bookmarkFiles.length, 2);
+    assert.equal(plan.exactUrlCount, 2);
+    assert.equal(plan.targetCount, 2);
+    assert.ok(plan.sources.some((source) => source.path === "Chrome: 我的自动任务"));
+    assert.ok(plan.sources.some((source) => source.path === "Edge: Edge收藏"));
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("可选 Edge 主文件损坏时独立回退到 Edge 备份", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-edge-backup-"));
+  const chromeFile = path.join(directory, "ChromeBookmarks");
+  const edgeFile = path.join(directory, "EdgeBookmarks");
+  try {
+    await fs.writeFile(chromeFile, JSON.stringify({
+      roots: { synced: { id: "1", type: "folder", name: "我的自动任务", children: [{
+        id: "2", type: "folder", name: "每日领取", children: [
+          { id: "3", type: "url", name: "Chrome 站点", url: "https://chrome.example/checkin" },
+        ],
+      }] } },
+    }));
+    await fs.writeFile(edgeFile, "not-json");
+    await fs.writeFile(`${edgeFile}.bak`, JSON.stringify({
+      roots: { synced: { id: "10", type: "folder", name: "Edge收藏", children: [{
+        id: "11", type: "folder", name: "每日领取", children: [
+          { id: "12", type: "url", name: "Edge 站点", url: "https://edge.example/console" },
+        ],
+      }] } },
+    }));
+
+    const plan = await readBookmarkPlanWithBackup(chromeFile, {
+      bookmarkSourceName: "Chrome",
+      additionalBookmarkSources: [{
+        name: "Edge",
+        path: edgeFile,
+        mobileFolderNames: ["Edge收藏"],
+        targetFolderNames: ["每日领取"],
+        optional: true,
+      }],
+      mobileFolderNames: ["我的自动任务"],
+      targetFolderNames: ["每日领取"],
+      minimumBookmarkTargetCount: 2,
+    });
+
+    assert.equal(plan.targetCount, 2);
+    assert.equal(plan.recoveredFromBackup, true);
+    assert.deepEqual(plan.recoveredSources, ["Edge"]);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("仅从显式配置加入关联签到入口", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-related-"));
   const file = path.join(directory, "Bookmarks");

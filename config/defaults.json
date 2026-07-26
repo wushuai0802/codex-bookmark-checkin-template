@@ -1,6 +1,8 @@
 {
   "mobileFolderNames": [],
   "targetFolderNames": [],
+  "bookmarkSourceName": "Chrome",
+  "additionalBookmarkSources": [],
   "minimumBookmarkTargetCount": 1,
   "configuredTargets": [],
   "quotaRequestRules": {

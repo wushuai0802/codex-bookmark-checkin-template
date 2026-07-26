@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { readBookmarkPlan, publicBookmarkReport } from "./bookmarks.mjs";
+import { publicBookmarkReport, readBookmarkPlanWithBackup } from "./bookmarks.mjs";
 import { configuredTargetSkip, launchAutomationContext, processTarget } from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
@@ -71,19 +71,9 @@ async function validateBookmarkPlan(plan) {
 }
 
 async function readValidatedBookmarkPlan() {
-  const candidates = [config.bookmarksPath, `${config.bookmarksPath}.bak`];
-  const failures = [];
-  for (let index = 0; index < candidates.length; index += 1) {
-    const candidatePath = candidates[index];
-    try {
-      const plan = await readBookmarkPlan(candidatePath, config);
-      await validateBookmarkPlan(plan);
-      return { ...plan, recoveredFromBackup: index > 0 };
-    } catch (error) {
-      failures.push(`${path.basename(candidatePath)}：${error.message}`);
-    }
-  }
-  throw new Error(`无法读取有效签到书签：${failures.join("；")}`);
+  const plan = await readBookmarkPlanWithBackup(config.bookmarksPath, config);
+  await validateBookmarkPlan(plan);
+  return plan;
 }
 
 async function readFreshNativeWafPreflight() {
