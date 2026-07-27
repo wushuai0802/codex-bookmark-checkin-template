@@ -60,6 +60,7 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   const installer = await fs.readFile(new URL("../scripts/Install-UserScheduler.ps1", import.meta.url), "utf8");
   const remover = await fs.readFile(new URL("../scripts/Remove-UserScheduler.ps1", import.meta.url), "utf8");
   const health = await fs.readFile(new URL("../scripts/Test-CheckinHealth.ps1", import.meta.url), "utf8");
+  const scheduler = await fs.readFile(new URL("../scripts/Start-UserScheduler.ps1", import.meta.url), "utf8");
   const supervisor = await fs.readFile(new URL("../scripts/UserSchedulerSupervisor.vbs", import.meta.url), "utf8");
   assert.match(installer, /UserSchedulerSupervisor\.vbs/);
   assert.match(installer, /wscript\.exe/);
@@ -68,6 +69,8 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(health, /\$supervisorCount -eq 1/);
   assert.match(supervisor, /WatchdogIsRunning/);
   assert.match(supervisor, /WScript\.Arguments/);
+  assert.match(scheduler, /Get-LatestReportState \$now \$config/);
+  assert.match(scheduler, /已接收外部续跑完成报告/);
 });
 
 test("安装配置优先使用 PowerShell 7，5.1 仅作为可用回退", async () => {

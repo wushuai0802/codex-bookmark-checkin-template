@@ -83,6 +83,26 @@ function targetUsesConfiguredOrigins(target, configuredOrigins) {
   return (target.allowedOrigins ?? [target.origin]).some((origin) => configured.has(origin));
 }
 
+export function shouldTryGenericNewApiCheckin(target, configuredOrigins = null) {
+  if (target?.origin === "https://bmapi.020212.xyz") return false;
+  if (Array.isArray(configuredOrigins)) {
+    const configured = new Set(configuredOrigins);
+    return (target?.allowedOrigins ?? [target?.origin]).some((origin) => configured.has(origin));
+  }
+  return target?.folderNames?.includes("公益站") ?? false;
+}
+
+export function filterExpiredBootstrapLocalEntries(entries, nowMs = Date.now()) {
+  const local = (entries ?? []).filter((entry) => Array.isArray(entry) && entry.length === 2
+    && entry.every((item) => typeof item === "string"));
+  const rawExpiry = local.find(([key]) => key === "token_expires_at")?.[1];
+  const numericExpiry = Number(rawExpiry);
+  const expiryMs = numericExpiry > 0 && numericExpiry < 10_000_000_000 ? numericExpiry * 1000 : numericExpiry;
+  if (!Number.isFinite(expiryMs) || expiryMs > nowMs) return local;
+  const staleAuthKeys = new Set(["auth_token", "refresh_token", "token_expires_at", "auth_user"]);
+  return local.filter(([key]) => !staleAuthKeys.has(key));
+}
+
 async function snapshotState(page) {
   const state = await page.evaluate((challengeSelector) => {
     const bodyText = String(document.body?.innerText ?? "").slice(0, 30000);
@@ -143,7 +163,26 @@ async function acceptConfiguredTerms(page, state, activeOrigin, config) {
 
 export async function tryBmapiCheckinStatus(page, activeOrigin, successStatus = "already_signed") {
   if (activeOrigin !== "https://bmapi.020212.xyz") return null;
-  const response = await page.evaluate(async () => {
+  const endpoint = `${activeOrigin}/api/v1/checkin/status?timezone=Asia%2FShanghai`;
+  let response = null;
+  try {
+    const context = typeof page.context === "function" ? page.context() : null;
+    let authToken = null;
+    if (typeof context?.storageState === "function") {
+      const storage = await context.storageState();
+      authToken = storage.origins?.find((item) => item.origin === activeOrigin)?.localStorage
+        ?.find((item) => item.name === "auth_token")?.value ?? null;
+    }
+    const request = context?.request;
+    if (request?.get) {
+      const headers = { accept: "application/json", ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) };
+      const value = await request.get(endpoint, { headers });
+      response = { ok: value.ok(), status: value.status(), body: await value.json() };
+    }
+  } catch {
+    response = null;
+  }
+  response ??= await page.evaluate(async () => {
     try {
       const value = await fetch("/api/v1/checkin/status?timezone=Asia%2FShanghai", {
         credentials: "include",
@@ -808,7 +847,7 @@ async function tryU2Captcha(page, expectedOrigin, config) {
 
 async function processCandidate(page, target, candidateUrl, config, qaRules) {
   const allowedOrigins = target.allowedOrigins ?? [target.origin];
-  const useNewApiCheckin = targetUsesConfiguredOrigins(target, config.newApiCheckinOrigins);
+  const useNewApiCheckin = shouldTryGenericNewApiCheckin(target, config.newApiCheckinOrigins);
   const useExtendedDiscovery = targetUsesConfiguredOrigins(target, config.extendedDiscoveryOrigins);
   const destination = assertBookmarkNavigation(candidateUrl, allowedOrigins);
   await page.goto(destination, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
@@ -1008,17 +1047,19 @@ export async function launchAutomationContext(config) {
     if (!storagePath.startsWith(`${allowedRoot}${path.sep}`)) continue;
     const value = await fs.readFile(storagePath, "utf8").then(JSON.parse).catch(() => null);
     if (value?.origin !== origin || !Array.isArray(value.local) || !Array.isArray(value.session)) continue;
-    const local = value.local.filter((entry) => Array.isArray(entry) && entry.length === 2 && entry.every((item) => typeof item === "string"));
+    const local = filterExpiredBootstrapLocalEntries(value.local);
     const session = value.session.filter((entry) => Array.isArray(entry) && entry.length === 2 && entry.every((item) => typeof item === "string"));
-    await context.addInitScript(({ expectedOrigin, localEntries, sessionEntries }) => {
+    await context.addInitScript(({ expectedOrigin, localEntries, sessionEntries, marker }) => {
       if (location.origin !== expectedOrigin) return;
+      if (sessionStorage.getItem(marker) === expectedOrigin) return;
+      sessionStorage.setItem(marker, expectedOrigin);
       for (const [key, item] of localEntries) {
-        localStorage.setItem(key, item);
+        if (localStorage.getItem(key) === null) localStorage.setItem(key, item);
       }
       for (const [key, item] of sessionEntries) {
-        sessionStorage.setItem(key, item);
+        if (sessionStorage.getItem(key) === null) sessionStorage.setItem(key, item);
       }
-    }, { expectedOrigin: origin, localEntries: local, sessionEntries: session });
+    }, { expectedOrigin: origin, localEntries: local, sessionEntries: session, marker: "__codex_storage_bootstrap_applied_v1" });
   }
   return context;
 }

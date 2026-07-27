@@ -46,6 +46,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 书签暂未同步时可用本机 `configuredTargets` 临时补入 HTTPS 目标；复杂验证站可用 `disabledCheckinOrigins` 明确取消，登录成功即算完成的站点可用 `loginAsCheckinOrigins` 配置。三者默认均为空。
 - 原生 WAF/验证预热只处理已校验书签计划中的站点；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。
 - 单站重试、异常复查和任务级断点续跑只重新访问未确认目标。
+- 用户明确完成当次人工验证后，可通过 `Run-Checkin.ps1 -ManualConfirmedOrigins 'https://example.com'` 将结果以“用户已确认手动完成”写回当天续跑报告；该状态保留审计字段，不冒充自动签到。
 - 限频站点会记录 `nextEligibleAt` 并按时间定向补跑；超时续跑只接受当天的新检查点，避免复用旧日报或重复整批执行。
 - Windows 计划任务从签到时间起按小时做无副作用探测，用户级调度器按分钟探测；用户级模式由独立守护、PowerShell 看门狗和调度器三层恢复，两种模式都受每日次数上限和运行锁保护。
 - 主 Chrome 和可选 Edge 书签文件只作为只读来源；后台运行始终使用独立 Chrome 配置，并为原生登录窗口禁用同步。

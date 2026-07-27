@@ -34,7 +34,26 @@ async function dismissBlockingModals(page) {
 
 async function getBmapiCheckinState(page) {
   if (expectedOrigin !== "https://bmapi.020212.xyz") return null;
-  const response = await page.evaluate(async () => {
+  const endpoint = `${expectedOrigin}/api/v1/checkin/status?timezone=Asia%2FShanghai`;
+  let response = null;
+  try {
+    const context = page.context();
+    let authToken = null;
+    if (typeof context?.storageState === "function") {
+      const storage = await context.storageState();
+      authToken = storage.origins?.find((item) => item.origin === expectedOrigin)?.localStorage
+        ?.find((item) => item.name === "auth_token")?.value ?? null;
+    }
+    const request = context?.request;
+    if (request?.get) {
+      const headers = { accept: "application/json", ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) };
+      const value = await request.get(endpoint, { headers });
+      response = { ok: value.ok(), body: await value.json() };
+    }
+  } catch {
+    response = null;
+  }
+  response ??= await page.evaluate(async () => {
     try {
       const value = await fetch("/api/v1/checkin/status?timezone=Asia%2FShanghai", {
         credentials: "include",

@@ -20,6 +20,7 @@ import { selectPreflightOrigins } from "./preflight-policy.mjs";
 import {
   TERMINAL_STATUSES,
   advanceAttemptedDeferredRetries,
+  applyManualConfirmations,
   deferUnresolvedLogin,
   isCurrentLocalRunId,
   isRetryEligible,
@@ -45,12 +46,16 @@ const limitIndex = process.argv.indexOf("--limit");
 const offsetIndex = process.argv.indexOf("--offset");
 const originsIndex = process.argv.indexOf("--origins");
 const resumeIndex = process.argv.indexOf("--resume-report");
+const manualConfirmedIndex = process.argv.indexOf("--manual-confirmed-origins");
 const limit = limitIndex >= 0 ? Math.max(1, Number.parseInt(process.argv[limitIndex + 1], 10) || 1) : null;
 const offset = offsetIndex >= 0 ? Math.max(0, Number.parseInt(process.argv[offsetIndex + 1], 10) || 0) : 0;
 let selectedOrigins = originsIndex >= 0
   ? new Set(String(process.argv[originsIndex + 1] ?? "").split(",").map((value) => value.trim()).filter(Boolean))
   : null;
 const requestedResumePath = resumeIndex >= 0 ? String(process.argv[resumeIndex + 1] ?? "").trim() : null;
+const manualConfirmedOrigins = new Set(manualConfirmedIndex >= 0
+  ? String(process.argv[manualConfirmedIndex + 1] ?? "").split(",").map((value) => value.trim()).filter(Boolean)
+  : []);
 const lockPath = path.join(rootDirectory, "tmp", "run.lock");
 const nativeWafPreflightPath = path.join(rootDirectory, "tmp", "native-waf-preflight.json");
 const lastValidBookmarkPlanPath = path.join(rootDirectory, "data", "last-valid-bookmark-plan.json");
@@ -115,6 +120,10 @@ try {
     const qaCachePath = path.join(rootDirectory, "data", "qa-cache.json");
     await ensurePrivateDirectory(logsRoot);
     let resumeBase = null;
+    let manualConfirmedResults = [];
+    if (manualConfirmedOrigins.size > 0 && !requestedResumePath) {
+      throw new Error("人工完成确认必须配合今天的续跑报告使用");
+    }
     if (requestedResumePath) {
       const resolvedResume = path.resolve(requestedResumePath);
       const resolvedLogs = path.resolve(logsRoot);
@@ -122,6 +131,19 @@ try {
       resumeBase = JSON.parse(await fs.readFile(resolvedResume, "utf8"));
       if (!Array.isArray(resumeBase?.results)) throw new Error("续跑报告缺少站点结果");
       if (!isCurrentLocalRunId(resumeBase.runId)) throw new Error("续跑报告不是今天生成的，拒绝复用旧签到结果");
+      const currentTargetOrigins = new Set(plan.targets.map((target) => target.origin));
+      const previousOrigins = new Set(resumeBase.results.map((result) => result.origin));
+      for (const origin of manualConfirmedOrigins) {
+        if (!currentTargetOrigins.has(origin) || !previousOrigins.has(origin)) {
+          throw new Error(`人工完成确认不属于当前续跑范围：${origin}`);
+        }
+      }
+      resumeBase = {
+        ...resumeBase,
+        results: applyManualConfirmations(resumeBase.results, manualConfirmedOrigins),
+      };
+      manualConfirmedResults = resumeBase.results.filter((result) => manualConfirmedOrigins.has(result.origin)
+        && result.manualConfirmation === true);
       if (!selectedOrigins) {
         selectedOrigins = resumeSelectedOrigins(plan.targets, resumeBase.results, config);
       }
@@ -330,7 +352,7 @@ try {
         ?? resumeBase.results.find((result) => result.origin === target.origin)
         ?? { origin: target.origin, title: target.title, folderNames: target.folderNames, status: "error", reason: "续跑未生成站点结果" })
       : results;
-    const currentOrigins = new Set(results.map((result) => result.origin));
+    const currentOrigins = new Set([...results, ...manualConfirmedResults].map((result) => result.origin));
     const finalResults = advanceAttemptedDeferredRetries(
       assembledResults.map((result) => currentOrigins.has(result.origin) ? deferUnresolvedLogin(result, config, finishedAt) : result),
       currentOrigins,
@@ -360,7 +382,7 @@ try {
     const resultPath = await writeRunResult(logsRoot, runLog, output, {
       updateLatest: isComplete && finalResults.length >= minimumTargets,
     });
-    await writeSiteState(siteStatePath, updateSiteState(siteState, results, finishedAt));
+    await writeSiteState(siteStatePath, updateSiteState(siteState, [...results, ...manualConfirmedResults], finishedAt));
     await writeQaCache(qaCachePath, updateQaCache(qaCache, results, finishedAt));
     await fs.rm(nativeWafPreflightPath, { force: true }).catch(() => {});
     console.log(JSON.stringify({ resultPath, summary }, null, 2));

@@ -2,7 +2,9 @@
 param(
     [switch]$DryRun,
     [switch]$SuppressReport,
-    [int]$Attempts = 0
+    [int]$Attempts = 0,
+    [string[]]$ManualConfirmedOrigins = @(),
+    [string]$ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -117,10 +119,9 @@ function Test-NeedsSavedLoginSync($ResumeCandidate, [datetime]$Now) {
 try {
     Push-Location $root
     $locationPushed = $true
-    $configPath = Join-Path $root 'config\config.json'
-    if (-not (Test-Path -LiteralPath $configPath)) { throw '尚未初始化，请先运行 scripts\Initialize-Checkin.ps1。' }
-    $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath | ConvertFrom-Json
-    $node = Resolve-CheckinNode $config
+    $effectiveConfigPath = if ($ConfigPath) { [System.IO.Path]::GetFullPath($ConfigPath) } else { Join-Path $root 'config\config.json' }
+    if (-not (Test-Path -LiteralPath $effectiveConfigPath -PathType Leaf)) { throw '尚未初始化，请先运行 scripts\Initialize-Checkin.ps1。' }
+    $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $effectiveConfigPath | ConvertFrom-Json
 
     $wrapperMutexName = if ($config.runMutexName) { [string]$config.runMutexName } else { 'Local\CodexBookmarkCheckinRun' }
     $wrapperMutex = [System.Threading.Mutex]::new($false, $wrapperMutexName)
@@ -134,6 +135,8 @@ try {
         return
     }
 
+    $node = Resolve-CheckinNode $config
+
     $timeoutMinutes = if ($null -ne $config.taskTimeoutMinutes) { [int]$config.taskTimeoutMinutes } else { 25 }
     if ($timeoutMinutes -lt 5 -or $timeoutMinutes -gt 55) { throw 'taskTimeoutMinutes 必须为 5 到 55 分钟。' }
     $runAttempts = if ($Attempts -gt 0) { $Attempts } elseif ($null -ne $config.taskRunAttempts) { [int]$config.taskRunAttempts } else { 2 }
@@ -146,6 +149,12 @@ try {
     if ($DryRun) { $arguments += '--dry-run' }
 
     if (-not $DryRun) { $resumeCandidate = Get-TodayResumeReport }
+    $manualConfirmed = @($ManualConfirmedOrigins | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($manualConfirmed.Count -gt 0) {
+        if ($DryRun) { throw '人工完成确认不能与 DryRun 同时使用。' }
+        if ($null -eq $resumeCandidate) { throw '人工完成确认需要今天已有完整 final 报告。' }
+        $arguments += @('--manual-confirmed-origins', ($manualConfirmed -join ','))
+    }
 
     $shouldSyncSavedLogins = -not $DryRun `
         -and (Test-NeedsSavedLoginSync $resumeCandidate (Get-Date)) `
@@ -169,7 +178,10 @@ try {
             if (@($config.nativeWafPreflightUrls).Count -gt 0 -or @($config.nativeChallengePreflight).Count -gt 0) {
                 $preflightOrigins = @()
                 if ($null -ne $resumeCandidate) {
-                    $preflightOrigins = @($resumeCandidate.Report.results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') } | ForEach-Object { [string]$_.origin })
+                    $preflightOrigins = @($resumeCandidate.Report.results | Where-Object {
+                        ($_.status -notin @('signed', 'already_signed', 'not_available')) `
+                            -and ($manualConfirmed -notcontains [string]$_.origin)
+                    } | ForEach-Object { [string]$_.origin })
                 }
                 elseif ($attempt -eq 1) {
                     $preflightOutput = & $node (Join-Path $root 'src\index.mjs') '--preflight-origins'

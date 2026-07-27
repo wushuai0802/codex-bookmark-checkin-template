@@ -9,7 +9,9 @@ import {
   configuredLoginCompletion,
   configuredTargetSkip,
   dismissBlockingModal,
+  filterExpiredBootstrapLocalEntries,
   preferCandidateResult,
+  shouldTryGenericNewApiCheckin,
   shouldPersistSiteStorage,
   tryBmapiCheckinStatus,
   writeSiteStorageSnapshot,
@@ -125,6 +127,63 @@ test("斑马签到使用接口确认最终状态", async () => {
     { status: "signed", reason: "斑马 API 接口确认签到成功" },
   );
   assert.equal(await tryBmapiCheckinStatus(page, "https://other.example"), null);
+});
+
+test("斑马状态查询优先使用不受页面导航影响的请求通道", async () => {
+  let evaluated = false;
+  const page = {
+    context: () => ({
+      storageState: async () => ({
+        origins: [{
+          origin: "https://bmapi.020212.xyz",
+          localStorage: [{ name: "auth_token", value: "test-token" }],
+        }],
+      }),
+      request: {
+        get: async (url, options) => {
+          assert.equal(url, "https://bmapi.020212.xyz/api/v1/checkin/status?timezone=Asia%2FShanghai");
+          assert.equal(options.headers.authorization, "Bearer test-token");
+          return {
+            ok: () => true,
+            status: () => 200,
+            json: async () => ({ code: 0, data: { enabled: true, checked_in: true } }),
+          };
+        },
+      },
+    }),
+    evaluate: async () => {
+      evaluated = true;
+      throw new Error("Execution context was destroyed");
+    },
+  };
+
+  assert.equal((await tryBmapiCheckinStatus(page, "https://bmapi.020212.xyz")).status, "already_signed");
+  assert.equal(evaluated, false);
+});
+
+test("斑马跳过包含提交动作的通用 New API 探测", () => {
+  const bmapi = { origin: "https://bmapi.020212.xyz", folderNames: ["公益站"] };
+  const publicSite = { origin: "https://public.example", folderNames: ["公益站"] };
+  const tracker = { origin: "https://tracker.example", folderNames: ["签到"] };
+  assert.equal(shouldTryGenericNewApiCheckin(bmapi), false);
+  assert.equal(shouldTryGenericNewApiCheckin(bmapi, [bmapi.origin]), false);
+  assert.equal(shouldTryGenericNewApiCheckin(publicSite), true);
+  assert.equal(shouldTryGenericNewApiCheckin(publicSite, [publicSite.origin]), true);
+  assert.equal(shouldTryGenericNewApiCheckin(tracker), false);
+});
+
+test("过期的站点快照不会反复注入认证令牌", () => {
+  const expired = [
+    ["auth_token", "old-access"],
+    ["refresh_token", "old-refresh"],
+    ["auth_user", "old-user"],
+    ["token_expires_at", "1785066910718"],
+    ["ann_dismiss_today_23", "2026-07-27"],
+  ];
+  assert.deepEqual(filterExpiredBootstrapLocalEntries(expired, 1785114265000), [
+    ["ann_dismiss_today_23", "2026-07-27"],
+  ]);
+  assert.deepEqual(filterExpiredBootstrapLocalEntries(expired, 1785000000000), expired);
 });
 
 test("站点会话更新前会把旧内容保留为 bak", async () => {
