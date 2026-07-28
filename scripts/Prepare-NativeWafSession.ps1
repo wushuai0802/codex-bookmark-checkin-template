@@ -157,7 +157,15 @@ foreach ($item in $items) {
     $maximumInspectionAttempts = if ([string]$item.action -eq 'checkin') { 1 } else { 2 }
     for ($inspectionAttempt = 1; $inspectionAttempt -le $maximumInspectionAttempts -and $null -eq $inspection; $inspectionAttempt++) {
         $debugPort = Get-Random -Minimum 12000 -Maximum 32000
-        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -RemoteDebuggingPort $debugPort -Urls @($url)
+        $openParameters = @{
+            RemoteDebuggingPort = $debugPort
+            Urls = @($url)
+        }
+        # Interactive providers throttle or reject fully offscreen windows.
+        # A native check-in therefore gets a normal visible Chrome window;
+        # passive WAF warmups remain offscreen to avoid unnecessary disruption.
+        if ([string]$item.action -ne 'checkin') { $openParameters.Offscreen = $true }
+        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters
         Start-Sleep -Seconds 2
         try {
             $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) $inspectionMode 2>$null
@@ -213,4 +221,4 @@ $preflightReport = [pscustomobject]@{
     [System.Text.UTF8Encoding]::new($false)
 )
 
-Write-Output "已离屏预热 $($items.Count) 个原生验证会话。"
+Write-Output "已完成 $($items.Count) 个原生验证会话预热。"

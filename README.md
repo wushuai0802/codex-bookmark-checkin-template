@@ -49,9 +49,9 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 用户明确完成当次人工验证后，可通过 `Run-Checkin.ps1 -ManualConfirmedOrigins 'https://example.com'` 将结果以“用户已确认手动完成”写回当天续跑报告；该状态保留审计字段，不冒充自动签到。
 - 限频站点会记录 `nextEligibleAt` 并按时间定向补跑；超时续跑只接受当天的新检查点，避免复用旧日报或重复整批执行。
 - Windows 计划任务从签到时间起按小时做无副作用探测，用户级调度器按分钟探测；用户级模式由独立守护、PowerShell 看门狗和调度器三层恢复，两种模式都受每日次数上限和运行锁保护。
-- 主 Chrome 和可选 Edge 书签文件只作为只读来源；后台运行始终使用独立 Chrome 配置，并为原生登录窗口禁用同步。
+- 主 Chrome 和可选 Edge 书签文件只作为只读来源；后台运行始终使用独立 Chrome 配置。普通原生窗口禁用同步，只有已授权的保存密码恢复窗口会临时启用 Chrome 账户密码库。
 - 默认不配置外部通知。用户可选择安全的命令型通知器，敏感值应从环境变量或凭据管理器读取。
-- 主 Chrome 保存密码同步和外部问答搜索默认关闭；初始化问卷获得明确授权后才启用，未授权时不会读取密码库或访问搜索引擎。
+- 主 Chrome 保存密码同步和外部问答搜索默认关闭；初始化问卷获得明确授权后才启用，未授权时不会读取密码库或访问搜索引擎。启用密码同步后，账户密码库中仍保持加密的匹配记录会桥接到独立配置的本地密码库，脚本不解密、输出或提交密码。
 - 机器人 Chrome 默认关闭 Chromium 的本地大模型下载；限频重试采用有界指数退避，达到当日上限后转到次日计划时间，避免空转。
 
 Chrome 保存密码和 OAuth 都无法恢复的站点，可选择使用 Windows DPAPI 凭据。运行 `scripts\Set-ProtectedSiteCredential.ps1 -Origin https://example.com` 交互录入，用户名和密码不会显示；密文只写入被 Git 忽略的 `data\credentials\`，且仅能由当前 Windows 用户解密。随后在本机 `config/config.json` 的 `protectedCredentialOrigins` 中加入站点，并按需配置 `protectedLoginVerificationPaths` 和 `siteStorageBootstrap`。登录器只通过子进程标准输入接收临时明文，不写命令行或日志。

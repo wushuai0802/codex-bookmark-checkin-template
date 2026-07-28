@@ -2,7 +2,8 @@
 param(
     [string[]]$Urls = @(),
     [switch]$Offscreen,
-    [int]$RemoteDebuggingPort = 0
+    [int]$RemoteDebuggingPort = 0,
+    [switch]$EnablePasswordManager
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,7 +47,6 @@ $arguments = @(
     '--new-window',
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-sync',
     '--disable-component-update',
     '--disable-features=OptimizationGuideOnDeviceModel',
     '--force-renderer-accessibility',
@@ -56,6 +56,9 @@ $arguments = @(
     "--window-position=$windowPosition",
     '--window-size=1400,900'
 )
+if (-not $EnablePasswordManager) {
+    $arguments += '--disable-sync'
+}
 if ($RemoteDebuggingPort -gt 0) {
     $arguments += "--remote-debugging-port=$RemoteDebuggingPort"
     $arguments += "--remote-allow-origins=http://127.0.0.1:$RemoteDebuggingPort"

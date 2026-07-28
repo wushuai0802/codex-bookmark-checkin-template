@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
 const port = Number.parseInt(process.argv[2], 10);
 const expectedOrigin = new URL(process.argv[3]).origin;
-const maxWaitSeconds = Math.max(0, Math.min(60, Number.parseInt(process.argv[4] || "0", 10) || 0));
+const maxWaitSeconds = Math.max(0, Math.min(120, Number.parseInt(process.argv[4] || "0", 10) || 0));
 const inspectionMode = process.argv[5] || "require-confirmed";
 const allowEndpointReady = inspectionMode === "allow-endpoint";
 const performNativeCheckin = inspectionMode === "native-checkin";
@@ -99,7 +99,8 @@ try {
   let checkboxClicked = false;
   let checkinClicked = false;
   let checkinStarted = false;
-  let lastCheckboxClickAt = 0;
+  let challengeDetectedAt = null;
+  let widgetInteractionAttempted = false;
   const dismissedPrompts = [];
   do {
     try {
@@ -158,7 +159,17 @@ try {
         }
       }
 
-      if (performNativeCheckin && !snapshot.challengeTokenReady && Date.now() - lastCheckboxClickAt >= 4000) {
+      if (snapshot.challengeSelectors && challengeDetectedAt === null) challengeDetectedAt = Date.now();
+      // Prefer passive verification in the real Chrome window.  Interact at
+      // most once after eight seconds because repeated clicks during the
+      // provider's verification phase can turn a slow success into a failure.
+      if (performNativeCheckin
+        && snapshot.challengeSelectors
+        && !snapshot.challengeTokenReady
+        && !widgetInteractionAttempted
+        && challengeDetectedAt !== null
+        && Date.now() - challengeDetectedAt >= 8000) {
+        widgetInteractionAttempted = true;
         let clickedThisRound = false;
         for (const frame of page.frames()) {
           const checkbox = frame.locator('#checkbox, [role="checkbox"], input[type="checkbox"]').first();
@@ -178,7 +189,6 @@ try {
           }
         }
         checkboxClicked = checkboxClicked || clickedThisRound;
-        lastCheckboxClickAt = clickedThisRound ? Date.now() : Date.now() - 3000;
       }
       if (performNativeCheckin && snapshot.challengeTokenReady && !checkinClicked) {
         const submit = page.locator("#checkin-submit");

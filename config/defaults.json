@@ -38,6 +38,7 @@
   "loginAsCheckinOrigins": [],
   "syncSavedLoginOrigins": [],
   "syncBookmarkSavedLogins": false,
+  "syncAccountSavedLoginsToLocalStore": true,
   "qaMaxQuestionChanges": 1,
   "qaWebSearchEnabled": false,
   "qaWebSearchUrl": "https://www.google.com/search?q=",

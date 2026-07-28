@@ -7,6 +7,7 @@ test("公开默认配置不启用外部通知", async () => {
   assert.equal(defaults.notification.mode, "none");
   assert.equal(defaults.notification.executable, "");
   assert.equal(defaults.syncBookmarkSavedLogins, false);
+  assert.equal(defaults.syncAccountSavedLoginsToLocalStore, true);
   assert.deepEqual(defaults.syncSavedLoginOrigins, []);
   assert.equal(defaults.qaWebSearchEnabled, false);
   assert.equal(defaults.disableOptimizationGuideOnDeviceModel, true);

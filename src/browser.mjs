@@ -69,6 +69,12 @@ export function configuredLoginCompletion(activeOrigin, config = {}) {
   };
 }
 
+export function turnstileWaitMs(config = {}) {
+  const configured = Number(config.cloudflareWaitMs);
+  const value = Number.isFinite(configured) && configured > 0 ? configured : 30000;
+  return Math.max(5000, Math.min(120000, value));
+}
+
 export function candidateHistoryEntry(candidateUrl, result, attempt) {
   return {
     attempt,
@@ -213,11 +219,23 @@ async function classifyManualAttention(page, state, activeOrigin, config) {
   if (state.status === "interactive_challenge"
     && (config.autoClickTurnstileOrigins ?? []).includes(activeOrigin)) {
     const response = page.locator('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
-    let lastClickAt = Date.now() - 4000;
-    const deadline = Date.now() + Math.min(30000, Number(config.cloudflareWaitMs) || 30000);
+    const waitMs = turnstileWaitMs(config);
+    const startedAt = Date.now();
+    const deadline = startedAt + waitMs;
+    const passiveGraceMs = Math.min(8000, Math.max(2000, Math.floor(waitMs / 6)));
+    let widgetInteractionAttempted = false;
     while (Date.now() < deadline) {
       const token = await response.first().inputValue({ timeout: 1000 }).catch(() => "");
-      if (token.length <= 20 && Date.now() - lastClickAt >= 4000) {
+      if (token.length > 20) {
+        await sleep(1000);
+      }
+      // Turnstile normally resolves by itself in a real browser.  Give it a
+      // passive grace period first, then make at most one bounded interaction.
+      // Repeated clicks while it says "正在验证" can invalidate the attempt.
+      if (token.length <= 20
+        && !widgetInteractionAttempted
+        && Date.now() - startedAt >= passiveGraceMs) {
+        widgetInteractionAttempted = true;
         let clickAttempted = false;
         for (const frame of page.frames()) {
           const checkbox = frame.locator('#checkbox, input[type="checkbox"], [role="checkbox"]').first();
@@ -236,7 +254,6 @@ async function classifyManualAttention(page, state, activeOrigin, config) {
               .then(() => true).catch(() => false);
           }
         }
-        lastClickAt = clickAttempted ? Date.now() : Date.now() - 3000;
       }
       const apiStatus = await tryBmapiCheckinStatus(page, activeOrigin, "signed");
       if (apiStatus && apiStatus.status !== "ready") return apiStatus;
@@ -246,7 +263,10 @@ async function classifyManualAttention(page, state, activeOrigin, config) {
       }
       await sleep(1000);
     }
-    return { status: "needs_attention", reason: "Turnstile 自动验证未在 30 秒内完成" };
+    return {
+      status: "needs_attention",
+      reason: `Turnstile 自动验证未在 ${Math.ceil(waitMs / 1000)} 秒内完成`,
+    };
   }
   if (state.status === "interactive_challenge"
     && ((config.manualChallengeOrigins ?? []).includes(activeOrigin)

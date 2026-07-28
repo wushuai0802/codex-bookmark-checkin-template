@@ -13,6 +13,7 @@ import {
   preferCandidateResult,
   shouldTryGenericNewApiCheckin,
   shouldPersistSiteStorage,
+  turnstileWaitMs,
   tryBmapiCheckinStatus,
   writeSiteStorageSnapshot,
 } from "../src/browser.mjs";
@@ -127,6 +128,13 @@ test("斑马签到使用接口确认最终状态", async () => {
     { status: "signed", reason: "斑马 API 接口确认签到成功" },
   );
   assert.equal(await tryBmapiCheckinStatus(page, "https://other.example"), null);
+});
+
+test("Turnstile 使用完整配置等待时间并设置安全上下限", () => {
+  assert.equal(turnstileWaitMs({ cloudflareWaitMs: 90000 }), 90000);
+  assert.equal(turnstileWaitMs({ cloudflareWaitMs: 1000 }), 5000);
+  assert.equal(turnstileWaitMs({ cloudflareWaitMs: 300000 }), 120000);
+  assert.equal(turnstileWaitMs({ cloudflareWaitMs: "invalid" }), 30000);
 });
 
 test("斑马状态查询优先使用不受页面导航影响的请求通道", async () => {

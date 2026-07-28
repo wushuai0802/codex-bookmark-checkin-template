@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -56,4 +57,26 @@ test("原生预热脚本拒绝未显式指定范围", async () => {
     ], { cwd: root, encoding: "utf8" }),
     (error) => /必须显式传入非空 -Origins/.test(`${error.stdout}\n${error.stderr}`),
   );
+});
+
+test("原生保存密码恢复显式启用 Chrome 账户密码库", async () => {
+  const recoverScript = await fs.readFile(path.join(root, "scripts", "Recover-NativeLogin.ps1"), "utf8");
+  const openScript = await fs.readFile(path.join(root, "scripts", "Open-PlainLoginChrome.ps1"), "utf8");
+  const nativeLogin = await fs.readFile(path.join(root, "src", "native-login.mjs"), "utf8");
+  const syncScript = await fs.readFile(path.join(root, "scripts", "Sync-ChromeSavedLogins.ps1"), "utf8");
+  assert.match(recoverScript, /Open-PlainLoginChrome\.ps1'[\s\S]*-EnablePasswordManager/);
+  assert.match(recoverScript, /for\s*\(\$loginAttempt\s*=\s*1;\s*\$loginAttempt\s*-le\s*3/);
+  assert.match(openScript, /if\s*\(-not\s+\$EnablePasswordManager\)\s*\{[\s\S]*--disable-sync/);
+  assert.match(nativeLogin, /for\s*\(const field of \[username, password, username\]\)/);
+  assert.match(syncScript, /syncAccountSavedLoginsToLocalStore/);
+  assert.match(syncScript, /app_bound_encrypted_key/);
+  assert.match(syncScript, /SourceName\s*=\s*'Login Data For Account'[\s\S]*TargetName\s*=\s*'Login Data'/);
+});
+
+test("原生交互签到使用可见窗口和最长两分钟检查器", async () => {
+  const preflightScript = await fs.readFile(path.join(root, "scripts", "Prepare-NativeWafSession.ps1"), "utf8");
+  const inspector = await fs.readFile(path.join(root, "src", "native-browser-inspect.mjs"), "utf8");
+  assert.match(preflightScript, /if\s*\(\[string\]\$item\.action\s+-ne\s+'checkin'\)\s*\{\s*\$openParameters\.Offscreen\s*=\s*\$true\s*\}/);
+  assert.match(inspector, /Math\.min\(120,/);
+  assert.doesNotMatch(inspector, /lastCheckboxClickAt/);
 });
