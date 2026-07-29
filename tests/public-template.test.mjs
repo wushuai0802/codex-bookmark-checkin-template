@@ -7,9 +7,23 @@ test("公开默认配置不启用外部通知", async () => {
   assert.equal(defaults.notification.mode, "none");
   assert.equal(defaults.notification.executable, "");
   assert.equal(defaults.syncBookmarkSavedLogins, false);
+  assert.equal(defaults.syncAccountSavedLoginsToLocalStore, true);
   assert.deepEqual(defaults.syncSavedLoginOrigins, []);
   assert.equal(defaults.qaWebSearchEnabled, false);
   assert.equal(defaults.disableOptimizationGuideOnDeviceModel, true);
+  assert.deepEqual(defaults.configuredTargets, []);
+  assert.deepEqual(defaults.disabledCheckinOrigins, []);
+  assert.deepEqual(defaults.loginAsCheckinOrigins, []);
+});
+
+test("首次运行原生预热必须使用已校验书签范围", async () => {
+  const runner = await fs.readFile(new URL("../scripts/Run-Checkin.ps1", import.meta.url), "utf8");
+  const preflight = await fs.readFile(new URL("../scripts/Prepare-NativeWafSession.ps1", import.meta.url), "utf8");
+  assert.match(runner, /--preflight-origins/);
+  assert.match(runner, /Prepare-NativeWafSession\.ps1'\) -Origins \$preflightOrigins/);
+  assert.doesNotMatch(runner, /Prepare-NativeWafSession\.ps1'\)\s*\}\s*$/m);
+  assert.match(preflight, /必须显式传入非空 -Origins/);
+  assert.match(preflight, /\[switch\]\$AllConfigured/);
 });
 
 test("保存密码同步必须经过显式总开关授权", async () => {
@@ -43,12 +57,36 @@ test("wrapper 覆盖前置步骤并且只在子进程退出后清理运行锁", 
   assert.match(runner, /Remove-RunLockOwnedByProcess/);
 });
 
+test("用户级调度器包含独立守护并在健康检查中验证三层进程", async () => {
+  const installer = await fs.readFile(new URL("../scripts/Install-UserScheduler.ps1", import.meta.url), "utf8");
+  const remover = await fs.readFile(new URL("../scripts/Remove-UserScheduler.ps1", import.meta.url), "utf8");
+  const health = await fs.readFile(new URL("../scripts/Test-CheckinHealth.ps1", import.meta.url), "utf8");
+  const scheduler = await fs.readFile(new URL("../scripts/Start-UserScheduler.ps1", import.meta.url), "utf8");
+  const supervisor = await fs.readFile(new URL("../scripts/UserSchedulerSupervisor.vbs", import.meta.url), "utf8");
+  assert.match(installer, /UserSchedulerSupervisor\.vbs/);
+  assert.match(installer, /wscript\.exe/);
+  assert.match(remover, /UserSchedulerSupervisor\.vbs/);
+  assert.match(health, /supervisorProcessCount/);
+  assert.match(health, /\$supervisorCount -eq 1/);
+  assert.match(supervisor, /WatchdogIsRunning/);
+  assert.match(supervisor, /WScript\.Arguments/);
+  assert.match(scheduler, /Get-LatestReportState \$now \$config/);
+  assert.match(scheduler, /已接收外部续跑完成报告/);
+});
+
 test("安装配置优先使用 PowerShell 7，5.1 仅作为可用回退", async () => {
   const setup = await fs.readFile(new URL("../src/setup-config.mjs", import.meta.url), "utf8");
   const preflight = await fs.readFile(new URL("../scripts/Test-Environment.ps1", import.meta.url), "utf8");
   assert.match(setup, /findOnPath\("pwsh\.exe"\)/);
   assert.match(setup, /answers\.powershellExecutable \|\| preferredPowerShell/);
   assert.match(preflight, /--scope-json-base64/);
+});
+
+test("OAuth 恢复可以展开其他登录选项并关闭 LinuxDO 遮罩", async () => {
+  const oauth = await fs.readFile(new URL("../src/oauth-login.mjs", import.meta.url), "utf8");
+  assert.match(oauth, /其他登录选项/);
+  assert.match(oauth, /revealAlternateLoginOptions/);
+  assert.match(oauth, /button\.modal-close\[title="关闭"\]/);
 });
 
 test("公开模板不预设任何用户的书签文件夹名称", async () => {

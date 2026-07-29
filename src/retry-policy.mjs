@@ -5,6 +5,29 @@ export const RECOVERABLE_STATUSES = new Set([
 
 export const TERMINAL_STATUSES = new Set(["signed", "already_signed", "not_available"]);
 
+export function applyManualConfirmations(results, confirmedOrigins, now = new Date()) {
+  const confirmed = confirmedOrigins instanceof Set ? confirmedOrigins : new Set(confirmedOrigins ?? []);
+  const confirmedAt = now.toISOString();
+  return (results ?? []).map((result) => {
+    if (!confirmed.has(result?.origin) || TERMINAL_STATUSES.has(result?.status)) return result;
+    const {
+      retryCause: _retryCause,
+      nextEligibleAt: _nextEligibleAt,
+      retrySequence: _retrySequence,
+      retrySequenceDate: _retrySequenceDate,
+      retryExhaustedForDay: _retryExhaustedForDay,
+      ...preserved
+    } = result;
+    return {
+      ...preserved,
+      status: "already_signed",
+      reason: "用户已确认手动完成",
+      manualConfirmation: true,
+      manualConfirmedAt: confirmedAt,
+    };
+  });
+}
+
 function shanghaiParts(date) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
@@ -123,6 +146,16 @@ export function isRetryEligible(result, now = new Date()) {
   if (result.status !== "deferred") return true;
   const next = Date.parse(result.nextEligibleAt ?? "");
   return !Number.isFinite(next) || next <= now.getTime();
+}
+
+export function resumeSelectedOrigins(currentTargets, previousResults, config = {}, now = new Date()) {
+  const currentOrigins = new Set((currentTargets ?? []).map((target) => target.origin));
+  const previousOrigins = new Set((previousResults ?? []).map((result) => result.origin));
+  return new Set([
+    ...(previousResults ?? []).filter((result) => isRetryEligible(result, now)).map((result) => result.origin),
+    ...[...currentOrigins].filter((origin) => !previousOrigins.has(origin)),
+    ...(config.disabledCheckinOrigins ?? []).filter((origin) => currentOrigins.has(origin)),
+  ]);
 }
 
 export function nextDeferredRetryAt(results, now = new Date()) {

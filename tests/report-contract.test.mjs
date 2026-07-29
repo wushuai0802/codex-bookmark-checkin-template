@@ -12,18 +12,24 @@ const logsRoot = path.join(root, "logs");
 const reporter = path.join(root, "scripts", "Submit-UnifiedCheckinReport.ps1");
 const powershell = process.platform === "win32" ? "pwsh.exe" : "pwsh";
 
-async function previewReport(report, runnerStatus = "completed") {
+async function previewReport(report, runnerStatus = "completed", configOverride = null) {
   await fs.mkdir(logsRoot, { recursive: true });
   const directory = await fs.mkdtemp(path.join(logsRoot, "report-contract-test-"));
   const reportPath = path.join(directory, "report.json");
+  const configPath = path.join(directory, "config.json");
   try {
     await fs.writeFile(reportPath, JSON.stringify(report), "utf8");
-    const { stdout } = await execFileAsync(powershell, [
+    if (configOverride) await fs.writeFile(configPath, JSON.stringify(configOverride), "utf8");
+    const reporterArguments = [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-File", reporter,
       "-RunnerStatus", runnerStatus,
       "-ReportPath", reportPath,
       "-Preview",
+    ];
+    if (configOverride) reporterArguments.push("-ConfigPath", configPath);
+    const { stdout } = await execFileAsync(powershell, [
+      ...reporterArguments,
     ], { cwd: root, encoding: "utf8" });
     return JSON.parse(stdout.trim());
   } finally {
@@ -80,6 +86,32 @@ test("只有完整的 final 报告可以映射为今日已完成", async () => {
   assert.equal(report.status, "already_done");
   assert.equal(report.isComplete, true);
   assert.match(report.summary, /^共 2 站：\n/);
+});
+
+test("同一逻辑站点的两个取消任务只统计一次", async () => {
+  const report = await previewReport({
+    runId: "20260723-120002-logical-group",
+    runState: "final",
+    plannedTotal: 2,
+    processedTotal: 2,
+    isComplete: true,
+    results: [
+      { origin: "https://checkin.example", status: "not_available", disabledByConfig: true },
+      { origin: "https://console.example", status: "not_available", disabledByConfig: true },
+    ],
+  }, "completed", {
+    logicalCheckinGroups: {
+      "https://checkin.example": "example-service",
+      "https://console.example": "example-service",
+    },
+    notification: { mode: "none" },
+  });
+
+  assert.equal(report.status, "skipped");
+  assert.equal(report.siteCount, 1);
+  assert.match(report.summary, /^共 1 站：\n/);
+  assert.match(report.summary, /\n1 个已取消签到/);
+  assert.doesNotMatch(report.summary, /2 个未开放签到/);
 });
 
 test("通知事件键对相同状态稳定并在结果变化后更新", async () => {

@@ -28,11 +28,17 @@ try {
     );
     let filled = await fieldsFilled();
     if (!filled) {
-      await username.click();
-      await username.press("ArrowDown").catch(() => {});
-      await username.press("Enter").catch(() => {});
-      await page.waitForTimeout(800);
-      filled = await fieldsFilled();
+      // Chrome may anchor the password-manager popup to either field.  Trying
+      // both also handles credentials saved on /sign-up but restored on
+      // /sign-in without reading or printing either field's value.
+      for (const field of [username, password, username]) {
+        await field.click().catch(() => {});
+        await field.press("ArrowDown").catch(() => {});
+        await field.press("Enter").catch(() => {});
+        await page.waitForTimeout(1000);
+        filled = await fieldsFilled();
+        if (filled) break;
+      }
     }
 
     if (!filled) {
@@ -80,13 +86,21 @@ try {
       if (submit && challengeReady) {
         await submit.click();
         await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => {});
-        await page.waitForTimeout(1500);
+        await page.waitForFunction(() => {
+          const visiblePassword = [...document.querySelectorAll('input[type="password"]')].some((element) => {
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+          });
+          return !visiblePassword || !/\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)/i.test(location.href);
+        }, null, { timeout: 12000 }).catch(() => {});
         let stillHasPassword = await page.locator('input[type="password"]:visible').count() > 0;
         if (stillHasPassword) {
           // Some forms render Turnstile only after the first submit.  Give the
           // newly-created widget one bounded native-browser pass, then submit
           // once more when its response token is present.
           const secondDeadline = Date.now() + 55000;
+          const secondStartedAt = Date.now();
           let secondSolved = false;
           let secondCheckboxClicked = false;
           while (Date.now() < secondDeadline) {
@@ -98,6 +112,7 @@ try {
             });
             if (challenge.solved) { secondSolved = true; break; }
             if (!challenge.hasFrame && !challenge.hasWidget) {
+              if (Date.now() - secondStartedAt > 8000) break;
               await page.waitForTimeout(1500);
               continue;
             }
@@ -114,7 +129,7 @@ try {
           if (secondSolved) {
             await submit.click();
             await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => {});
-            await page.waitForTimeout(1500);
+            await page.waitForFunction(() => !document.querySelector('input[type="password"]'), null, { timeout: 12000 }).catch(() => {});
             stillHasPassword = await page.locator('input[type="password"]:visible').count() > 0;
           }
         }

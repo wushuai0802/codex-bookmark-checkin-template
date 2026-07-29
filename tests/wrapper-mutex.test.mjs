@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { once } from "node:events";
@@ -12,6 +14,9 @@ const runner = path.join(root, "scripts", "Run-Checkin.ps1");
 const mutexName = "Local\\CodexBookmarkCheckinRun";
 
 test("第二个 wrapper 在命名互斥被占用时快速退出且不启动签到", async () => {
+  const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "wrapper-mutex-test-"));
+  const configPath = path.join(sandbox, "config.json");
+  await fs.writeFile(configPath, `${JSON.stringify({ runMutexName: mutexName })}\n`, "utf8");
   const holderCommand = [
     `$mutex=[System.Threading.Mutex]::new($false,'${mutexName}')`,
     "$owned=$mutex.WaitOne()",
@@ -33,12 +38,13 @@ test("第二个 wrapper 在命名互斥被占用时快速退出且不启动签�
     const started = Date.now();
     const { stdout } = await execFileAsync("pwsh.exe", [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-      "-File", runner, "-DryRun", "-SuppressReport",
+      "-File", runner, "-DryRun", "-SuppressReport", "-ConfigPath", configPath,
     ], { cwd: root, encoding: "utf8", windowsHide: true });
     assert.ok(Date.now() - started < 5000);
     assert.equal(stdout.trim(), "");
   } finally {
     holder.kill();
     await once(holder, "exit").catch(() => {});
+    await fs.rm(sandbox, { recursive: true, force: true });
   }
 });

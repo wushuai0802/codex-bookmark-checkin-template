@@ -51,6 +51,11 @@ async function readItem(outboxPath) {
   return JSON.parse(await fs.readFile(path.join(outboxPath, files[0]), "utf8"));
 }
 
+async function readItems(outboxPath) {
+  const files = (await fs.readdir(outboxPath)).filter((name) => name.endsWith(".json"));
+  return Promise.all(files.map(async (name) => JSON.parse(await fs.readFile(path.join(outboxPath, name), "utf8"))));
+}
+
 async function readQuarantineItems(outboxPath) {
   const quarantinePath = path.join(outboxPath, "quarantine");
   const files = await fs.readdir(quarantinePath).catch(() => []);
@@ -64,6 +69,16 @@ async function writeFakeCommand(filePath, acknowledgement, exitCode = 0) {
 
 async function writeHangingCommand(filePath) {
   const body = "setInterval(() => {}, 1000);\n";
+  await fs.writeFile(filePath, body, "utf8");
+}
+
+async function writeArgumentCheckingCommand(filePath, expectedSummary) {
+  const body = `
+const args = process.argv.slice(2);
+const summaryIndex = args.indexOf("--summary");
+if (summaryIndex < 0 || args[summaryIndex + 1] !== ${JSON.stringify(expectedSummary)}) process.exit(11);
+console.log(JSON.stringify({accepted:true,duplicate:false}));
+`;
   await fs.writeFile(filePath, body, "utf8");
 }
 
@@ -150,6 +165,72 @@ for (const disposition of ["accepted", "duplicate"]) {
     }
   });
 }
+
+test("多行中文摘要作为一个参数传给通知程序", async () => {
+  await fs.mkdir(tmpRoot, { recursive: true });
+  const sandbox = await fs.mkdtemp(path.join(tmpRoot, "public-outbox-argument-"));
+  const outboxPath = path.join(sandbox, "outbox");
+  const configPath = path.join(sandbox, "config.json");
+  const commandPath = path.join(sandbox, "argument-receiver.mjs");
+  try {
+    await writeConfig(configPath, commandNotification(process.execPath, [commandPath]));
+    await enqueue(outboxPath, configPath, completeReport({
+      origin: "https://argument.example",
+      status: "needs_attention",
+      reason: "第一行有空格\n第二行是中文",
+    }));
+    const item = await readItem(outboxPath);
+    await writeArgumentCheckingCommand(commandPath, item.summary);
+    const output = JSON.parse(await runPowerShell(worker, [
+      "-OutboxPath", outboxPath, "-ConfigPath", configPath, "-ForceDue",
+      "-MutexName", `Local\\PublicOutboxArgument${process.pid}`,
+    ]));
+    assert.equal(output.delivered, 1);
+    assert.equal((await readItem(outboxPath)).delivered, true);
+  } finally {
+    await fs.rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("同一天只投递最新回执并淘汰旧状态", async () => {
+  await fs.mkdir(tmpRoot, { recursive: true });
+  const sandbox = await fs.mkdtemp(path.join(tmpRoot, "public-outbox-supersede-"));
+  const outboxPath = path.join(sandbox, "outbox");
+  const configPath = path.join(sandbox, "config.json");
+  const commandPath = path.join(sandbox, "receiver.mjs");
+  try {
+    await writeConfig(configPath, commandNotification(process.execPath, [commandPath]));
+    await enqueue(outboxPath, configPath, completeReport({
+      origin: "https://supersede.example", status: "needs_attention", reason: "旧异常",
+    }));
+    await enqueue(outboxPath, configPath, completeReport({
+      origin: "https://supersede.example", status: "signed", reason: "最终成功",
+    }));
+    const initialItems = await readItems(outboxPath);
+    assert.equal(initialItems.length, 2);
+    const files = (await fs.readdir(outboxPath)).filter((name) => name.endsWith(".json"));
+    for (const file of files) {
+      const filePath = path.join(outboxPath, file);
+      const item = JSON.parse(await fs.readFile(filePath, "utf8"));
+      item.createdAt = item.status === "success" ? "2026-07-23T13:00:00+08:00" : "2026-07-23T12:00:00+08:00";
+      item.nextAttemptAt = "2099-01-01T00:00:00Z";
+      await fs.writeFile(filePath, JSON.stringify(item), "utf8");
+    }
+    await writeFakeCommand(commandPath, { accepted: true, duplicate: false });
+    const output = JSON.parse(await runPowerShell(worker, [
+      "-OutboxPath", outboxPath, "-ConfigPath", configPath, "-ForceDue",
+      "-MutexName", `Local\\PublicOutboxSupersede${process.pid}`,
+    ]));
+    assert.equal(output.processed, 1);
+    assert.equal(output.delivered, 1);
+    assert.equal(output.superseded, 1);
+    const items = await readItems(outboxPath);
+    assert.equal(items.find((item) => item.status === "success").disposition, "accepted");
+    assert.equal(items.find((item) => item.status === "needs_attention").disposition, "superseded");
+  } finally {
+    await fs.rm(sandbox, { recursive: true, force: true });
+  }
+});
 
 test("payloadHash 不匹配的 outbox 条目会被隔离且不会发送", async () => {
   await fs.mkdir(tmpRoot, { recursive: true });

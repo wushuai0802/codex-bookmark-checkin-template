@@ -1,10 +1,17 @@
 ﻿[CmdletBinding()]
 param(
     [int]$LoadTimeoutSeconds = 20,
-    [string[]]$Origins = @()
+    [string[]]$Origins,
+    [switch]$AllConfigured
 )
 
 $ErrorActionPreference = 'Stop'
+if ($AllConfigured -and $PSBoundParameters.ContainsKey('Origins')) {
+    throw '不能同时指定 -Origins 和 -AllConfigured。'
+}
+if (-not $AllConfigured -and (-not $PSBoundParameters.ContainsKey('Origins') -or @($Origins).Count -eq 0)) {
+    throw '必须显式传入非空 -Origins；确需预热全部配置项时请使用 -AllConfigured。'
+}
 $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $profilePath = [string]$config.automationUserDataDir
@@ -26,13 +33,40 @@ $items += @($config.nativeChallengePreflight | ForEach-Object {
     $passiveOnly = [bool]$_.passiveOnly
     if ($uri.Scheme -ne 'https' -or -not $uri.Host) { throw "原生验证预热地址无效：$($_.url)" }
     if ($waitSeconds -lt 5 -or $waitSeconds -gt 120) { throw "原生验证等待时间必须为 5 到 120 秒：$($_.url)" }
-    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $false; passiveOnly = $passiveOnly }
+    $action = if ($null -eq $_.action) { '' } else { [string]$_.action }
+    if ($action -notin @('', 'checkin')) { throw "原生验证动作无效：$action" }
+    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $false; action = $action; passiveOnly = $passiveOnly }
 })
 
-if ($Origins.Count -gt 0) {
+if (-not $AllConfigured) {
     $originSet = @{};
     foreach ($origin in $Origins) { $originSet[([uri]$origin).GetLeftPart([System.UriPartial]::Authority)] = $true }
     $items = @($items | Where-Object { $originSet.ContainsKey(([uri]$_.url).GetLeftPart([System.UriPartial]::Authority)) })
+}
+
+$knownNoCheckin = @{}
+foreach ($value in @($config.knownNoCheckinFeatureOrigins)) { $knownNoCheckin[[string]$value] = $true }
+$siteStatePath = Join-Path $root 'data\site-state.json'
+if ($knownNoCheckin.Count -gt 0 -and (Test-Path -LiteralPath $siteStatePath)) {
+    try {
+        $siteState = Get-Content -Raw -Encoding UTF8 -LiteralPath $siteStatePath | ConvertFrom-Json
+        $configuredHours = if ($null -ne $config.knownNoCheckinRecheckHours) { [double]$config.knownNoCheckinRecheckHours } else { 168 }
+        $recheckHours = [Math]::Max(24, [Math]::Min(720, $configuredHours))
+        $items = @($items | Where-Object {
+            $itemOrigin = ([uri][string]$_.url).GetLeftPart([System.UriPartial]::Authority)
+            if (-not $knownNoCheckin.ContainsKey($itemOrigin)) { return $true }
+            $prior = $siteState.sites.PSObject.Properties[$itemOrigin].Value
+            if ($null -eq $prior -or -not $prior.lastConfirmedAt) { return $true }
+            $confirmedStatus = [string]$prior.lastConfirmedStatus
+            if (-not $confirmedStatus -and -not $prior.lastSuccessAt -and [int]$prior.confirmedCount -gt 0) {
+                $confirmedStatus = 'not_available'
+            }
+            if ($confirmedStatus -ne 'not_available') { return $true }
+            try { return ((Get-Date) - [datetime]$prior.lastConfirmedAt).TotalHours -ge $recheckHours }
+            catch { return $true }
+        })
+    }
+    catch { Write-Warning '无法读取近期未开放签到缓存，将继续执行原生预热。' }
 }
 
 if ($items.Count -eq 0) { return }
@@ -63,7 +97,16 @@ function Close-AutomationChrome {
         Start-Sleep -Milliseconds 500
         $remaining = @(Get-AutomationChromeProcesses)
     } while ($remaining.Count -gt 0 -and (Get-Date) -lt $closeDeadline)
-    if ($remaining.Count -gt 0) { throw '原生 WAF 预热窗口未能正常退出。' }
+    if ($remaining.Count -gt 0) {
+        $remainingIds = @($remaining.ProcessId)
+        $remainingRoots = @($remaining | Where-Object { $remainingIds -notcontains $_.ParentProcessId })
+        foreach ($processInfo in $remainingRoots) {
+            Stop-Process -Id $processInfo.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 2
+        $remaining = @(Get-AutomationChromeProcesses)
+    }
+    if ($remaining.Count -gt 0) { throw '机器人专用原生 Chrome 未能退出。' }
 }
 
 # Chrome 会节流离屏的非活动标签页，因此逐站打开并正常关闭，确保每个
@@ -110,10 +153,19 @@ foreach ($item in $items) {
     }
 
     $inspection = $null
-    $inspectionMode = if ([bool]$item.trustAsSigned) { 'allow-endpoint' } else { 'require-confirmed' }
-    for ($inspectionAttempt = 1; $inspectionAttempt -le 2 -and $null -eq $inspection; $inspectionAttempt++) {
+    $inspectionMode = if ([string]$item.action -eq 'checkin') { 'native-checkin' } elseif ([bool]$item.trustAsSigned) { 'allow-endpoint' } else { 'require-confirmed' }
+    $maximumInspectionAttempts = if ([string]$item.action -eq 'checkin') { 1 } else { 2 }
+    for ($inspectionAttempt = 1; $inspectionAttempt -le $maximumInspectionAttempts -and $null -eq $inspection; $inspectionAttempt++) {
         $debugPort = Get-Random -Minimum 12000 -Maximum 32000
-        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -RemoteDebuggingPort $debugPort -Urls @($url)
+        $openParameters = @{
+            RemoteDebuggingPort = $debugPort
+            Urls = @($url)
+        }
+        # Interactive providers throttle or reject fully offscreen windows.
+        # A native check-in therefore gets a normal visible Chrome window;
+        # passive WAF warmups remain offscreen to avoid unnecessary disruption.
+        if ([string]$item.action -ne 'checkin') { $openParameters.Offscreen = $true }
+        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters
         Start-Sleep -Seconds 2
         try {
             $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) $inspectionMode 2>$null
@@ -122,20 +174,20 @@ foreach ($item in $items) {
                 $attemptExplicit = [string]$inspection.status -in @('signed', 'already_signed')
                 $attemptEndpoint = [bool]$item.trustAsSigned -and [bool]$inspection.siteBodyLoaded `
                     -and [bool]$inspection.attendanceEndpoint -and [string]$inspection.status -eq 'ready'
-                $attemptPrepared = -not [bool]$item.trustAsSigned -and [bool]$inspection.siteBodyLoaded `
+                $attemptPrepared = [string]$item.action -ne 'checkin' -and -not [bool]$item.trustAsSigned -and [bool]$inspection.siteBodyLoaded `
                     -and [string]$inspection.status -notin @('login_required', 'interactive_challenge', 'managed_challenge')
                 if (-not $attemptExplicit -and -not $attemptEndpoint -and -not $attemptPrepared) { $inspection = $null }
             }
         }
         catch { $inspection = $null }
         Close-AutomationChrome
-        if ($null -eq $inspection -and $inspectionAttempt -lt 2) { Start-Sleep -Seconds 1 }
+        if ($null -eq $inspection -and $inspectionAttempt -lt $maximumInspectionAttempts) { Start-Sleep -Seconds 1 }
     }
     $explicitlyConfirmed = $null -ne $inspection -and [string]$inspection.status -in @('signed', 'already_signed')
     $endpointConfirmed = [bool]$item.trustAsSigned -and $null -ne $inspection `
         -and [bool]$inspection.siteBodyLoaded -and [bool]$inspection.attendanceEndpoint `
         -and [string]$inspection.status -eq 'ready'
-    $prepared = $null -ne $inspection -and [bool]$inspection.siteBodyLoaded `
+    $prepared = [string]$item.action -ne 'checkin' -and $null -ne $inspection -and [bool]$inspection.siteBodyLoaded `
         -and [string]$inspection.status -notin @('login_required', 'interactive_challenge', 'managed_challenge')
     if (-not $explicitlyConfirmed -and -not $endpointConfirmed -and -not $prepared) {
         Write-Warning "原生验证未能确认站点正文：$hostName"
@@ -169,4 +221,4 @@ $preflightReport = [pscustomobject]@{
     [System.Text.UTF8Encoding]::new($false)
 )
 
-Write-Output "已离屏预热 $($items.Count) 个原生验证会话。"
+Write-Output "已完成 $($items.Count) 个原生验证会话预热。"

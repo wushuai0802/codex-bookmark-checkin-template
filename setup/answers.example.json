@@ -1,7 +1,10 @@
 {
   "chromeProfile": "Auto",
+  "edgeProfile": "None",
   "mobileFolderNames": [],
   "targetFolderNames": [],
+  "edgeMobileFolderNames": [],
+  "edgeTargetFolderNames": [],
   "schedule": "08:05",
   "useBuiltInSiteRules": true,
   "syncChromeSavedLogins": false,

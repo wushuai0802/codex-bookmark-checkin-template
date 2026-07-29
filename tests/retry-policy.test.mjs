@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import {
   advanceAttemptedDeferredRetries,
   advanceDeferredRetry,
+  applyManualConfirmations,
   deferUnresolvedLogin,
   isCurrentLocalRunId,
   isRetryEligible,
   nextDeferredRetryAt,
   nextShanghaiTime,
+  resumeSelectedOrigins,
   withRetrySchedule,
 } from "../src/retry-policy.mjs";
 
@@ -141,4 +143,41 @@ test("自动登录恢复仍失败时使用独立的六小时退避时间", () =>
 test("非登录异常不会被登录退避策略改写", () => {
   const result = { status: "interactive_challenge", reason: "需要验证" };
   assert.equal(deferUnresolvedLogin(result, { loginRetryDelayMs: 21600000 }), result);
+});
+
+test("续跑会重新选择配置取消但旧状态仍异常的站点", () => {
+  const selected = resumeSelectedOrigins(
+    [
+      { origin: "https://disabled.example" },
+      { origin: "https://done.example" },
+    ],
+    [
+      { origin: "https://disabled.example", status: "needs_attention" },
+      { origin: "https://done.example", status: "signed" },
+    ],
+    { disabledCheckinOrigins: ["https://disabled.example", "https://not-bookmarked.example"] },
+  );
+  assert.deepEqual([...selected], ["https://disabled.example"]);
+});
+
+test("人工完成确认会清除重试字段并保留明确审计标记", () => {
+  const now = new Date("2026-07-27T01:00:00Z");
+  const results = applyManualConfirmations([
+    {
+      origin: "https://manual.example",
+      status: "deferred",
+      retryCause: "login_required",
+      nextEligibleAt: "2026-07-27T07:00:00Z",
+      retrySequence: 2,
+    },
+    { origin: "https://done.example", status: "signed", reason: "自动完成" },
+  ], new Set(["https://manual.example", "https://done.example"]), now);
+  assert.deepEqual(results[0], {
+    origin: "https://manual.example",
+    status: "already_signed",
+    reason: "用户已确认手动完成",
+    manualConfirmation: true,
+    manualConfirmedAt: "2026-07-27T01:00:00.000Z",
+  });
+  assert.deepEqual(results[1], { origin: "https://done.example", status: "signed", reason: "自动完成" });
 });

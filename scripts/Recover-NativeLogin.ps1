@@ -23,10 +23,25 @@ if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法
 $debugPort = Get-Random -Minimum 12000 -Maximum 32000
 $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
 try {
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri)
-    Start-Sleep -Seconds 3
-    & $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue
-    if ($LASTEXITCODE -ne 0) { throw '原生 Chrome 未能自动恢复登录。' }
+    # Chrome stores synced/account passwords in "Login Data For Account".
+    # Keeping --disable-sync on this native recovery window prevents that store
+    # from participating in autofill even though the encrypted row is present.
+    # EnablePasswordManager only removes that launch restriction; the helper
+    # still never reads or prints the saved username/password.
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri)
+    Start-Sleep -Seconds 4
+    $loginSucceeded = $false
+    for ($loginAttempt = 1; $loginAttempt -le 3 -and -not $loginSucceeded; $loginAttempt++) {
+        & $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue
+        $loginSucceeded = $LASTEXITCODE -eq 0
+        if (-not $loginSucceeded -and $loginAttempt -lt 3) {
+            # The account password store can take a few seconds to become
+            # available after a cold native Chrome launch.  Reuse the same
+            # window instead of relaunching it or resyncing the database.
+            Start-Sleep -Seconds 8
+        }
+    }
+    if (-not $loginSucceeded) { throw '原生 Chrome 未能自动恢复登录。' }
 }
 finally {
     $targets = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {

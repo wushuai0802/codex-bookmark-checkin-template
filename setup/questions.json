@@ -12,9 +12,9 @@
       "id": "bookmark_scope",
       "askBefore": ["automation_policy", "notification"],
       "questions": [
-        "使用哪个 Chrome 配置文件？不确定可选择 Auto。",
-        "哪些上级书签文件夹包含需要自动签到的目录？请从预检候选中选择或填写实际名称。",
-        "这些上级文件夹中的哪些子文件夹需要每天签到？不得沿用其他用户的命名。"
+        "使用哪个 Chrome 配置文件？是否附加 Edge 配置？两者均可选择 Auto，Edge 也可选择 None。",
+        "Chrome 中哪些上级书签文件夹和子文件夹包含每日目标？请从预检候选中选择。",
+        "若启用 Edge，它的上级文件夹或目标子文件夹名称是否与 Chrome 不同？请从 Edge 候选中选择。"
       ]
     },
     {

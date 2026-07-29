@@ -6,11 +6,12 @@ $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $schedulerScript = Join-Path $PSScriptRoot 'Start-UserScheduler.ps1'
 $watchdogScript = Join-Path $PSScriptRoot 'Ensure-UserScheduler.ps1'
+$supervisorScript = Join-Path $PSScriptRoot 'UserSchedulerSupervisor.vbs'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $valueName = if ($config.schedulerRunKeyName) { [string]$config.schedulerRunKeyName } else { 'CodexBookmarkDailyCheckin' }
 $shell = (Get-Command pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
 if (-not $shell) { throw '未找到 PowerShell 可执行文件。' }
-$command = "`"$shell`" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogScript`""
+$command = "wscript.exe `"$supervisorScript`" `"$shell`""
 
 New-Item -Path $runKey -Force | Out-Null
 New-ItemProperty -Path $runKey -Name $valueName -Value $command -PropertyType String -Force | Out-Null
@@ -26,9 +27,16 @@ if (-not (Test-Path -LiteralPath $statePath)) {
     [System.IO.File]::WriteAllText($statePath, ($state | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
 }
 
-Start-Process -FilePath $shell -ArgumentList @(
-    '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
-    '-ExecutionPolicy', 'Bypass', '-File', $watchdogScript
-) -WindowStyle Hidden
+$ownedScripts = @($schedulerScript, $watchdogScript)
+Get-CimInstance Win32_Process | Where-Object {
+    $commandLine = [string]$_.CommandLine
+    $_.Name -in @('pwsh.exe', 'powershell.exe') -and @($ownedScripts | Where-Object { $commandLine -like "*-File*$_*" }).Count -gt 0
+} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "Name='wscript.exe'" | Where-Object {
+    [string]$_.CommandLine -like "*$supervisorScript*"
+} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
 
-Write-Output '用户级后台调度器已安装并启动；登录后自动恢复，并按本机配置时间运行。'
+Start-Process -FilePath 'wscript.exe' -ArgumentList @("`"$supervisorScript`"", "`"$shell`"") -WindowStyle Hidden
+
+Write-Output '用户级后台调度器已安装并启动；独立守护进程会恢复看门狗和签到调度器。'

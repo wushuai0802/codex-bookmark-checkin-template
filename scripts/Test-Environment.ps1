@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [string[]]$ContainerFolderNames = @(),
-    [string[]]$TargetFolderNames = @()
+    [string[]]$TargetFolderNames = @(),
+    [string[]]$EdgeContainerFolderNames = @(),
+    [string[]]$EdgeTargetFolderNames = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +15,8 @@ $pythonCommand = Get-Command python,python3 -ErrorAction SilentlyContinue | Wher
 $quoteCharacters = [char[]]@([char]39, [char]34)
 $resolvedContainerNames = @($ContainerFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })
 $resolvedTargetNames = @($TargetFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })
+$resolvedEdgeContainerNames = @($EdgeContainerFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })
+$resolvedEdgeTargetNames = @($EdgeTargetFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })
 
 if (-not $nodeCommand) {
     [ordered]@{
@@ -32,14 +36,22 @@ if (-not $nodeCommand) {
 }
 
 $nodeArguments = @((Join-Path $root 'src\preflight.mjs'))
-if ($resolvedContainerNames.Count -gt 0 -or $resolvedTargetNames.Count -gt 0) {
+if ($resolvedContainerNames.Count -gt 0 -or $resolvedTargetNames.Count -gt 0 -or $resolvedEdgeContainerNames.Count -gt 0 -or $resolvedEdgeTargetNames.Count -gt 0) {
     if ($resolvedContainerNames.Count -eq 0 -or $resolvedTargetNames.Count -eq 0) {
         throw 'ContainerFolderNames 和 TargetFolderNames 必须同时提供。'
     }
     $scope = [ordered]@{
         mobileFolderNames = @($resolvedContainerNames)
         targetFolderNames = @($resolvedTargetNames)
-    } | ConvertTo-Json -Compress
+    }
+    if ($resolvedEdgeContainerNames.Count -gt 0 -or $resolvedEdgeTargetNames.Count -gt 0) {
+        if ($resolvedEdgeContainerNames.Count -eq 0 -or $resolvedEdgeTargetNames.Count -eq 0) {
+            throw 'EdgeContainerFolderNames 和 EdgeTargetFolderNames 必须同时提供。'
+        }
+        $scope.edgeMobileFolderNames = @($resolvedEdgeContainerNames)
+        $scope.edgeTargetFolderNames = @($resolvedEdgeTargetNames)
+    }
+    $scope = $scope | ConvertTo-Json -Compress
     $scopeBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($scope))
     $nodeArguments += @('--scope-json-base64', $scopeBase64)
 }
@@ -53,6 +65,7 @@ $report.checks | Add-Member -NotePropertyName pythonPresent -NotePropertyValue (
 $report | Add-Member -NotePropertyName optionalCapabilities -NotePropertyValue ([ordered]@{
     pythonForSavedLoginSync = [bool]$pythonCommand
     windowsTaskScheduler = [bool](Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)
+    edgeBookmarkSource = [bool]$report.checks.readableEdgeBookmarkProfile
     externalNotification = $false
 }) -Force
 $report.checks | Add-Member -NotePropertyName scheduledTaskCmdletPresent -NotePropertyValue ([bool](Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) -Force

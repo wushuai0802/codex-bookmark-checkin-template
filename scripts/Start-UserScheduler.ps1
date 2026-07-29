@@ -171,6 +171,13 @@ try {
             $now = Get-Date
             $scheduledToday = [datetime]::ParseExact("$($now.ToString('yyyy-MM-dd')) $schedule", 'yyyy-MM-dd HH:mm', $null)
             $state = Read-SchedulerState
+            $latestReportState = Get-LatestReportState $now $config
+            if ($latestReportState.Complete `
+                -and ([string]$state.lastRunDate -ne $now.ToString('yyyy-MM-dd') -or $state.reportComplete -ne $true)) {
+                Write-SchedulerState $now 0 $latestReportState $config
+                $state = Read-SchedulerState
+                Write-SchedulerLog "已接收外部续跑完成报告：runId=$($latestReportState.RunId)。"
+            }
             if ($now -ge $scheduledToday -and -not (Test-SchedulerWaiting $state $now $config)) {
                 Write-SchedulerHeartbeat 'running_checkin'
                 Write-SchedulerLog "开始第 $([int]$state.attemptsToday + 1) 次签到尝试。"
