@@ -68,6 +68,8 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(installer, /if \(-not \(Test-Path -LiteralPath \$runKey\)\)/);
   assert.doesNotMatch(installer, /New-Item -Path \$runKey -Force/);
   assert.match(installer, /CreateShortcut\(\$startupShortcutPath\)/);
+  assert.match(installer, /primary/);
+  assert.match(installer, /fallback/);
   assert.match(remover, /UserSchedulerSupervisor\.vbs/);
   assert.match(remover, /startupShortcutPath/);
   assert.match(health, /supervisorProcessCount/);
@@ -78,6 +80,8 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(health, /schedulerStartupShortcutPresent/);
   assert.match(supervisor, /WatchdogIsRunning/);
   assert.match(supervisor, /WScript\.Arguments/);
+  assert.match(supervisor, /launchRole = "fallback"/);
+  assert.match(supervisor, /If WatchdogIsRunning\(\) Then WScript\.Quit 0/);
   assert.match(scheduler, /Get-LatestReportState \$now \$config/);
   assert.match(scheduler, /已接收外部续跑完成报告/);
 });
