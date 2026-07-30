@@ -78,12 +78,29 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(health, /runState\s+-eq\s+'final'/);
   assert.match(health, /processedTotal\s+-ge\s+\$plannedTotal/);
   assert.match(health, /schedulerStartupShortcutPresent/);
+  assert.match(health, /schemaVersion\s*=\s*1/);
+  assert.match(health, /failedChecks/);
+  assert.match(health, /if \(-not \$healthy\) \{ exit 2 \}/);
   assert.match(supervisor, /WatchdogIsRunning/);
   assert.match(supervisor, /WScript\.Arguments/);
   assert.match(supervisor, /launchRole = "fallback"/);
   assert.match(supervisor, /If WatchdogIsRunning\(\) Then WScript\.Quit 0/);
   assert.match(scheduler, /Get-LatestReportState \$now \$config/);
   assert.match(scheduler, /已接收外部续跑完成报告/);
+});
+
+test("公开健康检查提供稳定的只读调用入口", async () => {
+  const packageJson = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const readme = await fs.readFile(new URL("../README.md", import.meta.url), "utf8");
+  const health = await fs.readFile(new URL("../scripts/Test-CheckinHealth.ps1", import.meta.url), "utf8");
+
+  assert.equal(packageJson.scripts.health, "pwsh -NoProfile -File scripts/Test-CheckinHealth.ps1");
+  assert.match(readme, /npm run --silent health/);
+  assert.match(readme, /不会启动签到、修改配置或发送通知/);
+  assert.match(readme, /退出码为 `2`/);
+  assert.match(readme, /退出码为 `3`/);
+  assert.match(health, /reason = 'health_check_error'/);
+  assert.doesNotMatch(health, /Run-Checkin\.ps1|Start-Process/);
 });
 
 test("安装配置优先使用 PowerShell 7，5.1 仅作为可用回退", async () => {
