@@ -9,12 +9,20 @@ $watchdogScript = Join-Path $PSScriptRoot 'Ensure-UserScheduler.ps1'
 $supervisorScript = Join-Path $PSScriptRoot 'UserSchedulerSupervisor.vbs'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $valueName = if ($config.schedulerRunKeyName) { [string]$config.schedulerRunKeyName } else { 'CodexBookmarkDailyCheckin' }
+$startupShortcutPath = Join-Path ([Environment]::GetFolderPath('Startup')) "$valueName.lnk"
 $shell = (Get-Command pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
 if (-not $shell) { throw '未找到 PowerShell 可执行文件。' }
 $command = "wscript.exe `"$supervisorScript`" `"$shell`""
 
-New-Item -Path $runKey -Force | Out-Null
+if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey | Out-Null }
 New-ItemProperty -Path $runKey -Name $valueName -Value $command -PropertyType String -Force | Out-Null
+$shortcutShell = New-Object -ComObject WScript.Shell
+$shortcut = $shortcutShell.CreateShortcut($startupShortcutPath)
+$shortcut.TargetPath = (Get-Command wscript.exe -ErrorAction Stop).Source
+$shortcut.Arguments = "`"$supervisorScript`" `"$shell`""
+$shortcut.WorkingDirectory = $root
+$shortcut.WindowStyle = 7
+$shortcut.Save()
 
 $statePath = Join-Path $root 'data\scheduler-state.json'
 if (-not (Test-Path -LiteralPath $statePath)) {
@@ -39,4 +47,4 @@ Start-Sleep -Seconds 1
 
 Start-Process -FilePath 'wscript.exe' -ArgumentList @("`"$supervisorScript`"", "`"$shell`"") -WindowStyle Hidden
 
-Write-Output '用户级后台调度器已安装并启动；独立守护进程会恢复看门狗和签到调度器。'
+Write-Output '用户级后台调度器已安装并启动；注册表与启动文件夹双入口会恢复独立守护、看门狗和签到调度器。'

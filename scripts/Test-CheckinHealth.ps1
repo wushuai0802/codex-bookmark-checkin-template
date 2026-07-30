@@ -20,6 +20,8 @@ $runValue = try {
     $runProperties = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction Stop
     [string]$runProperties.$runKeyName
 } catch { $null }
+$startupShortcutPath = Join-Path ([Environment]::GetFolderPath('Startup')) "$runKeyName.lnk"
+$startupEntryPresent = [bool]$runValue -or (Test-Path -LiteralPath $startupShortcutPath -PathType Leaf)
 $schedulerScript = Join-Path $PSScriptRoot 'Start-UserScheduler.ps1'
 $watchdogScript = Join-Path $PSScriptRoot 'Ensure-UserScheduler.ps1'
 $supervisorScript = Join-Path $PSScriptRoot 'UserSchedulerSupervisor.vbs'
@@ -61,7 +63,7 @@ $checks = [ordered]@{
     automationProfilePresent = Test-Path -LiteralPath (Join-Path ([string]$config.automationUserDataDir) 'Local State')
     notificationReady = [bool]$notificationReady
     notificationOutboxClean = $notificationQuarantinedCount -eq 0
-    schedulerReady = [bool]$scheduledTask -or [bool]$runValue
+    schedulerReady = [bool]$scheduledTask -or $startupEntryPresent
     schedulerUnique = if ($scheduledTask) { $true } else { $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1 }
     schedulerHeartbeatFresh = [bool]$heartbeatFresh
     latestResultPresent = [bool]$latest
@@ -73,7 +75,9 @@ $checks = [ordered]@{
 [ordered]@{
     healthy = -not ($checks.Values -contains $false)
     schedule = [string]$config.schedule
-    schedulerMode = if ($scheduledTask) { 'windows_task' } elseif ($runValue) { 'user_scheduler' } else { 'none' }
+    schedulerMode = if ($scheduledTask) { 'windows_task' } elseif ($startupEntryPresent) { 'user_scheduler' } else { 'none' }
+    schedulerRunKeyPresent = [bool]$runValue
+    schedulerStartupShortcutPresent = Test-Path -LiteralPath $startupShortcutPath -PathType Leaf
     schedulerProcessCount = $schedulerCount
     watchdogProcessCount = $watchdogCount
     supervisorProcessCount = $supervisorCount

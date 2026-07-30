@@ -65,12 +65,17 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   const supervisor = await fs.readFile(new URL("../scripts/UserSchedulerSupervisor.vbs", import.meta.url), "utf8");
   assert.match(installer, /UserSchedulerSupervisor\.vbs/);
   assert.match(installer, /wscript\.exe/);
+  assert.match(installer, /if \(-not \(Test-Path -LiteralPath \$runKey\)\)/);
+  assert.doesNotMatch(installer, /New-Item -Path \$runKey -Force/);
+  assert.match(installer, /CreateShortcut\(\$startupShortcutPath\)/);
   assert.match(remover, /UserSchedulerSupervisor\.vbs/);
+  assert.match(remover, /startupShortcutPath/);
   assert.match(health, /supervisorProcessCount/);
   assert.match(health, /\$supervisorCount -eq 1/);
   assert.match(health, /latestRunToday/);
   assert.match(health, /runState\s+-eq\s+'final'/);
   assert.match(health, /processedTotal\s+-ge\s+\$plannedTotal/);
+  assert.match(health, /schedulerStartupShortcutPresent/);
   assert.match(supervisor, /WatchdogIsRunning/);
   assert.match(supervisor, /WScript\.Arguments/);
   assert.match(scheduler, /Get-LatestReportState \$now \$config/);
