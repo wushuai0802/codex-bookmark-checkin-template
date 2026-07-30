@@ -79,4 +79,8 @@ test("原生交互签到使用可见窗口和最长两分钟检查器", async ()
   assert.match(preflightScript, /if\s*\(\[string\]\$item\.action\s+-ne\s+'checkin'\)\s*\{\s*\$openParameters\.Offscreen\s*=\s*\$true\s*\}/);
   assert.match(inspector, /Math\.min\(120,/);
   assert.doesNotMatch(inspector, /lastCheckboxClickAt/);
+  assert.match(preflightScript, /reloadOnChallengeAfterSeconds/);
+  assert.match(preflightScript, /\$inspectionMode \(\[int\]\$item\.reloadOnChallengeAfterSeconds\)/);
+  assert.match(inspector, /challengeReloaded/);
+  assert.match(inspector, /page\.reload\(/);
 });

@@ -6,6 +6,7 @@ param(
     [datetime]$NowUtc = [datetime]::MinValue,
     [int]$BaseRetryMinutes = 0,
     [int]$MaxRetryMinutes = 0,
+    [int]$RetentionDays = 0,
     [int]$TimeoutSeconds = 0,
     [switch]$ForceDue,
     [string]$MutexName = ''
@@ -43,11 +44,13 @@ $now = if ($NowUtc -eq [datetime]::MinValue) { [datetime]::UtcNow } else { $NowU
 if ($MaxItems -le 0) { $MaxItems = if ($notification.outboxMaxItems) { [int]$notification.outboxMaxItems } else { 20 } }
 if ($BaseRetryMinutes -le 0) { $BaseRetryMinutes = if ($notification.retryBaseMinutes) { [int]$notification.retryBaseMinutes } else { 2 } }
 if ($MaxRetryMinutes -le 0) { $MaxRetryMinutes = if ($notification.retryMaxMinutes) { [int]$notification.retryMaxMinutes } else { 360 } }
+if ($RetentionDays -le 0) { $RetentionDays = if ($notification.outboxRetentionDays) { [int]$notification.outboxRetentionDays } else { 30 } }
 if ($TimeoutSeconds -le 0) { $TimeoutSeconds = if ($notification.timeoutSeconds) { [int]$notification.timeoutSeconds } else { 60 } }
 if (-not $MutexName) { $MutexName = if ($notification.outboxMutexName) { [string]$notification.outboxMutexName } else { 'Local\CodexBookmarkCheckinNotificationOutbox' } }
 $MaxItems = [Math]::Max(1, [Math]::Min(100, $MaxItems))
 $BaseRetryMinutes = [Math]::Max(1, [Math]::Min(1440, $BaseRetryMinutes))
 $MaxRetryMinutes = [Math]::Max($BaseRetryMinutes, [Math]::Min(10080, $MaxRetryMinutes))
+$RetentionDays = [Math]::Max(1, [Math]::Min(3650, $RetentionDays))
 $TimeoutSeconds = [Math]::Max(1, [Math]::Min(600, $TimeoutSeconds))
 
 function Write-OutboxItemAtomic([string]$Path, [object]$Value) {
@@ -182,7 +185,7 @@ function Get-OutboxLogicalScope([object]$Item) {
 $mutexCreated = $false
 $mutex = [System.Threading.Mutex]::new($true, $MutexName, [ref]$mutexCreated)
 if (-not $mutexCreated) {
-    [pscustomobject]@{ processed = 0; delivered = 0; deferred = 0; invalid = 0; disabled = $false; busy = $true } | ConvertTo-Json -Compress
+    [pscustomobject]@{ processed = 0; delivered = 0; deferred = 0; invalid = 0; pruned = 0; disabled = $false; busy = $true } | ConvertTo-Json -Compress
     exit 0
 }
 
@@ -192,13 +195,23 @@ $deferred = 0
 $invalid = 0
 $quarantined = 0
 $superseded = 0
+$pruned = 0
 try {
     $pendingItems = [System.Collections.Generic.List[object]]::new()
     $dueItems = [System.Collections.Generic.List[object]]::new()
     foreach ($file in @(Get-ChildItem -LiteralPath $OutboxPath -Filter '*.json' -File -ErrorAction SilentlyContinue)) {
         try {
             $item = Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName | ConvertFrom-Json
-            if ($item.delivered -eq $true) { continue }
+            if ($item.delivered -eq $true) {
+                $deliveredAt = if ($item.deliveredAt) {
+                    try { ([datetimeoffset]$item.deliveredAt).ToUniversalTime() } catch { [datetimeoffset]$file.LastWriteTimeUtc }
+                } else { [datetimeoffset]$file.LastWriteTimeUtc }
+                if ($deliveredAt -le [datetimeoffset]$now.AddDays(-$RetentionDays)) {
+                    Remove-Item -LiteralPath $file.FullName -Force
+                    $pruned++
+                }
+                continue
+            }
             $computedHash = Get-PayloadHash $item
             $storedHash = [string]$item.payloadHash
             if ($storedHash -notmatch '^[a-f0-9]{64}$' -or $storedHash -ne $computedHash) {
@@ -300,5 +313,6 @@ finally {
 [pscustomobject]@{
     processed = $processed; delivered = $delivered; deferred = $deferred;
     invalid = $invalid; quarantined = $quarantined; superseded = $superseded;
+    pruned = $pruned;
     disabled = $false; busy = $false
 } | ConvertTo-Json -Compress
