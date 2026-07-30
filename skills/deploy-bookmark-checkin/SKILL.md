@@ -19,6 +19,7 @@ Use the repository root that contains this skill. Keep every user-specific value
 8. Run one complete check-in without notification. For every unresolved site, first retry and inspect stable page evidence. Use built-in public rules, then generic discovery, then a local adapter. Write local rules only to ignored config files.
 9. Require authoritative success evidence. A click, redirect, empty error, or window title is insufficient.
 10. Read [acceptance.md](references/acceptance.md), run all acceptance checks, then install scheduling. Use the Windows task when permitted; otherwise use the user-level hidden scheduler only if the user accepted the fallback.
-11. Run `scripts/Scan-PublicSafety.ps1`. Report installed mode, schedule, site totals, unresolved sites, notification behavior, and recovery instructions.
+11. After scheduling is live, run `npm run --silent health`. Require exit code `0`, `healthy=true`, and an empty `failedChecks` array. Treat the JSON as local diagnostic data; never publish it without removing paths and user-specific site information.
+12. Run `scripts/Scan-PublicSafety.ps1`. Report installed mode, schedule, site totals, unresolved sites, notification behavior, health-check result, and recovery instructions.
 
 Read [compatibility.md](references/compatibility.md) when preflight is not fully ready. Read [site-adapters.md](references/site-adapters.md) when adding or reviewing site rules.

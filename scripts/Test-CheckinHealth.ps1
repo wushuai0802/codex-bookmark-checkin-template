@@ -2,11 +2,31 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+trap {
+    [ordered]@{
+        schemaVersion = 1
+        healthy = $false
+        reason = 'health_check_error'
+        checkedAt = (Get-Date).ToString('o')
+        failedChecks = @('healthCheckExecution')
+        error = $_.Exception.Message
+        checks = [ordered]@{ healthCheckExecution = $false }
+    } | ConvertTo-Json -Depth 5
+    exit 3
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $configPath = Join-Path $root 'config\config.json'
 if (-not (Test-Path -LiteralPath $configPath)) {
-    [ordered]@{ healthy = $false; reason = 'not_initialized'; checks = @{ configPresent = $false } } | ConvertTo-Json -Depth 5
-    return
+    [ordered]@{
+        schemaVersion = 1
+        healthy = $false
+        reason = 'not_initialized'
+        checkedAt = (Get-Date).ToString('o')
+        failedChecks = @('configPresent')
+        checks = [ordered]@{ configPresent = $false }
+    } | ConvertTo-Json -Depth 5
+    exit 2
 }
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath | ConvertFrom-Json
 $latestPath = Join-Path $root 'logs\latest.json'
@@ -41,6 +61,7 @@ $heartbeatPath = Join-Path $root 'data\scheduler-heartbeat.json'
 $heartbeat = if (Test-Path -LiteralPath $heartbeatPath) { Get-Content -Raw -Encoding UTF8 -LiteralPath $heartbeatPath | ConvertFrom-Json } else { $null }
 $heartbeatMaxAgeMinutes = if ($heartbeat -and [string]$heartbeat.phase -eq 'running_checkin') { ([int]$config.taskTimeoutMinutes) + 10 } else { 5 }
 $heartbeatFresh = $heartbeat -and ((Get-Date) - [datetime]$heartbeat.updatedAt) -lt [timespan]::FromMinutes($heartbeatMaxAgeMinutes)
+$siteState = if (Test-Path -LiteralPath $statePath) { try { Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json } catch { $null } } else { $null }
 $problemCount = if ($latest) { @($latest.results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') }).Count } else { $null }
 $minimumTargets = [Math]::Max(1, [int]$config.minimumBookmarkTargetCount)
 $latestRunToday = $latest -and [string]$latest.runId -like "$(Get-Date -Format 'yyyyMMdd')-*"
@@ -70,10 +91,16 @@ $checks = [ordered]@{
     latestResultValid = [bool]$latestResultValid
     latestResultConfirmed = $latestResultValid -and $problemCount -eq 0
     latestResultComplete = $latestResultValid -and $problemCount -eq 0
-    siteStatePresent = Test-Path -LiteralPath $statePath
+    siteStatePresent = $null -ne $siteState
 }
-[ordered]@{
-    healthy = -not ($checks.Values -contains $false)
+$failedChecks = @($checks.GetEnumerator() | Where-Object { -not [bool]$_.Value } | ForEach-Object { [string]$_.Key })
+$healthy = $failedChecks.Count -eq 0
+$result = [ordered]@{
+    schemaVersion = 1
+    healthy = $healthy
+    reason = if ($healthy) { 'ok' } else { 'checks_failed' }
+    checkedAt = (Get-Date).ToString('o')
+    failedChecks = $failedChecks
     schedule = [string]$config.schedule
     schedulerMode = if ($scheduledTask) { 'windows_task' } elseif ($startupEntryPresent) { 'user_scheduler' } else { 'none' }
     schedulerRunKeyPresent = [bool]$runValue
@@ -81,6 +108,7 @@ $checks = [ordered]@{
     schedulerProcessCount = $schedulerCount
     watchdogProcessCount = $watchdogCount
     supervisorProcessCount = $supervisorCount
+    schedulerHeartbeat = $heartbeat
     latestRunId = if ($latest) { [string]$latest.runId } else { $null }
     latestSiteCount = if ($latest) { @($latest.results).Count } else { $null }
     latestProblemCount = $problemCount
@@ -88,5 +116,8 @@ $checks = [ordered]@{
     schedulerNextEligibleAt = if ($schedulerState -and $schedulerState.nextEligibleAt) { try { ([datetime]$schedulerState.nextEligibleAt).ToString('o') } catch { [string]$schedulerState.nextEligibleAt } } else { $null }
     schedulerReportComplete = if ($schedulerState) { [bool]$schedulerState.reportComplete } else { $false }
     notificationQuarantinedCount = $notificationQuarantinedCount
+    trackedSiteCount = if ($siteState -and $siteState.sites) { @($siteState.sites.PSObject.Properties).Count } else { 0 }
     checks = $checks
-} | ConvertTo-Json -Depth 6
+}
+$result | ConvertTo-Json -Depth 6
+if (-not $healthy) { exit 2 }

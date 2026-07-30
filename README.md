@@ -73,6 +73,18 @@ npm test
 pwsh -NoProfile -File .\scripts\Scan-PublicSafety.ps1
 ```
 
+## 健康检查与外部调用
+
+部署完成后，用户、Codex 或其他本机监控程序可以运行同一个只读健康检查：
+
+```powershell
+npm run --silent health
+```
+
+该命令只读取本机配置、书签文件是否可访问、独立 Chrome 配置、调度入口与进程、调度心跳、当天最终结果、站点状态和通知隔离队列；它不会启动签到、修改配置或发送通知。标准输出始终是一个 JSON 对象，`schemaVersion` 当前为 `1`。`healthy=true` 时退出码为 `0`；未初始化或任一健康检查失败时，`healthy=false`、`failedChecks` 列出失败项，退出码为 `2`；健康检查自身无法执行时退出码为 `3`。
+
+外部调用方应在每日计划时间和预计任务时长之后执行，并同时判断退出码、`healthy` 和 `latestRunId`，不要仅凭进程存在判定签到成功。首次完整签到和调度安装尚未完成前，健康检查返回异常属于预期行为。检查结果可能包含本机路径和站点数量，适合留在本机监控系统，不应原样提交到公开 Issue 或仓库。
+
 机器人 Chrome 未运行时，可先只读查看可清理缓存；确认后再显式应用。脚本只允许操作项目 `data` 下的独立资料目录，不删除 Cookie、保存密码、站点存储、IndexedDB 或 Service Worker：
 
 ```powershell
