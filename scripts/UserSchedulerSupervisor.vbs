@@ -1,6 +1,6 @@
 Option Explicit
 
-Dim shell, fso, scriptDir, rootDir, watchdogPath, heartbeatPath, command, temporaryPath, powerShellPath
+Dim shell, fso, scriptDir, rootDir, watchdogPath, heartbeatPath, command, temporaryPath, powerShellPath, launchRole
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
@@ -11,6 +11,11 @@ If WScript.Arguments.Count > 0 Then
     powerShellPath = WScript.Arguments(0)
 Else
     powerShellPath = "pwsh.exe"
+End If
+If WScript.Arguments.Count > 1 Then
+    launchRole = LCase(WScript.Arguments(1))
+Else
+    launchRole = "primary"
 End If
 command = """" & powerShellPath & """ -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & watchdogPath & """"
 
@@ -29,6 +34,14 @@ Function WatchdogIsRunning()
     Next
     On Error GoTo 0
 End Function
+
+' The Startup-folder entry is a delayed fallback for environments that remove
+' HKCU Run values.  If the primary entry already restored the watchdog, the
+' fallback exits instead of leaving a duplicate supervisor process.
+If launchRole = "fallback" Then
+    WScript.Sleep 5000
+    If WatchdogIsRunning() Then WScript.Quit 0
+End If
 
 Sub WriteHeartbeat()
     Dim file, parent, json
