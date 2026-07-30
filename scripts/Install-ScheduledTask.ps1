@@ -62,6 +62,7 @@ catch {
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $runKeyName = if ($config.schedulerRunKeyName) { [string]$config.schedulerRunKeyName } else { 'CodexBookmarkDailyCheckin' }
 Remove-ItemProperty -Path $runKey -Name $runKeyName -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Startup')) "$runKeyName.lnk") -Force -ErrorAction SilentlyContinue
 $schedulerScripts = @($schedulerScript, (Join-Path $PSScriptRoot 'Ensure-UserScheduler.ps1'))
 Get-CimInstance Win32_Process | Where-Object {
     $commandLine = [string]$_.CommandLine
