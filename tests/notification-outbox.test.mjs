@@ -362,3 +362,32 @@ test("命令失败只延后通知并按 nextAttemptAt 重试", async () => {
     await fs.rm(sandbox, { recursive: true, force: true });
   }
 });
+
+test("已送达通知超过保留期后自动清理", async () => {
+  await fs.mkdir(tmpRoot, { recursive: true });
+  const sandbox = await fs.mkdtemp(path.join(tmpRoot, "public-outbox-retention-"));
+  const outboxPath = path.join(sandbox, "outbox");
+  const configPath = path.join(sandbox, "config.json");
+  const commandPath = path.join(sandbox, "receiver.mjs");
+  const mutex = `Local\\PublicOutboxRetention${process.pid}`;
+  try {
+    await writeFakeCommand(commandPath, { accepted: true, duplicate: false });
+    await writeConfig(configPath, commandNotification(process.execPath, [commandPath]));
+    await enqueue(outboxPath, configPath, completeReport({ origin: "https://retention.test", status: "signed" }));
+    await runPowerShell(worker, [
+      "-OutboxPath", outboxPath, "-ConfigPath", configPath, "-ForceDue",
+      "-NowUtc", "2026-07-01T00:00:00Z", "-MutexName", mutex,
+    ]);
+    const item = await readItem(outboxPath);
+    assert.equal(item.delivered, true);
+
+    const result = JSON.parse(await runPowerShell(worker, [
+      "-OutboxPath", outboxPath, "-ConfigPath", configPath,
+      "-NowUtc", "2026-08-01T00:00:00Z", "-RetentionDays", "30", "-MutexName", mutex,
+    ]));
+    assert.equal(result.pruned, 1);
+    assert.equal((await fs.readdir(outboxPath)).filter((name) => name.endsWith(".json")).length, 0);
+  } finally {
+    await fs.rm(sandbox, { recursive: true, force: true });
+  }
+});

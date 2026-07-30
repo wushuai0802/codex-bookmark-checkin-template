@@ -35,7 +35,21 @@ $items += @($config.nativeChallengePreflight | ForEach-Object {
     if ($waitSeconds -lt 5 -or $waitSeconds -gt 120) { throw "原生验证等待时间必须为 5 到 120 秒：$($_.url)" }
     $action = if ($null -eq $_.action) { '' } else { [string]$_.action }
     if ($action -notin @('', 'checkin')) { throw "原生验证动作无效：$action" }
-    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $false; action = $action; passiveOnly = $passiveOnly }
+    $reloadOnChallengeAfterSeconds = if ($null -eq $_.reloadOnChallengeAfterSeconds) { 0 } else { [int]$_.reloadOnChallengeAfterSeconds }
+    if ($reloadOnChallengeAfterSeconds -ne 0 -and (
+        $reloadOnChallengeAfterSeconds -lt 5 `
+        -or $reloadOnChallengeAfterSeconds -ge $waitSeconds
+    )) {
+        throw "验证页重载等待时间必须为 0，或介于 5 秒和总等待时间之间：$($_.url)"
+    }
+    [pscustomobject]@{
+        url = $uri.AbsoluteUri
+        waitSeconds = $waitSeconds
+        trustAsSigned = $false
+        action = $action
+        passiveOnly = $passiveOnly
+        reloadOnChallengeAfterSeconds = $reloadOnChallengeAfterSeconds
+    }
 })
 
 if (-not $AllConfigured) {
@@ -168,7 +182,7 @@ foreach ($item in $items) {
         & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters
         Start-Sleep -Seconds 2
         try {
-            $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) $inspectionMode 2>$null
+            $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) $inspectionMode ([int]$item.reloadOnChallengeAfterSeconds) 2>$null
             if ($LASTEXITCODE -eq 0 -and $inspectionText) {
                 $inspection = $inspectionText | ConvertFrom-Json
                 $attemptExplicit = [string]$inspection.status -in @('signed', 'already_signed')

@@ -8,6 +8,10 @@ const port = Number.parseInt(process.argv[2], 10);
 const expectedOrigin = new URL(process.argv[3]).origin;
 const maxWaitSeconds = Math.max(0, Math.min(120, Number.parseInt(process.argv[4] || "0", 10) || 0));
 const inspectionMode = process.argv[5] || "require-confirmed";
+const reloadOnChallengeAfterSeconds = Math.max(
+  0,
+  Math.min(maxWaitSeconds, Number.parseInt(process.argv[6] || "0", 10) || 0),
+);
 const allowEndpointReady = inspectionMode === "allow-endpoint";
 const performNativeCheckin = inspectionMode === "native-checkin";
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-browser-inspect.mjs <port> <origin> [max-wait-seconds] [allow-endpoint|native-checkin]");
@@ -100,8 +104,10 @@ try {
   let checkinClicked = false;
   let checkinStarted = false;
   let challengeDetectedAt = null;
+  let challengeReloaded = false;
   let widgetInteractionAttempted = false;
   const dismissedPrompts = [];
+  const inspectionStartedAt = Date.now();
   do {
     try {
       await page.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => {});
@@ -141,6 +147,15 @@ try {
         hasPassword: snapshot.hasPassword,
         challengeSelectors: snapshot.challengeSelectors,
       });
+      if (!challengeReloaded
+        && reloadOnChallengeAfterSeconds > 0
+        && ["interactive_challenge", "managed_challenge"].includes(state.status)
+        && Date.now() - inspectionStartedAt >= reloadOnChallengeAfterSeconds * 1000) {
+        challengeReloaded = true;
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(1000);
+        continue;
+      }
       const bmapiState = await getBmapiCheckinState(page);
       if (bmapiState && bmapiState.status !== "ready") state = bmapiState;
 
@@ -220,6 +235,7 @@ try {
         checkinClicked,
         checkinStarted,
         dismissedPrompts,
+        challengeReloaded,
         attendanceEndpoint,
       };
       const explicitlyConfirmed = ["signed", "already_signed"].includes(state.status);

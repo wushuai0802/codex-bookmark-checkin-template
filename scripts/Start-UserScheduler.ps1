@@ -180,7 +180,8 @@ try {
             }
             if ($now -ge $scheduledToday -and -not (Test-SchedulerWaiting $state $now $config)) {
                 Write-SchedulerHeartbeat 'running_checkin'
-                Write-SchedulerLog "开始第 $([int]$state.attemptsToday + 1) 次签到尝试。"
+                $attemptNumber = if ([string]$state.lastAttemptDate -eq $now.ToString('yyyy-MM-dd')) { [int]$state.attemptsToday + 1 } else { 1 }
+                Write-SchedulerLog "开始第 $attemptNumber 次签到尝试。"
                 $runScript = Join-Path $PSScriptRoot 'Run-Checkin.ps1'
                 $runStartedAt = Get-Date
                 Write-SchedulerClaim $runStartedAt

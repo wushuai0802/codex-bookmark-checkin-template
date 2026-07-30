@@ -83,6 +83,7 @@
     "retryBaseMinutes": 2,
     "retryMaxMinutes": 360,
     "outboxMaxItems": 20,
+    "outboxRetentionDays": 30,
     "timeoutSeconds": 60
   }
 }

@@ -15,5 +15,8 @@
   },
   "nativeWafPreflightUrls": [
     { "url": "https://example.com/account/check-in", "waitSeconds": 20 }
+  ],
+  "nativeChallengePreflight": [
+    { "url": "https://example.com/account/check-in", "waitSeconds": 90, "action": "checkin", "reloadOnChallengeAfterSeconds": 65 }
   ]
 }

@@ -40,6 +40,16 @@ $heartbeat = if (Test-Path -LiteralPath $heartbeatPath) { Get-Content -Raw -Enco
 $heartbeatMaxAgeMinutes = if ($heartbeat -and [string]$heartbeat.phase -eq 'running_checkin') { ([int]$config.taskTimeoutMinutes) + 10 } else { 5 }
 $heartbeatFresh = $heartbeat -and ((Get-Date) - [datetime]$heartbeat.updatedAt) -lt [timespan]::FromMinutes($heartbeatMaxAgeMinutes)
 $problemCount = if ($latest) { @($latest.results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') }).Count } else { $null }
+$minimumTargets = [Math]::Max(1, [int]$config.minimumBookmarkTargetCount)
+$latestRunToday = $latest -and [string]$latest.runId -like "$(Get-Date -Format 'yyyyMMdd')-*"
+$plannedTotal = if ($latest -and $null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { 0 }
+$processedTotal = if ($latest -and $null -ne $latest.processedTotal) { [int]$latest.processedTotal } else { 0 }
+$latestResultValid = $latestRunToday `
+    -and [string]$latest.runState -eq 'final' `
+    -and $latest.isComplete -eq $true `
+    -and $plannedTotal -ge $minimumTargets `
+    -and $processedTotal -ge $plannedTotal `
+    -and @($latest.results).Count -ge $plannedTotal
 $notificationReady = $config.notification.mode -in @($null, '', 'none') -or (
     $config.notification.mode -eq 'command' -and
     ((Test-Path -LiteralPath ([string]$config.notification.executable)) -or (Get-Command ([string]$config.notification.executable) -ErrorAction SilentlyContinue))
@@ -55,8 +65,9 @@ $checks = [ordered]@{
     schedulerUnique = if ($scheduledTask) { $true } else { $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1 }
     schedulerHeartbeatFresh = [bool]$heartbeatFresh
     latestResultPresent = [bool]$latest
-    latestResultConfirmed = $null -ne $problemCount -and $problemCount -eq 0
-    latestResultComplete = $null -ne $problemCount -and $problemCount -eq 0
+    latestResultValid = [bool]$latestResultValid
+    latestResultConfirmed = $latestResultValid -and $problemCount -eq 0
+    latestResultComplete = $latestResultValid -and $problemCount -eq 0
     siteStatePresent = Test-Path -LiteralPath $statePath
 }
 [ordered]@{
