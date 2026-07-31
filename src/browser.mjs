@@ -8,6 +8,7 @@ import { recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
 import { solveU2VisualChallenge } from "./u2-vision.mjs";
 import { resolveQaByWebSearch } from "./qa-solver.mjs";
 import { withRetrySchedule } from "./retry-policy.mjs";
+import { tryOAuthReloginCheckinStatus } from "./oauth-relogin-checkin.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -896,6 +897,9 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
   if (initialBmapiStatus && initialBmapiStatus.status !== "ready") {
     return { ...initialBmapiStatus, url: safeLogUrl(page.url()) };
   }
+
+  const oauthReloginStatus = await tryOAuthReloginCheckinStatus(page, activeOrigin, config);
+  if (oauthReloginStatus) return { ...oauthReloginStatus, url: safeLogUrl(page.url()) };
 
   // New API exposes an authoritative current-day status endpoint.  Query it
   // before interpreting generic page copy such as “每日签到可获得奖励”, which is

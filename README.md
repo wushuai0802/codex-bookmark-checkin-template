@@ -43,7 +43,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 相同来源和相同逻辑签到入口会去重，仍为每个书签保留结果。
 - 内置适配器覆盖 NexusPHP、New API、Linux DO OAuth、图片验证码、站内问答、Cloudflare/Turnstile，以及将“申请额度”作为每日签到动作的公益站流程。
 - 未知站点先走通用入口发现；Codex 只把经过页面成功确认的规则写入本机 `config/config.local.json`。
-- 书签暂未同步时可用本机 `configuredTargets` 临时补入 HTTPS 目标；复杂验证站可用 `disabledCheckinOrigins` 明确取消，登录成功即算完成的站点可用 `loginAsCheckinOrigins` 配置。三者默认均为空。
+- 书签暂未同步时可用本机 `configuredTargets` 临时补入 HTTPS 目标；复杂验证站可用 `disabledCheckinOrigins` 明确取消，登录成功即算完成的站点可用 `loginAsCheckinOrigins` 配置。需要每日退出并重新 OAuth 才发放奖励的站点使用 `oauthReloginCheckinRules`；规则可选择原生 Chrome 完成受浏览器验证保护的 OAuth，并且只在同源使用日志出现当天的预期奖励记录后确认成功。这些配置默认均为空。
 - 原生 WAF/验证预热只处理已校验书签计划中的站点；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。若验证 Cookie 需要等待扩展下载，可在单个 `nativeChallengePreflight` 条目中设置 `reloadOnChallengeAfterSeconds`；脚本到时最多重载一次，且该值必须小于总等待时间。
 - 单站重试、异常复查和任务级断点续跑只重新访问未确认目标。
 - 用户明确完成当次人工验证后，可通过 `Run-Checkin.ps1 -ManualConfirmedOrigins 'https://example.com'` 将结果以“用户已确认手动完成”写回当天续跑报告；该状态保留审计字段，不冒充自动签到。

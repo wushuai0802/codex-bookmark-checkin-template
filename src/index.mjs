@@ -266,6 +266,7 @@ try {
         if (current.status !== "login_required") continue;
         const target = selectedTargets[resultIndex];
         const provider = config.automaticOAuthProviders?.[current.origin];
+        const nativeOAuth = provider && config.oauthReloginCheckinRules?.[current.origin]?.nativeBrowser === true;
         const methods = [];
         if ((config.protectedCredentialOrigins ?? []).includes(current.origin)) {
           methods.push({
@@ -274,7 +275,21 @@ try {
             args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-ProtectedLogin.ps1"), "-Origin", current.origin, "-LoginUrl", current.url ?? `${current.origin}/login`],
           });
         }
-        if (provider) methods.push({ method: "oauth", executable: process.execPath, args: [path.join(sourceDirectory, "oauth-login.mjs"), current.origin, provider] });
+        if (nativeOAuth) {
+          methods.push({
+            method: "native_oauth",
+            executable: config.powershellExecutable || "pwsh.exe",
+            args: [
+              "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+              path.join(rootDirectory, "scripts", "Recover-NativeOAuthLogin.ps1"),
+              "-Origin", current.origin,
+              "-Provider", provider,
+              "-LoginUrl", config.oauthLoginUrls?.[current.origin] ?? `${current.origin}/login`,
+            ],
+          });
+        } else if (provider) {
+          methods.push({ method: "oauth", executable: process.execPath, args: [path.join(sourceDirectory, "oauth-login.mjs"), current.origin, provider] });
+        }
         else if (config.autoDetectLinuxDoOAuth !== false
           && (config.autoDetectOAuthOrigins ?? []).includes(current.origin)) {
           methods.push({ method: "oauth_autodetect", executable: process.execPath, args: [path.join(sourceDirectory, "oauth-login.mjs"), current.origin, "LinuxDO"] });

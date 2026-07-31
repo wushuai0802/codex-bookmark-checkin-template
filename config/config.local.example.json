@@ -4,6 +4,7 @@
   ],
   "disabledCheckinOrigins": [],
   "loginAsCheckinOrigins": [],
+  "oauthReloginCheckinRules": {},
   "relatedCandidateUrls": {
     "https://example.com": ["https://example.com/account/check-in"]
   },

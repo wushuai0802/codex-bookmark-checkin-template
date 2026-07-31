@@ -36,6 +36,7 @@
   "autoClickTurnstileOrigins": [],
   "disabledCheckinOrigins": [],
   "loginAsCheckinOrigins": [],
+  "oauthReloginCheckinRules": {},
   "syncSavedLoginOrigins": [],
   "syncBookmarkSavedLogins": false,
   "syncAccountSavedLoginsToLocalStore": true,
