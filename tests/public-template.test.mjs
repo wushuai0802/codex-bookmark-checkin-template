@@ -14,7 +14,22 @@ test("公开默认配置不启用外部通知", async () => {
   assert.deepEqual(defaults.configuredTargets, []);
   assert.deepEqual(defaults.disabledCheckinOrigins, []);
   assert.deepEqual(defaults.loginAsCheckinOrigins, []);
+  assert.deepEqual(defaults.newApiSignInRules, {});
   assert.deepEqual(defaults.oauthReloginCheckinRules, {});
+});
+
+test("AnyRouter 使用真实 sign_in 接口且不再以访问页面判成功", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  const anyRouter = rules.newApiSignInRules["https://anyrouter.top"];
+  assert.equal(rules.visitCheckinRules["https://anyrouter.top"], undefined);
+  assert.equal(anyRouter.signInPath, "/api/user/sign_in");
+  assert.equal(anyRouter.selfPath, "/api/user/self");
+  assert.equal(anyRouter.logPath, "/api/log/self");
+  assert.equal(anyRouter.logType, 4);
+  assert.equal(anyRouter.rewardAmount, 25);
+  assert.equal(anyRouter.emptySuccessMeansAlreadySigned, true);
+  assert.match(anyRouter.responseSuccessText, /签到成功/);
+  assert.match(anyRouter.logSuccessText, /每日签到成功/);
 });
 
 test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async () => {
