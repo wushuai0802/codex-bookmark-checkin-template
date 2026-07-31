@@ -33,6 +33,20 @@
     "https://free.lyclaude.site"
   ],
   "loginAsCheckinOrigins": [],
+  "newApiSignInRules": {
+    "https://anyrouter.top": {
+      "signInPath": "/api/user/sign_in",
+      "selfPath": "/api/user/self",
+      "statusPath": "/api/status",
+      "logPath": "/api/log/self",
+      "logType": 4,
+      "responseSuccessText": "签到成功，获得",
+      "logSuccessText": "每日签到成功，增加额度",
+      "rewardAmount": 25,
+      "emptySuccessMeansAlreadySigned": true,
+      "userStorageKeys": ["user"]
+    }
+  },
   "oauthReloginCheckinRules": {
     "https://agentrouter.org": {
       "forceLogout": true,
@@ -57,9 +71,7 @@
     "https://rrrapi.com",
     "https://token.fourj.space"
   ],
-  "visitCheckinRules": {
-    "https://anyrouter.top": { "after": "08:00" }
-  },
+  "visitCheckinRules": {},
   "nativeWafPreflightUrls": [
     { "url": "https://piggo.me/attendance.php", "waitSeconds": 35 },
     { "url": "https://www.hdkyl.in/attendance.php", "waitSeconds": 15 }
