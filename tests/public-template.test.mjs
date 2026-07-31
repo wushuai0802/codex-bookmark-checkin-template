@@ -14,6 +14,36 @@ test("公开默认配置不启用外部通知", async () => {
   assert.deepEqual(defaults.configuredTargets, []);
   assert.deepEqual(defaults.disabledCheckinOrigins, []);
   assert.deepEqual(defaults.loginAsCheckinOrigins, []);
+  assert.deepEqual(defaults.oauthReloginCheckinRules, {});
+});
+
+test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  const agentRouter = rules.oauthReloginCheckinRules["https://agentrouter.org"];
+  assert.equal(rules.loginAsCheckinOrigins.includes("https://agentrouter.org"), false);
+  assert.equal(rules.automaticOAuthProviders["https://agentrouter.org"], "LinuxDO");
+  assert.equal(rules.oauthLoginUrls["https://agentrouter.org"], "https://agentrouter.org/login");
+  assert.equal(agentRouter.forceLogout, true);
+  assert.equal(agentRouter.nativeBrowser, true);
+  assert.equal(agentRouter.logoutPath, "/api/user/logout");
+  assert.equal(agentRouter.logPath, "/api/log/self");
+  assert.equal(agentRouter.logType, 4);
+  assert.equal(agentRouter.rewardAmount, 25);
+  assert.match(agentRouter.successText, /每日签到成功/);
+});
+
+test("AgentRouter 原生 OAuth 恢复不接触或输出浏览器凭据", async () => {
+  const runner = await fs.readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
+  const nativeOAuth = await fs.readFile(new URL("../src/native-oauth-login.mjs", import.meta.url), "utf8");
+  const recovery = await fs.readFile(new URL("../scripts/Recover-NativeOAuthLogin.ps1", import.meta.url), "utf8");
+  assert.match(runner, /native_oauth/);
+  assert.match(runner, /Recover-NativeOAuthLogin\.ps1/);
+  assert.match(nativeOAuth, /connectOverCDP/);
+  assert.match(nativeOAuth, /tryOAuthReloginCheckinStatus/);
+  assert.match(nativeOAuth, /session cookie|callback evidence is optional/i);
+  assert.doesNotMatch(nativeOAuth, /document\.cookie|cookies\(|storageState/);
+  assert.match(recovery, /automationUserDataDir/);
+  assert.match(recovery, /Open-PlainLoginChrome\.ps1/);
 });
 
 test("首次运行原生预热必须使用已校验书签范围", async () => {
@@ -116,6 +146,7 @@ test("OAuth 恢复可以展开其他登录选项并关闭 LinuxDO 遮罩", async
   assert.match(oauth, /其他登录选项/);
   assert.match(oauth, /revealAlternateLoginOptions/);
   assert.match(oauth, /button\.modal-close\[title="关闭"\]/);
+  assert.match(oauth, /session\\\/sso_provider/);
 });
 
 test("公开模板不预设任何用户的书签文件夹名称", async () => {

@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { safeLogUrl } from "./security.mjs";
+import {
+  configuredOAuthReloginRule,
+  forceConfiguredOAuthLogout,
+  tryOAuthReloginCheckinStatus,
+} from "./oauth-relogin-checkin.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -104,6 +109,8 @@ async function revealAlternateLoginOptions(page) {
 const context = await launchAutomationContext(config);
 try {
   let page = await context.newPage();
+  const reloginRule = configuredOAuthReloginRule(origin, config);
+  if (reloginRule?.forceLogout) await forceConfiguredOAuthLogout(page, reloginRule, config);
   const configuredLoginUrl = config.oauthLoginUrls?.[origin] ?? `${origin}/login`;
   const loginUrl = new URL(configuredLoginUrl);
   if (loginUrl.origin !== origin || loginUrl.protocol !== "https:") throw new Error("OAuth 登录入口不属于目标站点");
@@ -169,6 +176,13 @@ try {
     }
   }
 
+  const discourseSso = new URL(page.url());
+  if (discourseSso.hostname === "linux.do" && /^\/session\/sso_provider(?:[/?#]|$)/i.test(discourseSso.pathname)) {
+    const waitMs = Math.max(5000, Math.min(120000, Number(config.cloudflareWaitMs) || 30000));
+    await page.waitForURL((url) => url.origin === origin, { timeout: waitMs }).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+  }
+
   await page.waitForTimeout(1500);
   const finalUrl = page.url();
   const bodyText = String(await page.locator("body").innerText()).replace(/\s+/g, " ").trim();
@@ -191,10 +205,20 @@ try {
       }
     }
   }
-  const loggedIn = finalLocation.origin === origin
+  let loggedIn = finalLocation.origin === origin
     && !/\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(finalLocation.href)
     && !visiblePassword
     && !visibleProviderLogin;
+  let dailyCheckin = null;
+  if (loggedIn && reloginRule) {
+    const verificationDeadline = Date.now() + reloginRule.verificationWaitMs;
+    do {
+      dailyCheckin = await tryOAuthReloginCheckinStatus(page, origin, config, "signed");
+      if (["signed", "already_signed"].includes(dailyCheckin?.status) || dailyCheckin?.status === "unconfirmed") break;
+      await page.waitForTimeout(1000);
+    } while (Date.now() < verificationDeadline);
+    loggedIn = ["signed", "already_signed"].includes(dailyCheckin?.status);
+  }
   const screenshotPath = path.join(rootDirectory, "tmp", `oauth-${new URL(origin).hostname.replace(/[^a-z0-9.-]/gi, "_")}.png`);
   if (!loggedIn) await page.screenshot({ path: screenshotPath, fullPage: false });
   console.log(JSON.stringify({
@@ -204,6 +228,7 @@ try {
     finalUrl: safeLogUrl(finalUrl),
     title: await page.title(),
     screenshotPath: loggedIn ? null : screenshotPath,
+    dailyCheckin,
     excerpt: bodyText.slice(0, 1600),
   }, null, 2));
   if (!loggedIn) process.exitCode = 2;

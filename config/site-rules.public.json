@@ -1,7 +1,7 @@
 {
   "_meta": {
     "schemaVersion": 1,
-    "lastVerifiedAt": "2026-07-26"
+    "lastVerifiedAt": "2026-07-31"
   },
   "relatedCandidateUrls": {
     "https://x666.me": ["https://up.x666.me/"],
@@ -32,9 +32,22 @@
   "autoDetectOAuthOrigins": [
     "https://free.lyclaude.site"
   ],
-  "loginAsCheckinOrigins": [
-    "https://agentrouter.org"
-  ],
+  "loginAsCheckinOrigins": [],
+  "oauthReloginCheckinRules": {
+    "https://agentrouter.org": {
+      "forceLogout": true,
+      "nativeBrowser": true,
+      "logoutPagePath": "/console",
+      "logoutPath": "/api/user/logout",
+      "logoutLabel": "退出",
+      "logPagePath": "/console/log",
+      "logPath": "/api/log/self",
+      "logType": 4,
+      "successText": "每日签到成功，增加额度",
+      "rewardAmount": 25,
+      "verificationWaitMs": 12000
+    }
+  },
   "autoClickTurnstileOrigins": [
     "https://bmapi.020212.xyz"
   ],
@@ -62,9 +75,11 @@
     }
   },
   "oauthLoginUrls": {
+    "https://agentrouter.org": "https://agentrouter.org/login",
     "https://checkin.new-api.abrdns.com": "https://checkin.new-api.abrdns.com/"
   },
   "automaticOAuthProviders": {
+    "https://agentrouter.org": "LinuxDO",
     "https://muyuan.do": "LinuxDO",
     "https://checkin.new-api.abrdns.com": "LinuxDO"
   },
