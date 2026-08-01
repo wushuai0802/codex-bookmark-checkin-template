@@ -6,6 +6,7 @@ import { findBookmarkTarget } from "./bookmarks.mjs";
 import {
   configuredOAuthReloginRule,
   forceConfiguredOAuthLogout,
+  parseObservedBrowserUrl,
   tryOAuthReloginCheckinStatus,
 } from "./oauth-relogin-checkin.mjs";
 import { safeLogUrl } from "./security.mjs";
@@ -131,7 +132,7 @@ try {
   context.on("page", observeCallback);
 
   page = context.pages().find((candidate) => {
-    try { return new URL(candidate.url()).origin === origin; } catch { return false; }
+    return parseObservedBrowserUrl(candidate.url())?.origin === origin;
   }) ?? context.pages()[0];
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
 
@@ -174,12 +175,8 @@ try {
   while (Date.now() < oauthDeadline) {
     if (page.isClosed()) {
       const targetPage = [...context.pages()].reverse().find((candidate) => {
-        try {
-          const url = new URL(candidate.url());
-          return url.origin === origin && !isTargetLogin(url);
-        } catch {
-          return false;
-        }
+        const url = parseObservedBrowserUrl(candidate.url());
+        return url?.origin === origin && !isTargetLogin(url);
       });
       if (targetPage) page = targetPage;
       else {
@@ -188,7 +185,11 @@ try {
       }
     }
 
-    const location = new URL(page.url());
+    const location = parseObservedBrowserUrl(page.url());
+    if (!location) {
+      await page.waitForTimeout(500);
+      continue;
+    }
     if (location.origin === origin && !isTargetLogin(location)) {
       callbackReached = true;
       break;
