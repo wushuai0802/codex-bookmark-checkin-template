@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   configuredOAuthReloginRule,
   forceConfiguredOAuthLogout,
+  parseObservedBrowserUrl,
   tryOAuthReloginCheckinStatus,
 } from "../src/oauth-relogin-checkin.mjs";
 
@@ -24,6 +25,12 @@ const config = {
     },
   },
 };
+
+test("OAuth 弹窗的临时空地址不会中断恢复流程", () => {
+  assert.equal(parseObservedBrowserUrl(""), null);
+  assert.equal(parseObservedBrowserUrl(undefined), null);
+  assert.equal(parseObservedBrowserUrl("https://agentrouter.org/login").origin, origin);
+});
 
 test("OAuth 重登录签到规则只接受同源 HTTPS 地址", () => {
   const rule = configuredOAuthReloginRule(origin, config);

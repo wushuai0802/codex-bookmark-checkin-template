@@ -1,5 +1,13 @@
 const DEFAULT_LOG_PATH = "/api/log/self";
 
+export function parseObservedBrowserUrl(value) {
+  try {
+    return new URL(String(value || ""));
+  } catch {
+    return null;
+  }
+}
+
 function sameOriginHttpsUrl(origin, value, field) {
   const expectedOrigin = new URL(origin).origin;
   const resolved = new URL(String(value || "/"), expectedOrigin);
