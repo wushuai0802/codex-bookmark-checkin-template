@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { publicBookmarkReport, readBookmarkPlanWithBackup } from "./bookmarks.mjs";
 import { configuredTargetSkip, launchAutomationContext, processTarget } from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
+import { loginHelperOutcome, resolveLoginRecoveryUrl } from "./login-recovery.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
@@ -267,12 +268,17 @@ try {
         const target = selectedTargets[resultIndex];
         const provider = config.automaticOAuthProviders?.[current.origin];
         const nativeOAuth = provider && config.oauthReloginCheckinRules?.[current.origin]?.nativeBrowser === true;
+        const savedLoginUrl = resolveLoginRecoveryUrl(
+          current.origin,
+          config.savedLoginUrls?.[current.origin],
+          current.url,
+        );
         const methods = [];
         if ((config.protectedCredentialOrigins ?? []).includes(current.origin)) {
           methods.push({
             method: "protected_credential",
             executable: config.powershellExecutable || "pwsh.exe",
-            args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-ProtectedLogin.ps1"), "-Origin", current.origin, "-LoginUrl", current.url ?? `${current.origin}/login`],
+            args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-ProtectedLogin.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
           });
         }
         if (nativeOAuth) {
@@ -297,29 +303,39 @@ try {
         methods.push({
           method: "saved_password",
           executable: process.execPath,
-          args: [path.join(sourceDirectory, "saved-password-login.mjs"), current.origin, current.url ?? ""],
+          args: [path.join(sourceDirectory, "saved-password-login.mjs"), current.origin, savedLoginUrl],
         });
         methods.push({
           method: "native_saved_password",
           executable: config.powershellExecutable || "pwsh.exe",
-          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-NativeLogin.ps1"), "-Origin", current.origin, "-LoginUrl", current.url ?? `${current.origin}/login`],
+          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-NativeLogin.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
         });
 
         const attempts = [];
         let succeeded = false;
         for (const method of methods) {
           try {
-            await execFileAsync(method.executable, method.args, {
+            const helperOutput = await execFileAsync(method.executable, method.args, {
               cwd: rootDirectory,
               windowsHide: true,
               timeout: 180000,
               maxBuffer: 1024 * 1024,
             });
-            attempts.push({ method: method.method, succeeded: true });
-            succeeded = true;
-            break;
-          } catch {
-            attempts.push({ method: method.method, succeeded: false });
+            const outcome = loginHelperOutcome(helperOutput.stdout);
+            attempts.push({ method: method.method, ...outcome });
+            if (outcome.succeeded) {
+              succeeded = true;
+              break;
+            }
+          } catch (error) {
+            const fallback = error?.code === "ETIMEDOUT" ? "timeout" : "failed";
+            const outcome = loginHelperOutcome(`${error?.stdout ?? ""}\n${error?.stderr ?? ""}`, fallback);
+            const failedOutcome = outcome.status === "logged_in" ? loginHelperOutcome("", fallback) : outcome;
+            attempts.push({
+              method: method.method,
+              ...failedOutcome,
+              succeeded: false,
+            });
           }
         }
         loginOutcomes.set(current.origin, { attempted: true, succeeded, attempts });

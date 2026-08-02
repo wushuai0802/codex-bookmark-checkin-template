@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
+import { resolveLoginRecoveryUrl } from "./login-recovery.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -15,17 +16,11 @@ const origin = new URL(requestedOrigin).origin;
 const { target } = await findBookmarkTarget(config.bookmarksPath, origin, config);
 const allowedOrigins = target.allowedOrigins ?? [origin];
 
-let loginUrl = config.savedLoginUrls?.[origin] ?? null;
-if (!loginUrl && requestedUrl) {
-  try {
-    const candidate = new URL(requestedUrl);
-    if (/\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)|#\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(candidate.href)) {
-      loginUrl = candidate.href;
-    }
-  } catch { /* ignore invalid diagnostic URL */ }
-}
-loginUrl ??= `${origin}/login`;
-loginUrl = assertBookmarkNavigation(loginUrl, allowedOrigins);
+const loginUrl = assertBookmarkNavigation(resolveLoginRecoveryUrl(
+  origin,
+  config.savedLoginUrls?.[origin],
+  requestedUrl,
+), allowedOrigins);
 
 const context = await launchAutomationContext(config);
 try {
