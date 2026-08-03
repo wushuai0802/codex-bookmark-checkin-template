@@ -4,12 +4,12 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText } from "./detector.mjs";
 import { assertBookmarkNavigation, safeErrorMessage, safeLogUrl } from "./security.mjs";
-import { recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
+import { newApiCaptchaCandidates, recognizeNewApiCaptcha, recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
 import { solveU2VisualChallenge } from "./u2-vision.mjs";
 import { resolveQaByWebSearch } from "./qa-solver.mjs";
 import { withRetrySchedule } from "./retry-policy.mjs";
 import { tryOAuthReloginCheckinStatus } from "./oauth-relogin-checkin.mjs";
-import { tryNewApiSignIn } from "./new-api-signin.mjs";
+import { tryNewApiCaptchaCheckin, tryNewApiSignIn } from "./new-api-signin.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -904,6 +904,17 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
 
   const oauthReloginStatus = await tryOAuthReloginCheckinStatus(page, activeOrigin, config);
   if (oauthReloginStatus) return { ...oauthReloginStatus, url: safeLogUrl(page.url()) };
+
+  const newApiCaptchaStatus = await tryNewApiCaptchaCheckin(
+    page,
+    activeOrigin,
+    config,
+    async (image) => {
+      const recognition = await recognizeNewApiCaptcha(image);
+      return newApiCaptchaCandidates(recognition);
+    },
+  );
+  if (newApiCaptchaStatus) return { ...newApiCaptchaStatus, url: safeLogUrl(page.url()) };
 
   // New API exposes an authoritative current-day status endpoint.  Query it
   // before interpreting generic page copy such as “每日签到可获得奖励”, which is

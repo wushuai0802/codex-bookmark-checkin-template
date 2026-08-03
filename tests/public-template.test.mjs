@@ -14,8 +14,20 @@ test("公开默认配置不启用外部通知", async () => {
   assert.deepEqual(defaults.configuredTargets, []);
   assert.deepEqual(defaults.disabledCheckinOrigins, []);
   assert.deepEqual(defaults.loginAsCheckinOrigins, []);
+  assert.deepEqual(defaults.newApiCaptchaRules, {});
   assert.deepEqual(defaults.newApiSignInRules, {});
   assert.deepEqual(defaults.oauthReloginCheckinRules, {});
+});
+
+test("简直了使用个人中心和有界图片验证码签到规则", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  assert.equal(rules.extendedDiscoveryOrigins.includes("https://jianzhile.vip"), true);
+  assert.equal(rules.newApiCheckinOrigins.includes("https://jianzhile.vip"), true);
+  assert.deepEqual(rules.newApiCaptchaRules["https://jianzhile.vip"], {
+    checkinPath: "/api/user/checkin",
+    captchaPath: "/api/user/checkin/captcha",
+    maxAttempts: 6,
+  });
 });
 
 test("AnyRouter 使用真实 sign_in 接口且不再以访问页面判成功", async () => {
@@ -75,6 +87,8 @@ test("保存密码同步必须经过显式总开关授权", async () => {
   const runner = await fs.readFile(new URL("../scripts/Run-Checkin.ps1", import.meta.url), "utf8");
   assert.match(runner, /syncBookmarkSavedLogins -eq \$true/);
   assert.doesNotMatch(runner, /syncSavedLoginOrigins\)\.Count -gt 0 -or/);
+  assert.match(runner, /try\s*\{[\s\S]*Sync-ChromeSavedLogins\.ps1'[\s\S]*\}\s*catch\s*\{/);
+  assert.match(runner, /保存密码同步未完成，继续使用现有机器人会话/);
 });
 
 test("机器人 Chrome 缓存清理有目录边界和会话数据保护", async () => {

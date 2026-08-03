@@ -1,10 +1,53 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  classifyNewApiCaptchaObservation,
+  configuredNewApiCaptchaRule,
   classifyNewApiSignInObservation,
   configuredNewApiSignInRule,
+  tryNewApiCaptchaCheckin,
   tryNewApiSignIn,
 } from "../src/new-api-signin.mjs";
+
+test("New API 图片验证码规则限制同源地址和尝试次数", () => {
+  const captchaOrigin = "https://captcha.example";
+  const rule = configuredNewApiCaptchaRule(captchaOrigin, {
+    newApiCaptchaRules: {
+      [captchaOrigin]: { checkinPath: "/api/user/checkin", captchaPath: "/api/user/checkin/captcha", maxAttempts: 6 },
+    },
+  });
+  assert.equal(rule.checkinUrl, "https://captcha.example/api/user/checkin");
+  assert.equal(rule.captchaUrl, "https://captcha.example/api/user/checkin/captcha");
+  assert.equal(rule.maxAttempts, 6);
+  assert.throws(() => configuredNewApiCaptchaRule(captchaOrigin, {
+    newApiCaptchaRules: { [captchaOrigin]: { maxAttempts: 20 } },
+  }), /maxAttempts/);
+});
+
+test("New API 图片验证码只按接口权威状态确认完成", () => {
+  assert.equal(classifyNewApiCaptchaObservation({ state: "already_signed" }).status, "already_signed");
+  const signed = classifyNewApiCaptchaObservation({ state: "signed", quotaAwarded: 5000000, attempts: 2 });
+  assert.equal(signed.status, "signed");
+  assert.equal(signed.evidence.quotaAwarded, 5000000);
+  assert.equal(classifyNewApiCaptchaObservation({ state: "captcha_unresolved" }).status, "interactive_challenge");
+});
+
+test("New API 图片验证码提交后必须再次确认当日状态", async () => {
+  const captchaOrigin = "https://captcha.example";
+  const observations = [
+    { state: "ready", userId: "7" },
+    { state: "ready", id: "captcha-id", image: `data:image/png;base64,${Buffer.from("image").toString("base64")}` },
+    { state: "signed", quotaAwarded: 5000000 },
+    { state: "signed" },
+  ];
+  const page = { evaluate: async () => observations.shift() };
+  const result = await tryNewApiCaptchaCheckin(page, captchaOrigin, {
+    newApiCaptchaRules: { [captchaOrigin]: { maxAttempts: 2 } },
+  }, async () => ["ABCDE"]);
+  assert.equal(result.status, "signed");
+  assert.equal(result.evidence.quotaAwarded, 5000000);
+  assert.equal(observations.length, 0);
+});
 
 const origin = "https://anyrouter.top";
 const config = {

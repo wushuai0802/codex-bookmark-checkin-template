@@ -197,6 +197,158 @@ export async function recognizeOpenCdCaptcha(input) {
   }
 }
 
+const NEW_API_CAPTCHA_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const NEW_API_CAPTCHA_CENTERS = [23, 49, 75, 100, 126];
+
+function normalizeCaptchaCode(value) {
+  return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function addCaptchaVote(votes, slot, character, weight) {
+  if (slot < 0 || slot >= votes.length || !NEW_API_CAPTCHA_ALPHABET.includes(character)) return;
+  const row = votes[slot];
+  row.set(character, (row.get(character) || 0) + weight);
+}
+
+function rankCaptchaVotes(votes) {
+  return votes.map((row) => [...row.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([character, score]) => ({ character, score })));
+}
+
+function mapTesseractBoxes(boxText, votes, scale = 8, leftPadding = 80) {
+  for (const line of String(boxText || "").split(/\r?\n/)) {
+    const match = line.match(/^([A-Z0-9])\s+(\d+)\s+\d+\s+(\d+)\s+\d+/i);
+    if (!match) continue;
+    const center = ((Number(match[2]) + Number(match[3])) / 2 - leftPadding) / scale;
+    const slot = NEW_API_CAPTCHA_CENTERS
+      .map((expected, index) => ({ index, distance: Math.abs(center - expected) }))
+      .sort((left, right) => left.distance - right.distance)[0];
+    if (slot && slot.distance <= 14) addCaptchaVote(votes, slot.index, match[1].toUpperCase(), 3);
+  }
+}
+
+function bestCaptchaCode(votes) {
+  const ranked = rankCaptchaVotes(votes);
+  if (ranked.some((row) => row.length === 0)) return null;
+  const selected = ranked.map((row) => row[0]);
+  const weakest = Math.min(...selected.map((item) => item.score));
+  const margins = selected.map((item, index) => item.score / Math.max(0.001, ranked[index][1]?.score || 0.001));
+  const confidence = Math.min(100, Math.round((weakest / 12) * 100));
+  const margin = Math.min(...margins);
+  if (weakest < 2 || margin < 1.12) return null;
+  return {
+    code: selected.map((item) => item.character).join(""),
+    confidence,
+    margin,
+    candidates: ranked.map((row) => row.slice(0, 4)),
+  };
+}
+
+// Jianzhile and compatible New API deployments use a small five-character
+// image CAPTCHA.  The characters are fixed-width and the interference lines
+// are much lighter than the glyphs, so a few thresholded OCR passes are more
+// reliable than sending the full colourful image to Tesseract once.  The
+// caller treats a low-margin result as unresolved and requests a fresh image.
+export async function recognizeNewApiCaptcha(input) {
+  const source = sharp(input).resize({ width: 160, height: 58, kernel: "lanczos3" });
+  const { data, info } = await source.clone().removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const worker = await createWorker("eng", 1, { logger: () => {} });
+  const votes = Array.from({ length: 5 }, () => new Map());
+  try {
+    await worker.setParameters({
+      tessedit_char_whitelist: NEW_API_CAPTCHA_ALPHABET,
+      user_defined_dpi: "300",
+    });
+
+    for (const threshold of [120, 160]) {
+      const y0 = 18;
+      const y1 = 50;
+      const raw = Buffer.alloc(info.width * (y1 - y0), 255);
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = 10; x < 145; x += 1) {
+          const offset = (y * info.width + x) * 3;
+          if (Math.min(data[offset], data[offset + 1], data[offset + 2]) < threshold) {
+            raw[(y - y0) * info.width + x] = 0;
+          }
+        }
+      }
+      const image = await sharp(raw, { raw: { width: info.width, height: y1 - y0, channels: 1 } })
+        .resize({ width: info.width * 8, height: (y1 - y0) * 8, kernel: "nearest" })
+        .extend({ top: 80, bottom: 80, left: 80, right: 80, background: "white" })
+        .png()
+        .toBuffer();
+      for (const psm of [PSM.SINGLE_LINE, PSM.SINGLE_WORD]) {
+        await worker.setParameters({ tessedit_pageseg_mode: psm });
+        const result = await worker.recognize(image, {}, { text: true, box: true });
+        mapTesseractBoxes(result.data.box, votes);
+      }
+    }
+
+    // Isolated glyph passes recover cases where a noise line makes the full
+    // OCR line shift by one character.  Keep the pass count bounded because
+    // this runs inside the scheduled daily task.
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_CHAR });
+    for (let slot = 0; slot < NEW_API_CAPTCHA_CENTERS.length; slot += 1) {
+      for (const width of [18, 22]) {
+        const left = Math.max(0, Math.round(NEW_API_CAPTCHA_CENTERS[slot] - width / 2));
+        for (const threshold of [120, 160]) {
+          const y0 = 18;
+          const y1 = 50;
+          const raw = Buffer.alloc(width * (y1 - y0), 255);
+          for (let y = y0; y < y1; y += 1) {
+            for (let x = left; x < left + width; x += 1) {
+              const offset = (y * info.width + x) * 3;
+              if (Math.min(data[offset], data[offset + 1], data[offset + 2]) < threshold) {
+                raw[(y - y0) * width + (x - left)] = 0;
+              }
+            }
+          }
+          const image = await sharp(raw, { raw: { width, height: y1 - y0, channels: 1 } })
+            .resize({ width: width * 16, height: (y1 - y0) * 16, kernel: "nearest" })
+            .extend({ top: 80, bottom: 80, left: 80, right: 80, background: "white" })
+            .png()
+            .toBuffer();
+          for (const psm of [PSM.SINGLE_CHAR, PSM.SINGLE_WORD]) {
+            await worker.setParameters({ tessedit_pageseg_mode: psm });
+            const result = await worker.recognize(image);
+            const character = normalizeCaptchaCode(result.data.text);
+            if (character.length === 1) {
+              addCaptchaVote(votes, slot, character, 1 + Math.max(0, Number(result.data.confidence) || 0) / 20);
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    await worker.terminate();
+  }
+  return bestCaptchaCode(votes) ?? {
+    code: null,
+    confidence: 0,
+    margin: 0,
+    candidates: rankCaptchaVotes(votes).map((row) => row.slice(0, 4)),
+  };
+}
+
+export const NEW_API_CAPTCHA_MAX_SUBMISSIONS = 6;
+
+// Keep the Cartesian product deliberately small.  A New API CAPTCHA id is
+// single-use after a wrong answer, so callers request a fresh challenge for
+// every candidate and stop after the configured bounded attempts.
+export function newApiCaptchaCandidates(recognition, limit = NEW_API_CAPTCHA_MAX_SUBMISSIONS) {
+  const rows = recognition?.candidates;
+  if (!Array.isArray(rows) || rows.length !== 5 || rows.some((row) => !Array.isArray(row) || row.length === 0)) return [];
+  let candidates = [{ code: "", score: 0 }];
+  for (const row of rows) {
+    candidates = candidates.flatMap((prefix) => row.slice(0, 2).map((item) => ({
+      code: `${prefix.code}${item.character}`,
+      score: prefix.score + Number(item.score || 0),
+    }))).sort((left, right) => right.score - left.score).slice(0, Math.max(1, limit));
+  }
+  return [...new Set(candidates.map((item) => item.code))].filter((code) => code.length === 5).slice(0, limit);
+}
+
 if (process.argv[1] && new URL(import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/, (value) => value.slice(1)) === process.argv[1].replace(/\\/g, "/")) {
   const inputPath = process.argv[2];
   if (!inputPath) throw new Error("用法: node src/captcha-ocr.mjs <image>");

@@ -36,6 +36,7 @@
   "autoClickTurnstileOrigins": [],
   "disabledCheckinOrigins": [],
   "loginAsCheckinOrigins": [],
+  "newApiCaptchaRules": {},
   "newApiSignInRules": {},
   "oauthReloginCheckinRules": {},
   "syncSavedLoginOrigins": [],
