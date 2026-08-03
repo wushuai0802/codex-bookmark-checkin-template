@@ -15,6 +15,7 @@
   "newApiCheckinOrigins": [
     "https://ai-cf.ailinyu.de",
     "https://checkin.new-api.abrdns.com",
+    "https://jianzhile.vip",
     "https://muyuan.do",
     "https://new-api.abrdns.com",
     "https://rrrapi.com",
@@ -24,6 +25,7 @@
     "https://ai-cf.ailinyu.de",
     "https://checkin.new-api.abrdns.com",
     "https://free.lyclaude.site",
+    "https://jianzhile.vip",
     "https://muyuan.do",
     "https://new-api.abrdns.com",
     "https://rrrapi.com",
@@ -33,6 +35,13 @@
     "https://free.lyclaude.site"
   ],
   "loginAsCheckinOrigins": [],
+  "newApiCaptchaRules": {
+    "https://jianzhile.vip": {
+      "checkinPath": "/api/user/checkin",
+      "captchaPath": "/api/user/checkin/captcha",
+      "maxAttempts": 6
+    }
+  },
   "newApiSignInRules": {
     "https://anyrouter.top": {
       "signInPath": "/api/user/sign_in",

@@ -160,7 +160,18 @@ try {
         -and (Test-NeedsSavedLoginSync $resumeCandidate (Get-Date)) `
         -and $config.syncBookmarkSavedLogins -eq $true
     if ($shouldSyncSavedLogins) {
-        & (Join-Path $PSScriptRoot 'Sync-ChromeSavedLogins.ps1')
+        try {
+            & (Join-Path $PSScriptRoot 'Sync-ChromeSavedLogins.ps1')
+            if ($LASTEXITCODE -ne 0) { throw "Chrome 保存密码同步退出码为 $LASTEXITCODE。" }
+        }
+        catch {
+            # Password-database synchronization is an optional recovery aid.
+            # A missing Python runtime or an unavailable source profile must
+            # not prevent sites with an existing session from checking in.
+            $syncFailure = ([string]$_.Exception.Message -replace '[\r\n\t]+', ' ').Trim()
+            if ($syncFailure.Length -gt 240) { $syncFailure = $syncFailure.Substring(0, 240) }
+            Write-Warning "Chrome 保存密码同步未完成，继续使用现有机器人会话：$syncFailure"
+        }
     }
 
     if ($DryRun) {

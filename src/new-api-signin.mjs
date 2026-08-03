@@ -3,6 +3,9 @@ const DEFAULT_SELF_PATH = "/api/user/self";
 const DEFAULT_STATUS_PATH = "/api/status";
 const DEFAULT_LOG_PATH = "/api/log/self";
 
+const DEFAULT_CHECKIN_PATH = "/api/user/checkin";
+const DEFAULT_CAPTCHA_PATH = "/api/user/checkin/captcha";
+
 function sameOriginHttpsUrl(origin, value, field) {
   const expected = new URL(origin);
   if (expected.protocol !== "https:" || expected.username || expected.password) {
@@ -56,6 +59,138 @@ export function configuredNewApiSignInRule(origin, config = {}) {
     userStorageKeys: userStorageKeys.map((key) => String(key).trim()),
     emptySuccessMeansAlreadySigned: raw.emptySuccessMeansAlreadySigned === true,
   };
+}
+
+export function configuredNewApiCaptchaRule(origin, config = {}) {
+  const expectedOrigin = new URL(origin).origin;
+  const raw = config.newApiCaptchaRules?.[expectedOrigin];
+  if (!raw) return null;
+  const maxAttempts = Number(raw.maxAttempts ?? 6);
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 8) {
+    throw new Error(`New API captcha maxAttempts 无效：${expectedOrigin}`);
+  }
+  return {
+    origin: expectedOrigin,
+    checkinUrl: sameOriginHttpsUrl(expectedOrigin, raw.checkinPath || DEFAULT_CHECKIN_PATH, "checkinPath"),
+    captchaUrl: sameOriginHttpsUrl(expectedOrigin, raw.captchaPath || DEFAULT_CAPTCHA_PATH, "captchaPath"),
+    maxAttempts,
+  };
+}
+
+export function classifyNewApiCaptchaObservation(observed) {
+  if (!observed) return { status: "unconfirmed", reason: "New API 验证码签到没有返回可验证结果" };
+  if (observed.state === "user_id_missing") return { status: "login_required", reason: "站点页面没有可用的登录用户状态，需要重新登录" };
+  if (observed.state === "user_id_ambiguous") return { status: "unconfirmed", reason: "站点页面存在多个用户标识，已拒绝发送签到请求" };
+  if (observed.state === "unauthorized") return { status: "login_required", reason: "站点签到接口确认会话已失效，需要重新登录" };
+  if (observed.state === "already_signed") return { status: "already_signed", reason: "签到接口显示今日已签到" };
+  if (observed.state === "signed") {
+    const quota = observed.quotaAwarded;
+    return {
+      status: "signed",
+      reason: quota == null ? "已通过站点验证码签到接口完成" : `已通过站点验证码签到接口完成，奖励额度 ${quota}`,
+      evidence: { source: "new_api_captcha", quotaAwarded: quota ?? undefined, attempts: observed.attempts },
+    };
+  }
+  if (observed.state === "captcha_unresolved") {
+    return { status: "interactive_challenge", reason: "站内图片验证码未能可靠识别，已停止盲目提交" };
+  }
+  return { status: "unconfirmed", reason: String(observed.message || "New API 验证码签到未确认完成").slice(0, 200) };
+}
+
+export async function tryNewApiCaptchaCheckin(page, origin, config = {}, solveCaptcha) {
+  const rule = configuredNewApiCaptchaRule(origin, config);
+  if (!rule) return null;
+  if (typeof solveCaptcha !== "function") throw new Error("New API captcha 缺少本地识别器");
+
+  const session = await page.evaluate(async (activeRule) => {
+    const ids = [];
+    const extract = (value) => value?.id ?? value?.user?.id ?? value?.state?.user?.id ?? value?.data?.id ?? value?.data?.user?.id ?? null;
+    for (const storage of [localStorage, sessionStorage]) {
+      for (let index = 0; index < storage.length; index += 1) {
+        try {
+          const value = JSON.parse(storage.getItem(storage.key(index)) || "null");
+          const id = extract(value);
+          if (id != null) ids.push(String(id));
+        } catch { /* unrelated storage */ }
+      }
+    }
+    const visibleId = String(document.body?.innerText || "").match(/ID\s*[:：]\s*(\d+)/i)?.[1];
+    if (visibleId) ids.push(visibleId);
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return { state: "user_id_missing" };
+    if (uniqueIds.length !== 1) return { state: "user_id_ambiguous" };
+    const headers = { Accept: "application/json", "New-Api-User": uniqueIds[0] };
+    const month = new Date().toISOString().slice(0, 7);
+    const response = await fetch(`${activeRule.checkinUrl}?month=${month}`, { credentials: "include", headers }).catch(() => null);
+    if (!response) return { state: "verification_failed" };
+    if ([401, 403].includes(response.status)) return { state: "unauthorized" };
+    const body = await response.json().catch(() => null);
+    if (body?.success === true && Boolean(body?.data?.stats?.checked_in_today ?? body?.data?.checked_in_today)) {
+      return { state: "already_signed", userId: uniqueIds[0] };
+    }
+    return { state: "ready", userId: uniqueIds[0] };
+  }, rule);
+  if (session.state !== "ready") return classifyNewApiCaptchaObservation(session);
+
+  const tried = new Set();
+  for (let attempt = 1; attempt <= rule.maxAttempts; attempt += 1) {
+    const challenge = await page.evaluate(async ({ activeRule, userId }) => {
+      const response = await fetch(activeRule.captchaUrl, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "New-Api-User": userId },
+      }).catch(() => null);
+      if (!response) return { state: "failed" };
+      if ([401, 403].includes(response.status)) return { state: "unauthorized" };
+      const body = await response.json().catch(() => null);
+      const id = body?.data?.captcha_id;
+      const image = body?.data?.captcha_image;
+      if (body?.success !== true || !id || !image) return { state: "failed", message: body?.message };
+      return { state: "ready", id: String(id), image: String(image) };
+    }, { activeRule: rule, userId: session.userId });
+    if (challenge.state !== "ready") return classifyNewApiCaptchaObservation(challenge);
+    const match = challenge.image.match(/^data:image\/[a-z0-9.+-]+;base64,([A-Za-z0-9+/=]+)$/i);
+    if (!match) return classifyNewApiCaptchaObservation({ state: "failed", message: "站点返回的验证码图片格式无效" });
+    const candidates = await solveCaptcha(Buffer.from(match[1], "base64"));
+    const code = candidates.find((candidate) => /^[A-Z0-9]{5}$/.test(candidate) && !tried.has(candidate));
+    if (!code) continue;
+    tried.add(code);
+    const submitted = await page.evaluate(async ({ activeRule, userId, captchaId, captchaAnswer }) => {
+      const response = await fetch(activeRule.checkinUrl, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json", "New-Api-User": userId },
+        body: JSON.stringify({ captcha_id: captchaId, captcha_answer: captchaAnswer }),
+      }).catch(() => null);
+      if (!response) return { state: "failed" };
+      if ([401, 403].includes(response.status)) return { state: "unauthorized" };
+      const body = await response.json().catch(() => null);
+      if (body?.success === true) return { state: "signed", quotaAwarded: body?.data?.quota_awarded };
+      const message = String(body?.message || "");
+      if (/已签到|已簽到|already/i.test(message)) return { state: "already_signed" };
+      if (/验证码(?:错误|已失效)|驗證碼(?:錯誤|已失效)|captcha/i.test(message)) return { state: "retry" };
+      return { state: "failed", message };
+    }, { activeRule: rule, userId: session.userId, captchaId: challenge.id, captchaAnswer: code });
+    if (submitted.state === "retry") continue;
+    if (submitted.state === "signed") {
+      const verified = await page.evaluate(async ({ activeRule, userId }) => {
+        const month = new Date().toISOString().slice(0, 7);
+        const response = await fetch(`${activeRule.checkinUrl}?month=${month}`, {
+          credentials: "include",
+          headers: { Accept: "application/json", "New-Api-User": userId },
+        }).catch(() => null);
+        if (!response) return { state: "verification_failed" };
+        if ([401, 403].includes(response.status)) return { state: "unauthorized" };
+        const body = await response.json().catch(() => null);
+        const checked = body?.success === true
+          && Boolean(body?.data?.stats?.checked_in_today ?? body?.data?.checked_in_today);
+        return { state: checked ? "signed" : "verification_failed" };
+      }, { activeRule: rule, userId: session.userId });
+      if (verified.state !== "signed") return classifyNewApiCaptchaObservation(verified);
+    }
+    return classifyNewApiCaptchaObservation({ ...submitted, attempts: attempt });
+  }
+  return classifyNewApiCaptchaObservation({ state: "captcha_unresolved" });
 }
 
 function amountMatches(value, expected) {

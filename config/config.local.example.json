@@ -4,6 +4,7 @@
   ],
   "disabledCheckinOrigins": [],
   "loginAsCheckinOrigins": [],
+  "newApiCaptchaRules": {},
   "newApiSignInRules": {},
   "oauthReloginCheckinRules": {},
   "relatedCandidateUrls": {
