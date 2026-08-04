@@ -15,6 +15,8 @@ else {
         $_ -notmatch '^(node_modules|data|logs|tmp|outputs|work|inputs|downloads|\.git|\.venv|venv|\.pytest_cache)(/|$)' -and
         $_ -notmatch '(^|/)(__pycache__|\.pytest_cache)(/|$)' -and
         $_ -notmatch '(^|/)\.env(/|$)' -and
+        $_ -notmatch '^(progress\.md|requirements-ocr\.txt|pnpm-lock\.yaml|eng\.traineddata)$' -and
+        $_ -notmatch '^scripts/(Install-CaptchaOcr\.ps1|Invoke-CheckinReportOutbox\.ps1)$' -and
         $_ -notin @('config/config.json', 'config/config.local.json', 'config/qa-rules.local.json', 'setup/answers.json')
     })
 }
