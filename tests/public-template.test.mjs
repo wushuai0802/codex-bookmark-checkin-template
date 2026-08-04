@@ -73,6 +73,22 @@ test("AgentRouter 原生 OAuth 恢复不接触或输出浏览器凭据", async (
   assert.match(recovery, /Open-PlainLoginChrome\.ps1/);
 });
 
+test("AgentRouter 当天已有奖励日志时不会重复退出并触发 OAuth", async () => {
+  const nativeOAuth = await fs.readFile(new URL("../src/native-oauth-login.mjs", import.meta.url), "utf8");
+  const reuseCheck = nativeOAuth.indexOf("const existingDailyCheckin");
+  const forcedLogout = nativeOAuth.indexOf("forceConfiguredOAuthLogout(page");
+  assert.ok(reuseCheck >= 0);
+  assert.ok(forcedLogout > reuseCheck);
+  assert.match(nativeOAuth, /reusedExistingDailyEvidence:\s*true/);
+  assert.match(nativeOAuth, /\["signed", "already_signed"\]\.includes\(existingDailyCheckin\?\.status\)/);
+});
+
+test("AgentRouter PowerShell 恢复链固定使用 UTF-8 传递 JSON", async () => {
+  const recovery = await fs.readFile(new URL("../scripts/Recover-NativeOAuthLogin.ps1", import.meta.url), "utf8");
+  assert.match(recovery, /\$OutputEncoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$false\)/);
+  assert.match(recovery, /\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$false\)/);
+});
+
 test("首次运行原生预热必须使用已校验书签范围", async () => {
   const runner = await fs.readFile(new URL("../scripts/Run-Checkin.ps1", import.meta.url), "utf8");
   const preflight = await fs.readFile(new URL("../scripts/Prepare-NativeWafSession.ps1", import.meta.url), "utf8");

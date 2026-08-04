@@ -49,6 +49,11 @@ export function configuredOAuthReloginRule(origin, config = {}) {
     logoutLabel,
     forceLogout: raw.forceLogout === true,
     nativeBrowser: raw.nativeBrowser === true,
+    expectedAccountId: String(
+      config.oauthExpectedAccountIds?.[expectedOrigin]
+      ?? config.oauthAccountIdentities?.[expectedOrigin]?.accountId
+      ?? "",
+    ).trim(),
     verificationWaitMs: Math.max(1000, Math.min(30000, Number(raw.verificationWaitMs) || 12000)),
   };
 }
@@ -110,7 +115,7 @@ export async function forceConfiguredOAuthLogout(page, rule, config = {}) {
 export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, completedStatus = "already_signed") {
   const rule = configuredOAuthReloginRule(origin, config);
   if (!rule) return null;
-  const observed = await page.evaluate(async ({ logUrl, successText, rewardAmount, logType }) => {
+  const observed = await page.evaluate(async ({ logUrl, successText, rewardAmount, logType, expectedAccountId }) => {
     const findUserId = () => {
       for (const storage of [localStorage, sessionStorage]) {
         for (let index = 0; index < storage.length; index += 1) {
@@ -125,6 +130,9 @@ export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, co
     };
     const userId = findUserId();
     if (!userId) return { state: "unauthorized" };
+    if (expectedAccountId && userId !== expectedAccountId) {
+      return { state: "account_mismatch", accountId: userId, expectedAccountId };
+    }
     const now = new Date();
     const startSeconds = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000);
     const endSeconds = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() / 1000);
@@ -164,21 +172,32 @@ export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, co
           && Number.isFinite(amount)
           && Math.abs(amount - rewardAmount) < 0.000001;
       });
-      if (match) return { state: "confirmed", createdAt: Number(match.created_at) };
+      if (match) return { state: "confirmed", createdAt: Number(match.created_at), accountId: userId };
       if (items.length < 100) break;
     }
     return { state: "missing" };
   }, rule);
 
   if (observed?.state === "confirmed") {
+    const evidence = {
+      source: "usage_log",
+      createdAt: new Date(Number(observed.createdAt) * 1000).toISOString(),
+      rewardAmount: rule.rewardAmount,
+    };
+    if (observed.accountId != null && String(observed.accountId).trim()) {
+      evidence.accountId = String(observed.accountId).trim();
+    }
     return {
       status: completedStatus,
       reason: `使用日志确认今日重新登录签到成功，奖励额度 $${rule.rewardAmount}`,
-      evidence: {
-        source: "usage_log",
-        createdAt: new Date(Number(observed.createdAt) * 1000).toISOString(),
-        rewardAmount: rule.rewardAmount,
-      },
+      evidence,
+    };
+  }
+  if (observed?.state === "account_mismatch") {
+    return {
+      status: "login_required",
+      reason: `当前登录账号 ${observed.accountId || "unknown"} 与配置账号 ${observed.expectedAccountId} 不符`,
+      forceOAuthRelogin: true,
     };
   }
   if (observed?.state === "unauthorized") {
@@ -188,4 +207,37 @@ export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, co
     return { status: "login_required", reason: "今日使用日志没有登录签到额度记录，需要退出后重新登录", forceOAuthRelogin: true };
   }
   return { status: "unconfirmed", reason: "无法从使用日志确认今日登录签到结果" };
+}
+
+export async function readOAuthAccountIdentity(page, origin) {
+  const expectedOrigin = new URL(origin).origin;
+  let activeOrigin;
+  try { activeOrigin = new URL(page.url()).origin; } catch { return null; }
+  if (activeOrigin !== expectedOrigin) return null;
+  return page.evaluate(() => {
+    const preferredKeys = ["user", "current_user", "currentUser"];
+    const keys = [];
+    for (const storage of [localStorage, sessionStorage]) {
+      for (const key of preferredKeys) {
+        if (storage.getItem(key) !== null) keys.push([storage, key]);
+      }
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        if (key && !preferredKeys.includes(key)) keys.push([storage, key]);
+      }
+    }
+    for (const [storage, key] of keys) {
+      try {
+        const value = JSON.parse(storage.getItem(key) || "null");
+        const candidate = value?.user ?? value?.state?.user ?? value?.data?.user ?? value?.data ?? value;
+        const id = candidate?.id;
+        if (id == null) continue;
+        return {
+          accountId: String(id),
+          username: String(candidate?.username ?? candidate?.display_name ?? candidate?.name ?? "").slice(0, 120),
+        };
+      } catch { /* continue */ }
+    }
+    return null;
+  });
 }

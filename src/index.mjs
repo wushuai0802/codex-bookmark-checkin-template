@@ -18,6 +18,8 @@ import {
 } from "./site-state.mjs";
 import { loadQaCache, updateQaCache, writeQaCache } from "./qa-solver.mjs";
 import { selectPreflightOrigins } from "./preflight-policy.mjs";
+import { accountMetadataForOrigin, compatiblePriorResult, resultIdentity } from "./result-identity.mjs";
+import { configuredSupplementalOAuthAccounts, runSupplementalOAuthAccount } from "./supplemental-oauth-accounts.mjs";
 import {
   TERMINAL_STATUSES,
   advanceAttemptedDeferredRetries,
@@ -26,7 +28,6 @@ import {
   isCurrentLocalRunId,
   isRetryEligible,
   nextDeferredRetryAt,
-  resumeSelectedOrigins,
 } from "./retry-policy.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -102,7 +103,30 @@ async function readFreshNativeWafPreflight() {
 const lockLease = await acquireRunLock(lockPath);
 try {
   const plan = await readValidatedBookmarkPlan();
-  const report = publicBookmarkReport(plan);
+  const supplementalAccounts = configuredSupplementalOAuthAccounts(config, rootDirectory);
+  const baseReport = publicBookmarkReport(plan);
+  const reportTargets = [
+    ...baseReport.targets.map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) })),
+    ...supplementalAccounts.map((account) => ({
+      origin: account.origin,
+      title: account.title,
+      candidateCount: 1,
+      folderNames: ["supplemental-oauth"],
+      accountKey: account.accountKey,
+      accountId: account.accountId,
+      accountLabel: account.accountLabel,
+      supplementalAccount: true,
+    })),
+  ];
+  const reportIdentities = reportTargets.map(resultIdentity);
+  if (new Set(reportIdentities).size !== reportIdentities.length) {
+    throw new Error("OAuth 多账号配置与书签主账号身份重复");
+  }
+  const report = {
+    ...baseReport,
+    targetCount: baseReport.targetCount + supplementalAccounts.length,
+    targets: reportTargets,
+  };
   const reportPath = path.join(rootDirectory, "outputs", "bookmark-comparison.json");
   await atomicWriteJson(reportPath, report);
 
@@ -138,6 +162,9 @@ try {
         if (!currentTargetOrigins.has(origin) || !previousOrigins.has(origin)) {
           throw new Error(`人工完成确认不属于当前续跑范围：${origin}`);
         }
+        if (resumeBase.results.filter((result) => result.origin === origin).length !== 1) {
+          throw new Error(`人工完成确认对应多个账号，必须保留各账号的权威签到证据：${origin}`);
+        }
       }
       resumeBase = {
         ...resumeBase,
@@ -145,9 +172,6 @@ try {
       };
       manualConfirmedResults = resumeBase.results.filter((result) => manualConfirmedOrigins.has(result.origin)
         && result.manualConfirmation === true);
-      if (!selectedOrigins) {
-        selectedOrigins = resumeSelectedOrigins(plan.targets, resumeBase.results, config);
-      }
     }
     await cleanupOldLogs(logsRoot, config.logRetentionDays);
     const runLog = await createRunLog(logsRoot);
@@ -161,22 +185,36 @@ try {
     ];
     const results = [];
     const nativeWafPreflight = await readFreshNativeWafPreflight();
-    const preferredTargets = applyPreferredCandidates(plan.targets, siteState);
+    const preferredTargets = applyPreferredCandidates(plan.targets, siteState)
+      .map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) }));
+    const plannedTargets = [...preferredTargets, ...supplementalAccounts];
+    const resumeTargets = resumeBase && !selectedOrigins
+      ? plannedTargets.filter((target) => {
+        const prior = compatiblePriorResult(target, resumeBase.results);
+        return !prior
+          || isRetryEligible(prior)
+          || (config.disabledCheckinOrigins ?? []).includes(target.origin);
+      })
+      : plannedTargets;
     const originFilteredTargets = selectedOrigins
-      ? preferredTargets.filter((target) => selectedOrigins.has(target.origin))
-      : preferredTargets;
-    const selectedTargets = limit
+      ? resumeTargets.filter((target) => selectedOrigins.has(target.origin))
+      : resumeTargets;
+    const selectedPlanTargets = limit
       ? originFilteredTargets.slice(offset, offset + limit)
       : originFilteredTargets.slice(offset);
-    const plannedTotal = preferredTargets.length;
+    const selectedIdentities = new Set(selectedPlanTargets.map(resultIdentity));
+    const selectedTargets = preferredTargets.filter((target) => selectedIdentities.has(resultIdentity(target)));
+    const selectedSupplementalAccounts = supplementalAccounts
+      .filter((account) => selectedIdentities.has(resultIdentity(account)));
+    const plannedTotal = plannedTargets.length;
     const logicalCompletions = new Map();
 
     const mergedProgressResults = () => {
       if (!resumeBase) return [...results];
-      const currentByOrigin = new Map(results.map((result) => [result.origin, result]));
-      const previousByOrigin = new Map(resumeBase.results.map((result) => [result.origin, result]));
-      return preferredTargets
-        .map((target) => currentByOrigin.get(target.origin) ?? previousByOrigin.get(target.origin))
+      const currentByIdentity = new Map(results.map((result) => [resultIdentity(result), result]));
+      return plannedTargets
+        .map((target) => currentByIdentity.get(resultIdentity(target))
+          ?? compatiblePriorResult(target, resumeBase.results))
         .filter(Boolean);
     };
 
@@ -243,6 +281,7 @@ try {
           origin: target.origin,
           title: target.title,
           folderNames: target.folderNames,
+          ...accountMetadataForOrigin(target.origin, config),
           ...targetResult,
         });
         await writeProgress("checkin");
@@ -356,6 +395,7 @@ try {
             origin: target.origin,
             title: target.title,
             folderNames: target.folderNames,
+            ...accountMetadataForOrigin(target.origin, config),
             ...recoveredResult,
             recovery: {
               attempted: true,
@@ -377,15 +417,29 @@ try {
       }
     }
 
+    for (let accountIndex = 0; accountIndex < selectedSupplementalAccounts.length; accountIndex += 1) {
+      const account = selectedSupplementalAccounts[accountIndex];
+      const prior = compatiblePriorResult(account, resumeBase?.results ?? []);
+      const shouldReuse = prior && !isRetryEligible(prior);
+      if (!shouldReuse) {
+        results.push(await runSupplementalOAuthAccount(account, config, rootDirectory));
+      }
+      await writeProgress("supplemental_oauth", {
+        supplementalCompleted: accountIndex + 1,
+        supplementalTotal: selectedSupplementalAccounts.length,
+      });
+    }
+
     const finishedAt = new Date();
+    const currentByIdentity = new Map(results.map((result) => [resultIdentity(result), result]));
     const assembledResults = resumeBase
-      ? preferredTargets.map((target) => results.find((result) => result.origin === target.origin)
-        ?? resumeBase.results.find((result) => result.origin === target.origin)
-        ?? { origin: target.origin, title: target.title, folderNames: target.folderNames, status: "error", reason: "续跑未生成站点结果" })
+      ? plannedTargets.map((target) => currentByIdentity.get(resultIdentity(target))
+        ?? compatiblePriorResult(target, resumeBase.results)
+        ?? { ...target, status: "error", reason: "续跑未生成站点结果" })
       : results;
-    const currentOrigins = new Set([...results, ...manualConfirmedResults].map((result) => result.origin));
+    const currentOrigins = new Set([...results, ...manualConfirmedResults].map(resultIdentity));
     const finalResults = advanceAttemptedDeferredRetries(
-      assembledResults.map((result) => currentOrigins.has(result.origin) ? deferUnresolvedLogin(result, config, finishedAt) : result),
+      assembledResults.map((result) => currentOrigins.has(resultIdentity(result)) ? deferUnresolvedLogin(result, config, finishedAt) : result),
       currentOrigins,
       resumeBase?.results,
       config,
@@ -413,7 +467,9 @@ try {
     const resultPath = await writeRunResult(logsRoot, runLog, output, {
       updateLatest: isComplete && finalResults.length >= minimumTargets,
     });
-    await writeSiteState(siteStatePath, updateSiteState(siteState, [...results, ...manualConfirmedResults], finishedAt));
+    const primaryResults = [...results, ...manualConfirmedResults]
+      .filter((result) => result.supplementalAccount !== true);
+    await writeSiteState(siteStatePath, updateSiteState(siteState, primaryResults, finishedAt));
     await writeQaCache(qaCachePath, updateQaCache(qaCache, results, finishedAt));
     await fs.rm(nativeWafPreflightPath, { force: true }).catch(() => {});
     console.log(JSON.stringify({ resultPath, summary }, null, 2));

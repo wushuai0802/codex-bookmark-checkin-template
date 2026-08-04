@@ -1,3 +1,5 @@
+import { compatiblePriorResult, resultIdentity } from "./result-identity.mjs";
+
 export const RECOVERABLE_STATUSES = new Set([
   "error", "login_required", "interactive_challenge", "managed_challenge_timeout",
   "visited", "clicked", "no_action", "unconfirmed", "deferred",
@@ -8,8 +10,14 @@ export const TERMINAL_STATUSES = new Set(["signed", "already_signed", "not_avail
 export function applyManualConfirmations(results, confirmedOrigins, now = new Date()) {
   const confirmed = confirmedOrigins instanceof Set ? confirmedOrigins : new Set(confirmedOrigins ?? []);
   const confirmedAt = now.toISOString();
+  const originCounts = new Map();
+  for (const result of results ?? []) {
+    originCounts.set(result?.origin, (originCounts.get(result?.origin) ?? 0) + 1);
+  }
   return (results ?? []).map((result) => {
-    if (!confirmed.has(result?.origin) || TERMINAL_STATUSES.has(result?.status)) return result;
+    if (!confirmed.has(result?.origin)
+      || originCounts.get(result?.origin) !== 1
+      || TERMINAL_STATUSES.has(result?.status)) return result;
     const {
       retryCause: _retryCause,
       nextEligibleAt: _nextEligibleAt,
@@ -123,9 +131,8 @@ export function advanceDeferredRetry(result, previous, config = {}, now = new Da
 
 export function advanceAttemptedDeferredRetries(results, attemptedOrigins, previousResults, config = {}, now = new Date()) {
   const attempted = attemptedOrigins instanceof Set ? attemptedOrigins : new Set(attemptedOrigins ?? []);
-  const previousByOrigin = new Map((previousResults ?? []).map((result) => [result.origin, result]));
-  return (results ?? []).map((result) => attempted.has(result.origin)
-    ? advanceDeferredRetry(result, previousByOrigin.get(result.origin), config, now)
+  return (results ?? []).map((result) => attempted.has(resultIdentity(result))
+    ? advanceDeferredRetry(result, compatiblePriorResult(result, previousResults ?? []), config, now)
     : result);
 }
 

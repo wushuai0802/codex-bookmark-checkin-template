@@ -7,6 +7,27 @@
   "newApiCaptchaRules": {},
   "newApiSignInRules": {},
   "oauthReloginCheckinRules": {},
+  "oauthAccountIdentities": {
+    "https://example.com": {
+      "accountKey": "example-primary",
+      "accountId": "12345",
+      "accountLabel": "Example primary"
+    }
+  },
+  "oauthExpectedAccountIds": {
+    "https://example.com": "12345"
+  },
+  "supplementalOAuthAccounts": [
+    {
+      "accountKey": "example-secondary",
+      "accountId": "67890",
+      "accountLabel": "Example secondary",
+      "origin": "https://example.com",
+      "provider": "GitHub",
+      "loginUrl": "https://example.com/login",
+      "automationUserDataDir": "data/accounts/example-secondary/chrome-user-data"
+    }
+  ],
   "relatedCandidateUrls": {
     "https://example.com": ["https://example.com/account/check-in"]
   },

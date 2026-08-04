@@ -2,10 +2,17 @@
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
     [Parameter(Mandatory = $true)][string]$Provider,
-    [string]$LoginUrl
+    [string]$LoginUrl,
+    [string]$AutomationUserDataDir,
+    [string]$ExpectedAccountId,
+    [string]$AccountKey,
+    [string]$AccountLabel,
+    [string]$UpstreamProvider
 )
 
 $ErrorActionPreference = 'Stop'
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
@@ -28,7 +35,12 @@ if ($targetUrl.Scheme -ne 'https' -or $targetUrl.UserInfo -or
     throw '原生 OAuth 登录地址不属于目标站点。'
 }
 
-$profilePath = [string]$config.automationUserDataDir
+$profilePath = if ($AutomationUserDataDir) { [System.IO.Path]::GetFullPath($AutomationUserDataDir) } else { [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir) }
+$allowedRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
+$allowedPrefix = $allowedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $profilePath.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "机器人 Chrome 目录必须位于 $allowedRoot"
+}
 function Get-AutomationChromeProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
         $_.CommandLine -like "*$profilePath*"
@@ -67,10 +79,11 @@ try {
         Offscreen = $true
         RemoteDebuggingPort = $debugPort
         Urls = @($targetUrl.AbsoluteUri)
+        UserDataDirOverride = $profilePath
     }
     & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters | Out-Null
     Start-Sleep -Seconds 4
-    $output = & $node (Join-Path $root 'src\native-oauth-login.mjs') $debugPort $originValue $Provider
+    $output = & $node (Join-Path $root 'src\native-oauth-login.mjs') $debugPort $originValue $Provider $ExpectedAccountId $AccountKey $AccountLabel $UpstreamProvider $targetUrl.AbsoluteUri
     $nodeExitCode = $LASTEXITCODE
     if ($output) { Write-Output $output }
 }

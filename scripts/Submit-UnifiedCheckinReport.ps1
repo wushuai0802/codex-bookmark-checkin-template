@@ -35,11 +35,21 @@ function Compress-Text([object]$Value, [int]$MaximumLength = 120) {
 
 function Get-LogicalSiteKey($Result) {
     $origin = [string]$Result.origin
+    $accountKey = [string]$Result.accountKey
+    $suffix = if ($accountKey) { "#account=$accountKey" } else { '' }
     if ($null -ne $config.logicalCheckinGroups) {
         $property = $config.logicalCheckinGroups.PSObject.Properties[$origin]
-        if ($null -ne $property -and [string]$property.Value) { return [string]$property.Value }
+        if ($null -ne $property -and [string]$property.Value) { return "$([string]$property.Value)$suffix" }
     }
-    return $origin
+    return "$origin$suffix"
+}
+
+function Get-ResultDisplayName($Result) {
+    $hostName = try { ([uri]$Result.origin).DnsSafeHost } catch { Compress-Text $Result.origin 30 }
+    $label = Compress-Text $Result.accountLabel 60
+    if (-not $label) { $label = Compress-Text $Result.accountId 60 }
+    if ($label) { return "$hostName（$label）" }
+    return $hostName
 }
 
 function Get-LogicalStatusPriority($Result) {
@@ -122,11 +132,20 @@ $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $planne
     $summaryValue
 }
 else { Compress-Text $RunnerMessage 160 }
+$accountResults = @($reportingResults | Where-Object { [string]$_.accountKey })
+if ($accountResults.Count -gt 0) {
+    $summary += "`n账号结果："
+    $summary += "`n" + (($accountResults | ForEach-Object {
+        $marker = if ($_.status -in @('signed', 'already_signed')) { '✅' } elseif ($_.status -eq 'not_available') { '⏭️' } else { '❌' }
+        $reward = if ($_.evidence.rewardAmount) { " `$$([decimal]$_.evidence.rewardAmount)" } else { '' }
+        "- $marker $(Get-ResultDisplayName $_)$reward"
+    }) -join "`n")
+}
 if ($problems.Count -gt 0) {
     $summary += "`n需关注 $($problems.Count) 个："
     $brief = @($problems | ForEach-Object {
         $problem = $_
-        $hostName = try { ([uri]$problem.origin).DnsSafeHost } catch { Compress-Text $problem.origin 30 }
+        $hostName = Get-ResultDisplayName $problem
         $reason = switch ([string]$problem.status) {
             'login_required' { '登录失效' }
             'interactive_challenge' { '需要验证' }

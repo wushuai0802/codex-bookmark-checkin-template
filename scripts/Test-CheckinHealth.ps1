@@ -77,11 +77,28 @@ $notificationReady = $config.notification.mode -in @($null, '', 'none') -or (
     $config.notification.mode -eq 'command' -and
     ((Test-Path -LiteralPath ([string]$config.notification.executable)) -or (Get-Command ([string]$config.notification.executable) -ErrorAction SilentlyContinue))
 )
+$dataRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
+$dataPrefix = $dataRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$supplementalProfiles = @(@($config.supplementalOAuthAccounts) | Where-Object { $null -ne $_ } | ForEach-Object {
+    $raw = [string]$_.automationUserDataDir
+    $resolved = if ($raw) {
+        if ([System.IO.Path]::IsPathRooted($raw)) { [System.IO.Path]::GetFullPath($raw) }
+        else { [System.IO.Path]::GetFullPath((Join-Path $root $raw)) }
+    } else { $null }
+    $valid = $resolved -and $resolved.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    [pscustomobject]@{
+        accountKey = [string]$_.accountKey
+        path = $resolved
+        valid = [bool]$valid
+        present = $valid -and (Test-Path -LiteralPath (Join-Path $resolved 'Local State'))
+    }
+})
 $checks = [ordered]@{
     configPresent = $true
     bookmarksReadable = Test-Path -LiteralPath ([string]$config.bookmarksPath)
     chromeExecutablePresent = Test-Path -LiteralPath ([string]$config.chromeExecutable)
     automationProfilePresent = Test-Path -LiteralPath (Join-Path ([string]$config.automationUserDataDir) 'Local State')
+    supplementalProfilesPresent = @($supplementalProfiles | Where-Object { -not $_.present }).Count -eq 0
     notificationReady = [bool]$notificationReady
     notificationOutboxClean = $notificationQuarantinedCount -eq 0
     schedulerReady = [bool]$scheduledTask -or $startupEntryPresent
@@ -117,6 +134,7 @@ $result = [ordered]@{
     schedulerReportComplete = if ($schedulerState) { [bool]$schedulerState.reportComplete } else { $false }
     notificationQuarantinedCount = $notificationQuarantinedCount
     trackedSiteCount = if ($siteState -and $siteState.sites) { @($siteState.sites.PSObject.Properties).Count } else { 0 }
+    supplementalProfiles = $supplementalProfiles
     checks = $checks
 }
 $result | ConvertTo-Json -Depth 6

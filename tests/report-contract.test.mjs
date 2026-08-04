@@ -114,6 +114,36 @@ test("同一逻辑站点的两个取消任务只统计一次", async () => {
   assert.doesNotMatch(report.summary, /2 个未开放签到/);
 });
 
+test("同一站点的三个账号分别统计并显示签到结果", async () => {
+  const accountIds = ["10001", "20002", "30003"];
+  const report = await previewReport({
+    runId: "20260723-120002-three-accounts",
+    runState: "final",
+    plannedTotal: 3,
+    processedTotal: 3,
+    isComplete: true,
+    bookmarkSummary: {
+      targets: accountIds.map((accountId) => ({
+        origin: "https://agentrouter.example",
+        accountKey: `agentrouter-${accountId}`,
+      })),
+    },
+    results: accountIds.map((accountId) => ({
+      origin: "https://agentrouter.example",
+      accountKey: `agentrouter-${accountId}`,
+      accountId,
+      accountLabel: accountId,
+      status: "signed",
+      evidence: { rewardAmount: 25 },
+    })),
+  });
+
+  assert.equal(report.status, "success");
+  assert.equal(report.siteCount, 3);
+  assert.match(report.summary, /^共 3 站：/);
+  for (const accountId of accountIds) assert.match(report.summary, new RegExp(accountId));
+});
+
 test("通知事件键对相同状态稳定并在结果变化后更新", async () => {
   const base = {
     runId: "20260723-120003",
