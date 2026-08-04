@@ -204,6 +204,9 @@ test("非 Git 安全扫描忽略依赖环境和本地运行数据", async () => 
       "src/__pycache__/private.txt",
       ".pytest_cache/private.txt",
       ".env/private.txt",
+      "progress.md",
+      "scripts/Install-CaptchaOcr.ps1",
+      "scripts/Invoke-CheckinReportOutbox.ps1",
     ]) {
       const target = path.join(sandbox, ...relative.split("/"));
       await fs.mkdir(path.dirname(target), { recursive: true });
