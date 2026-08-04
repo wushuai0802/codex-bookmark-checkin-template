@@ -150,14 +150,46 @@ try {
   }) ?? context.pages()[0];
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
 
-  if (rule.forceLogout) await forceConfiguredOAuthLogout(page, rule, runtimeConfig);
   const configuredLoginUrl = runtimeConfig.oauthLoginUrls?.[origin] ?? `${origin}/login`;
   const loginUrl = new URL(configuredLoginUrl);
   if (loginUrl.protocol !== "https:" || loginUrl.origin !== origin || loginUrl.username || loginUrl.password) {
     throw new Error("OAuth 登录入口不属于目标站点");
   }
 
-  const beginTargetProviderLogin = async (activePage) => {
+  // A completed daily reward is authoritative for the rest of the local day.
+  // Check it before logging out so retries, acceptance runs, and manual audits
+  // do not repeatedly trigger the upstream OAuth provider's rate limit.
+  await page.goto(rule.logPageUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
+  });
+  await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+  const existingAccountIdentity = await readOAuthAccountIdentity(page, origin);
+  const existingIdentityMatches = !configuredExpectedAccountId
+    || existingAccountIdentity?.accountId === configuredExpectedAccountId;
+  const existingDailyCheckin = existingIdentityMatches
+    ? await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "already_signed")
+    : null;
+  const reuseExistingDailyEvidence = ["signed", "already_signed"].includes(existingDailyCheckin?.status);
+
+  if (reuseExistingDailyEvidence) {
+    console.log(JSON.stringify({
+      origin,
+      provider,
+      status: "logged_in",
+      finalUrl: safeLogUrl(page.url()),
+      checkedIn: null,
+      accountKey,
+      accountId: existingAccountIdentity?.accountId ?? (configuredExpectedAccountId || null),
+      accountLabel,
+      upstreamProvider,
+      reusedExistingDailyEvidence: true,
+      dailyCheckin: existingDailyCheckin,
+    }));
+  } else {
+    if (rule.forceLogout) await forceConfiguredOAuthLogout(page, rule, runtimeConfig);
+
+    const beginTargetProviderLogin = async (activePage) => {
     await activePage.goto(loginUrl.href, {
       waitUntil: "domcontentloaded",
       timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
@@ -180,18 +212,18 @@ try {
     await nextPage.waitForTimeout(1500);
     await nextPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
     return nextPage;
-  };
+    };
 
-  page = await beginTargetProviderLogin(page);
+    page = await beginTargetProviderLogin(page);
 
-  const oauthDeadline = Date.now()
+    const oauthDeadline = Date.now()
     + Math.max(30000, Math.min(120000, Number(runtimeConfig.cloudflareWaitMs) || 90000));
-  let authorizeClicked = false;
-  let upstreamLoginAttempted = false;
-  let resumeTargetAfterUpstream = false;
-  let githubAuthorizeAttempted = false;
-  let callbackReached = false;
-  while (Date.now() < oauthDeadline) {
+    let authorizeClicked = false;
+    let upstreamLoginAttempted = false;
+    let resumeTargetAfterUpstream = false;
+    let githubAuthorizeAttempted = false;
+    let callbackReached = false;
+    while (Date.now() < oauthDeadline) {
     if (page.isClosed()) {
       const targetPage = [...context.pages()].reverse().find((candidate) => {
         const url = parseObservedBrowserUrl(candidate.url());
@@ -256,46 +288,48 @@ try {
       throw new Error("机器人 Chrome 需要人工确认一次 Google 登录后才能恢复 Linux DO");
     }
     await page.waitForTimeout(1000);
-  }
-  if (!callbackReached) throw new Error(`${provider} OAuth 未在限定时间内回到目标站点`);
+    }
+    if (!callbackReached) throw new Error(`${provider} OAuth 未在限定时间内回到目标站点`);
 
   // The callback page finishes the server-side OAuth exchange with JavaScript.
   // Let that request settle before navigating to the authoritative log page.
-  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(5000);
-  await page.goto(rule.logPageUrl, {
+    await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(5000);
+    await page.goto(rule.logPageUrl, {
     waitUntil: "domcontentloaded",
     timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
   });
-  await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
 
-  const accountIdentity = await readOAuthAccountIdentity(page, origin);
-  if (configuredExpectedAccountId && accountIdentity?.accountId !== configuredExpectedAccountId) {
-    throw new Error(`OAuth 登录账号不匹配，期望 ${configuredExpectedAccountId}，实际 ${accountIdentity?.accountId || "unknown"}`);
+    const accountIdentity = await readOAuthAccountIdentity(page, origin);
+    if (configuredExpectedAccountId && accountIdentity?.accountId !== configuredExpectedAccountId) {
+      throw new Error(`OAuth 登录账号不匹配，期望 ${configuredExpectedAccountId}，实际 ${accountIdentity?.accountId || "unknown"}`);
+    }
+
+    const verificationDeadline = Date.now() + rule.verificationWaitMs;
+    let dailyCheckin = null;
+    do {
+      dailyCheckin = await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "signed");
+      if (["signed", "already_signed"].includes(dailyCheckin?.status) || dailyCheckin?.status === "unconfirmed") break;
+      await page.waitForTimeout(1000);
+    } while (Date.now() < verificationDeadline);
+
+    const completed = ["signed", "already_signed"].includes(dailyCheckin?.status);
+    console.log(JSON.stringify({
+      origin,
+      provider,
+      status: completed ? "logged_in" : "needs_attention",
+      finalUrl: safeLogUrl(page.url()),
+      checkedIn,
+      accountKey,
+      accountId: accountIdentity?.accountId ?? (configuredExpectedAccountId || null),
+      accountLabel,
+      upstreamProvider,
+      reusedExistingDailyEvidence: false,
+      dailyCheckin,
+    }));
+    if (!completed) process.exitCode = 2;
   }
-
-  const verificationDeadline = Date.now() + rule.verificationWaitMs;
-  let dailyCheckin = null;
-  do {
-    dailyCheckin = await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "signed");
-    if (["signed", "already_signed"].includes(dailyCheckin?.status) || dailyCheckin?.status === "unconfirmed") break;
-    await page.waitForTimeout(1000);
-  } while (Date.now() < verificationDeadline);
-
-  const completed = ["signed", "already_signed"].includes(dailyCheckin?.status);
-  console.log(JSON.stringify({
-    origin,
-    provider,
-    status: completed ? "logged_in" : "needs_attention",
-    finalUrl: safeLogUrl(page.url()),
-    checkedIn,
-    accountKey,
-    accountId: accountIdentity?.accountId ?? (configuredExpectedAccountId || null),
-    accountLabel,
-    upstreamProvider,
-    dailyCheckin,
-  }));
-  if (!completed) process.exitCode = 2;
 } catch (error) {
   console.log(JSON.stringify({
     origin,
