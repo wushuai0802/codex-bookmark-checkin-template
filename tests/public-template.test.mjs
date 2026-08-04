@@ -83,6 +83,12 @@ test("AgentRouter 当天已有奖励日志时不会重复退出并触发 OAuth",
   assert.match(nativeOAuth, /\["signed", "already_signed"\]\.includes\(existingDailyCheckin\?\.status\)/);
 });
 
+test("AgentRouter PowerShell 恢复链固定使用 UTF-8 传递 JSON", async () => {
+  const recovery = await fs.readFile(new URL("../scripts/Recover-NativeOAuthLogin.ps1", import.meta.url), "utf8");
+  assert.match(recovery, /\$OutputEncoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$false\)/);
+  assert.match(recovery, /\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$false\)/);
+});
+
 test("首次运行原生预热必须使用已校验书签范围", async () => {
   const runner = await fs.readFile(new URL("../scripts/Run-Checkin.ps1", import.meta.url), "utf8");
   const preflight = await fs.readFile(new URL("../scripts/Prepare-NativeWafSession.ps1", import.meta.url), "utf8");
