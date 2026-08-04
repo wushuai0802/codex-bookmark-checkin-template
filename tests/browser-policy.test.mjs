@@ -15,6 +15,8 @@ import {
   shouldPersistSiteStorage,
   turnstileWaitMs,
   tryBmapiCheckinStatus,
+  waitForActiveQuotaBenefit,
+  waitForQuotaRequestField,
   writeSiteStorageSnapshot,
 } from "../src/browser.mjs";
 
@@ -172,12 +174,49 @@ test("斑马状态查询优先使用不受页面导航影响的请求通道", as
 test("斑马跳过包含提交动作的通用 New API 探测", () => {
   const bmapi = { origin: "https://bmapi.020212.xyz", folderNames: ["公益站"] };
   const publicSite = { origin: "https://public.example", folderNames: ["公益站"] };
+  const explicitlyConfigured = { origin: "https://configured.example", folderNames: ["签到"] };
   const tracker = { origin: "https://tracker.example", folderNames: ["签到"] };
   assert.equal(shouldTryGenericNewApiCheckin(bmapi), false);
   assert.equal(shouldTryGenericNewApiCheckin(bmapi, [bmapi.origin]), false);
   assert.equal(shouldTryGenericNewApiCheckin(publicSite), true);
   assert.equal(shouldTryGenericNewApiCheckin(publicSite, [publicSite.origin]), true);
+  assert.equal(shouldTryGenericNewApiCheckin(publicSite, [explicitlyConfigured.origin]), true);
+  assert.equal(shouldTryGenericNewApiCheckin(explicitlyConfigured, [explicitlyConfigured.origin]), true);
   assert.equal(shouldTryGenericNewApiCheckin(tracker), false);
+});
+
+test("领取权益后等待页面出现有效套餐再确认成功", async () => {
+  let checks = 0;
+  const page = {
+    locator: () => ({
+      innerText: async () => {
+        checks += 1;
+        return checks < 2 ? "正在更新套餐" : "当前套餐 - Codex 剩余额度 100 下次重置 明天";
+      },
+    }),
+    getByRole: () => ({
+      count: async () => 0,
+      isVisible: async () => false,
+    }),
+  };
+  const result = await waitForActiveQuotaBenefit(page, "https://benefit.example", {
+    quotaRequestRules: { "https://benefit.example": {} },
+  }, "signed", 1000);
+  assert.deepEqual(result, { status: "signed", reason: "Codex 权益已领取，页面显示有效套餐" });
+  assert.equal(checks, 2);
+});
+
+test("额度申请弹窗延迟渲染时等待唯一理由输入框", async () => {
+  let checks = 0;
+  const field = {
+    count: async () => {
+      checks += 1;
+      return checks < 2 ? 0 : 1;
+    },
+  };
+  const page = { locator: () => field };
+  assert.equal(await waitForQuotaRequestField(page, 1000), field);
+  assert.equal(checks, 2);
 });
 
 test("过期的站点快照不会反复注入认证令牌", () => {

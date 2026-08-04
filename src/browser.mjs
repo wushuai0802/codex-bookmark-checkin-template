@@ -93,11 +93,9 @@ function targetUsesConfiguredOrigins(target, configuredOrigins) {
 
 export function shouldTryGenericNewApiCheckin(target, configuredOrigins = null) {
   if (target?.origin === "https://bmapi.020212.xyz") return false;
-  if (Array.isArray(configuredOrigins)) {
-    const configured = new Set(configuredOrigins);
-    return (target?.allowedOrigins ?? [target?.origin]).some((origin) => configured.has(origin));
-  }
-  return target?.folderNames?.includes("公益站") ?? false;
+  if (target?.folderNames?.includes("公益站")) return true;
+  const configured = new Set(configuredOrigins ?? []);
+  return (target?.allowedOrigins ?? [target?.origin]).some((origin) => configured.has(origin));
 }
 
 export function filterExpiredBootstrapLocalEntries(entries, nowMs = Date.now()) {
@@ -401,21 +399,43 @@ async function detectActiveQuotaBenefit(page, activeOrigin, config, status = "al
   return null;
 }
 
-async function tryQuotaRequestFlow(page, activeOrigin, config) {
-  const rule = config.quotaRequestRules?.[activeOrigin];
-  if (!rule) return null;
-  const reason = formatDailyReason(String(rule.reason || "{date}正常使用服务，申请额度用于开发测试和日常体验，谢谢。"));
-  const minimumLength = Math.max(10, Number(rule.minimumReasonLength) || 10);
-  if ([...reason].length < minimumLength) throw new Error(`额度申请理由少于 ${minimumLength} 个字符`);
-  const reasonFields = page.locator([
+export async function waitForActiveQuotaBenefit(page, activeOrigin, config, status = "already_signed", timeoutMs = 0) {
+  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  do {
+    const result = await detectActiveQuotaBenefit(page, activeOrigin, config, status);
+    if (result) return result;
+    if (Date.now() >= deadline) return null;
+    await sleep(Math.min(500, deadline - Date.now()));
+  } while (true);
+}
+
+export async function waitForQuotaRequestField(page, timeoutMs = 10000) {
+  const selector = [
     'textarea:visible',
     'input[name*="reason" i]:visible',
     'input[name*="remark" i]:visible',
     'input[name*="message" i]:visible',
     'input[placeholder*="理由" i]:visible',
     'input[placeholder*="原因" i]:visible',
-  ].join(", "));
-  if (await reasonFields.count() !== 1) return null;
+  ].join(", ");
+  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  do {
+    const fields = page.locator(selector);
+    const count = await fields.count();
+    if (count === 1) return fields;
+    if (count > 1 || Date.now() >= deadline) return null;
+    await sleep(Math.min(500, deadline - Date.now()));
+  } while (true);
+}
+
+async function tryQuotaRequestFlow(page, activeOrigin, config) {
+  const rule = config.quotaRequestRules?.[activeOrigin];
+  if (!rule) return null;
+  const reason = formatDailyReason(String(rule.reason || "{date}正常使用服务，申请额度用于开发测试和日常体验，谢谢。"));
+  const minimumLength = Math.max(10, Number(rule.minimumReasonLength) || 10);
+  if ([...reason].length < minimumLength) throw new Error(`额度申请理由少于 ${minimumLength} 个字符`);
+  const reasonFields = await waitForQuotaRequestField(page);
+  if (!reasonFields) return null;
   await reasonFields.fill(reason);
   let submit = null;
   for (const label of ["领取", "領取", "提交申请", "确认申请", "确认提交", "提交", "确认"]) {
@@ -1000,6 +1020,10 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
       return { ...state, action: action.text, url: safeLogUrl(page.url()) };
     }
     if (state.status === "ready") {
+      const activeBenefitAfterAction = await waitForActiveQuotaBenefit(page, activeOrigin, config, "signed", 5000);
+      if (activeBenefitAfterAction) {
+        return { ...activeBenefitAfterAction, action: action.text, url: safeLogUrl(page.url()) };
+      }
       const quotaResult = await tryQuotaRequestFlow(page, activeOrigin, config);
       if (quotaResult) return { ...quotaResult, action: `${action.text} → 申请理由`, url: safeLogUrl(page.url()) };
     }
