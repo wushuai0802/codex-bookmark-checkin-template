@@ -4,6 +4,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
+import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protected-login-flow.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -68,6 +69,7 @@ try {
   page = await context.newPage();
   await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+  await acceptConfiguredLoginTerms(page, origin, config);
   const password = page.locator('input[type="password"]:visible');
   if (await password.count() < 1) {
     status = isLoginUrl(page.url()) ? "unsupported" : "logged_in";
@@ -88,7 +90,9 @@ try {
       }
       if (!submit) status = "unsupported";
       else {
-        await submit.click({ timeout: 10000 }).catch(() => {});
+        const submitReady = await waitForLoginSubmitEnabled(page, submit, origin, config);
+        if (!submitReady) status = "needs_attention";
+        else await submit.click({ timeout: 10000 }).catch(() => {});
         const deadline = Date.now() + Math.max(30000, Math.min(90000, Number(config.cloudflareWaitMs) || 60000));
         while (Date.now() < deadline) {
           const stillHasPassword = await page.locator('input[type="password"]:visible').count() > 0;

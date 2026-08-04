@@ -1,8 +1,14 @@
 import { createRequire } from "node:module";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protected-login-flow.mjs";
 import { safeLogUrl } from "./security.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
+const rootDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const config = JSON.parse(await fs.readFile(path.join(rootDirectory, "config", "config.json"), "utf8"));
 const port = Number.parseInt(process.argv[2], 10);
 const expectedOrigin = new URL(process.argv[3]).origin;
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-login.mjs <port> <origin>");
@@ -17,6 +23,7 @@ try {
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await acceptConfiguredLoginTerms(page, expectedOrigin, config);
   const password = page.locator('input[type="password"]:visible');
   const username = page.locator('input[type="email"]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="email" i]:visible, input[type="text"]:visible');
   if (await password.count() !== 1 || await username.count() !== 1) {
@@ -83,7 +90,10 @@ try {
         const candidate = page.locator('button[type="submit"]:visible, input[type="submit"]:visible');
         if (await candidate.count() === 1) submit = candidate;
       }
-      if (submit && challengeReady) {
+      const submitReady = submit
+        ? await waitForLoginSubmitEnabled(page, submit, expectedOrigin, config)
+        : false;
+      if (submit && challengeReady && submitReady) {
         await submit.click();
         await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => {});
         await page.waitForFunction(() => {
@@ -134,7 +144,7 @@ try {
           }
         }
         status = stillHasPassword ? "needs_attention" : "logged_in";
-      }
+      } else if (submit && !submitReady) status = "needs_attention";
     }
   }
 
