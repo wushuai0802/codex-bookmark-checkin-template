@@ -12,7 +12,9 @@ else {
     $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
         $_.FullName.Substring($root.Length + 1).Replace('\', '/')
     } | Where-Object {
-        $_ -notmatch '^(node_modules|data|logs|tmp|outputs|work|\.git)/' -and
+        $_ -notmatch '^(node_modules|data|logs|tmp|outputs|work|inputs|downloads|\.git|\.venv|venv|\.pytest_cache)(/|$)' -and
+        $_ -notmatch '(^|/)(__pycache__|\.pytest_cache)(/|$)' -and
+        $_ -notmatch '(^|/)\.env(/|$)' -and
         $_ -notin @('config/config.json', 'config/config.local.json', 'config/qa-rules.local.json', 'setup/answers.json')
     })
 }
@@ -31,7 +33,7 @@ $findings = @()
 foreach ($relative in $relativeFiles) {
     $fullPath = Join-Path $root $relative
     if (-not (Test-Path -LiteralPath $fullPath)) { continue }
-    if ([System.IO.Path]::GetExtension($fullPath) -match '^\.(png|jpg|jpeg|gif|webp|ico|zip|gz|pdf|lock)$') { continue }
+    if ([System.IO.Path]::GetExtension($fullPath) -match '^\.(png|jpg|jpeg|gif|webp|ico|zip|gz|pdf|lock|pyc|pyo|dll|exe|bin|traineddata)$') { continue }
     $lineNumber = 0
     foreach ($line in Get-Content -LiteralPath $fullPath -ErrorAction SilentlyContinue) {
         $lineNumber += 1

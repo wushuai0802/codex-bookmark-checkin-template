@@ -126,7 +126,7 @@ elseif ($RunnerStatus -eq 'skipped') { $status = 'skipped' }
 else { $status = 'unconfirmed' }
 
 $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
-    $heading = if ($isCompleteFinalReport) { "共 $logicalPlannedTotal 站：" } else { "已处理 $logicalProcessedTotal/$logicalPlannedTotal 站（任务未完成）：" }
+    $heading = if ($isCompleteFinalReport) { "共 $logicalPlannedTotal 个签到项：" } else { "已处理 $logicalProcessedTotal/$logicalPlannedTotal 个签到项（任务未完成）：" }
     $summaryValue = "$heading`n$done 个签到正常`n$notAvailable 个未开放签到"
     if ($disabled -gt 0) { $summaryValue += "`n$disabled 个已取消签到" }
     $summaryValue
@@ -168,7 +168,7 @@ if ($problems.Count -gt 0) {
     }) -join "`n"
     $summary += "`n$brief"
 }
-if ($summary.Length -gt 950) { $summary = $summary.Substring(0, 947) + "…`n（其余站点请查看本地日志）" }
+if ($summary.Length -gt 950) { $summary = $summary.Substring(0, 947) + "…`n（其余签到项请查看本地日志）" }
 $summary = Remove-SensitiveText $summary
 
 $notification = $config.notification
