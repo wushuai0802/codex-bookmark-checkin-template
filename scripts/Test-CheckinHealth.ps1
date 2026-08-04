@@ -31,6 +31,7 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath | ConvertFrom-Json
 $latestPath = Join-Path $root 'logs\latest.json'
 $statePath = Join-Path $root 'data\site-state.json'
+$currentPlanPath = Join-Path $root 'data\last-valid-bookmark-plan.json'
 $notificationQuarantinePath = Join-Path $root 'data\notification-outbox\quarantine'
 $notificationQuarantinedCount = @(Get-ChildItem -LiteralPath $notificationQuarantinePath -Filter '*.invalid.json' -File -ErrorAction SilentlyContinue).Count
 $taskName = if ($config.schedulerTaskName) { [string]$config.schedulerTaskName } else { 'CodexBookmarkDailyCheckin' }
@@ -62,11 +63,40 @@ $heartbeat = if (Test-Path -LiteralPath $heartbeatPath) { Get-Content -Raw -Enco
 $heartbeatMaxAgeMinutes = if ($heartbeat -and [string]$heartbeat.phase -eq 'running_checkin') { ([int]$config.taskTimeoutMinutes) + 10 } else { 5 }
 $heartbeatFresh = $heartbeat -and ((Get-Date) - [datetime]$heartbeat.updatedAt) -lt [timespan]::FromMinutes($heartbeatMaxAgeMinutes)
 $siteState = if (Test-Path -LiteralPath $statePath) { try { Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json } catch { $null } } else { $null }
+$currentPlan = if (Test-Path -LiteralPath $currentPlanPath) { try { Get-Content -Raw -Encoding UTF8 -LiteralPath $currentPlanPath | ConvertFrom-Json } catch { $null } } else { $null }
 $problemCount = if ($latest) { @($latest.results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') }).Count } else { $null }
 $minimumTargets = [Math]::Max(1, [int]$config.minimumBookmarkTargetCount)
 $latestRunToday = $latest -and [string]$latest.runId -like "$(Get-Date -Format 'yyyyMMdd')-*"
 $plannedTotal = if ($latest -and $null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { 0 }
 $processedTotal = if ($latest -and $null -ne $latest.processedTotal) { [int]$latest.processedTotal } else { 0 }
+$supplementalAccounts = @(@($config.supplementalOAuthAccounts) | Where-Object { $null -ne $_ })
+$currentBookmarkPlannedTotal = if ($currentPlan -and $null -ne $currentPlan.targetCount) { [int]$currentPlan.targetCount } elseif ($currentPlan) { @($currentPlan.targets).Count } else { $null }
+$currentPlannedTotal = if ($null -ne $currentBookmarkPlannedTotal) { $currentBookmarkPlannedTotal + $supplementalAccounts.Count } else { $null }
+
+function Get-PlanTargetIdentity([object]$Target, [bool]$ApplyConfiguredAccountIdentity) {
+    $origin = try { ([uri][string]$Target.origin).GetLeftPart([System.UriPartial]::Authority).TrimEnd('/') } catch { $null }
+    if (-not $origin) { return $null }
+    $accountKey = [string]$Target.accountKey
+    if (-not $accountKey -and $ApplyConfiguredAccountIdentity -and $null -ne $config.oauthAccountIdentities) {
+        $identityProperty = $config.oauthAccountIdentities.PSObject.Properties[$origin]
+        if ($null -ne $identityProperty) { $accountKey = [string]$identityProperty.Value.accountKey }
+    }
+    if ($accountKey) { return "$origin#account=$accountKey" }
+    return $origin
+}
+
+$currentPlanIdentities = if ($currentPlan) { @(
+    @($currentPlan.targets) | ForEach-Object { Get-PlanTargetIdentity $_ $true }
+    $supplementalAccounts | ForEach-Object { Get-PlanTargetIdentity $_ $false }
+) | Where-Object { $_ } | Sort-Object -Unique } else { @() }
+$latestPlanTargets = if ($latest -and $latest.bookmarkSummary) { @($latest.bookmarkSummary.targets) } else { @() }
+$latestPlanIdentities = @($latestPlanTargets | ForEach-Object { Get-PlanTargetIdentity $_ $false } | Where-Object { $_ } | Sort-Object -Unique)
+$currentPlanIdentityReady = $null -ne $currentPlannedTotal -and $currentPlanIdentities.Count -eq $currentPlannedTotal
+$latestPlanIdentityReady = $latest -and $latestPlanIdentities.Count -eq $plannedTotal
+$latestMatchesCurrentPlan = $currentPlanIdentityReady `
+    -and $latestPlanIdentityReady `
+    -and $currentPlannedTotal -eq $plannedTotal `
+    -and @(Compare-Object -ReferenceObject $currentPlanIdentities -DifferenceObject $latestPlanIdentities).Count -eq 0
 $latestResultValid = $latestRunToday `
     -and [string]$latest.runState -eq 'final' `
     -and $latest.isComplete -eq $true `
@@ -79,7 +109,7 @@ $notificationReady = $config.notification.mode -in @($null, '', 'none') -or (
 )
 $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
 $dataPrefix = $dataRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-$supplementalProfiles = @(@($config.supplementalOAuthAccounts) | Where-Object { $null -ne $_ } | ForEach-Object {
+$supplementalProfiles = @($supplementalAccounts | ForEach-Object {
     $raw = [string]$_.automationUserDataDir
     $resolved = if ($raw) {
         if ([System.IO.Path]::IsPathRooted($raw)) { [System.IO.Path]::GetFullPath($raw) }
@@ -106,6 +136,7 @@ $checks = [ordered]@{
     schedulerHeartbeatFresh = [bool]$heartbeatFresh
     latestResultPresent = [bool]$latest
     latestResultValid = [bool]$latestResultValid
+    latestMatchesCurrentPlan = [bool]$latestMatchesCurrentPlan
     latestResultConfirmed = $latestResultValid -and $problemCount -eq 0
     latestResultComplete = $latestResultValid -and $problemCount -eq 0
     siteStatePresent = $null -ne $siteState
@@ -128,6 +159,11 @@ $result = [ordered]@{
     schedulerHeartbeat = $heartbeat
     latestRunId = if ($latest) { [string]$latest.runId } else { $null }
     latestSiteCount = if ($latest) { @($latest.results).Count } else { $null }
+    currentPlannedTotal = $currentPlannedTotal
+    latestPlannedTotal = if ($latest -and $null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { $null }
+    currentPlanMatchesLatest = [bool]$latestMatchesCurrentPlan
+    currentPlanIdentityCount = $currentPlanIdentities.Count
+    latestPlanIdentityCount = $latestPlanIdentities.Count
     latestProblemCount = $problemCount
     schedulerAttemptsToday = if ($schedulerState) { [int]$schedulerState.attemptsToday } else { 0 }
     schedulerNextEligibleAt = if ($schedulerState -and $schedulerState.nextEligibleAt) { try { ([datetime]$schedulerState.nextEligibleAt).ToString('o') } catch { [string]$schedulerState.nextEligibleAt } } else { $null }

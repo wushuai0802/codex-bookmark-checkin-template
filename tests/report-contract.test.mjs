@@ -52,7 +52,7 @@ test("部分进度即使全部已签到也不会报告成功", async () => {
 
   assert.equal(report.status, "unconfirmed");
   assert.equal(report.isComplete, false);
-  assert.match(report.summary, /已处理 2\/5 站（任务未完成）/);
+  assert.match(report.summary, /已处理 2\/5 个签到项（任务未完成）/);
   assert.match(report.summary, /\n2 个签到正常/);
 });
 
@@ -67,7 +67,7 @@ test("部分进度在运行器超时时保持超时状态", async () => {
   }, "timeout");
 
   assert.equal(report.status, "timeout");
-  assert.match(report.summary, /已处理 1\/5 站（任务未完成）/);
+  assert.match(report.summary, /已处理 1\/5 个签到项（任务未完成）/);
 });
 
 test("只有完整的 final 报告可以映射为今日已完成", async () => {
@@ -85,7 +85,7 @@ test("只有完整的 final 报告可以映射为今日已完成", async () => {
 
   assert.equal(report.status, "already_done");
   assert.equal(report.isComplete, true);
-  assert.match(report.summary, /^共 2 站：\n/);
+  assert.match(report.summary, /^共 2 个签到项：\n/);
 });
 
 test("同一逻辑站点的两个取消任务只统计一次", async () => {
@@ -109,7 +109,7 @@ test("同一逻辑站点的两个取消任务只统计一次", async () => {
 
   assert.equal(report.status, "skipped");
   assert.equal(report.siteCount, 1);
-  assert.match(report.summary, /^共 1 站：\n/);
+  assert.match(report.summary, /^共 1 个签到项：\n/);
   assert.match(report.summary, /\n1 个已取消签到/);
   assert.doesNotMatch(report.summary, /2 个未开放签到/);
 });
@@ -140,7 +140,7 @@ test("同一站点的三个账号分别统计并显示签到结果", async () =>
 
   assert.equal(report.status, "success");
   assert.equal(report.siteCount, 3);
-  assert.match(report.summary, /^共 3 站：/);
+  assert.match(report.summary, /^共 3 个签到项：/);
   for (const accountId of accountIds) assert.match(report.summary, new RegExp(accountId));
 });
 

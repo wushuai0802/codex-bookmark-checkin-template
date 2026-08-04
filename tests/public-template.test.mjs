@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+const powershell = process.platform === "win32" ? "pwsh.exe" : "pwsh";
 
 test("公开默认配置不启用外部通知", async () => {
   const defaults = JSON.parse(await fs.readFile(new URL("../config/defaults.json", import.meta.url), "utf8"));
@@ -152,6 +159,10 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(health, /latestRunToday/);
   assert.match(health, /runState\s+-eq\s+'final'/);
   assert.match(health, /processedTotal\s+-ge\s+\$plannedTotal/);
+  assert.match(health, /latestMatchesCurrentPlan/);
+  assert.match(health, /currentPlannedTotal/);
+  assert.match(health, /latestPlannedTotal/);
+  assert.match(health, /Compare-Object -ReferenceObject \$currentPlanIdentities -DifferenceObject \$latestPlanIdentities/);
   assert.match(health, /schedulerStartupShortcutPresent/);
   assert.match(health, /schemaVersion\s*=\s*1/);
   assert.match(health, /failedChecks/);
@@ -176,6 +187,38 @@ test("公开健康检查提供稳定的只读调用入口", async () => {
   assert.match(readme, /退出码为 `3`/);
   assert.match(health, /reason = 'health_check_error'/);
   assert.doesNotMatch(health, /Run-Checkin\.ps1|Start-Process/);
+});
+
+test("非 Git 安全扫描忽略依赖环境和本地运行数据", async () => {
+  const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "bookmark-safety-scan-"));
+  try {
+    await fs.mkdir(path.join(sandbox, "scripts"), { recursive: true });
+    await fs.copyFile(new URL("../scripts/Scan-PublicSafety.ps1", import.meta.url), path.join(sandbox, "scripts", "Scan-PublicSafety.ps1"));
+    await fs.writeFile(path.join(sandbox, "README.md"), "public template fixture", "utf8");
+    for (const relative of [
+      ".venv/private.txt",
+      "venv/private.txt",
+      "data/private.txt",
+      "logs/private.txt",
+      "inputs/private.txt",
+      "src/__pycache__/private.txt",
+      ".pytest_cache/private.txt",
+      ".env/private.txt",
+    ]) {
+      const target = path.join(sandbox, ...relative.split("/"));
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, "C:\\Users\\private-user private" + "@" + "example.net", "utf8");
+    }
+    const { stdout } = await execFileAsync(powershell, [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", path.join(sandbox, "scripts", "Scan-PublicSafety.ps1"),
+    ], { cwd: sandbox, encoding: "utf8" });
+    const report = JSON.parse(stdout.trim());
+    assert.equal(report.safe, true);
+    assert.equal(report.scannedFiles, 2);
+  } finally {
+    await fs.rm(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("安装配置优先使用 PowerShell 7，5.1 仅作为可用回退", async () => {
