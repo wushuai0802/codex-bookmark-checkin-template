@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$Force,
-    [switch]$SkipSavedLoginSync
+    [switch]$SkipSavedLoginSync,
+    [string]$UserDataDirOverride
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,10 +10,11 @@ $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $sourceRoot = [System.IO.Path]::GetFullPath([string]$config.sourceUserDataDir)
-$targetRoot = [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir)
+$targetRoot = if ($UserDataDirOverride) { [System.IO.Path]::GetFullPath($UserDataDirOverride) } else { [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir) }
 $expectedParent = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
+$expectedPrefix = $expectedParent.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 
-if (-not $targetRoot.StartsWith($expectedParent, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (-not $targetRoot.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "安全检查失败：目标会话目录必须位于 $expectedParent"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'Local State'))) {
@@ -21,7 +23,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'Local State'))) {
 if (Test-Path -LiteralPath $targetRoot) {
     if (-not $Force) { throw '独立登录会话已存在。使用 -Force 时会先保留时间戳备份。' }
     $resolved = (Resolve-Path -LiteralPath $targetRoot).Path
-    if (-not $resolved.StartsWith($expectedParent, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $resolved.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw '拒绝移动工作区之外的目录。'
     }
     Move-Item -LiteralPath $targetRoot -Destination "$targetRoot.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
@@ -55,7 +57,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $targetRoot 'Default\Login Data'))) 
     throw 'Chrome 未能初始化独立配置。'
 }
 
-if (-not $SkipSavedLoginSync -and $config.syncBookmarkSavedLogins -ne $false) {
+if (-not $UserDataDirOverride -and -not $SkipSavedLoginSync -and $config.syncBookmarkSavedLogins -ne $false) {
     & (Join-Path $PSScriptRoot 'Sync-ChromeSavedLogins.ps1')
 }
 

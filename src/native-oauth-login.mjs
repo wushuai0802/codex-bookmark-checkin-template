@@ -7,6 +7,7 @@ import {
   configuredOAuthReloginRule,
   forceConfiguredOAuthLogout,
   parseObservedBrowserUrl,
+  readOAuthAccountIdentity,
   tryOAuthReloginCheckinStatus,
 } from "./oauth-relogin-checkin.mjs";
 import { safeLogUrl } from "./security.mjs";
@@ -19,15 +20,30 @@ const config = JSON.parse(await fs.readFile(path.join(rootDirectory, "config", "
 const port = Number.parseInt(process.argv[2], 10);
 const requestedOrigin = process.argv[3];
 const provider = process.argv[4] || "LinuxDO";
+const expectedAccountId = String(process.argv[5] || "").trim();
+const accountKey = String(process.argv[6] || "").trim();
+const accountLabel = String(process.argv[7] || expectedAccountId).trim();
+const upstreamProvider = String(process.argv[8] || "Google").trim();
+const requestedLoginUrl = String(process.argv[9] || "").trim();
 
 if (!Number.isInteger(port) || port <= 0 || !requestedOrigin) {
   throw new Error("用法: node src/native-oauth-login.mjs <port> <origin> [provider]");
 }
 
 const origin = new URL(requestedOrigin).origin;
-await findBookmarkTarget(config.bookmarksPath, origin, config);
-const rule = configuredOAuthReloginRule(origin, config);
+const runtimeConfig = expectedAccountId || requestedLoginUrl ? {
+  ...config,
+  ...(expectedAccountId ? {
+    oauthExpectedAccountIds: { ...(config.oauthExpectedAccountIds ?? {}), [origin]: expectedAccountId },
+  } : {}),
+  ...(requestedLoginUrl ? {
+    oauthLoginUrls: { ...(config.oauthLoginUrls ?? {}), [origin]: requestedLoginUrl },
+  } : {}),
+} : config;
+await findBookmarkTarget(runtimeConfig.bookmarksPath, origin, runtimeConfig);
+const rule = configuredOAuthReloginRule(origin, runtimeConfig);
 if (!rule?.nativeBrowser) throw new Error("目标站点没有启用原生浏览器 OAuth 恢复");
+const configuredExpectedAccountId = expectedAccountId || rule.expectedAccountId;
 
 function providerLabels(name) {
   const variants = [...new Set([name, name.replace(/linuxdo/i, "Linux DO")])];
@@ -76,7 +92,7 @@ async function findAuthorizeButton(page) {
   return null;
 }
 
-async function tryExistingGoogleLinuxDoLogin(page) {
+async function startLinuxDoUpstreamLogin(page, loginProvider) {
   const location = new URL(page.url());
   if (location.hostname !== "linux.do" || !/^\/login(?:[/?#]|$)/i.test(location.pathname)) return false;
   const modalClose = page.locator('button.modal-close[title="关闭"]:visible');
@@ -84,16 +100,14 @@ async function tryExistingGoogleLinuxDoLogin(page) {
     await modalClose.click({ timeout: 5000 });
     await page.waitForTimeout(300);
   }
-  const googleButton = page.getByRole("button", { name: "使用 Google 登录", exact: true });
-  if (await googleButton.count() !== 1 || !await googleButton.isVisible()) return false;
-  await googleButton.click({ timeout: 10000 });
-  await page.waitForURL((url) => {
-    const loginPath = /^\/login(?:[/?#]|$)/i.test(url.pathname);
-    return url.hostname !== "linux.do" || !loginPath;
-  }, { timeout: 45000 }).catch(() => {});
-  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-  const afterGoogle = new URL(page.url());
-  return afterGoogle.hostname !== "linux.do" || !/^\/login(?:[/?#]|$)/i.test(afterGoogle.pathname);
+  let providerButton = await findProviderButton(page, providerLabels(loginProvider));
+  if (!providerButton && await revealAlternateLoginOptions(page)) {
+    providerButton = await findProviderButton(page, providerLabels(loginProvider));
+  }
+  if (!providerButton) return false;
+  await providerButton.click({ timeout: 10000 });
+  await page.waitForTimeout(1000);
+  return true;
 }
 
 function isTargetLogin(url) {
@@ -136,41 +150,46 @@ try {
   }) ?? context.pages()[0];
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
 
-  if (rule.forceLogout) await forceConfiguredOAuthLogout(page, rule, config);
-  const configuredLoginUrl = config.oauthLoginUrls?.[origin] ?? `${origin}/login`;
+  if (rule.forceLogout) await forceConfiguredOAuthLogout(page, rule, runtimeConfig);
+  const configuredLoginUrl = runtimeConfig.oauthLoginUrls?.[origin] ?? `${origin}/login`;
   const loginUrl = new URL(configuredLoginUrl);
   if (loginUrl.protocol !== "https:" || loginUrl.origin !== origin || loginUrl.username || loginUrl.password) {
     throw new Error("OAuth 登录入口不属于目标站点");
   }
-  await page.goto(loginUrl.href, {
-    waitUntil: "domcontentloaded",
-    timeout: Number(config.navigationTimeoutMs) || 20000,
-  });
-  await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
 
-  const agreementCheckbox = page.locator('input[type="checkbox"]:visible');
-  if (await agreementCheckbox.count() === 1 && !await agreementCheckbox.isChecked()) {
-    await agreementCheckbox.check({ force: true, timeout: 5000 });
-  }
+  const beginTargetProviderLogin = async (activePage) => {
+    await activePage.goto(loginUrl.href, {
+      waitUntil: "domcontentloaded",
+      timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
+    });
+    await activePage.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+    const agreementCheckbox = activePage.locator('input[type="checkbox"]:visible');
+    if (await agreementCheckbox.count() === 1 && !await agreementCheckbox.isChecked()) {
+      await agreementCheckbox.check({ force: true, timeout: 5000 });
+    }
+    const labels = providerLabels(provider);
+    let providerButton = await findProviderButton(activePage, labels);
+    if (!providerButton && await revealAlternateLoginOptions(activePage)) {
+      providerButton = await findProviderButton(activePage, labels);
+    }
+    if (!providerButton) throw new Error(`没有找到唯一的 ${provider} 登录按钮`);
+    const popupPromise = activePage.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
+    await providerButton.click({ timeout: 10000 });
+    const popup = await popupPromise;
+    const nextPage = popup ?? activePage;
+    await nextPage.waitForTimeout(1500);
+    await nextPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    return nextPage;
+  };
 
-  const labels = providerLabels(provider);
-  let providerButton = await findProviderButton(page, labels);
-  if (!providerButton && await revealAlternateLoginOptions(page)) {
-    providerButton = await findProviderButton(page, labels);
-  }
-  if (!providerButton) throw new Error(`没有找到唯一的 ${provider} 登录按钮`);
-
-  const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
-  await providerButton.click({ timeout: 10000 });
-  const popup = await popupPromise;
-  if (popup) page = popup;
-  await page.waitForTimeout(1500);
-  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+  page = await beginTargetProviderLogin(page);
 
   const oauthDeadline = Date.now()
-    + Math.max(30000, Math.min(120000, Number(config.cloudflareWaitMs) || 90000));
+    + Math.max(30000, Math.min(120000, Number(runtimeConfig.cloudflareWaitMs) || 90000));
   let authorizeClicked = false;
-  let googleLoginAttempted = false;
+  let upstreamLoginAttempted = false;
+  let resumeTargetAfterUpstream = false;
+  let githubAuthorizeAttempted = false;
   let callbackReached = false;
   while (Date.now() < oauthDeadline) {
     if (page.isClosed()) {
@@ -204,18 +223,41 @@ try {
       }
     }
     if (location.hostname === "linux.do" && /^\/login(?:[/?#]|$)/i.test(location.pathname)) {
-      if (!googleLoginAttempted) {
-        googleLoginAttempted = true;
-        if (await tryExistingGoogleLinuxDoLogin(page)) continue;
+      if (!upstreamLoginAttempted) {
+        upstreamLoginAttempted = true;
+        resumeTargetAfterUpstream = true;
+        if (await startLinuxDoUpstreamLogin(page, upstreamProvider)) continue;
       }
-      throw new Error("机器人 Chrome 的 Linux DO 登录已失效，且现有 Google 会话未能自动恢复");
+      throw new Error(`机器人 Chrome 的 Linux DO 登录已失效，且现有 ${upstreamProvider} 会话未能自动恢复`);
+    }
+    if (resumeTargetAfterUpstream && location.hostname === "linux.do") {
+      await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(1000);
+      page = await beginTargetProviderLogin(page);
+      resumeTargetAfterUpstream = false;
+      authorizeClicked = false;
+      continue;
+    }
+    if (location.hostname === "github.com") {
+      if (/^\/login(?:[/?#]|$)/i.test(location.pathname)) {
+        throw new Error("机器人 Chrome 需要人工确认一次 GitHub 登录");
+      }
+      if (!githubAuthorizeAttempted && /\/login\/oauth\/authorize/i.test(location.pathname)) {
+        const authorize = page.locator('button[name="authorize"]:visible');
+        if (await authorize.count() === 1) {
+          githubAuthorizeAttempted = true;
+          await authorize.click({ timeout: 10000 });
+          await page.waitForTimeout(1000);
+          continue;
+        }
+      }
     }
     if (/accounts\.google\.com$/i.test(location.hostname)) {
       throw new Error("机器人 Chrome 需要人工确认一次 Google 登录后才能恢复 Linux DO");
     }
     await page.waitForTimeout(1000);
   }
-  if (!callbackReached) throw new Error("Linux DO 验证未在限定时间内回到目标站点");
+  if (!callbackReached) throw new Error(`${provider} OAuth 未在限定时间内回到目标站点`);
 
   // The callback page finishes the server-side OAuth exchange with JavaScript.
   // Let that request settle before navigating to the authoritative log page.
@@ -223,14 +265,19 @@ try {
   await page.waitForTimeout(5000);
   await page.goto(rule.logPageUrl, {
     waitUntil: "domcontentloaded",
-    timeout: Number(config.navigationTimeoutMs) || 20000,
+    timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
   });
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+
+  const accountIdentity = await readOAuthAccountIdentity(page, origin);
+  if (configuredExpectedAccountId && accountIdentity?.accountId !== configuredExpectedAccountId) {
+    throw new Error(`OAuth 登录账号不匹配，期望 ${configuredExpectedAccountId}，实际 ${accountIdentity?.accountId || "unknown"}`);
+  }
 
   const verificationDeadline = Date.now() + rule.verificationWaitMs;
   let dailyCheckin = null;
   do {
-    dailyCheckin = await tryOAuthReloginCheckinStatus(page, origin, config, "signed");
+    dailyCheckin = await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "signed");
     if (["signed", "already_signed"].includes(dailyCheckin?.status) || dailyCheckin?.status === "unconfirmed") break;
     await page.waitForTimeout(1000);
   } while (Date.now() < verificationDeadline);
@@ -242,6 +289,10 @@ try {
     status: completed ? "logged_in" : "needs_attention",
     finalUrl: safeLogUrl(page.url()),
     checkedIn,
+    accountKey,
+    accountId: accountIdentity?.accountId ?? (configuredExpectedAccountId || null),
+    accountLabel,
+    upstreamProvider,
     dailyCheckin,
   }));
   if (!completed) process.exitCode = 2;
@@ -252,6 +303,10 @@ try {
     status: "needs_attention",
     finalUrl: page && !page.isClosed() ? safeLogUrl(page.url()) : origin,
     checkedIn,
+    accountKey,
+    accountId: configuredExpectedAccountId || null,
+    accountLabel,
+    upstreamProvider,
     reason: safeFailureReason(error),
   }));
   process.exitCode = 2;

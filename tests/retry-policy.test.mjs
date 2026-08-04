@@ -58,6 +58,28 @@ test("续跑只推进本轮真正尝试过的站点", () => {
   assert.equal(advanced[1].nextEligibleAt, "2026-07-23T14:00:00.000Z");
 });
 
+test("同源账号分别延续自己的重试序列并兼容旧主账号结果", () => {
+  const now = new Date("2026-07-23T12:00:00Z");
+  const previous = [
+    { origin: "https://agent.test", status: "deferred", retryCause: "rate_limit", retrySequence: 1, retrySequenceDate: "20260723" },
+    { origin: "https://agent.test", accountKey: "secondary", supplementalAccount: true, status: "deferred", retryCause: "rate_limit", retrySequence: 3, retrySequenceDate: "20260723" },
+  ];
+  const current = [
+    { origin: "https://agent.test", accountKey: "primary", status: "deferred", retryCause: "rate_limit" },
+    { origin: "https://agent.test", accountKey: "secondary", supplementalAccount: true, status: "deferred", retryCause: "rate_limit" },
+  ];
+  const attempted = new Set([
+    "https://agent.test#account=primary",
+    "https://agent.test#account=secondary",
+  ]);
+  const advanced = advanceAttemptedDeferredRetries(current, attempted, previous, {
+    rateLimitRetryDelayMs: 3600000,
+    rateLimitMaxDailyAttempts: 6,
+  }, now);
+  assert.equal(advanced[0].retrySequence, 2);
+  assert.equal(advanced[1].retrySequence, 4);
+});
+
 test("限频序列跨上海日期会重置且耗尽始终转到次日", () => {
   const config = {
     schedule: "08:05",
@@ -180,4 +202,12 @@ test("人工完成确认会清除重试字段并保留明确审计标记", () =>
     manualConfirmedAt: "2026-07-27T01:00:00.000Z",
   });
   assert.deepEqual(results[1], { origin: "https://done.example", status: "signed", reason: "自动完成" });
+});
+
+test("同一来源存在多个账号时不接受来源级人工完成确认", () => {
+  const results = applyManualConfirmations([
+    { origin: "https://agent.test", accountKey: "primary", status: "deferred" },
+    { origin: "https://agent.test", accountKey: "secondary", status: "deferred" },
+  ], new Set(["https://agent.test"]), new Date("2026-07-27T01:00:00Z"));
+  assert.deepEqual(results.map((result) => result.status), ["deferred", "deferred"]);
 });

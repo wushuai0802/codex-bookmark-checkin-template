@@ -96,3 +96,22 @@ test("缺失奖励日志时要求强制 OAuth 重登录且不误报成功", asyn
   const failed = await tryOAuthReloginCheckinStatus(failedPage, origin, config);
   assert.equal(failed.status, "unconfirmed");
 });
+
+test("OAuth 登录账号不符时拒绝使用其他账号的奖励记录", async () => {
+  let observedRule = null;
+  const mismatchConfig = {
+    ...config,
+    oauthExpectedAccountIds: { [origin]: "20002" },
+  };
+  const page = {
+    evaluate: async (_callback, rule) => {
+      observedRule = rule;
+      return { state: "account_mismatch", accountId: "10001", expectedAccountId: rule.expectedAccountId };
+    },
+  };
+  const result = await tryOAuthReloginCheckinStatus(page, origin, mismatchConfig, "signed");
+  assert.equal(observedRule.expectedAccountId, "20002");
+  assert.equal(result.status, "login_required");
+  assert.equal(result.forceOAuthRelogin, true);
+  assert.match(result.reason, /10001.*20002/);
+});

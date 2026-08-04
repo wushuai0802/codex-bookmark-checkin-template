@@ -3,7 +3,8 @@ param(
     [string[]]$Urls = @(),
     [switch]$Offscreen,
     [int]$RemoteDebuggingPort = 0,
-    [switch]$EnablePasswordManager
+    [switch]$EnablePasswordManager,
+    [string]$UserDataDirOverride
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,12 @@ $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 $node = Resolve-CheckinNode $config
 $closeSignal = Join-Path $root 'tmp\close-manual-session.signal'
+$profilePath = if ($UserDataDirOverride) { [System.IO.Path]::GetFullPath($UserDataDirOverride) } else { [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir) }
+$allowedRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
+$allowedPrefix = $allowedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $profilePath.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "机器人 Chrome 目录必须位于 $allowedRoot"
+}
 
 if (Test-Path -LiteralPath (Join-Path $root 'tmp\manual-session.json')) {
     [System.IO.File]::WriteAllText($closeSignal, (Get-Date).ToString('o'), [System.Text.UTF8Encoding]::new($false))
@@ -26,7 +33,7 @@ if (Test-Path -LiteralPath (Join-Path $root 'tmp\manual-session.json')) {
 }
 
 $existing = Get-CimInstance Win32_Process | Where-Object {
-    $_.Name -eq 'chrome.exe' -and $_.CommandLine -like "*$($config.automationUserDataDir)*"
+    $_.Name -eq 'chrome.exe' -and $_.CommandLine -like "*$profilePath*"
 }
 if ($existing) { throw '机器人专用 Chrome 配置仍被其他进程占用。' }
 
@@ -42,7 +49,7 @@ else {
 }
 $windowPosition = if ($Offscreen) { '-32000,-32000' } else { '60,60' }
 $arguments = @(
-    "--user-data-dir=$($config.automationUserDataDir)",
+    "--user-data-dir=$profilePath",
     '--profile-directory=Default',
     '--new-window',
     '--no-first-run',
