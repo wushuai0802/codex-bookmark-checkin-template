@@ -27,6 +27,7 @@
     "https://free.lyclaude.site",
     "https://jianzhile.vip",
     "https://muyuan.do",
+    "https://new.bxacc.xyz",
     "https://new-api.abrdns.com",
     "https://rrrapi.com",
     "https://token.fourj.space"
@@ -97,12 +98,14 @@
   },
   "oauthLoginUrls": {
     "https://agentrouter.org": "https://agentrouter.org/login",
-    "https://checkin.new-api.abrdns.com": "https://checkin.new-api.abrdns.com/"
+    "https://checkin.new-api.abrdns.com": "https://checkin.new-api.abrdns.com/",
+    "https://new.bxacc.xyz": "https://new.bxacc.xyz/sign-in"
   },
   "automaticOAuthProviders": {
     "https://agentrouter.org": "LinuxDO",
     "https://muyuan.do": "LinuxDO",
-    "https://checkin.new-api.abrdns.com": "LinuxDO"
+    "https://checkin.new-api.abrdns.com": "LinuxDO",
+    "https://new.bxacc.xyz": "LinuxDO"
   },
   "attentionPreferredOrigins": [
     "https://audiences.me",

@@ -59,6 +59,8 @@ function providerLabels(name) {
 
 async function findProviderButton(page, labels) {
   for (const label of labels.text) {
+    const roleButton = page.getByRole("button").filter({ hasText: label });
+    if (await roleButton.count() === 1 && await roleButton.isVisible()) return roleButton;
     const candidate = page.getByText(label, { exact: true });
     if (await candidate.count() === 1 && await candidate.isVisible()) return candidate;
   }
