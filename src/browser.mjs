@@ -1076,6 +1076,18 @@ async function saveFailureScreenshot(page, logDirectory, target) {
   return file;
 }
 
+async function resultFromPageFailure(page, error, config) {
+  const pageState = await snapshotState(page).catch(() => null);
+  if (pageState?.status === "deferred") {
+    return withRetrySchedule({ ...pageState, url: safeLogUrl(page.url()) }, config);
+  }
+  return {
+    status: "error",
+    reason: safeErrorMessage(error),
+    url: safeLogUrl(page.url()),
+  };
+}
+
 export async function launchAutomationContext(config) {
   await fs.access(config.chromeExecutable);
   const disabledFeatures = [
@@ -1184,11 +1196,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
             config,
           );
         } catch (error) {
-          result = {
-            status: "error",
-            reason: safeErrorMessage(error),
-            url: safeLogUrl(page.url()),
-          };
+          result = await resultFromPageFailure(page, error, config);
         }
         candidateHistory.push(candidateHistoryEntry(candidateUrl, result, attempt + 1));
         attemptResult = preferCandidateResult(attemptResult, result);
@@ -1216,7 +1224,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
       }
     } catch (error) {
-      const result = { status: "error", reason: safeErrorMessage(error), url: safeLogUrl(page.url()) };
+      const result = await resultFromPageFailure(page, error, config);
       candidateHistory.push(candidateHistoryEntry(page.url(), result, attempt + 1));
       attemptResult = preferCandidateResult(attemptResult, result);
       lastResult = preferCandidateResult(lastResult, result);

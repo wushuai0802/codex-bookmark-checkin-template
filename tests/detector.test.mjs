@@ -58,6 +58,15 @@ test("识别站点频率限制并延后处理", () => {
   assert.equal(result.retryCause, "rate_limit");
 });
 
+test("识别 Cloudflare 522 为站点故障并延后处理", () => {
+  const result = classifyPageText({
+    title: "Connection timed out",
+    bodyText: "Error code 522 Browser Working Cloudflare Working Host Error",
+  });
+  assert.equal(result.status, "deferred");
+  assert.equal(result.retryCause, "upstream_unavailable");
+});
+
 test("额度申请理由按上海日期生成唯一文案", () => {
   assert.equal(formatDailyReason("{date} 用于开发测试", new Date("2026-07-23T00:30:00Z")), "2026年7月23日 用于开发测试");
 });

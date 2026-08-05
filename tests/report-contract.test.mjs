@@ -193,6 +193,28 @@ test("延迟重试按原因区分登录恢复和安全验证", async () => {
   });
 
   assert.equal(report.status, "skipped");
+  assert.match(report.summary, /待自动重试 2 个：/);
+  assert.doesNotMatch(report.summary, /需关注/);
   assert.match(report.summary, /login\.example\.test：登录恢复未成功，计划/);
   assert.match(report.summary, /challenge\.example\.test：验证未自动通过，计划/);
+});
+
+test("站点故障在通知中显示为自动重试而不是人工关注", async () => {
+  const report = await previewReport({
+    runId: "20260723-120004",
+    runState: "final",
+    plannedTotal: 1,
+    processedTotal: 1,
+    isComplete: true,
+    results: [{
+      origin: "https://offline.example.test",
+      status: "deferred",
+      retryCause: "upstream_unavailable",
+      nextEligibleAt: "2026-07-23T06:00:00Z",
+    }],
+  });
+
+  assert.match(report.summary, /待自动重试 1 个：/);
+  assert.match(report.summary, /offline\.example\.test：站点暂时不可用，计划/);
+  assert.doesNotMatch(report.summary, /需关注/);
 });

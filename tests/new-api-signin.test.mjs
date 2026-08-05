@@ -162,3 +162,14 @@ test("认证失效返回 login_required", async () => {
   assert.equal(result.status, "login_required");
   assert.match(result.reason, /重新登录/);
 });
+
+test("站点数据库写入故障会延后重试而不是误判签到", () => {
+  const result = classifyNewApiSignInObservation({
+    state: "called",
+    signInStatus: 500,
+    responseSuccess: false,
+    responseMessage: "Error 1290: The MySQL server is running with the LOCK_WRITE_GROWTH option",
+  }, configuredNewApiSignInRule(origin, config));
+  assert.equal(result.status, "deferred");
+  assert.equal(result.retryCause, "upstream_unavailable");
+});

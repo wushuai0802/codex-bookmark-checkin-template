@@ -106,6 +106,8 @@ $done = @($statuses | Where-Object { $_ -in @('signed', 'already_signed') }).Cou
 $disabled = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -eq $true }).Count
 $notAvailable = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -ne $true }).Count
 $problems = @($reportingResults | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
+$deferredProblems = @($problems | Where-Object { $_.status -eq 'deferred' })
+$attentionProblems = @($problems | Where-Object { $_.status -ne 'deferred' })
 $attentionCount = @($problems | Where-Object { $_.status -in @('interactive_challenge', 'login_required', 'needs_attention') }).Count
 $timeoutCount = @($problems | Where-Object { $_.status -eq 'managed_challenge_timeout' }).Count
 $hardFailureCount = @($problems | Where-Object { $_.status -in @('error', 'failed') }).Count
@@ -141,24 +143,32 @@ if ($accountResults.Count -gt 0) {
         "- $marker $(Get-ResultDisplayName $_)$reward"
     }) -join "`n")
 }
-if ($problems.Count -gt 0) {
-    $summary += "`n需关注 $($problems.Count) 个："
-    $brief = @($problems | ForEach-Object {
+if ($deferredProblems.Count -gt 0) {
+    $summary += "`n待自动重试 $($deferredProblems.Count) 个："
+    $retryBrief = @($deferredProblems | ForEach-Object {
+        $problem = $_
+        $hostName = Get-ResultDisplayName $problem
+        $retryLabel = switch ([string]$problem.retryCause) {
+            'login_required' { '登录恢复未成功'; break }
+            'managed_challenge_timeout' { '验证未自动通过'; break }
+            'upstream_unavailable' { '站点暂时不可用'; break }
+            default { '限频' }
+        }
+        $reason = if ($problem.nextEligibleAt) { try { "$retryLabel，计划 $(([datetime]$problem.nextEligibleAt).ToLocalTime().ToString('HH:mm')) 重试" } catch { "$retryLabel，已安排重试" } }
+        else { "$retryLabel，已安排重试" }
+        "- $hostName：$reason"
+    }) -join "`n"
+    $summary += "`n$retryBrief"
+}
+if ($attentionProblems.Count -gt 0) {
+    $summary += "`n需关注 $($attentionProblems.Count) 个："
+    $brief = @($attentionProblems | ForEach-Object {
         $problem = $_
         $hostName = Get-ResultDisplayName $problem
         $reason = switch ([string]$problem.status) {
             'login_required' { '登录失效' }
             'interactive_challenge' { '需要验证' }
             'managed_challenge_timeout' { '验证超时' }
-            'deferred' {
-                $retryLabel = switch ([string]$problem.retryCause) {
-                    'login_required' { '登录恢复未成功'; break }
-                    'managed_challenge_timeout' { '验证未自动通过'; break }
-                    default { '限频' }
-                }
-                if ($problem.nextEligibleAt) { try { "$retryLabel，计划 $(([datetime]$problem.nextEligibleAt).ToLocalTime().ToString('HH:mm')) 重试" } catch { "$retryLabel，已安排重试" } }
-                else { "$retryLabel，已安排重试" }
-            }
             'no_action' { '未找到入口' }
             'visited' { '结果未确认' }
             'clicked' { '结果未确认' }

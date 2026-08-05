@@ -56,9 +56,10 @@ function Get-LatestReportState([datetime]$now, $config, [Nullable[datetime]]$not
             -and $results.Count -ge $plannedTotal
         $problems = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
         $missingCount = [Math]::Max(0, $plannedTotal - $processedTotal)
+        $nowOffset = [datetimeoffset]$now
         $retryTimes = @($problems | Where-Object { $_.status -eq 'deferred' -and $_.nextEligibleAt } | ForEach-Object {
-            try { [datetime]$_.nextEligibleAt } catch { }
-        } | Where-Object { $_ -gt $now })
+            try { [datetimeoffset]$_.nextEligibleAt } catch { }
+        } | Where-Object { $_ -gt $nowOffset })
         return [pscustomobject]@{
             Valid = $true
             Complete = $contractComplete -and $problems.Count -eq 0
@@ -121,7 +122,7 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
     $nextEligibleAt = $null
     if (-not $reportState.Complete) {
         $nextEligibleAt = if ($null -ne $reportState.NextEligibleAt) {
-            ([datetime]$reportState.NextEligibleAt).ToString('o')
+            ([datetimeoffset]$reportState.NextEligibleAt).ToLocalTime().ToString('o')
         } else {
             $finishedAt.AddMinutes($failureDelay).ToString('o')
         }
@@ -172,11 +173,14 @@ try {
             $scheduledToday = [datetime]::ParseExact("$($now.ToString('yyyy-MM-dd')) $schedule", 'yyyy-MM-dd HH:mm', $null)
             $state = Read-SchedulerState
             $latestReportState = Get-LatestReportState $now $config
-            if ($latestReportState.Complete `
-                -and ([string]$state.lastRunDate -ne $now.ToString('yyyy-MM-dd') -or $state.reportComplete -ne $true)) {
-                Write-SchedulerState $now 0 $latestReportState $config
+            $hasNewExternalReport = $latestReportState.Valid `
+                -and $latestReportState.RunId `
+                -and [string]$state.lastRunId -ne [string]$latestReportState.RunId
+            if ($hasNewExternalReport) {
+                $externalExitCode = if ($latestReportState.Complete) { 0 } else { 2 }
+                Write-SchedulerState $now $externalExitCode $latestReportState $config
                 $state = Read-SchedulerState
-                Write-SchedulerLog "已接收外部续跑完成报告：runId=$($latestReportState.RunId)。"
+                Write-SchedulerLog "已接收外部续跑报告：runId=$($latestReportState.RunId)，完整=$($latestReportState.Complete)，异常=$($latestReportState.ProblemCount)。"
             }
             if ($now -ge $scheduledToday -and -not (Test-SchedulerWaiting $state $now $config)) {
                 Write-SchedulerHeartbeat 'running_checkin'
