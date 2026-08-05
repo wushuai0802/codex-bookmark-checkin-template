@@ -242,6 +242,9 @@ export function classifyNewApiSignInObservation(observed, rule) {
     if (/turnstile|hcaptcha|recaptcha|验证码|驗證碼|captcha|人机|人機/i.test(message)) {
       return { status: "interactive_challenge", reason: "站点签到接口要求人机验证" };
     }
+    if (/(?:error\s*1290|lock_write_growth|mysql server|database.{0,30}(?:locked|read[ -]?only)|internal server error|bad gateway|service unavailable|服务器内部错误|服務器內部錯誤)/i.test(message)) {
+      return { status: "deferred", retryCause: "upstream_unavailable", reason: "站点签到服务暂时异常，已安排自动重试" };
+    }
     return { status: "unconfirmed", reason: "站点签到接口未确认成功，未判定为完成" };
   }
 

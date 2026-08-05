@@ -172,7 +172,11 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(supervisor, /launchRole = "fallback"/);
   assert.match(supervisor, /If WatchdogIsRunning\(\) Then WScript\.Quit 0/);
   assert.match(scheduler, /Get-LatestReportState \$now \$config/);
-  assert.match(scheduler, /已接收外部续跑完成报告/);
+  assert.match(scheduler, /\$hasNewExternalReport = \$latestReportState\.Valid/);
+  assert.match(scheduler, /\[string\]\$state\.lastRunId -ne \[string\]\$latestReportState\.RunId/);
+  assert.match(scheduler, /\[datetimeoffset\]\$_\.nextEligibleAt/);
+  assert.match(scheduler, /\[datetimeoffset\]\$reportState\.NextEligibleAt\)\.ToLocalTime\(\)\.ToString\('o'\)/);
+  assert.match(scheduler, /已接收外部续跑报告/);
 });
 
 test("公开健康检查提供稳定的只读调用入口", async () => {
