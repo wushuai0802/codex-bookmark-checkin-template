@@ -57,6 +57,12 @@ test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async (
   assert.equal(rules.loginAsCheckinOrigins.includes("https://agentrouter.org"), false);
   assert.equal(rules.automaticOAuthProviders["https://agentrouter.org"], "LinuxDO");
   assert.equal(rules.oauthLoginUrls["https://agentrouter.org"], "https://agentrouter.org/login");
+  assert.equal(rules.extendedDiscoveryOrigins.includes("https://new.bxacc.xyz"), true);
+  assert.equal(rules.automaticOAuthProviders["https://new.bxacc.xyz"], "LinuxDO");
+  assert.equal(rules.oauthLoginUrls["https://new.bxacc.xyz"], "https://new.bxacc.xyz/sign-in");
+  const browser = await fs.readFile(new URL("../src/browser.mjs", import.meta.url), "utf8");
+  assert.match(browser, /\(\?:用户\\s\*\)\?ID\\s\*\[:：\]\?\\s\*\(\\d\+\)/);
+  assert.match(browser, /const discoveredApiResult = await tryNewApiCheckin\(page\)/);
   assert.equal(agentRouter.forceLogout, true);
   assert.equal(agentRouter.nativeBrowser, true);
   assert.equal(agentRouter.logoutPath, "/api/user/logout");
@@ -240,6 +246,7 @@ test("OAuth 恢复可以展开其他登录选项并关闭 LinuxDO 遮罩", async
   const oauth = await fs.readFile(new URL("../src/oauth-login.mjs", import.meta.url), "utf8");
   assert.match(oauth, /其他登录选项/);
   assert.match(oauth, /revealAlternateLoginOptions/);
+  assert.match(oauth, /getByRole\("button"\)\.filter\(\{ hasText: label \}\)/);
   assert.match(oauth, /button\.modal-close\[title="关闭"\]/);
   assert.match(oauth, /session\\\/sso_provider/);
 });

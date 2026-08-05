@@ -686,7 +686,7 @@ async function tryNewApiCheckin(page) {
       if (userId != null) break;
     }
     if (userId == null) {
-      const visibleId = String(document.body?.innerText || "").match(/ID\s*[:：]\s*(\d+)/i);
+      const visibleId = String(document.body?.innerText || "").match(/(?:用户\s*)?ID\s*[:：]?\s*(\d+)/i);
       userId = visibleId?.[1] ?? null;
     }
     if (userId == null) {
@@ -997,6 +997,12 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
       await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
       activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
       activeOrigin = new URL(activeUrl).origin;
+      if (useNewApiCheckin) {
+        const discoveredApiResult = await tryNewApiCheckin(page);
+        if (discoveredApiResult && discoveredApiResult.status !== "not_available") {
+          return { ...discoveredApiResult, url: safeLogUrl(page.url()) };
+        }
+      }
       state = await waitForManagedChallenge(page, config);
       state = await classifyManualAttention(page, state, activeOrigin, config);
       if (state.status !== "ready") return { ...state, url: safeLogUrl(page.url()) };

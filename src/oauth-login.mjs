@@ -84,6 +84,8 @@ async function trySavedLinuxDoLogin(page) {
 
 async function findVisibleProviderButton(page, providerLabels, providerAltLabels) {
   for (const label of providerLabels) {
+    const roleButton = page.getByRole("button").filter({ hasText: label });
+    if (await roleButton.count() === 1 && await roleButton.isVisible()) return roleButton;
     const candidate = page.getByText(label, { exact: true });
     if (await candidate.count() === 1 && await candidate.isVisible()) return candidate;
   }
