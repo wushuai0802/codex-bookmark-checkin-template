@@ -14,6 +14,10 @@ const reloadOnChallengeAfterSeconds = Math.max(
 );
 const allowEndpointReady = inspectionMode === "allow-endpoint";
 const performNativeCheckin = inspectionMode === "native-checkin";
+const nativeCheckinActionOrigins = new Set([
+  "https://bmapi.020212.xyz",
+  "https://new.bxacc.xyz",
+]);
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-browser-inspect.mjs <port> <origin> [max-wait-seconds] [allow-endpoint|native-checkin]");
 
 async function dismissBlockingModals(page) {
@@ -159,7 +163,7 @@ try {
       const bmapiState = await getBmapiCheckinState(page);
       if (bmapiState && bmapiState.status !== "ready") state = bmapiState;
 
-      if (performNativeCheckin && expectedOrigin === "https://bmapi.020212.xyz"
+      if (performNativeCheckin && nativeCheckinActionOrigins.has(expectedOrigin)
         && !["signed", "already_signed", "not_available"].includes(state.status)) {
         dismissedPrompts.push(...await dismissBlockingModals(page));
         if (!checkinStarted) {

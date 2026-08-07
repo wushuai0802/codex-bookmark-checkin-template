@@ -60,6 +60,10 @@ test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async (
   assert.equal(rules.extendedDiscoveryOrigins.includes("https://new.bxacc.xyz"), true);
   assert.equal(rules.automaticOAuthProviders["https://new.bxacc.xyz"], "LinuxDO");
   assert.equal(rules.oauthLoginUrls["https://new.bxacc.xyz"], "https://new.bxacc.xyz/sign-in");
+  assert.deepEqual(
+    rules.nativeChallengePreflight.find((entry) => entry.url === "https://new.bxacc.xyz/profile"),
+    { url: "https://new.bxacc.xyz/profile", waitSeconds: 120, action: "checkin" },
+  );
   const browser = await fs.readFile(new URL("../src/browser.mjs", import.meta.url), "utf8");
   assert.match(browser, /\(\?:用户\\s\*\)\?ID\\s\*\[:：\]\?\\s\*\(\\d\+\)/);
   assert.match(browser, /const discoveredApiResult = await tryNewApiCheckin\(page\)/);
