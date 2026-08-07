@@ -89,7 +89,8 @@
   "nativeChallengePreflight": [
     { "url": "https://audiences.me/attendance.php", "waitSeconds": 20 },
     { "url": "https://ourbits.club/attendance.php", "waitSeconds": 30 },
-    { "url": "https://bmapi.020212.xyz/dashboard", "waitSeconds": 90, "action": "checkin" }
+    { "url": "https://bmapi.020212.xyz/dashboard", "waitSeconds": 90, "action": "checkin" },
+    { "url": "https://new.bxacc.xyz/profile", "waitSeconds": 120, "action": "checkin" }
   ],
   "oauthRedirectOverrides": {
     "https://free.lyclaude.site": {

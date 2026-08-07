@@ -78,6 +78,9 @@ test("原生交互签到使用可见窗口和最长两分钟检查器", async ()
   const inspector = await fs.readFile(path.join(root, "src", "native-browser-inspect.mjs"), "utf8");
   assert.match(preflightScript, /if\s*\(\[string\]\$item\.action\s+-ne\s+'checkin'\)\s*\{\s*\$openParameters\.Offscreen\s*=\s*\$true\s*\}/);
   assert.match(inspector, /Math\.min\(120,/);
+  assert.match(inspector, /nativeCheckinActionOrigins = new Set\(\[/);
+  assert.match(inspector, /https:\/\/new\.bxacc\.xyz/);
+  assert.match(inspector, /nativeCheckinActionOrigins\.has\(expectedOrigin\)/);
   assert.doesNotMatch(inspector, /lastCheckboxClickAt/);
   assert.match(preflightScript, /reloadOnChallengeAfterSeconds/);
   assert.match(preflightScript, /\$inspectionMode \(\[int\]\$item\.reloadOnChallengeAfterSeconds\)/);
