@@ -36,7 +36,7 @@ export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) 
     const accountId = requiredText(raw?.accountId, `第 ${index + 1} 项 accountId`, 80);
     const accountLabel = requiredText(raw?.accountLabel ?? accountId, `第 ${index + 1} 项 accountLabel`, 120);
     const provider = requiredText(raw?.provider, `第 ${index + 1} 项 provider`, 40);
-    const upstreamProvider = requiredText(raw?.upstreamProvider ?? "Google", `第 ${index + 1} 项 upstreamProvider`, 40);
+    const upstreamProvider = requiredText(raw?.upstreamProvider, `第 ${index + 1} 项 upstreamProvider`, 40);
     const originUrl = new URL(requiredText(raw?.origin, `第 ${index + 1} 项 origin`));
     if (originUrl.protocol !== "https:" || originUrl.username || originUrl.password) {
       throw new Error(`补充 OAuth 账号 ${accountKey} 的 origin 必须是无凭据 HTTPS 地址`);

@@ -76,9 +76,7 @@ export async function listBookmarkFolderCandidatesWithBackup(bookmarksPath) {
 export function normalizeHttpUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
-    if (!/^https?:$/.test(url.protocol)) return null;
-    url.username = "";
-    url.password = "";
+    if (url.protocol !== "https:" || url.username || url.password) return null;
     if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
     return url.href;
   } catch {

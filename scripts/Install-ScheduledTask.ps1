@@ -28,6 +28,10 @@ $trigger = @(
         New-ScheduledTaskTrigger -Daily -At $scheduleTime.Date.AddMinutes($minute)
     }
 )
+$taskRunAttempts = [Math]::Max(1, [Math]::Min(3, [int]$config.taskRunAttempts))
+$taskTimeoutMinutes = [Math]::Max(5, [Math]::Min(55, [int]$config.taskTimeoutMinutes))
+$taskRetryDelayMinutes = [Math]::Max(0, [Math]::Min(30, [int]$config.taskRetryDelayMinutes))
+$executionLimitMinutes = $taskRunAttempts * $taskTimeoutMinutes + ($taskRunAttempts - 1) * $taskRetryDelayMinutes + 15
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -35,7 +39,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -RunOnlyIfNetworkAvailable `
     -WakeToRun `
     -Hidden `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes $executionLimitMinutes) `
     -MultipleInstances IgnoreNew
 
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name

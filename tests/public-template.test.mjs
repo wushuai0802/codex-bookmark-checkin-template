@@ -26,6 +26,15 @@ test("公开默认配置不启用外部通知", async () => {
   assert.deepEqual(defaults.oauthReloginCheckinRules, {});
 });
 
+test("CI 使用最小权限、固定 Action 提交并扫描 Git 历史", async () => {
+  const workflow = await fs.readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(workflow, /permissions:\s*\r?\n\s+contents:\s*read/);
+  assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
+  assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/);
+  assert.match(workflow, /gitleaks\/gitleaks-action@[0-9a-f]{40}/);
+  assert.match(workflow, /fetch-depth:\s*0/);
+});
+
 test("简直了使用个人中心和有界图片验证码签到规则", async () => {
   const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
   assert.equal(rules.extendedDiscoveryOrigins.includes("https://jianzhile.vip"), true);
@@ -79,14 +88,16 @@ test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async (
 test("AgentRouter 原生 OAuth 恢复不接触或输出浏览器凭据", async () => {
   const runner = await fs.readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
   const nativeOAuth = await fs.readFile(new URL("../src/native-oauth-login.mjs", import.meta.url), "utf8");
+  const nativeCdp = await fs.readFile(new URL("../src/native-cdp.mjs", import.meta.url), "utf8");
   const recovery = await fs.readFile(new URL("../scripts/Recover-NativeOAuthLogin.ps1", import.meta.url), "utf8");
   assert.match(runner, /native_oauth/);
   assert.match(runner, /Recover-NativeOAuthLogin\.ps1/);
-  assert.match(nativeOAuth, /connectOverCDP/);
+  assert.match(nativeOAuth, /connectOverCdpWithRetry/);
+  assert.match(nativeCdp, /connectOverCDP/);
   assert.match(nativeOAuth, /tryOAuthReloginCheckinStatus/);
   assert.match(nativeOAuth, /session cookie|callback evidence is optional/i);
   assert.doesNotMatch(nativeOAuth, /document\.cookie|cookies\(|storageState/);
-  assert.match(recovery, /automationUserDataDir/);
+  assert.match(recovery, /AutomationUserDataDir/i);
   assert.match(recovery, /Open-PlainLoginChrome\.ps1/);
 });
 

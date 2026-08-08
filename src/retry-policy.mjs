@@ -83,7 +83,9 @@ export function withRetrySchedule(result, config = {}, now = new Date()) {
   const configuredDelay = Number(
     result.retryCause === "rate_limit"
       ? (config.rateLimitRetryDelayMs ?? config.deferredRetryDelayMs)
-      : config.deferredRetryDelayMs,
+      : result.retryCause === "managed_challenge_timeout"
+        ? (config.challengeRetryDelayMs ?? config.deferredRetryDelayMs)
+        : config.deferredRetryDelayMs,
   );
   const delayMs = Math.max(60_000, Math.min(6 * 60 * 60 * 1000,
     Number.isFinite(configuredDelay) ? configuredDelay : 30 * 60 * 1000));

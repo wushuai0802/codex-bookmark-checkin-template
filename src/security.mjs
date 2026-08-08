@@ -29,7 +29,7 @@ export function safeErrorMessage(error) {
 
 export function assertBookmarkNavigation(candidate, expectedOrigin) {
   const url = new URL(candidate);
-  if (!/^https?:$/.test(url.protocol)) throw new Error("仅允许 HTTP/HTTPS 书签");
+  if (url.protocol !== "https:" || url.username || url.password) throw new Error("仅允许无凭据 HTTPS 书签");
   const allowedOrigins = new Set(Array.isArray(expectedOrigin) ? expectedOrigin : [expectedOrigin]);
   if (!allowedOrigins.has(url.origin)) throw new Error("拒绝跨站导航");
   return url.href;

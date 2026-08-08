@@ -55,7 +55,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 主 Chrome 保存密码同步和外部问答搜索默认关闭；初始化问卷获得明确授权后才启用，未授权时不会读取密码库或访问搜索引擎。启用密码同步后，账户密码库中仍保持加密的匹配记录会桥接到独立配置的本地密码库，脚本不解密、输出或提交密码。
 - 机器人 Chrome 默认关闭 Chromium 的本地大模型下载；限频重试采用有界指数退避，达到当日上限后转到次日计划时间，避免空转。
 
-Chrome 保存密码和 OAuth 都无法恢复的站点，可选择使用 Windows DPAPI 凭据。运行 `scripts\Set-ProtectedSiteCredential.ps1 -Origin https://example.com` 交互录入，用户名和密码不会显示；密文只写入被 Git 忽略的 `data\credentials\`，且仅能由当前 Windows 用户解密。随后在本机 `config/config.json` 的 `protectedCredentialOrigins` 中加入站点，并按需配置 `protectedLoginVerificationPaths` 和 `siteStorageBootstrap`。登录器只通过子进程标准输入接收临时明文，不写命令行或日志。
+Chrome 保存密码和 OAuth 都无法恢复的站点，可选择使用 Windows DPAPI 凭据。运行 `scripts\Set-ProtectedSiteCredential.ps1 -Origin https://example.com` 交互录入，用户名和密码不会显示；密文只写入被 Git 忽略的 `data\credentials\`，且仅能由当前 Windows 用户解密。随后在本机 `config/config.json` 的 `protectedCredentialOrigins` 中加入站点，并按需配置 `protectedLoginVerificationPaths`。登录器只通过子进程标准输入接收临时明文，不写命令行、日志或额外的浏览器存储快照。
 
 ## 目录边界
 

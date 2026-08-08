@@ -141,7 +141,7 @@ test("安全验证可使用独立的低频退避时间", () => {
     status: "deferred",
     retryCause: "managed_challenge_timeout",
     reason: "安全验证未自动通过，改为低频重试",
-  }, { deferredRetryDelayMs: 3600000 }, now);
+  }, { deferredRetryDelayMs: 1800000, challengeRetryDelayMs: 3600000 }, now);
   assert.equal(result.nextEligibleAt, "2026-07-23T06:00:00.000Z");
   assert.equal(result.retryCause, "managed_challenge_timeout");
 });

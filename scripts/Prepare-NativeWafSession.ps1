@@ -16,6 +16,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $profilePath = [string]$config.automationUserDataDir
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
+. (Join-Path $PSScriptRoot 'Native-ChromeDebug.ps1')
 $node = Resolve-CheckinNode $config
 $inspector = Join-Path $root 'src\native-browser-inspect.mjs'
 $items = @($config.nativeWafPreflightUrls | ForEach-Object {
@@ -170,9 +171,9 @@ foreach ($item in $items) {
     $inspectionMode = if ([string]$item.action -eq 'checkin') { 'native-checkin' } elseif ([bool]$item.trustAsSigned) { 'allow-endpoint' } else { 'require-confirmed' }
     $maximumInspectionAttempts = if ([string]$item.action -eq 'checkin') { 1 } else { 2 }
     for ($inspectionAttempt = 1; $inspectionAttempt -le $maximumInspectionAttempts -and $null -eq $inspection; $inspectionAttempt++) {
-        $debugPort = Get-Random -Minimum 12000 -Maximum 32000
+        [void](Reset-NativeChromeDebugPort $profilePath)
         $openParameters = @{
-            RemoteDebuggingPort = $debugPort
+            DynamicRemoteDebuggingPort = $true
             Urls = @($url)
         }
         # Interactive providers throttle or reject fully offscreen windows.
@@ -180,7 +181,7 @@ foreach ($item in $items) {
         # passive WAF warmups remain offscreen to avoid unnecessary disruption.
         if ([string]$item.action -ne 'checkin') { $openParameters.Offscreen = $true }
         & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters
-        Start-Sleep -Seconds 2
+        $debugPort = Wait-NativeChromeDebugPort $profilePath 25
         try {
             $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) $inspectionMode ([int]$item.reloadOnChallengeAfterSeconds) 2>$null
             if ($LASTEXITCODE -eq 0 -and $inspectionText) {

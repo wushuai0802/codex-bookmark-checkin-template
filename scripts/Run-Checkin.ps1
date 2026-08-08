@@ -123,6 +123,9 @@ try {
     if (-not (Test-Path -LiteralPath $effectiveConfigPath -PathType Leaf)) { throw '尚未初始化，请先运行 scripts\Initialize-Checkin.ps1。' }
     $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $effectiveConfigPath | ConvertFrom-Json
 
+    try { & (Join-Path $PSScriptRoot 'Clear-StalePrivateTemp.ps1') -RetentionHours 48 | Out-Null }
+    catch { Write-Warning "过期临时文件清理未完成：$($_.Exception.Message)" }
+
     $wrapperMutexName = if ($config.runMutexName) { [string]$config.runMutexName } else { 'Local\CodexBookmarkCheckinRun' }
     $wrapperMutex = [System.Threading.Mutex]::new($false, $wrapperMutexName)
     try { $wrapperMutexOwned = $wrapperMutex.WaitOne(0) }

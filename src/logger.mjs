@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 
 function localRunId(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+  const milliseconds = String(date.getMilliseconds()).padStart(3, "0");
+  const suffix = randomBytes(3).toString("hex");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}-${milliseconds}-${suffix}`;
 }
 
 export async function createRunLog(rootDirectory) {
