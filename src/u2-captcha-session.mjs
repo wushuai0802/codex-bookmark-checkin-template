@@ -182,5 +182,9 @@ try {
   if (!success) process.exitCode = 2;
 } finally {
   await fs.rm(answerPath, { force: true }).catch(() => {});
+  await fs.rm(challengePath, { force: true }).catch(() => {});
+  await fs.rm(screenshotPath, { force: true }).catch(() => {});
+  await fs.rm(fullScreenshotPath, { force: true }).catch(() => {});
+  await fs.rm(sourceImagePath, { force: true }).catch(() => {});
   await context.close();
 }

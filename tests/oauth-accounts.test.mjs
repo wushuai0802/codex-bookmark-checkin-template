@@ -30,6 +30,7 @@ function supplemental(overrides = {}) {
     accountLabel: "Secondary",
     origin,
     provider: "GitHub",
+    upstreamProvider: "GitHub",
     loginUrl: `${origin}/oauth/login`,
     automationUserDataDir: "data/accounts/secondary/chrome-user-data",
     ...overrides,
@@ -94,4 +95,10 @@ test("补充账号浏览器目录必须严格位于项目 data 子目录", () =>
   const [account] = configuredSupplementalOAuthAccounts(configWith([supplemental()]), root);
   assert.equal(account.accountId, "200");
   assert.equal(account.loginUrl, `${origin}/oauth/login`);
+});
+
+test("补充账号必须显式声明上游登录方式", () => {
+  assert.throws(() => configuredSupplementalOAuthAccounts(configWith([
+    supplemental({ upstreamProvider: "" }),
+  ]), root), /upstreamProvider 无效/);
 });

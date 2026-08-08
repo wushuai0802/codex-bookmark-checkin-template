@@ -5,10 +5,12 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $configPath = Join-Path $root 'config\config.json'
 $initialConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 $statePath = Join-Path $root 'data\scheduler-state.json'
 $heartbeatPath = Join-Path $root 'data\scheduler-heartbeat.json'
 $schedulerLogPath = Join-Path $root 'logs\scheduler.log'
 $outboxScript = Join-Path $PSScriptRoot 'Invoke-CheckinNotificationOutbox.ps1'
+$reporterScript = Join-Path $PSScriptRoot 'Submit-UnifiedCheckinReport.ps1'
 $mutexCreated = $false
 $mutexName = if ($initialConfig.schedulerMutexName) { [string]$initialConfig.schedulerMutexName } else { 'Local\CodexBookmarkDailyCheckinScheduler' }
 $mutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$mutexCreated)
@@ -31,7 +33,7 @@ function Read-SchedulerState {
     catch { return [pscustomobject]@{} }
 }
 
-function Get-LatestReportState([datetime]$now, $config, [Nullable[datetime]]$notBefore = $null) {
+function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[datetime]]$notBefore = $null) {
     $latestPath = Join-Path $root 'logs\latest.json'
     $empty = [pscustomobject]@{
         Valid = $false; Complete = $false; NextEligibleAt = $null; RunId = $null
@@ -46,10 +48,21 @@ function Get-LatestReportState([datetime]$now, $config, [Nullable[datetime]]$not
         $runState = [string]$latest.runState
         $plannedTotal = if ($null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { 0 }
         $processedTotal = if ($null -ne $latest.processedTotal) { [int]$latest.processedTotal } else { $results.Count }
+        $latestIdentities = @($latest.bookmarkSummary.targets | ForEach-Object {
+            $origin = try { ([uri][string]$_.origin).GetLeftPart([System.UriPartial]::Authority).TrimEnd('/') } catch { $null }
+            if (-not $origin) { return }
+            $accountKey = [string]$_.accountKey
+            if ($accountKey) { "$origin#account=$accountKey" } else { $origin }
+        } | Sort-Object -Unique)
+        $planMatches = $null -ne $currentPlan `
+            -and [int]$currentPlan.targetCount -eq $plannedTotal `
+            -and @($currentPlan.identities).Count -eq $latestIdentities.Count `
+            -and @(Compare-Object -ReferenceObject @($currentPlan.identities) -DifferenceObject $latestIdentities).Count -eq 0
         $valid = [string]$latest.runId -like "$($now.ToString('yyyyMMdd'))-*" `
             -and $runState -eq 'final' `
             -and $results.Count -ge $minimumTargets `
-            -and $plannedTotal -ge $minimumTargets
+            -and $plannedTotal -ge $minimumTargets `
+            -and $planMatches
         if (-not $valid) { return $empty }
         $contractComplete = $latest.isComplete -eq $true `
             -and $processedTotal -ge $plannedTotal `
@@ -152,9 +165,12 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
 try {
     Write-SchedulerLog "调度器启动（PID=$PID）。"
     while ($true) {
+        $claimedThisLoop = $false
+        $process = $null
         try {
             Write-SchedulerHeartbeat 'idle'
             $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath | ConvertFrom-Json
+            $node = Resolve-CheckinNode $config
             try {
                 Write-SchedulerHeartbeat 'flushing_notifications'
                 $outboxResult = (& $outboxScript | Select-Object -Last 1) | ConvertFrom-Json
@@ -172,7 +188,13 @@ try {
             $now = Get-Date
             $scheduledToday = [datetime]::ParseExact("$($now.ToString('yyyy-MM-dd')) $schedule", 'yyyy-MM-dd HH:mm', $null)
             $state = Read-SchedulerState
-            $latestReportState = Get-LatestReportState $now $config
+            $currentPlan = (& $node (Join-Path $root 'src\current-plan.mjs') | Select-Object -Last 1) | ConvertFrom-Json
+            $latestReportState = Get-LatestReportState $now $config $currentPlan
+            if ($state.reportComplete -eq $true -and -not $latestReportState.Valid) {
+                $state.reportComplete = $false
+                $state.lastRunDate = $null
+                $state.nextEligibleAt = $null
+            }
             $hasNewExternalReport = $latestReportState.Valid `
                 -and $latestReportState.RunId `
                 -and [string]$state.lastRunId -ne [string]$latestReportState.RunId
@@ -189,6 +211,7 @@ try {
                 $runScript = Join-Path $PSScriptRoot 'Run-Checkin.ps1'
                 $runStartedAt = Get-Date
                 Write-SchedulerClaim $runStartedAt
+                $claimedThisLoop = $true
                 $shell = (Get-Command pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
                 if (-not $shell) { throw '未找到 PowerShell 可执行文件。' }
                 $process = Start-Process -FilePath $shell -ArgumentList @(
@@ -201,13 +224,26 @@ try {
                     $process.Refresh()
                 }
                 $finishedAt = Get-Date
-                $reportState = Get-LatestReportState $finishedAt $config $runStartedAt
+                $reportState = Get-LatestReportState $finishedAt $config $currentPlan $runStartedAt
                 Write-SchedulerState $finishedAt $process.ExitCode $reportState $config
+                $claimedThisLoop = $false
                 Write-SchedulerLog "签到结束：退出码=$($process.ExitCode)，报告有效=$($reportState.Valid)，完整=$($reportState.Complete)，进度=$($reportState.ProcessedTotal)/$($reportState.PlannedTotal)，异常=$($reportState.ProblemCount)。"
             }
         }
         catch {
             $message = ([string]$_.Exception.Message) -replace '[\r\n\t]+', ' '
+            if ($claimedThisLoop) {
+                if ($null -ne $process) {
+                    try { if (-not $process.HasExited) { $process.Kill($true) } } catch { try { $process.Kill() } catch { } }
+                }
+                $failureState = [pscustomobject]@{
+                    Valid = $false; Complete = $false; NextEligibleAt = $null; RunId = $null
+                    ProblemCount = 1; RunState = 'scheduler_error'; PlannedTotal = 0; ProcessedTotal = 0
+                }
+                try { Write-SchedulerState (Get-Date) 1 $failureState $config } catch { }
+                try { & $reporterScript -RunnerStatus failed -RunnerMessage "后台调度器启动签到失败：$message" | Out-Null } catch { }
+                try { & $outboxScript | Out-Null } catch { }
+            }
             Write-Warning "后台调度循环发生可恢复异常：$message"
             Write-SchedulerLog "可恢复异常：$message"
         }

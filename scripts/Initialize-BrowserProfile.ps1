@@ -61,12 +61,7 @@ if (-not $UserDataDirOverride -and -not $SkipSavedLoginSync -and $config.syncBoo
     & (Join-Path $PSScriptRoot 'Sync-ChromeSavedLogins.ps1')
 }
 
-$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-foreach ($securePath in @((Join-Path $root 'data'), (Join-Path $root 'logs'))) {
-    New-Item -ItemType Directory -Path $securePath -Force | Out-Null
-    & icacls.exe $securePath /inheritance:r /grant:r "${identity}:(OI)(CI)F" 'SYSTEM:(OI)(CI)F' /Q | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "无法收紧目录权限：$securePath" }
-}
+& (Join-Path $PSScriptRoot 'Protect-PrivateRuntime.ps1') | Out-Null
 
 Write-Output "独立登录会话已创建：$targetRoot"
 Write-Output '未复制完整 Cookie 或浏览历史。需要 OAuth/人机验证时，请用 Open-ManualLogin.ps1 完成首次可见登录。'

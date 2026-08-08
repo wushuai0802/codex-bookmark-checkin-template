@@ -16,7 +16,35 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
+. (Join-Path $PSScriptRoot 'OAuth-AccountConfig.ps1')
+. (Join-Path $PSScriptRoot 'Native-ChromeDebug.ps1')
 $node = Resolve-CheckinNode $config
+$binding = Resolve-OAuthAccountConfiguration $config $root $AccountKey
+$providedProfilePath = if ($AutomationUserDataDir) { [System.IO.Path]::GetFullPath($AutomationUserDataDir) } else { $binding.AutomationUserDataDir }
+$providedLoginUrl = if ($LoginUrl) { ([uri]$LoginUrl).AbsoluteUri } else { ([uri]$binding.LoginUrl).AbsoluteUri }
+$tupleChecks = [ordered]@{
+    Origin = @(([uri]$Origin).GetLeftPart([System.UriPartial]::Authority), $binding.Origin)
+    Provider = @($Provider, $binding.Provider)
+    LoginUrl = @($providedLoginUrl, ([uri]$binding.LoginUrl).AbsoluteUri)
+    AutomationUserDataDir = @($providedProfilePath, $binding.AutomationUserDataDir)
+    ExpectedAccountId = @($ExpectedAccountId, $binding.AccountId)
+    AccountLabel = @($AccountLabel, $binding.AccountLabel)
+    UpstreamProvider = @($UpstreamProvider, $binding.UpstreamProvider)
+}
+foreach ($entry in $tupleChecks.GetEnumerator()) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry.Value[0])) { continue }
+    $comparison = if ($entry.Key -in @('Origin', 'LoginUrl', 'AutomationUserDataDir')) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    if (-not [string]::Equals([string]$entry.Value[0], [string]$entry.Value[1], $comparison)) {
+        throw "OAuth 账号绑定不匹配：$($entry.Key) 与 accountKey=$AccountKey 的配置不一致。"
+    }
+}
+$Origin = $binding.Origin
+$Provider = $binding.Provider
+$LoginUrl = $binding.LoginUrl
+$AutomationUserDataDir = $binding.AutomationUserDataDir
+$ExpectedAccountId = $binding.AccountId
+$AccountLabel = $binding.AccountLabel
+$UpstreamProvider = $binding.UpstreamProvider
 $originUri = [uri]$Origin
 if ($originUri.Scheme -ne 'https' -or -not $originUri.Host -or $originUri.UserInfo) {
     throw '原生 OAuth 恢复来源无效。'
@@ -35,7 +63,7 @@ if ($targetUrl.Scheme -ne 'https' -or $targetUrl.UserInfo -or
     throw '原生 OAuth 登录地址不属于目标站点。'
 }
 
-$profilePath = if ($AutomationUserDataDir) { [System.IO.Path]::GetFullPath($AutomationUserDataDir) } else { [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir) }
+$profilePath = [System.IO.Path]::GetFullPath($AutomationUserDataDir)
 $allowedRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
 $allowedPrefix = $allowedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 if (-not $profilePath.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -72,17 +100,17 @@ function Close-AutomationChrome {
     }
 }
 
-$debugPort = Get-Random -Minimum 12000 -Maximum 32000
 $nodeExitCode = 1
 try {
+    [void](Reset-NativeChromeDebugPort $profilePath)
     $openParameters = @{
         Offscreen = $true
-        RemoteDebuggingPort = $debugPort
+        DynamicRemoteDebuggingPort = $true
         Urls = @($targetUrl.AbsoluteUri)
         UserDataDirOverride = $profilePath
     }
     & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters | Out-Null
-    Start-Sleep -Seconds 4
+    $debugPort = Wait-NativeChromeDebugPort $profilePath 25
     $output = & $node (Join-Path $root 'src\native-oauth-login.mjs') $debugPort $originValue $Provider $ExpectedAccountId $AccountKey $AccountLabel $UpstreamProvider $targetUrl.AbsoluteUri
     $nodeExitCode = $LASTEXITCODE
     if ($output) { Write-Output $output }

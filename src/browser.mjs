@@ -18,7 +18,6 @@ const rootDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const COMPLETED = new Set(["signed", "already_signed", "not_available"]);
 const CHALLENGE = new Set(["interactive_challenge", "managed_challenge_timeout"]);
 const UNCONFIRMED = new Set(["visited", "clicked"]);
-const STORAGE_CONFIRMED = new Set(["signed", "already_signed"]);
 const CANDIDATE_STATUS_PRIORITY = new Map([
   ["signed", 100],
   ["already_signed", 100],
@@ -47,10 +46,6 @@ export function preferCandidateResult(current, candidate) {
   const currentPriority = CANDIDATE_STATUS_PRIORITY.get(current.status) ?? 0;
   const candidatePriority = CANDIDATE_STATUS_PRIORITY.get(candidate.status) ?? 0;
   return candidatePriority > currentPriority ? candidate : current;
-}
-
-export function shouldPersistSiteStorage(result) {
-  return STORAGE_CONFIRMED.has(result?.status);
 }
 
 export function configuredTargetSkip(target, config = {}) {
@@ -96,17 +91,6 @@ export function shouldTryGenericNewApiCheckin(target, configuredOrigins = null) 
   if (target?.folderNames?.includes("公益站")) return true;
   const configured = new Set(configuredOrigins ?? []);
   return (target?.allowedOrigins ?? [target?.origin]).some((origin) => configured.has(origin));
-}
-
-export function filterExpiredBootstrapLocalEntries(entries, nowMs = Date.now()) {
-  const local = (entries ?? []).filter((entry) => Array.isArray(entry) && entry.length === 2
-    && entry.every((item) => typeof item === "string"));
-  const rawExpiry = local.find(([key]) => key === "token_expires_at")?.[1];
-  const numericExpiry = Number(rawExpiry);
-  const expiryMs = numericExpiry > 0 && numericExpiry < 10_000_000_000 ? numericExpiry * 1000 : numericExpiry;
-  if (!Number.isFinite(expiryMs) || expiryMs > nowMs) return local;
-  const staleAuthKeys = new Set(["auth_token", "refresh_token", "token_expires_at", "auth_user"]);
-  return local.filter(([key]) => !staleAuthKeys.has(key));
 }
 
 async function snapshotState(page) {
@@ -264,8 +248,9 @@ async function classifyManualAttention(page, state, activeOrigin, config) {
       await sleep(1000);
     }
     return {
-      status: "needs_attention",
-      reason: `Turnstile 自动验证未在 ${Math.ceil(waitMs / 1000)} 秒内完成`,
+      status: "deferred",
+      retryCause: "managed_challenge_timeout",
+      reason: `Turnstile 自动验证未在 ${Math.ceil(waitMs / 1000)} 秒内完成，已安排低频重试`,
     };
   }
   if (state.status === "interactive_challenge"
@@ -1122,67 +1107,7 @@ export async function launchAutomationContext(config) {
       ...(config.backgroundWindowMode === "visible" ? ["--window-position=80,80", "--window-size=1365,900"] : []),
     ],
   });
-  for (const [origin, relativeFile] of Object.entries(config.siteStorageBootstrap ?? {})) {
-    const storagePath = path.resolve(rootDirectory, String(relativeFile));
-    const allowedRoot = path.resolve(rootDirectory, "data");
-    if (!storagePath.startsWith(`${allowedRoot}${path.sep}`)) continue;
-    const value = await fs.readFile(storagePath, "utf8").then(JSON.parse).catch(() => null);
-    if (value?.origin !== origin || !Array.isArray(value.local) || !Array.isArray(value.session)) continue;
-    const local = filterExpiredBootstrapLocalEntries(value.local);
-    const session = value.session.filter((entry) => Array.isArray(entry) && entry.length === 2 && entry.every((item) => typeof item === "string"));
-    await context.addInitScript(({ expectedOrigin, localEntries, sessionEntries, marker }) => {
-      if (location.origin !== expectedOrigin) return;
-      if (sessionStorage.getItem(marker) === expectedOrigin) return;
-      sessionStorage.setItem(marker, expectedOrigin);
-      for (const [key, item] of localEntries) {
-        if (localStorage.getItem(key) === null) localStorage.setItem(key, item);
-      }
-      for (const [key, item] of sessionEntries) {
-        if (sessionStorage.getItem(key) === null) sessionStorage.setItem(key, item);
-      }
-    }, { expectedOrigin: origin, localEntries: local, sessionEntries: session, marker: "__codex_storage_bootstrap_applied_v1" });
-  }
   return context;
-}
-
-export async function writeSiteStorageSnapshot(storagePath, value) {
-  await fs.mkdir(path.dirname(storagePath), { recursive: true });
-  const temporary = `${storagePath}.${process.pid}.tmp`;
-  try {
-    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    await fs.copyFile(storagePath, `${storagePath}.bak`).catch((error) => {
-      if (error?.code !== "ENOENT") throw error;
-    });
-    await fs.rename(temporary, storagePath);
-  } catch (error) {
-    await fs.rm(temporary, { force: true }).catch(() => {});
-    throw error;
-  }
-}
-
-async function persistSiteStorage(page, target, config, result) {
-  if (!shouldPersistSiteStorage(result)) return;
-  const relativeFile = config.siteStorageBootstrap?.[target.origin];
-  if (!relativeFile) return;
-  let activeOrigin;
-  try { activeOrigin = new URL(page.url()).origin; } catch { return; }
-  if (activeOrigin !== target.origin) return;
-  if (/\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)/i.test(page.url())) return;
-  const visiblePassword = await page.locator('input[type="password"]:visible').count().catch(() => 0);
-  if (visiblePassword > 0) return;
-  const storagePath = path.resolve(rootDirectory, String(relativeFile));
-  const allowedRoot = path.resolve(rootDirectory, "data");
-  if (!storagePath.startsWith(`${allowedRoot}${path.sep}`)) return;
-  const storage = await page.evaluate(() => ({
-    local: Object.entries(localStorage),
-    session: Object.entries(sessionStorage),
-  }));
-  await writeSiteStorageSnapshot(storagePath, {
-    version: 1,
-    origin: target.origin,
-    capturedAt: new Date().toISOString(),
-    ...storage,
-  });
 }
 
 export async function processTarget(context, target, config, qaRules, logDirectory) {
@@ -1238,7 +1163,6 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         try { result.screenshot = await saveFailureScreenshot(page, logDirectory, target); } catch { /* 页面可能已经关闭 */ }
       }
     } finally {
-      await persistSiteStorage(page, target, config, attemptResult).catch(() => {});
       await page.close().catch(() => {});
     }
 

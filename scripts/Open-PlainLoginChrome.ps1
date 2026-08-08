@@ -3,6 +3,7 @@ param(
     [string[]]$Urls = @(),
     [switch]$Offscreen,
     [int]$RemoteDebuggingPort = 0,
+    [switch]$DynamicRemoteDebuggingPort,
     [switch]$EnablePasswordManager,
     [string]$UserDataDirOverride
 )
@@ -66,8 +67,13 @@ $arguments = @(
 if (-not $EnablePasswordManager) {
     $arguments += '--disable-sync'
 }
-if ($RemoteDebuggingPort -gt 0) {
+if ($DynamicRemoteDebuggingPort) {
+    $arguments += '--remote-debugging-port=0'
+    $arguments += '--remote-debugging-address=127.0.0.1'
+}
+elseif ($RemoteDebuggingPort -gt 0) {
     $arguments += "--remote-debugging-port=$RemoteDebuggingPort"
+    $arguments += '--remote-debugging-address=127.0.0.1'
     $arguments += "--remote-allow-origins=http://127.0.0.1:$RemoteDebuggingPort"
 }
 $arguments += @($items | ForEach-Object { [string]$_.url })

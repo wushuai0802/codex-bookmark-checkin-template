@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
+. (Join-Path $PSScriptRoot 'Native-ChromeDebug.ps1')
 $node = Resolve-CheckinNode $config
 $originUri = [uri]$Origin
 if ($originUri.Scheme -ne 'https' -or -not $originUri.Host) { throw '原生登录恢复来源无效。' }
@@ -20,7 +21,6 @@ $profilePath = [string]$config.automationUserDataDir
 $existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like "*$profilePath*" })
 if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法恢复登录。' }
 
-$debugPort = Get-Random -Minimum 12000 -Maximum 32000
 $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
 try {
     # Chrome stores synced/account passwords in "Login Data For Account".
@@ -28,8 +28,9 @@ try {
     # from participating in autofill even though the encrypted row is present.
     # EnablePasswordManager only removes that launch restriction; the helper
     # still never reads or prints the saved username/password.
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri)
-    Start-Sleep -Seconds 4
+    [void](Reset-NativeChromeDebugPort $profilePath)
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -DynamicRemoteDebuggingPort -Urls @($targetUrl.AbsoluteUri)
+    $debugPort = Wait-NativeChromeDebugPort $profilePath 25
     $loginSucceeded = $false
     for ($loginAttempt = 1; $loginAttempt -le 3 -and -not $loginSucceeded; $loginAttempt++) {
         & $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue

@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { classifyPageText } from "./detector.mjs";
+import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 
 const require = createRequire(import.meta.url);
@@ -82,16 +83,9 @@ async function getBmapiCheckinState(page) {
   return { status: "ready", reason: "斑马 API 接口确认今日尚未签到" };
 }
 
-let browser = null;
-const connectDeadline = Date.now() + Math.max(5000, Math.min(15000, maxWaitSeconds * 1000));
-while (!browser && Date.now() < connectDeadline) {
-  try {
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 2000 });
-  } catch {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-}
-if (!browser) throw new Error("无法连接原生 Chrome 调试端口");
+const browser = await connectOverCdpWithRetry(chromium, port, {
+  timeoutMs: Math.max(5000, Math.min(15000, maxWaitSeconds * 1000)),
+});
 try {
   const deadline = Date.now() + maxWaitSeconds * 1000;
   let page = null;

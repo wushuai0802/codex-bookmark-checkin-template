@@ -10,6 +10,7 @@ import {
   readOAuthAccountIdentity,
   tryOAuthReloginCheckinStatus,
 } from "./oauth-relogin-checkin.mjs";
+import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 
 const require = createRequire(import.meta.url);
@@ -23,7 +24,7 @@ const provider = process.argv[4] || "LinuxDO";
 const expectedAccountId = String(process.argv[5] || "").trim();
 const accountKey = String(process.argv[6] || "").trim();
 const accountLabel = String(process.argv[7] || expectedAccountId).trim();
-const upstreamProvider = String(process.argv[8] || "Google").trim();
+const requestedUpstreamProvider = String(process.argv[8] || "").trim();
 const requestedLoginUrl = String(process.argv[9] || "").trim();
 
 if (!Number.isInteger(port) || port <= 0 || !requestedOrigin) {
@@ -31,6 +32,9 @@ if (!Number.isInteger(port) || port <= 0 || !requestedOrigin) {
 }
 
 const origin = new URL(requestedOrigin).origin;
+const upstreamProvider = requestedUpstreamProvider
+  || String(config.oauthUpstreamProviders?.[origin] || (provider === "LinuxDO" ? "" : provider)).trim();
+if (!upstreamProvider) throw new Error("Linux DO OAuth 恢复必须显式配置上游登录方式");
 const runtimeConfig = expectedAccountId || requestedLoginUrl ? {
   ...config,
   ...(expectedAccountId ? {
@@ -128,7 +132,7 @@ let browser = null;
 let page = null;
 let checkedIn = null;
 try {
-  browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 10000 });
+  browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
   const context = browser.contexts()[0];
   if (!context) throw new Error("原生 Chrome 没有可用浏览器上下文");
 

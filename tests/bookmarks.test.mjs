@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { findBookmarkTarget, listBookmarkFolderCandidates, listBookmarkFolderCandidatesWithBackup, readBookmarkPlan, readBookmarkPlanWithBackup } from "../src/bookmarks.mjs";
+import { findBookmarkTarget, listBookmarkFolderCandidates, listBookmarkFolderCandidatesWithBackup, normalizeHttpUrl, readBookmarkPlan, readBookmarkPlanWithBackup } from "../src/bookmarks.mjs";
+
+test("普通签到书签只接受无凭据 HTTPS", () => {
+  assert.equal(normalizeHttpUrl("https://example.test/checkin/"), "https://example.test/checkin");
+  assert.equal(normalizeHttpUrl("http://example.test/checkin"), null);
+  assert.equal(normalizeHttpUrl(`https://user:secret${"@"}example.test/checkin`), null);
+});
 
 test("不预设名称时列出候选书签目录供用户选择", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-candidates-"));

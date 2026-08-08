@@ -1,3 +1,5 @@
+$script:CheckinProjectRoot = Split-Path -Parent $PSScriptRoot
+
 function Resolve-CheckinExecutable {
     param(
         [string]$Configured,
@@ -25,5 +27,13 @@ function Resolve-CheckinNode {
 
 function Resolve-CheckinPython {
     param($Config, [switch]$Optional)
+    foreach ($candidate in @(
+        (Join-Path $script:CheckinProjectRoot '.venv\Scripts\python.exe'),
+        (Join-Path $script:CheckinProjectRoot 'venv\Scripts\python.exe')
+    )) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
     return Resolve-CheckinExecutable -Configured ([string]$Config.pythonExecutable) -CommandNames @('python.exe', 'python3.exe', 'python', 'python3') -Optional:$Optional
 }

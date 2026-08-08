@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protected-login-flow.mjs";
+import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 
 const require = createRequire(import.meta.url);
@@ -13,7 +14,7 @@ const port = Number.parseInt(process.argv[2], 10);
 const expectedOrigin = new URL(process.argv[3]).origin;
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-login.mjs <port> <origin>");
 
-const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 10000 });
+const browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
 let status = "needs_attention";
 let page = null;
 try {

@@ -17,6 +17,9 @@
   "oauthExpectedAccountIds": {
     "https://example.com": "12345"
   },
+  "oauthUpstreamProviders": {
+    "https://example.com": "GitHub"
+  },
   "supplementalOAuthAccounts": [
     {
       "accountKey": "example-secondary",
@@ -24,6 +27,7 @@
       "accountLabel": "Example secondary",
       "origin": "https://example.com",
       "provider": "GitHub",
+      "upstreamProvider": "GitHub",
       "loginUrl": "https://example.com/login",
       "automationUserDataDir": "data/accounts/example-secondary/chrome-user-data"
     }

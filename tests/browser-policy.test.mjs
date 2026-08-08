@@ -1,23 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import {
   CHALLENGE_SELECTOR,
   candidateHistoryEntry,
   configuredLoginCompletion,
   configuredTargetSkip,
   dismissBlockingModal,
-  filterExpiredBootstrapLocalEntries,
   preferCandidateResult,
   shouldTryGenericNewApiCheckin,
-  shouldPersistSiteStorage,
   turnstileWaitMs,
   tryBmapiCheckinStatus,
   waitForActiveQuotaBenefit,
   waitForQuotaRequestField,
-  writeSiteStorageSnapshot,
 } from "../src/browser.mjs";
 
 test("候选弱结果不会覆盖登录、挑战或延迟状态", () => {
@@ -53,14 +47,6 @@ test("候选历史会脱敏网址和错误原因", () => {
 test("通用安全验证选择器覆盖 Cap.js", () => {
   assert.match(CHALLENGE_SELECTOR, /cap-widget/);
   assert.match(CHALLENGE_SELECTOR, /data-cap-api-endpoint/);
-});
-
-test("只有已确认签到结果允许保存站点会话", () => {
-  assert.equal(shouldPersistSiteStorage({ status: "signed" }), true);
-  assert.equal(shouldPersistSiteStorage({ status: "already_signed" }), true);
-  for (const status of ["login_required", "error", "no_action", "unconfirmed", "not_available"]) {
-    assert.equal(shouldPersistSiteStorage({ status }), false);
-  }
 });
 
 test("配置取消的站点直接返回终止状态", () => {
@@ -217,35 +203,4 @@ test("额度申请弹窗延迟渲染时等待唯一理由输入框", async () =>
   const page = { locator: () => field };
   assert.equal(await waitForQuotaRequestField(page, 1000), field);
   assert.equal(checks, 2);
-});
-
-test("过期的站点快照不会反复注入认证令牌", () => {
-  const expired = [
-    ["auth_token", "old-access"],
-    ["refresh_token", "old-refresh"],
-    ["auth_user", "old-user"],
-    ["token_expires_at", "1785066910718"],
-    ["ann_dismiss_today_23", "2026-07-27"],
-  ];
-  assert.deepEqual(filterExpiredBootstrapLocalEntries(expired, 1785114265000), [
-    ["ann_dismiss_today_23", "2026-07-27"],
-  ]);
-  assert.deepEqual(filterExpiredBootstrapLocalEntries(expired, 1785000000000), expired);
-});
-
-test("站点会话更新前会把旧内容保留为 bak", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-storage-"));
-  const storagePath = path.join(directory, "session.json");
-  try {
-    const previous = { version: 1, origin: "https://example.test", local: [["auth", "old"]], session: [] };
-    const current = { version: 1, origin: "https://example.test", local: [["auth", "new"]], session: [] };
-    await fs.writeFile(storagePath, `${JSON.stringify(previous)}\n`, "utf8");
-
-    await writeSiteStorageSnapshot(storagePath, current);
-
-    assert.deepEqual(JSON.parse(await fs.readFile(storagePath, "utf8")), current);
-    assert.deepEqual(JSON.parse(await fs.readFile(`${storagePath}.bak`, "utf8")), previous);
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
 });

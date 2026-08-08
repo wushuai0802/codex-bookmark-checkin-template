@@ -11,7 +11,13 @@ $root = Split-Path -Parent $PSScriptRoot
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
 $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
 $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
-$pythonCommand = Get-Command python,python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch 'WindowsApps\\python(?:3)?\.exe$' } | Select-Object -First 1
+$projectPython = @(
+    (Join-Path $root '.venv\Scripts\python.exe'),
+    (Join-Path $root 'venv\Scripts\python.exe')
+) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+$pythonCommand = if ($projectPython) { $projectPython } else {
+    Get-Command python,python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch 'WindowsApps\\python(?:3)?\.exe$' } | Select-Object -First 1
+}
 $quoteCharacters = [char[]]@([char]39, [char]34)
 $resolvedContainerNames = @($ContainerFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })
 $resolvedTargetNames = @($TargetFolderNames | ForEach-Object { [string]$_ -split ',' } | ForEach-Object { $_.Trim().Trim($quoteCharacters) } | Where-Object { $_ })

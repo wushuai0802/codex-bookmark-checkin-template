@@ -7,6 +7,7 @@ import { publicBookmarkReport, readBookmarkPlanWithBackup } from "./bookmarks.mj
 import { configuredTargetSkip, launchAutomationContext, processTarget } from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
 import { loginHelperOutcome, resolveLoginRecoveryUrl } from "./login-recovery.mjs";
+import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
@@ -207,7 +208,10 @@ try {
     const selectedSupplementalAccounts = supplementalAccounts
       .filter((account) => selectedIdentities.has(resultIdentity(account)));
     const plannedTotal = plannedTargets.length;
-    const logicalCompletions = new Map();
+    const priorLogicalResults = resumeBase
+      ? preferredTargets.map((target) => compatiblePriorResult(target, resumeBase.results)).filter(Boolean)
+      : [];
+    const logicalCompletions = collectLogicalCompletions(priorLogicalResults, config.logicalCheckinGroups);
 
     const mergedProgressResults = () => {
       if (!resumeBase) return [...results];
@@ -241,16 +245,16 @@ try {
       : null;
 
     const rememberLogicalCompletion = (target, result) => {
-      const group = config.logicalCheckinGroups?.[target.origin];
-      if (group && ["signed", "already_signed"].includes(result.status)) {
-        logicalCompletions.set(group, { origin: target.origin, result });
+      const key = logicalCompletionKey({ ...target, ...result }, config.logicalCheckinGroups);
+      if (key && ["signed", "already_signed"].includes(result.status)) {
+        logicalCompletions.set(key, { origin: target.origin, result });
       }
     };
 
     const runOneTarget = async (activeContext, target, allowReuse = true) => {
       const started = Date.now();
-      const group = config.logicalCheckinGroups?.[target.origin];
-      const reused = allowReuse && group ? logicalCompletions.get(group) : null;
+      const key = logicalCompletionKey(target, config.logicalCheckinGroups);
+      const reused = allowReuse && key ? logicalCompletions.get(key) : null;
       if (reused && reused.origin !== target.origin) {
         return {
           status: "already_signed",
@@ -276,7 +280,10 @@ try {
       for (let index = 0; index < selectedTargets.length; index += 1) {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
-        const targetResult = await runOneTarget(context, target);
+        const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
+        const targetResult = selectedOrigins && prior && TERMINAL_STATUSES.has(prior.status)
+          ? prior
+          : await runOneTarget(context, target);
         results.push({
           origin: target.origin,
           title: target.title,
@@ -321,6 +328,13 @@ try {
           });
         }
         if (nativeOAuth) {
+          const accountIdentity = config.oauthAccountIdentities?.[current.origin] ?? {};
+          const expectedAccountId = String(
+            accountIdentity.accountId ?? config.oauthExpectedAccountIds?.[current.origin] ?? "",
+          ).trim();
+          const accountKey = String(accountIdentity.accountKey ?? current.accountKey ?? "").trim();
+          const accountLabel = String(accountIdentity.accountLabel ?? current.accountLabel ?? expectedAccountId).trim();
+          const upstreamProvider = String(config.oauthUpstreamProviders?.[current.origin] ?? "").trim();
           methods.push({
             method: "native_oauth",
             executable: config.powershellExecutable || "pwsh.exe",
@@ -330,6 +344,10 @@ try {
               "-Origin", current.origin,
               "-Provider", provider,
               "-LoginUrl", config.oauthLoginUrls?.[current.origin] ?? `${current.origin}/login`,
+              ...(expectedAccountId ? ["-ExpectedAccountId", expectedAccountId] : []),
+              ...(accountKey ? ["-AccountKey", accountKey] : []),
+              ...(accountLabel ? ["-AccountLabel", accountLabel] : []),
+              ...(upstreamProvider ? ["-UpstreamProvider", upstreamProvider] : []),
             ],
           });
         } else if (provider) {
@@ -420,7 +438,12 @@ try {
     for (let accountIndex = 0; accountIndex < selectedSupplementalAccounts.length; accountIndex += 1) {
       const account = selectedSupplementalAccounts[accountIndex];
       const prior = compatiblePriorResult(account, resumeBase?.results ?? []);
-      const shouldReuse = prior && !isRetryEligible(prior);
+      // An explicit origin selection is a deliberate operator retry. Do not
+      // let a previous deferred cooldown hide that account from the run, but
+      // never replace authoritative same-day success with a flaky browser
+      // startup result from another account on the same origin.
+      const shouldReuse = prior && (TERMINAL_STATUSES.has(prior.status)
+        || (!selectedOrigins && !isRetryEligible(prior)));
       if (!shouldReuse) {
         results.push(await runSupplementalOAuthAccount(account, config, rootDirectory));
       }
@@ -438,8 +461,9 @@ try {
         ?? { ...target, status: "error", reason: "续跑未生成站点结果" })
       : results;
     const currentOrigins = new Set([...results, ...manualConfirmedResults].map(resultIdentity));
+    const logicallyResolvedResults = applyLogicalCompletionReuse(assembledResults, config.logicalCheckinGroups);
     const finalResults = advanceAttemptedDeferredRetries(
-      assembledResults.map((result) => currentOrigins.has(resultIdentity(result)) ? deferUnresolvedLogin(result, config, finishedAt) : result),
+      logicallyResolvedResults.map((result) => currentOrigins.has(resultIdentity(result)) ? deferUnresolvedLogin(result, config, finishedAt) : result),
       currentOrigins,
       resumeBase?.results,
       config,

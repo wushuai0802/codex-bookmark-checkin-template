@@ -221,15 +221,12 @@ try {
     } while (Date.now() < verificationDeadline);
     loggedIn = ["signed", "already_signed"].includes(dailyCheckin?.status);
   }
-  const screenshotPath = path.join(rootDirectory, "tmp", `oauth-${new URL(origin).hostname.replace(/[^a-z0-9.-]/gi, "_")}.png`);
-  if (!loggedIn) await page.screenshot({ path: screenshotPath, fullPage: false });
   console.log(JSON.stringify({
     origin,
     provider,
     status: loggedIn ? "logged_in" : "needs_attention",
     finalUrl: safeLogUrl(finalUrl),
     title: await page.title(),
-    screenshotPath: loggedIn ? null : screenshotPath,
     dailyCheckin,
     excerpt: bodyText.slice(0, 1600),
   }, null, 2));
