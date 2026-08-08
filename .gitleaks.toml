@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public OCR captcha alphabet, not a credential"
+regexTarget = "secret"
+regexes = ['''^ABCDEFGHJKLMNPQRSTUVWXYZ23456789$''']

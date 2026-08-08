@@ -31,7 +31,9 @@ test("CI 使用最小权限、固定 Action 提交并扫描 Git 历史", async (
   assert.match(workflow, /permissions:\s*\r?\n\s+contents:\s*read/);
   assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
   assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/);
-  assert.match(workflow, /gitleaks\/gitleaks-action@[0-9a-f]{40}/);
+  assert.match(workflow, /gitleaks_\$\{version\}_windows_x64\.zip/);
+  assert.match(workflow, /Get-FileHash -Algorithm SHA256/);
+  assert.match(workflow, /gitleaks git --config \.gitleaks\.toml --redact --no-banner --exit-code 1/);
   assert.match(workflow, /fetch-depth:\s*0/);
 });
 
