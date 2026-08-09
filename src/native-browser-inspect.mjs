@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { classifyPageText } from "./detector.mjs";
+import { classifyPageText, scoreActionText } from "./detector.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 
@@ -15,11 +15,67 @@ const reloadOnChallengeAfterSeconds = Math.max(
 );
 const allowEndpointReady = inspectionMode === "allow-endpoint";
 const performNativeCheckin = inspectionMode === "native-checkin";
+const BMAPI_ORIGIN = "https://bmapi.020212.xyz";
+const BMAPI_EXPIRED_CHALLENGE = /(?:验证码|驗證碼)(?:已)?(?:过期|過期)|重新(?:验证|驗證)/;
 const nativeCheckinActionOrigins = new Set([
-  "https://bmapi.020212.xyz",
-  "https://new.bxacc.xyz",
+  BMAPI_ORIGIN,
+  "https://audiences.me",
+  "https://ourbits.club",
 ]);
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-browser-inspect.mjs <port> <origin> [max-wait-seconds] [allow-endpoint|native-checkin]");
+
+const NATIVE_ACTION_SELECTOR = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
+
+async function findNativeCheckinAction(page, mode = "start") {
+  const raw = await page.locator(NATIVE_ACTION_SELECTOR).evaluateAll((elements) => {
+    return elements.slice(0, 400).map((element, index) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return {
+        index,
+        id: String(element.id || ""),
+        text: String(element.innerText || element.value || element.getAttribute("aria-label") || element.title || "")
+          .replace(/\s+/g, " ").trim(),
+        visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0,
+        disabled: Boolean(element.disabled || element.getAttribute("aria-disabled") === "true"),
+        tagName: element.tagName,
+        href: element instanceof HTMLAnchorElement ? element.href : null,
+        formAction: element.form ? element.form.action : null,
+      };
+    });
+  });
+  return raw
+    .map((candidate) => ({
+      ...candidate,
+      score: mode === "challenge-submit"
+        ? (candidate.id === "checkin-submit" ? 120
+          : (/^(?:提交|確認|确认|驗證|验证|签到|簽到|submit|verify|check[ -]?in)$/i.test(candidate.text)
+            ? 100 : -1))
+        : scoreActionText(candidate.text),
+    }))
+    .filter((candidate) => candidate.visible && !candidate.disabled && candidate.score >= 0)
+    .filter((candidate) => {
+      if (!candidate.href) return true;
+      if (mode === "challenge-submit") return false;
+      try {
+        const href = new URL(candidate.href);
+        if (href.origin !== expectedOrigin) return false;
+        if (/(attendance|check[-_]?in|showup|bakatest|sign|签到|簽到)/i.test(href.href)) return true;
+        return candidate.href.endsWith("#") && /^(?:\[?\s*)?(?:签到|簽到)(?:\s*\]?)$/i.test(candidate.text);
+      } catch {
+        return false;
+      }
+    })
+    .filter((candidate) => {
+      if (!candidate.formAction) return true;
+      try { return new URL(candidate.formAction).origin === expectedOrigin; } catch { return false; }
+    })
+    .sort((left, right) => right.score - left.score)[0] ?? null;
+}
+
+async function clickNativeCheckinAction(page, candidate) {
+  await page.locator(NATIVE_ACTION_SELECTOR).nth(candidate.index).click({ timeout: 5000 });
+}
 
 async function dismissBlockingModals(page) {
   const labels = ["标记已读", "今天关闭", "今日关闭", "不再提示", "我知道了", "知道了", "关闭"];
@@ -42,7 +98,7 @@ async function dismissBlockingModals(page) {
 }
 
 async function getBmapiCheckinState(page) {
-  if (expectedOrigin !== "https://bmapi.020212.xyz") return null;
+  if (expectedOrigin !== BMAPI_ORIGIN) return null;
   const endpoint = `${expectedOrigin}/api/v1/checkin/status?timezone=Asia%2FShanghai`;
   let response = null;
   try {
@@ -100,9 +156,11 @@ try {
   let output = null;
   let checkboxClicked = false;
   let checkinClicked = false;
+  let challengeSubmitAttempted = false;
   let checkinStarted = false;
   let challengeDetectedAt = null;
   let challengeReloaded = false;
+  let checkinRestartCount = 0;
   let widgetInteractionAttempted = false;
   const dismissedPrompts = [];
   const inspectionStartedAt = Date.now();
@@ -155,17 +213,40 @@ try {
         continue;
       }
       const bmapiState = await getBmapiCheckinState(page);
-      if (bmapiState && bmapiState.status !== "ready") state = bmapiState;
+      if (expectedOrigin === BMAPI_ORIGIN) {
+        // Page copy can be stale after a challenge failure.  Only the
+        // authenticated status endpoint may declare the Zebra check-in done.
+        state = bmapiState ?? { status: "unconfirmed", reason: "斑马 API 暂未返回权威签到状态" };
+      }
+
+      const bmapiChallengeExpired = expectedOrigin === BMAPI_ORIGIN
+        && BMAPI_EXPIRED_CHALLENGE.test(snapshot.bodyText);
+      if (performNativeCheckin
+        && bmapiChallengeExpired
+        && bmapiState?.status === "ready"
+        && checkinRestartCount < 1) {
+        // An expired challenge leaves the modal in a terminal UI state. Reload
+        // the dashboard and start the bounded native flow once more; the API
+        // check above prevents a stale error message from repeating success.
+        checkinRestartCount += 1;
+        checkinStarted = false;
+        checkinClicked = false;
+        challengeSubmitAttempted = false;
+        challengeDetectedAt = null;
+        widgetInteractionAttempted = false;
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(1000);
+        continue;
+      }
 
       if (performNativeCheckin && nativeCheckinActionOrigins.has(expectedOrigin)
         && !["signed", "already_signed", "not_available"].includes(state.status)) {
         dismissedPrompts.push(...await dismissBlockingModals(page));
+        if (!checkinStarted && snapshot.challengeSelectors) checkinStarted = true;
         if (!checkinStarted) {
-          const action = page.getByRole("button", { name: /^(?:立即签到|立即簽到)$/, exact: true }).first();
-          if (await action.count().catch(() => 0) === 1
-            && await action.isVisible().catch(() => false)
-            && await action.isEnabled().catch(() => false)) {
-            await action.click({ timeout: 5000 });
+          const action = await findNativeCheckinAction(page);
+          if (action) {
+            await clickNativeCheckinAction(page, action);
             checkinStarted = true;
             await page.waitForTimeout(800);
           }
@@ -177,6 +258,7 @@ try {
       // most once after eight seconds because repeated clicks during the
       // provider's verification phase can turn a slow success into a failure.
       if (performNativeCheckin
+        && nativeCheckinActionOrigins.has(expectedOrigin)
         && snapshot.challengeSelectors
         && !snapshot.challengeTokenReady
         && !widgetInteractionAttempted
@@ -203,10 +285,14 @@ try {
         }
         checkboxClicked = checkboxClicked || clickedThisRound;
       }
-      if (performNativeCheckin && snapshot.challengeTokenReady && !checkinClicked) {
-        const submit = page.locator("#checkin-submit");
-        if (await submit.count() === 1 && await submit.isVisible() && await submit.isEnabled()) {
-          await submit.click({ timeout: 5000 });
+      if (performNativeCheckin
+        && nativeCheckinActionOrigins.has(expectedOrigin)
+        && snapshot.challengeTokenReady
+        && !challengeSubmitAttempted) {
+        challengeSubmitAttempted = true;
+        const submit = await findNativeCheckinAction(page, "challenge-submit");
+        if (submit) {
+          await clickNativeCheckinAction(page, submit);
           checkinClicked = true;
           await page.waitForTimeout(1200);
           const confirmed = await getBmapiCheckinState(page);
@@ -231,9 +317,11 @@ try {
         challengeTokenReady: snapshot.challengeTokenReady,
         checkboxClicked,
         checkinClicked,
+        challengeSubmitAttempted,
         checkinStarted,
         dismissedPrompts,
         challengeReloaded,
+        checkinRestartCount,
         attendanceEndpoint,
       };
       const explicitlyConfirmed = ["signed", "already_signed"].includes(state.status);

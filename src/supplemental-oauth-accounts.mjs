@@ -21,15 +21,33 @@ export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) 
   const identities = new Set();
   const accountIds = new Set();
   const profilePaths = new Set();
+  const resolveDataProfile = (configured, field) => {
+    const value = requiredText(configured, field, 500);
+    const resolved = path.resolve(rootDirectory, value);
+    const relative = path.relative(dataRoot, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`${field} 必须位于 data 内`);
+    }
+    return resolved;
+  };
+  const reserveProfile = (profile, owner) => {
+    const identity = pathKey(profile);
+    if (profilePaths.has(identity)) throw new Error(`OAuth 账号浏览器目录重复：${owner}`);
+    profilePaths.add(identity);
+  };
+  if (config.automationUserDataDir) {
+    reserveProfile(resolveDataProfile(config.automationUserDataDir, "automationUserDataDir"), "automationUserDataDir");
+  }
   for (const [configuredOrigin, raw] of Object.entries(config.oauthAccountIdentities ?? {})) {
     const origin = new URL(configuredOrigin).origin;
     const accountKey = String(raw?.accountKey ?? "").trim();
     const accountId = String(raw?.accountId ?? "").trim();
     if (accountKey) identities.add(resultIdentity({ origin, accountKey }));
     if (accountId) accountIds.add(`${origin}#id=${accountId}`);
-  }
-  if (config.automationUserDataDir) {
-    profilePaths.add(pathKey(path.resolve(rootDirectory, String(config.automationUserDataDir))));
+    if (raw?.automationUserDataDir != null && String(raw.automationUserDataDir).trim()) {
+      const profile = resolveDataProfile(raw.automationUserDataDir, `OAuth 主账号 ${accountKey || configuredOrigin} automationUserDataDir`);
+      reserveProfile(profile, accountKey || configuredOrigin);
+    }
   }
   return rawAccounts.map((raw, index) => {
     const accountKey = requiredText(raw?.accountKey, `第 ${index + 1} 项 accountKey`, 80);
@@ -46,12 +64,10 @@ export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) 
     if (loginUrl.protocol !== "https:" || loginUrl.origin !== origin || loginUrl.username || loginUrl.password) {
       throw new Error(`补充 OAuth 账号 ${accountKey} 的 loginUrl 必须属于目标 HTTPS origin`);
     }
-    const configuredProfile = requiredText(raw?.automationUserDataDir, `第 ${index + 1} 项 automationUserDataDir`, 500);
-    const automationUserDataDir = path.resolve(rootDirectory, configuredProfile);
-    const profileRelative = path.relative(dataRoot, automationUserDataDir);
-    if (!profileRelative || profileRelative.startsWith("..") || path.isAbsolute(profileRelative)) {
-      throw new Error(`补充 OAuth 账号 ${accountKey} 的浏览器目录必须位于 data 内`);
-    }
+    const automationUserDataDir = resolveDataProfile(
+      raw?.automationUserDataDir,
+      `补充 OAuth 账号 ${accountKey} 的浏览器目录`,
+    );
     const account = {
       accountKey, accountId, accountLabel, provider, upstreamProvider,
       origin, loginUrl: loginUrl.href, automationUserDataDir,

@@ -5,10 +5,58 @@ function Get-OAuthMapValue([object]$Map, [string]$Key) {
     return $property.Value
 }
 
+function Resolve-OAuthProfilePath([string]$Root, [string]$ConfiguredPath) {
+    if ([string]::IsNullOrWhiteSpace($ConfiguredPath)) { return $null }
+    if ([System.IO.Path]::IsPathRooted($ConfiguredPath)) {
+        return [System.IO.Path]::GetFullPath($ConfiguredPath)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $Root $ConfiguredPath))
+}
+
+function Assert-OAuthProfileInData([string]$Root, [string]$ProfilePath, [string]$Owner) {
+    $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $Root 'data'))
+    $dataPrefix = $dataRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $ProfilePath -or -not $ProfilePath.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "OAuth 账号 $Owner 的浏览器目录必须位于 data 内。"
+    }
+}
+
 function Resolve-OAuthAccountConfiguration([object]$Config, [string]$Root, [string]$AccountKey) {
     if ([string]::IsNullOrWhiteSpace($AccountKey) -or $AccountKey.Length -gt 80 -or $AccountKey -match '[\r\n]') {
         throw 'OAuth accountKey 无效。'
     }
+    $globalProfile = Resolve-OAuthProfilePath $Root ([string]$Config.automationUserDataDir)
+    Assert-OAuthProfileInData $Root $globalProfile 'automationUserDataDir'
+    $profileOwners = @{}
+    $profileOwners[$globalProfile.ToLowerInvariant()] = 'automationUserDataDir'
+    $primaryProfiles = @{}
+    foreach ($property in @($Config.oauthAccountIdentities.PSObject.Properties)) {
+        $identity = $property.Value
+        $rawProfile = [string]$identity.automationUserDataDir
+        if ([string]::IsNullOrWhiteSpace($rawProfile)) { continue }
+        $profile = Resolve-OAuthProfilePath $Root $rawProfile
+        $owner = if ($identity.accountKey) { [string]$identity.accountKey } else { [string]$property.Name }
+        Assert-OAuthProfileInData $Root $profile $owner
+        $profileKey = $profile.ToLowerInvariant()
+        if ($profileOwners.ContainsKey($profileKey)) {
+            throw "OAuth 账号浏览器目录必须唯一：$owner 与 $($profileOwners[$profileKey]) 重复。"
+        }
+        $profileOwners[$profileKey] = $owner
+        $primaryProfiles[[string]$property.Name] = $profile
+    }
+    foreach ($account in @($Config.supplementalOAuthAccounts)) {
+        $rawProfile = [string]$account.automationUserDataDir
+        if ([string]::IsNullOrWhiteSpace($rawProfile)) { continue }
+        $profile = Resolve-OAuthProfilePath $Root $rawProfile
+        $owner = if ($account.accountKey) { [string]$account.accountKey } else { 'supplementalOAuthAccounts' }
+        Assert-OAuthProfileInData $Root $profile $owner
+        $profileKey = $profile.ToLowerInvariant()
+        if ($profileOwners.ContainsKey($profileKey)) {
+            throw "OAuth 账号浏览器目录必须唯一：$owner 与 $($profileOwners[$profileKey]) 重复。"
+        }
+        $profileOwners[$profileKey] = $owner
+    }
+
     $matches = @()
     foreach ($property in @($Config.oauthAccountIdentities.PSObject.Properties)) {
         $identity = $property.Value
@@ -22,7 +70,7 @@ function Resolve-OAuthAccountConfiguration([object]$Config, [string]$Root, [stri
             Provider = [string](Get-OAuthMapValue $Config.automaticOAuthProviders $origin)
             UpstreamProvider = [string](Get-OAuthMapValue $Config.oauthUpstreamProviders $origin)
             LoginUrl = if (Get-OAuthMapValue $Config.oauthLoginUrls $origin) { [string](Get-OAuthMapValue $Config.oauthLoginUrls $origin) } else { "$origin/login" }
-            AutomationUserDataDir = [System.IO.Path]::GetFullPath([string]$Config.automationUserDataDir)
+            AutomationUserDataDir = if ($primaryProfiles.ContainsKey([string]$property.Name)) { [string]$primaryProfiles[[string]$property.Name] } else { $globalProfile }
             Supplemental = $false
         }
     }
@@ -30,7 +78,7 @@ function Resolve-OAuthAccountConfiguration([object]$Config, [string]$Root, [stri
         if ([string]$account.accountKey -ne $AccountKey) { continue }
         $origin = ([uri][string]$account.origin).GetLeftPart([System.UriPartial]::Authority)
         $rawProfile = [string]$account.automationUserDataDir
-        $profile = if ([System.IO.Path]::IsPathRooted($rawProfile)) { [System.IO.Path]::GetFullPath($rawProfile) } else { [System.IO.Path]::GetFullPath((Join-Path $Root $rawProfile)) }
+        $profile = Resolve-OAuthProfilePath $Root $rawProfile
         $matches += [pscustomobject]@{
             AccountKey = $AccountKey
             AccountId = [string]$account.accountId
@@ -54,10 +102,6 @@ function Resolve-OAuthAccountConfiguration([object]$Config, [string]$Root, [stri
         -or $loginUri.GetLeftPart([System.UriPartial]::Authority) -ne $binding.Origin) {
         throw "OAuth 账号 $AccountKey 的站点地址无效。"
     }
-    $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $Root 'data'))
-    $dataPrefix = $dataRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-    if (-not $binding.AutomationUserDataDir.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "OAuth 账号 $AccountKey 的浏览器目录必须位于 data 内。"
-    }
+    Assert-OAuthProfileInData $Root ([string]$binding.AutomationUserDataDir) $AccountKey
     return $binding
 }

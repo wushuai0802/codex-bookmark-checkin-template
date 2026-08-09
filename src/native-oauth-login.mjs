@@ -48,6 +48,26 @@ await findBookmarkTarget(runtimeConfig.bookmarksPath, origin, runtimeConfig);
 const rule = configuredOAuthReloginRule(origin, runtimeConfig);
 if (!rule?.nativeBrowser) throw new Error("目标站点没有启用原生浏览器 OAuth 恢复");
 const configuredExpectedAccountId = expectedAccountId || rule.expectedAccountId;
+if (!configuredExpectedAccountId) throw new Error("原生 OAuth 恢复必须配置预期账号 ID");
+
+const CONNECT_LINUX_DO_ORIGIN = "https://connect.linux.do";
+const CONNECT_AUTHORIZATION_LABELS = Object.freeze([
+  "同意",
+  "确认授权",
+  "同意并继续",
+  "继续",
+  "Approve",
+  "Continue",
+  "允许",
+  "授权",
+  "Allow",
+  "Authorize",
+]);
+const MAX_CONNECT_AUTHORIZATION_CLICKS = 3;
+const MIN_CONNECT_AUTHORIZATION_CLICK_INTERVAL_MS = 5000;
+const CONNECT_TURNSTILE_PASSIVE_WAIT_MS = 3000;
+const CONNECT_TURNSTILE_SETTLE_WAIT_MS = 3000;
+const CONNECT_MANAGED_CHALLENGE_TITLE = /just a moment|checking your browser|请稍候|請稍候|请稍等|請稍等|安全验证|安全驗證/i;
 
 function providerLabels(name) {
   const variants = [...new Set([name, name.replace(/linuxdo/i, "Linux DO")])];
@@ -88,19 +108,154 @@ async function revealAlternateLoginOptions(page) {
   return false;
 }
 
-async function findAuthorizeButton(page) {
-  for (const label of ["允许", "授权", "Allow", "Authorize"]) {
-    const byRole = page.getByRole("button", { name: label, exact: true });
-    if (await byRole.count() === 1 && await byRole.isVisible()) return byRole;
-    const byText = page.getByText(label, { exact: true });
-    if (await byText.count() === 1 && await byText.isVisible()) return byText;
+function isConnectLinuxDoAuthorizationPage(page) {
+  return parseObservedBrowserUrl(page.url())?.origin === CONNECT_LINUX_DO_ORIGIN;
+}
+
+async function findConnectLinuxDoAuthorizationControl(page) {
+  if (!isConnectLinuxDoAuthorizationPage(page)) return null;
+  const matches = [];
+  for (const label of CONNECT_AUTHORIZATION_LABELS) {
+    const buttonLike = page.getByRole("button", { name: label, exact: true });
+    for (let index = 0; index < await buttonLike.count(); index += 1) {
+      const candidate = buttonLike.nth(index);
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      const kind = await candidate.evaluate((element) => {
+        const tagName = element.tagName.toLowerCase();
+        const type = String(element.getAttribute("type") || "").toLowerCase();
+        if (tagName === "button") return "button";
+        if (tagName === "input" && type === "submit") return "submit";
+        return null;
+      }).catch(() => null);
+      if (kind) matches.push(candidate);
+    }
+    const links = page.getByRole("link", { name: label, exact: true });
+    for (let index = 0; index < await links.count(); index += 1) {
+      const candidate = links.nth(index);
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      const isLink = await candidate.evaluate((element) => element.tagName.toLowerCase() === "a")
+        .catch(() => false);
+      if (isLink) matches.push(candidate);
+    }
+    if (matches.length > 1) return null;
   }
-  return null;
+  return matches[0] ?? null;
+}
+
+async function clickConnectLinuxDoAuthorization(page, state) {
+  if (!isConnectLinuxDoAuthorizationPage(page)) return false;
+  let control = await findConnectLinuxDoAuthorizationControl(page);
+  if (!control) return false;
+  if (state.clicks >= MAX_CONNECT_AUTHORIZATION_CLICKS) {
+    throw new Error("Linux DO OAuth 授权步骤超过安全点击上限");
+  }
+  const remainingInterval = state.lastClickedAt > 0
+    ? MIN_CONNECT_AUTHORIZATION_CLICK_INTERVAL_MS - (Date.now() - state.lastClickedAt)
+    : 0;
+  if (remainingInterval > 0) await page.waitForTimeout(remainingInterval);
+  if (!isConnectLinuxDoAuthorizationPage(page)) return false;
+  control = await findConnectLinuxDoAuthorizationControl(page);
+  if (!control) return false;
+  await control.click({ timeout: 10000 });
+  state.clicks += 1;
+  state.lastClickedAt = Date.now();
+  return true;
+}
+
+async function inspectConnectLinuxDoTurnstile(page) {
+  if (!isConnectLinuxDoAuthorizationPage(page)) return { present: false, ready: false };
+  const managedChallengeTitle = CONNECT_MANAGED_CHALLENGE_TITLE.test(await page.title().catch(() => ""));
+  const response = page.locator([
+    'input[name="cf-turnstile-response"]',
+    'textarea[name="cf-turnstile-response"]',
+  ].join(", "));
+  const ready = await response.evaluateAll((elements) => elements.some((element) => {
+    return typeof element.value === "string" && element.value.length > 20;
+  })).catch(() => false);
+  const frames = page.locator([
+    'iframe[src*="challenges.cloudflare.com"]:visible',
+    'iframe[src*="turnstile" i]:visible',
+  ].join(", "));
+  const widgets = page.locator([
+    '.cf-turnstile:visible',
+    '[data-turnstile-widget-id]:visible',
+    '#challenge-stage:visible',
+    '#turnstile-wrapper:visible',
+  ].join(", "));
+  return {
+    present: managedChallengeTitle || await response.count() > 0 || await frames.count() > 0 || await widgets.count() > 0,
+    ready,
+  };
+}
+
+async function interactWithConnectLinuxDoTurnstileOnce(page) {
+  if (!isConnectLinuxDoAuthorizationPage(page)) return false;
+  const checkbox = page.frameLocator([
+    'iframe[src*="challenges.cloudflare.com"]',
+    'iframe[src*="turnstile" i]',
+  ].join(", ")).locator('input[type="checkbox"]:visible');
+  if (await checkbox.count() === 1) {
+    await checkbox.click({ timeout: 5000 });
+    return true;
+  }
+
+  const frames = page.locator([
+    'iframe[src*="challenges.cloudflare.com"]:visible',
+    'iframe[src*="turnstile" i]:visible',
+  ].join(", "));
+  let target = await frames.count() === 1 ? frames.first() : null;
+  if (!target && await frames.count() === 0) {
+    for (const selector of [
+      '.cf-turnstile:visible, [data-turnstile-widget-id]:visible',
+      '#turnstile-wrapper:visible',
+      '#challenge-stage:visible',
+    ]) {
+      const candidates = page.locator(selector);
+      if (await candidates.count() === 1) {
+        target = candidates.first();
+        break;
+      }
+    }
+  }
+  if (!target && CONNECT_MANAGED_CHALLENGE_TITLE.test(await page.title().catch(() => ""))) {
+    const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight })).catch(() => null);
+    if (!viewport || viewport.width < 600 || viewport.height < 400) return false;
+    await page.mouse.click((viewport.width / 2) - 120, viewport.height * 0.6);
+    return true;
+  }
+  if (!target) return false;
+  const box = await target.boundingBox().catch(() => null);
+  if (!box || box.width < 8 || box.height < 8) return false;
+  const leftOffset = Math.min(box.width - 2, Math.max(6, Math.min(32, box.width * 0.1)));
+  await page.mouse.click(box.x + leftOffset, box.y + box.height / 2);
+  return true;
+}
+
+async function handleConnectLinuxDoTurnstile(page, state) {
+  if (!isConnectLinuxDoAuthorizationPage(page)) return false;
+  let challenge = await inspectConnectLinuxDoTurnstile(page);
+  if (!challenge.present) return false;
+
+  if (!state.passiveWaitCompleted) {
+    state.passiveWaitCompleted = true;
+    await page.waitForTimeout(CONNECT_TURNSTILE_PASSIVE_WAIT_MS);
+    if (!isConnectLinuxDoAuthorizationPage(page)) return true;
+    if (await findConnectLinuxDoAuthorizationControl(page)) return true;
+    challenge = await inspectConnectLinuxDoTurnstile(page);
+  }
+  if (!challenge.present || challenge.ready || state.interactionAttempted) return true;
+
+  const interacted = await interactWithConnectLinuxDoTurnstileOnce(page);
+  if (interacted) {
+    state.interactionAttempted = true;
+    await page.waitForTimeout(CONNECT_TURNSTILE_SETTLE_WAIT_MS);
+  }
+  return true;
 }
 
 async function startLinuxDoUpstreamLogin(page, loginProvider) {
   const location = new URL(page.url());
-  if (location.hostname !== "linux.do" || !/^\/login(?:[/?#]|$)/i.test(location.pathname)) return false;
+  if (location.hostname !== "linux.do" || !/^\/login(?:[/?#]|$)/i.test(location.pathname)) return null;
   const modalClose = page.locator('button.modal-close[title="关闭"]:visible');
   if (await modalClose.count() === 1) {
     await modalClose.click({ timeout: 5000 });
@@ -110,10 +265,21 @@ async function startLinuxDoUpstreamLogin(page, loginProvider) {
   if (!providerButton && await revealAlternateLoginOptions(page)) {
     providerButton = await findProviderButton(page, providerLabels(loginProvider));
   }
-  if (!providerButton) return false;
+  if (!providerButton) return null;
+  const popupPromise = page.waitForEvent("popup", { timeout: 7000 }).catch(() => null);
+  const samePagePromise = page.waitForURL((url) => {
+    return url.hostname !== "linux.do" || !/^\/login(?:[/?#]|$)/i.test(url.pathname);
+  }, { waitUntil: "domcontentloaded", timeout: 7000 }).then(() => page).catch(() => null);
   await providerButton.click({ timeout: 10000 });
-  await page.waitForTimeout(1000);
-  return true;
+  const activePage = await Promise.race([
+    popupPromise,
+    samePagePromise,
+    page.waitForTimeout(7000).then(() => null),
+  ]);
+  if (!activePage) return null;
+  await activePage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+  await activePage.waitForTimeout(1000);
+  return activePage;
 }
 
 function isTargetLogin(url) {
@@ -130,26 +296,12 @@ function safeFailureReason(error) {
 
 let browser = null;
 let page = null;
-let checkedIn = null;
 try {
   browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
   const context = browser.contexts()[0];
   if (!context) throw new Error("原生 Chrome 没有可用浏览器上下文");
-
-  const observeCallback = (candidate) => {
-    candidate.on("response", async (response) => {
-      try {
-        const url = new URL(response.url());
-        if (url.origin !== origin || !/^\/api\/oauth\//i.test(url.pathname)) return;
-        const text = await response.text();
-        const body = JSON.parse(text);
-        const value = body?.checked_in ?? body?.data?.checked_in;
-        if (typeof value === "boolean") checkedIn = value;
-      } catch { /* callback evidence is optional */ }
-    });
-  };
-  for (const candidate of context.pages()) observeCallback(candidate);
-  context.on("page", observeCallback);
+  // A session cookie can complete the callback server-side. Callback evidence
+  // is optional, so this helper never reads or prints the callback body.
 
   page = context.pages().find((candidate) => {
     return parseObservedBrowserUrl(candidate.url())?.origin === origin;
@@ -170,9 +322,8 @@ try {
     timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
   });
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
-  const existingAccountIdentity = await readOAuthAccountIdentity(page, origin);
-  const existingIdentityMatches = !configuredExpectedAccountId
-    || existingAccountIdentity?.accountId === configuredExpectedAccountId;
+  const existingAccountId = (await readOAuthAccountIdentity(page, origin))?.accountId ?? null;
+  const existingIdentityMatches = existingAccountId === configuredExpectedAccountId;
   const existingDailyCheckin = existingIdentityMatches
     ? await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "already_signed")
     : null;
@@ -184,9 +335,8 @@ try {
       provider,
       status: "logged_in",
       finalUrl: safeLogUrl(page.url()),
-      checkedIn: null,
       accountKey,
-      accountId: existingAccountIdentity?.accountId ?? (configuredExpectedAccountId || null),
+      accountId: configuredExpectedAccountId,
       accountLabel,
       upstreamProvider,
       reusedExistingDailyEvidence: true,
@@ -224,10 +374,10 @@ try {
 
     const oauthDeadline = Date.now()
     + Math.max(30000, Math.min(120000, Number(runtimeConfig.cloudflareWaitMs) || 90000));
-    let authorizeClicked = false;
     let upstreamLoginAttempted = false;
     let resumeTargetAfterUpstream = false;
-    let githubAuthorizeAttempted = false;
+    const connectAuthorizationState = { clicks: 0, lastClickedAt: 0 };
+    const connectTurnstileState = { passiveWaitCompleted: false, interactionAttempted: false };
     let callbackReached = false;
     while (Date.now() < oauthDeadline) {
     if (page.isClosed()) {
@@ -251,11 +401,12 @@ try {
       callbackReached = true;
       break;
     }
-    if (location.hostname === "connect.linux.do" && !authorizeClicked) {
-      const authorizeButton = await findAuthorizeButton(page);
-      if (authorizeButton) {
-        authorizeClicked = true;
-        await authorizeButton.click({ timeout: 10000 });
+    if (location.origin === CONNECT_LINUX_DO_ORIGIN) {
+      if (await clickConnectLinuxDoAuthorization(page, connectAuthorizationState)) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+      if (await handleConnectLinuxDoTurnstile(page, connectTurnstileState)) {
         await page.waitForTimeout(1000);
         continue;
       }
@@ -264,7 +415,11 @@ try {
       if (!upstreamLoginAttempted) {
         upstreamLoginAttempted = true;
         resumeTargetAfterUpstream = true;
-        if (await startLinuxDoUpstreamLogin(page, upstreamProvider)) continue;
+        const upstreamPage = await startLinuxDoUpstreamLogin(page, upstreamProvider);
+        if (upstreamPage) {
+          page = upstreamPage;
+          continue;
+        }
       }
       throw new Error(`机器人 Chrome 的 Linux DO 登录已失效，且现有 ${upstreamProvider} 会话未能自动恢复`);
     }
@@ -273,21 +428,19 @@ try {
       await page.waitForTimeout(1000);
       page = await beginTargetProviderLogin(page);
       resumeTargetAfterUpstream = false;
-      authorizeClicked = false;
+      // Upstream login starts a distinct authorization cycle with a fresh
+      // Turnstile widget. Give only that new page one bounded interaction;
+      // upstreamLoginAttempted prevents repeated resets.
+      connectTurnstileState.passiveWaitCompleted = false;
+      connectTurnstileState.interactionAttempted = false;
       continue;
     }
     if (location.hostname === "github.com") {
       if (/^\/login(?:[/?#]|$)/i.test(location.pathname)) {
         throw new Error("机器人 Chrome 需要人工确认一次 GitHub 登录");
       }
-      if (!githubAuthorizeAttempted && /\/login\/oauth\/authorize/i.test(location.pathname)) {
-        const authorize = page.locator('button[name="authorize"]:visible');
-        if (await authorize.count() === 1) {
-          githubAuthorizeAttempted = true;
-          await authorize.click({ timeout: 10000 });
-          await page.waitForTimeout(1000);
-          continue;
-        }
+      if (/\/login\/oauth\/authorize/i.test(location.pathname)) {
+        throw new Error("机器人 Chrome 需要人工确认一次 GitHub 授权");
       }
     }
     if (/accounts\.google\.com$/i.test(location.hostname)) {
@@ -295,7 +448,9 @@ try {
     }
     await page.waitForTimeout(1000);
     }
-    if (!callbackReached) throw new Error(`${provider} OAuth 未在限定时间内回到目标站点`);
+    if (!callbackReached) {
+      throw new Error(`${provider} OAuth 未在限定时间内回到目标站点（授权点击=${connectAuthorizationState.clicks}，验证交互=${connectTurnstileState.interactionAttempted ? 1 : 0}，上游恢复=${upstreamLoginAttempted ? 1 : 0}，等待重建=${resumeTargetAfterUpstream ? 1 : 0}）`);
+    }
 
   // The callback page finishes the server-side OAuth exchange with JavaScript.
   // Let that request settle before navigating to the authoritative log page.
@@ -307,9 +462,9 @@ try {
   });
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
 
-    const accountIdentity = await readOAuthAccountIdentity(page, origin);
-    if (configuredExpectedAccountId && accountIdentity?.accountId !== configuredExpectedAccountId) {
-      throw new Error(`OAuth 登录账号不匹配，期望 ${configuredExpectedAccountId}，实际 ${accountIdentity?.accountId || "unknown"}`);
+    const observedAccountId = (await readOAuthAccountIdentity(page, origin))?.accountId ?? null;
+    if (observedAccountId !== configuredExpectedAccountId) {
+      throw new Error("OAuth 登录账号与配置不匹配");
     }
 
     const verificationDeadline = Date.now() + rule.verificationWaitMs;
@@ -326,9 +481,8 @@ try {
       provider,
       status: completed ? "logged_in" : "needs_attention",
       finalUrl: safeLogUrl(page.url()),
-      checkedIn,
       accountKey,
-      accountId: accountIdentity?.accountId ?? (configuredExpectedAccountId || null),
+      accountId: configuredExpectedAccountId,
       accountLabel,
       upstreamProvider,
       reusedExistingDailyEvidence: false,
@@ -342,7 +496,6 @@ try {
     provider,
     status: "needs_attention",
     finalUrl: page && !page.isClosed() ? safeLogUrl(page.url()) : origin,
-    checkedIn,
     accountKey,
     accountId: configuredExpectedAccountId || null,
     accountLabel,

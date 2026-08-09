@@ -6,7 +6,11 @@ import { fileURLToPath } from "node:url";
 import { publicBookmarkReport, readBookmarkPlanWithBackup } from "./bookmarks.mjs";
 import { configuredTargetSkip, launchAutomationContext, processTarget } from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
-import { loginHelperOutcome, resolveLoginRecoveryUrl } from "./login-recovery.mjs";
+import {
+  authoritativeNativeOAuthDailyCheckin,
+  loginHelperOutcome,
+  resolveLoginRecoveryUrl,
+} from "./login-recovery.mjs";
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
@@ -48,12 +52,16 @@ const ignoreNativePreflight = process.argv.includes("--ignore-native-preflight")
 const limitIndex = process.argv.indexOf("--limit");
 const offsetIndex = process.argv.indexOf("--offset");
 const originsIndex = process.argv.indexOf("--origins");
+const accountKeysIndex = process.argv.indexOf("--account-keys");
 const resumeIndex = process.argv.indexOf("--resume-report");
 const manualConfirmedIndex = process.argv.indexOf("--manual-confirmed-origins");
 const limit = limitIndex >= 0 ? Math.max(1, Number.parseInt(process.argv[limitIndex + 1], 10) || 1) : null;
 const offset = offsetIndex >= 0 ? Math.max(0, Number.parseInt(process.argv[offsetIndex + 1], 10) || 0) : 0;
 let selectedOrigins = originsIndex >= 0
   ? new Set(String(process.argv[originsIndex + 1] ?? "").split(",").map((value) => value.trim()).filter(Boolean))
+  : null;
+const selectedAccountKeys = accountKeysIndex >= 0
+  ? new Set(String(process.argv[accountKeysIndex + 1] ?? "").split(",").map((value) => value.trim()).filter(Boolean))
   : null;
 const requestedResumePath = resumeIndex >= 0 ? String(process.argv[resumeIndex + 1] ?? "").trim() : null;
 const manualConfirmedOrigins = new Set(manualConfirmedIndex >= 0
@@ -189,7 +197,14 @@ try {
     const preferredTargets = applyPreferredCandidates(plan.targets, siteState)
       .map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) }));
     const plannedTargets = [...preferredTargets, ...supplementalAccounts];
-    const resumeTargets = resumeBase && !selectedOrigins
+    if (selectedAccountKeys) {
+      const configuredAccountKeys = new Set(plannedTargets.map((target) => String(target.accountKey || "").trim()).filter(Boolean));
+      for (const accountKey of selectedAccountKeys) {
+        if (!configuredAccountKeys.has(accountKey)) throw new Error(`定向续跑账号不存在：${accountKey}`);
+      }
+    }
+    const explicitSelection = Boolean(selectedOrigins || selectedAccountKeys);
+    const resumeTargets = resumeBase && !explicitSelection
       ? plannedTargets.filter((target) => {
         const prior = compatiblePriorResult(target, resumeBase.results);
         return !prior
@@ -200,9 +215,12 @@ try {
     const originFilteredTargets = selectedOrigins
       ? resumeTargets.filter((target) => selectedOrigins.has(target.origin))
       : resumeTargets;
+    const accountFilteredTargets = selectedAccountKeys
+      ? originFilteredTargets.filter((target) => selectedAccountKeys.has(String(target.accountKey || "").trim()))
+      : originFilteredTargets;
     const selectedPlanTargets = limit
-      ? originFilteredTargets.slice(offset, offset + limit)
-      : originFilteredTargets.slice(offset);
+      ? accountFilteredTargets.slice(offset, offset + limit)
+      : accountFilteredTargets.slice(offset);
     const selectedIdentities = new Set(selectedPlanTargets.map(resultIdentity));
     const selectedTargets = preferredTargets.filter((target) => selectedIdentities.has(resultIdentity(target)));
     const selectedSupplementalAccounts = supplementalAccounts
@@ -281,7 +299,7 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
-        const targetResult = selectedOrigins && prior && TERMINAL_STATUSES.has(prior.status)
+        const targetResult = explicitSelection && prior && TERMINAL_STATUSES.has(prior.status)
           ? prior
           : await runOneTarget(context, target);
         results.push({
@@ -370,6 +388,7 @@ try {
 
         const attempts = [];
         let succeeded = false;
+        let authoritativeDailyCheckin = null;
         for (const method of methods) {
           try {
             const helperOutput = await execFileAsync(method.executable, method.args, {
@@ -381,6 +400,7 @@ try {
             const outcome = loginHelperOutcome(helperOutput.stdout);
             attempts.push({ method: method.method, ...outcome });
             if (outcome.succeeded) {
+              authoritativeDailyCheckin = authoritativeNativeOAuthDailyCheckin(method.method, outcome);
               succeeded = true;
               break;
             }
@@ -395,19 +415,34 @@ try {
             });
           }
         }
-        loginOutcomes.set(current.origin, { attempted: true, succeeded, attempts });
+        loginOutcomes.set(current.origin, {
+          attempted: true,
+          succeeded,
+          attempts,
+          ...(authoritativeDailyCheckin ? { authoritativeDailyCheckin } : {}),
+        });
       }
 
       const delayMs = Math.max(0, Number(recoveryDelays[Math.min(round, recoveryDelays.length - 1)]) || 0);
       if (delayMs > 0) await wait(delayMs);
-      const recoveryContext = await launchAutomationContext(config);
+      let recoveryContext = null;
       try {
         for (let recoveryIndex = 0; recoveryIndex < recoveryIndexes.length; recoveryIndex += 1) {
           const resultIndex = recoveryIndexes[recoveryIndex];
           const target = selectedTargets[resultIndex];
           const initialResult = results[resultIndex];
           console.log(`[recovery ${round + 1}.${recoveryIndex + 1}/${recoveryIndexes.length}] ${target.origin}`);
-          const recoveredResult = await runOneTarget(recoveryContext, target);
+          const loginRecovery = loginOutcomes.get(target.origin);
+          const helperDailyCheckin = initialResult.status === "login_required"
+            ? loginRecovery?.authoritativeDailyCheckin
+            : null;
+          let recoveredResult;
+          if (["signed", "already_signed"].includes(helperDailyCheckin?.status)) {
+            recoveredResult = helperDailyCheckin;
+          } else {
+            recoveryContext ??= await launchAutomationContext(config);
+            recoveredResult = await runOneTarget(recoveryContext, target);
+          }
           const priorHistory = initialResult.recovery?.history ?? [];
           results[resultIndex] = {
             origin: target.origin,
@@ -421,7 +456,7 @@ try {
               history: [...priorHistory, {
                 round: round + 1,
                 status: recoveredResult.status,
-                login: loginOutcomes.get(target.origin) ?? { attempted: false },
+                login: loginRecovery ?? { attempted: false },
               }],
             },
           };
@@ -431,7 +466,7 @@ try {
           });
         }
       } finally {
-        await recoveryContext.close();
+        await recoveryContext?.close();
       }
     }
 
@@ -443,7 +478,7 @@ try {
       // never replace authoritative same-day success with a flaky browser
       // startup result from another account on the same origin.
       const shouldReuse = prior && (TERMINAL_STATUSES.has(prior.status)
-        || (!selectedOrigins && !isRetryEligible(prior)));
+        || (!explicitSelection && !isRetryEligible(prior)));
       if (!shouldReuse) {
         results.push(await runSupplementalOAuthAccount(account, config, rootDirectory));
       }

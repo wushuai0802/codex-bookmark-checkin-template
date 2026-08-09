@@ -172,17 +172,20 @@ foreach ($item in $items) {
     $maximumInspectionAttempts = if ([string]$item.action -eq 'checkin') { 1 } else { 2 }
     for ($inspectionAttempt = 1; $inspectionAttempt -le $maximumInspectionAttempts -and $null -eq $inspection; $inspectionAttempt++) {
         [void](Reset-NativeChromeDebugPort $profilePath)
+        $debugPort = Get-NativeChromeDebugPort
         $openParameters = @{
-            DynamicRemoteDebuggingPort = $true
+            RemoteDebuggingPort = $debugPort
             Urls = @($url)
+            Offscreen = $true
         }
-        # Interactive providers throttle or reject fully offscreen windows.
-        # A native check-in therefore gets a normal visible Chrome window;
-        # passive WAF warmups remain offscreen to avoid unnecessary disruption.
-        if ([string]$item.action -ne 'checkin') { $openParameters.Offscreen = $true }
-        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters
-        $debugPort = Wait-NativeChromeDebugPort $profilePath 25
+        # Native preflight is unattended. Keep every real Chrome window
+        # offscreen, including action=checkin flows, so retries never interrupt
+        # the user's desktop.
+        $nativeChromeStarted = $false
         try {
+            & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters
+            $nativeChromeStarted = $true
+            $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
             $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) $inspectionMode ([int]$item.reloadOnChallengeAfterSeconds) 2>$null
             if ($LASTEXITCODE -eq 0 -and $inspectionText) {
                 $inspection = $inspectionText | ConvertFrom-Json
@@ -195,7 +198,9 @@ foreach ($item in $items) {
             }
         }
         catch { $inspection = $null }
-        Close-AutomationChrome
+        finally {
+            if ($nativeChromeStarted) { Close-AutomationChrome }
+        }
         if ($null -eq $inspection -and $inspectionAttempt -lt $maximumInspectionAttempts) { Start-Sleep -Seconds 1 }
     }
     $explicitlyConfirmed = $null -ne $inspection -and [string]$inspection.status -in @('signed', 'already_signed')

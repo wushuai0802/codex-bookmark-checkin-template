@@ -23,7 +23,9 @@ async function runPowerShell(script, args = []) {
 function completeReport(result) {
   return {
     runId: "20260723-230000", runState: "final", plannedTotal: 1,
-    processedTotal: 1, isComplete: true, results: [result],
+    processedTotal: 1, isComplete: true,
+    bookmarkSummary: { targets: [{ origin: result.origin, accountKey: result.accountKey }] },
+    results: [result],
   };
 }
 

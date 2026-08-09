@@ -2,17 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBookmarkPlanWithBackup } from "./bookmarks.mjs";
+import { TERMINAL_STATUSES } from "./retry-policy.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
 const config = JSON.parse(await fs.readFile(path.join(rootDirectory, "config", "config.json"), "utf8"));
 const latest = JSON.parse(await fs.readFile(path.join(rootDirectory, "logs", "latest.json"), "utf8"));
 const plan = await readBookmarkPlanWithBackup(config.bookmarksPath, config);
-const completed = new Set(["signed", "already_signed", "visited", "clicked"]);
 
 const items = [];
 for (const result of latest.results) {
-  if (completed.has(result.status)) continue;
+  if (TERMINAL_STATUSES.has(result.status)) continue;
   const target = plan.targets.find((candidate) => candidate.origin === result.origin);
   if (!target?.candidates?.length) continue;
   items.push({ origin: result.origin, url: target.candidates[0], status: result.status });

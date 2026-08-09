@@ -29,8 +29,9 @@ try {
     # EnablePasswordManager only removes that launch restriction; the helper
     # still never reads or prints the saved username/password.
     [void](Reset-NativeChromeDebugPort $profilePath)
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -DynamicRemoteDebuggingPort -Urls @($targetUrl.AbsoluteUri)
-    $debugPort = Wait-NativeChromeDebugPort $profilePath 25
+    $debugPort = Get-NativeChromeDebugPort
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri)
+    $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
     $loginSucceeded = $false
     for ($loginAttempt = 1; $loginAttempt -le 3 -and -not $loginSucceeded; $loginAttempt++) {
         & $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue
