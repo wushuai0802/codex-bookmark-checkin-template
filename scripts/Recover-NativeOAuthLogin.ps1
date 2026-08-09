@@ -100,23 +100,82 @@ function Close-AutomationChrome {
     }
 }
 
-$nodeExitCode = 1
-try {
-    [void](Reset-NativeChromeDebugPort $profilePath)
-    $openParameters = @{
-        Offscreen = $true
-        DynamicRemoteDebuggingPort = $true
-        Urls = @($targetUrl.AbsoluteUri)
-        UserDataDirOverride = $profilePath
+function Invoke-NativeOAuthRound {
+    $roundExitCode = 1
+    $roundOutput = @()
+    try {
+        [void](Reset-NativeChromeDebugPort $profilePath)
+        $debugPort = Get-NativeChromeDebugPort
+        $openParameters = @{
+            Offscreen = $true
+            RemoteDebuggingPort = $debugPort
+            Urls = @($targetUrl.AbsoluteUri)
+            UserDataDirOverride = $profilePath
+        }
+        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters | Out-Null
+        $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
+        $roundOutput = @(& $node (Join-Path $root 'src\native-oauth-login.mjs') $debugPort $originValue $Provider $ExpectedAccountId $AccountKey $AccountLabel $UpstreamProvider $targetUrl.AbsoluteUri)
+        $roundExitCode = $LASTEXITCODE
     }
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters | Out-Null
-    $debugPort = Wait-NativeChromeDebugPort $profilePath 25
-    $output = & $node (Join-Path $root 'src\native-oauth-login.mjs') $debugPort $originValue $Provider $ExpectedAccountId $AccountKey $AccountLabel $UpstreamProvider $targetUrl.AbsoluteUri
-    $nodeExitCode = $LASTEXITCODE
-    if ($output) { Write-Output $output }
-}
-finally {
-    Close-AutomationChrome
+    finally {
+        Close-AutomationChrome
+    }
+    [pscustomobject]@{ ExitCode = $roundExitCode; Output = @($roundOutput) }
 }
 
-exit $nodeExitCode
+function Convert-PlainOAuthFailure([object]$PlainResult) {
+    $reason = if ($PlainResult -and $PlainResult.reason) {
+        [string]$PlainResult.reason
+    }
+    else {
+        '原生 Chrome 后台 OAuth 恢复未完成'
+    }
+    [pscustomobject]@{
+        origin = $originValue
+        provider = $Provider
+        status = 'needs_attention'
+        finalUrl = $originValue
+        accountKey = $AccountKey
+        accountId = $ExpectedAccountId
+        accountLabel = $AccountLabel
+        upstreamProvider = $UpstreamProvider
+        reason = $reason.Substring(0, [Math]::Min(240, $reason.Length))
+    } | ConvertTo-Json -Compress
+}
+
+$firstRound = Invoke-NativeOAuthRound
+if ($firstRound.ExitCode -eq 0) {
+    if ($firstRound.Output) { Write-Output $firstRound.Output }
+    exit 0
+}
+
+# Remote debugging can itself cause a managed challenge even when
+# navigator.webdriver is false.  Retry Linux DO once in an ordinary off-screen
+# Chrome window and interact only with exact accessibility controls.  No OAuth
+# URL, callback code, cookie, token, or page body leaves that process.
+if ($Provider -eq 'LinuxDO') {
+    $plainResult = $null
+    $plainExitCode = 1
+    try {
+        $plainOutput = @(& (Join-Path $PSScriptRoot 'Invoke-PlainOAuthAccessibility.ps1') `
+            -Origin $originValue -Provider $Provider -UpstreamProvider $UpstreamProvider `
+            -LoginUrl $targetUrl.AbsoluteUri -AutomationUserDataDir $profilePath)
+        $plainExitCode = $LASTEXITCODE
+        if ($plainOutput.Count -gt 0) {
+            $plainResult = $plainOutput[-1] | ConvertFrom-Json
+        }
+    }
+    catch {
+        $plainResult = [pscustomobject]@{ reason = '原生 Chrome 后台 OAuth 恢复未完成' }
+    }
+    if ($plainExitCode -eq 0 -and $plainResult.status -eq 'callback_reached') {
+        $verificationRound = Invoke-NativeOAuthRound
+        if ($verificationRound.Output) { Write-Output $verificationRound.Output }
+        exit $verificationRound.ExitCode
+    }
+    Write-Output (Convert-PlainOAuthFailure $plainResult)
+    exit 2
+}
+
+if ($firstRound.Output) { Write-Output $firstRound.Output }
+exit $firstRound.ExitCode

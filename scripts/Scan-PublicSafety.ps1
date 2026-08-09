@@ -6,7 +6,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $git = Get-Command git -ErrorAction SilentlyContinue
 
 if ($git -and (Test-Path -LiteralPath (Join-Path $root '.git'))) {
-    $relativeFiles = @(& $git.Source -C $root ls-files)
+    # Scan both committed files and new, non-ignored files so a pre-commit
+    # safety check cannot miss a secret introduced in an untracked file.
+    $relativeFiles = @(& $git.Source -C $root ls-files --cached --others --exclude-standard)
 }
 else {
     $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {

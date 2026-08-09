@@ -1,3 +1,5 @@
+import { safeErrorMessage } from "./security.mjs";
+
 const LOGIN_HELPER_STATUSES = new Set([
   "logged_in",
   "needs_attention",
@@ -10,6 +12,30 @@ const LOGIN_HELPER_STATUSES = new Set([
 ]);
 
 const LOGIN_URL_PATTERN = /\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)|#\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i;
+const TERMINAL_DAILY_CHECKIN_STATUSES = new Set(["signed", "already_signed"]);
+
+function safeTerminalDailyCheckin(value) {
+  const status = String(value?.status ?? "");
+  if (!TERMINAL_DAILY_CHECKIN_STATUSES.has(status)) return null;
+  const reason = safeErrorMessage(String(value?.reason || "登录助手确认今日签到完成")).slice(0, 240);
+  const rawEvidence = value?.evidence;
+  const evidence = {};
+  if (rawEvidence && typeof rawEvidence === "object" && !Array.isArray(rawEvidence)) {
+    const source = String(rawEvidence.source ?? "").trim();
+    if (/^[a-z0-9_-]{1,40}$/i.test(source)) evidence.source = source;
+    const createdAt = String(rawEvidence.createdAt ?? "").trim();
+    if (createdAt && Number.isFinite(Date.parse(createdAt))) evidence.createdAt = new Date(createdAt).toISOString();
+    const rewardAmount = Number(rawEvidence.rewardAmount);
+    if (Number.isFinite(rewardAmount) && rewardAmount >= 0 && rewardAmount <= 1_000_000_000) {
+      evidence.rewardAmount = rewardAmount;
+    }
+  }
+  return {
+    status,
+    reason,
+    ...(Object.keys(evidence).length > 0 ? { evidence } : {}),
+  };
+}
 
 export function parseLoginHelperResult(text) {
   const lines = String(text ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -41,11 +67,18 @@ export function loginHelperOutcome(text, fallback = "failed") {
     timeout: "登录恢复流程超时",
     failed: "登录恢复流程失败",
   };
+  const dailyCheckin = status === "logged_in" ? safeTerminalDailyCheckin(value?.dailyCheckin) : null;
   return {
     succeeded: status === "logged_in",
     status,
     diagnostic: messages[status] ?? messages.failed,
+    ...(dailyCheckin ? { dailyCheckin } : {}),
   };
+}
+
+export function authoritativeNativeOAuthDailyCheckin(method, outcome) {
+  if (method !== "native_oauth" || outcome?.succeeded !== true) return null;
+  return safeTerminalDailyCheckin(outcome.dailyCheckin);
 }
 
 function sameOriginHttpsUrl(value, expectedOrigin) {

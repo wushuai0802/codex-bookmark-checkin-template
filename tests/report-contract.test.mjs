@@ -18,7 +18,10 @@ async function previewReport(report, runnerStatus = "completed", configOverride 
   const reportPath = path.join(directory, "report.json");
   const configPath = path.join(directory, "config.json");
   try {
-    await fs.writeFile(reportPath, JSON.stringify(report), "utf8");
+    const reportWithContract = report.runState === "final" && !report.bookmarkSummary
+      ? { ...report, bookmarkSummary: { targets: report.results.map(({ origin, accountKey }) => ({ origin, accountKey })) } }
+      : report;
+    await fs.writeFile(reportPath, JSON.stringify(reportWithContract), "utf8");
     if (configOverride) await fs.writeFile(configPath, JSON.stringify(configOverride), "utf8");
     const reporterArguments = [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -217,4 +220,21 @@ test("站点故障在通知中显示为自动重试而不是人工关注", async
   assert.match(report.summary, /待自动重试 1 个：/);
   assert.match(report.summary, /offline\.example\.test：站点暂时不可用，计划/);
   assert.doesNotMatch(report.summary, /需关注/);
+});
+
+test("伪造相同数量的重复 signed 结果不能冒充完整报告", async () => {
+  const targets = Array.from({ length: 52 }, (_, index) => ({ origin: `https://site-${index}.example` }));
+  const report = await previewReport({
+    runId: "20260723-duplicate-results",
+    runState: "final",
+    plannedTotal: targets.length,
+    processedTotal: targets.length,
+    isComplete: true,
+    bookmarkSummary: { targets },
+    results: targets.map(() => ({ origin: targets[0].origin, status: "signed" })),
+  });
+
+  assert.equal(report.status, "unconfirmed");
+  assert.equal(report.isComplete, false);
+  assert.match(report.summary, /任务未完成/);
 });

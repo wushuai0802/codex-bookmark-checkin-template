@@ -11,6 +11,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'ResultIdentity.ps1')
 $localConfigPath = Join-Path $root 'config\config.json'
 $defaultsPath = Join-Path $root 'config\defaults.json'
 $effectiveConfigPath = if ($ConfigPath) { $ConfigPath } elseif (Test-Path -LiteralPath $localConfigPath) { $localConfigPath } else { $defaultsPath }
@@ -89,12 +90,28 @@ $statuses = @($reportingResults | ForEach-Object { [string]$_.status })
 $reportRunState = if ($null -ne $report) { [string]$report.runState } else { '' }
 $plannedTotal = if ($null -ne $report -and $null -ne $report.plannedTotal) { [int]$report.plannedTotal } else { $results.Count }
 $processedTotal = if ($null -ne $report -and $null -ne $report.processedTotal) { [int]$report.processedTotal } else { $results.Count }
+$reportIdentityContractValid = $false
+if ($null -ne $report -and $null -ne $report.bookmarkSummary -and $null -ne $report.bookmarkSummary.targets) {
+    try {
+        $targetIdentityValues = @($report.bookmarkSummary.targets | ForEach-Object { Get-CanonicalResultIdentity $_ })
+        $targetIdentities = @($targetIdentityValues | Sort-Object -Unique)
+        $resultIdentityValues = @($results | ForEach-Object { Get-CanonicalResultIdentity $_ })
+        $resultIdentities = @($resultIdentityValues | Sort-Object -Unique)
+        $reportIdentityContractValid = $targetIdentityValues.Count -eq $plannedTotal `
+            -and $targetIdentities.Count -eq $targetIdentityValues.Count `
+            -and $resultIdentityValues.Count -eq $plannedTotal `
+            -and $resultIdentities.Count -eq $resultIdentityValues.Count `
+            -and @(Compare-Object -ReferenceObject $targetIdentities -DifferenceObject $resultIdentities).Count -eq 0
+    }
+    catch { $reportIdentityContractValid = $false }
+}
 $isCompleteFinalReport = $null -ne $report `
     -and $reportRunState -eq 'final' `
     -and $report.isComplete -eq $true `
     -and $plannedTotal -gt 0 `
     -and $processedTotal -ge $plannedTotal `
-    -and $results.Count -ge $plannedTotal
+    -and $results.Count -ge $plannedTotal `
+    -and $reportIdentityContractValid
 $isPartialReport = $null -ne $report -and -not $isCompleteFinalReport
 $logicalPlannedTotal = if ($null -ne $report -and $null -ne $report.bookmarkSummary -and $null -ne $report.bookmarkSummary.targets) {
     @($report.bookmarkSummary.targets | ForEach-Object { Get-LogicalSiteKey $_ } | Select-Object -Unique).Count

@@ -16,6 +16,7 @@ trap {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'ResultIdentity.ps1')
 $configPath = Join-Path $root 'config\config.json'
 if (-not (Test-Path -LiteralPath $configPath)) {
     [ordered]@{
@@ -92,8 +93,7 @@ function Get-PlanTargetIdentity([object]$Target, [bool]$ApplyConfiguredAccountId
         $identityProperty = $config.oauthAccountIdentities.PSObject.Properties[$origin]
         if ($null -ne $identityProperty) { $accountKey = [string]$identityProperty.Value.accountKey }
     }
-    if ($accountKey) { return "$origin#account=$accountKey" }
-    return $origin
+    return Get-CanonicalResultIdentity ([pscustomobject]@{ origin = $origin; accountKey = $accountKey })
 }
 
 $currentPlanIdentities = if ($currentPlan) { @(
@@ -102,12 +102,19 @@ $currentPlanIdentities = if ($currentPlan) { @(
 ) | Where-Object { $_ } | Sort-Object -Unique } else { @() }
 $latestPlanTargets = if ($latest -and $latest.bookmarkSummary) { @($latest.bookmarkSummary.targets) } else { @() }
 $latestPlanIdentities = @($latestPlanTargets | ForEach-Object { Get-PlanTargetIdentity $_ $false } | Where-Object { $_ } | Sort-Object -Unique)
+$latestResultIdentityValues = if ($latest) { @($latest.results | ForEach-Object { Get-CanonicalResultIdentity $_ }) } else { @() }
+$latestResultIdentities = @($latestResultIdentityValues | Sort-Object -Unique)
 $currentPlanIdentityReady = $null -ne $currentPlannedTotal -and $currentPlanIdentities.Count -eq $currentPlannedTotal
 $latestPlanIdentityReady = $latest -and $latestPlanIdentities.Count -eq $plannedTotal
+$latestResultIdentityReady = $latest `
+    -and $latestResultIdentityValues.Count -eq $plannedTotal `
+    -and $latestResultIdentities.Count -eq $latestResultIdentityValues.Count
 $latestMatchesCurrentPlan = $currentPlanIdentityReady `
     -and $latestPlanIdentityReady `
+    -and $latestResultIdentityReady `
     -and $currentPlannedTotal -eq $plannedTotal `
-    -and @(Compare-Object -ReferenceObject $currentPlanIdentities -DifferenceObject $latestPlanIdentities).Count -eq 0
+    -and @(Compare-Object -ReferenceObject $currentPlanIdentities -DifferenceObject $latestPlanIdentities).Count -eq 0 `
+    -and @(Compare-Object -ReferenceObject $currentPlanIdentities -DifferenceObject $latestResultIdentities).Count -eq 0
 $latestResultValid = $latestRunToday `
     -and [string]$latest.runState -eq 'final' `
     -and $latest.isComplete -eq $true `
@@ -120,25 +127,39 @@ $notificationReady = $config.notification.mode -in @($null, '', 'none') -or (
 )
 $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
 $dataPrefix = $dataRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-$supplementalProfiles = @($supplementalAccounts | ForEach-Object {
-    $raw = [string]$_.automationUserDataDir
+function Get-OAuthProfileHealth([string]$RawPath, [string]$AccountKey, [string]$Kind) {
+    $raw = [string]$RawPath
     $resolved = if ($raw) {
         if ([System.IO.Path]::IsPathRooted($raw)) { [System.IO.Path]::GetFullPath($raw) }
         else { [System.IO.Path]::GetFullPath((Join-Path $root $raw)) }
     } else { $null }
     $valid = $resolved -and $resolved.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-    [pscustomobject]@{
-        accountKey = [string]$_.accountKey
+    return [pscustomobject]@{
+        accountKey = $AccountKey
+        kind = $Kind
         path = $resolved
         valid = [bool]$valid
         present = $valid -and (Test-Path -LiteralPath (Join-Path $resolved 'Local State'))
     }
+}
+$globalProfile = Get-OAuthProfileHealth ([string]$config.automationUserDataDir) 'automationUserDataDir' 'global'
+$primaryIdentityProfiles = @($config.oauthAccountIdentities.PSObject.Properties | ForEach-Object {
+    $identity = $_.Value
+    if (-not [string]::IsNullOrWhiteSpace([string]$identity.automationUserDataDir)) {
+        Get-OAuthProfileHealth ([string]$identity.automationUserDataDir) ([string]$identity.accountKey) 'primary'
+    }
 })
-$configuredSupplementalProfilePaths = @($supplementalProfiles | Where-Object { $_.valid } | ForEach-Object { [string]$_.path })
+$supplementalProfiles = @($supplementalAccounts | ForEach-Object {
+    Get-OAuthProfileHealth ([string]$_.automationUserDataDir) ([string]$_.accountKey) 'supplemental'
+})
+$oauthAccountProfiles = @($primaryIdentityProfiles) + @($supplementalProfiles)
+$reservedOAuthProfiles = @($globalProfile) + @($oauthAccountProfiles)
+$duplicateOAuthProfileGroups = @($reservedOAuthProfiles | Where-Object { $_.valid } | Group-Object { $_.path.ToLowerInvariant() } | Where-Object { $_.Count -gt 1 })
+$configuredOAuthProfilePathKeys = @($reservedOAuthProfiles | Where-Object { $_.valid } | ForEach-Object { $_.path.ToLowerInvariant() } | Sort-Object -Unique)
 $accountsRoot = Join-Path $root 'data\accounts'
-$orphanSupplementalProfiles = @(Get-ChildItem -LiteralPath $accountsRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+$orphanOAuthProfiles = @(Get-ChildItem -LiteralPath $accountsRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
     $candidate = [System.IO.Path]::GetFullPath((Join-Path $_.FullName 'chrome-user-data'))
-    (Test-Path -LiteralPath (Join-Path $candidate 'Local State')) -and $configuredSupplementalProfilePaths -notcontains $candidate
+    (Test-Path -LiteralPath (Join-Path $candidate 'Local State')) -and $configuredOAuthProfilePathKeys -notcontains $candidate.ToLowerInvariant()
 } | ForEach-Object { $_.Name })
 $scheduleValid = [string]$config.schedule -match '^([01]\d|2[0-3]):[0-5]\d$'
 $claimFresh = $true
@@ -171,8 +192,10 @@ $checks = [ordered]@{
     configPresent = $true
     bookmarksReadable = Test-Path -LiteralPath ([string]$config.bookmarksPath)
     chromeExecutablePresent = Test-Path -LiteralPath ([string]$config.chromeExecutable)
-    automationProfilePresent = Test-Path -LiteralPath (Join-Path ([string]$config.automationUserDataDir) 'Local State')
+    automationProfilePresent = [bool]$globalProfile.present
+    oauthIdentityProfilesPresent = @($primaryIdentityProfiles | Where-Object { -not $_.present }).Count -eq 0
     supplementalProfilesPresent = @($supplementalProfiles | Where-Object { -not $_.present }).Count -eq 0
+    oauthAccountProfilesUnique = $duplicateOAuthProfileGroups.Count -eq 0
     notificationReady = [bool]$notificationReady
     notificationOutboxClean = $notificationQuarantinedCount -eq 0 -and $notificationPendingCount -eq 0
     scheduleValid = [bool]$scheduleValid
@@ -183,7 +206,8 @@ $checks = [ordered]@{
     supervisorHeartbeatFresh = if ($scheduledTask) { $true } else { [bool]$supervisorHeartbeatFresh }
     schedulerClaimFresh = [bool]$claimFresh
     runtimeAclPrivate = [bool]$runtimeAclPrivate
-    noOrphanSupplementalProfiles = $orphanSupplementalProfiles.Count -eq 0
+    noOrphanOAuthProfiles = $orphanOAuthProfiles.Count -eq 0
+    noOrphanSupplementalProfiles = $orphanOAuthProfiles.Count -eq 0
     stalePrivateTempClean = $staleTempCount -eq 0
     latestResultPresent = [bool]$latest
     latestResultValid = [bool]$latestResultValid
@@ -215,15 +239,18 @@ $result = [ordered]@{
     currentPlanMatchesLatest = [bool]$latestMatchesCurrentPlan
     currentPlanIdentityCount = $currentPlanIdentities.Count
     latestPlanIdentityCount = $latestPlanIdentities.Count
+    latestResultIdentityCount = $latestResultIdentities.Count
     latestProblemCount = $problemCount
     schedulerAttemptsToday = if ($schedulerState) { [int]$schedulerState.attemptsToday } else { 0 }
     schedulerNextEligibleAt = if ($schedulerState -and $schedulerState.nextEligibleAt) { try { ([datetime]$schedulerState.nextEligibleAt).ToString('o') } catch { [string]$schedulerState.nextEligibleAt } } else { $null }
     schedulerReportComplete = if ($schedulerState) { [bool]$schedulerState.reportComplete } else { $false }
     notificationQuarantinedCount = $notificationQuarantinedCount
     notificationPendingCount = $notificationPendingCount
-    orphanSupplementalProfiles = $orphanSupplementalProfiles
+    orphanOAuthProfiles = $orphanOAuthProfiles
+    orphanSupplementalProfiles = $orphanOAuthProfiles
     stalePrivateTempCount = $staleTempCount
     trackedSiteCount = if ($siteState -and $siteState.sites) { @($siteState.sites.PSObject.Properties).Count } else { 0 }
+    oauthIdentityProfiles = $primaryIdentityProfiles
     supplementalProfiles = $supplementalProfiles
     checks = $checks
 }

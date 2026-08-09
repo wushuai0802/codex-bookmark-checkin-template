@@ -73,17 +73,48 @@ test("原生保存密码恢复显式启用 Chrome 账户密码库", async () => 
   assert.match(syncScript, /SourceName\s*=\s*'Login Data For Account'[\s\S]*TargetName\s*=\s*'Login Data'/);
 });
 
-test("原生交互签到使用可见窗口和最长两分钟检查器", async () => {
+test("原生预热规则使用被动等待或离屏签到且最长检查两分钟", async () => {
+  const publicRules = JSON.parse(await fs.readFile(path.join(root, "config", "site-rules.public.json"), "utf8"));
   const preflightScript = await fs.readFile(path.join(root, "scripts", "Prepare-NativeWafSession.ps1"), "utf8");
   const inspector = await fs.readFile(path.join(root, "src", "native-browser-inspect.mjs"), "utf8");
-  assert.match(preflightScript, /if\s*\(\[string\]\$item\.action\s+-ne\s+'checkin'\)\s*\{\s*\$openParameters\.Offscreen\s*=\s*\$true\s*\}/);
+
+  assert.deepEqual(publicRules.nativeWafPreflightUrls, [
+    { url: "https://piggo.me/attendance.php", waitSeconds: 45, passiveOnly: true },
+    { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 30, passiveOnly: true },
+  ]);
+  assert.deepEqual(publicRules.nativeChallengePreflight.slice(0, 2), [
+    { url: "https://audiences.me/attendance.php", waitSeconds: 90, action: "checkin" },
+    { url: "https://ourbits.club/attendance.php", waitSeconds: 120, action: "checkin" },
+  ]);
+  assert.match(preflightScript, /Open-PlainLoginChrome\.ps1'\) -Offscreen -Urls/);
+  assert.match(preflightScript, /Offscreen\s*=\s*\$true/);
+  assert.doesNotMatch(preflightScript, /action\s+-ne\s+'checkin'[\s\S]*?Offscreen/);
   assert.match(inspector, /Math\.min\(120,/);
   assert.match(inspector, /nativeCheckinActionOrigins = new Set\(\[/);
-  assert.match(inspector, /https:\/\/new\.bxacc\.xyz/);
+  assert.match(inspector, /https:\/\/audiences\.me/);
+  assert.match(inspector, /https:\/\/ourbits\.club/);
   assert.match(inspector, /nativeCheckinActionOrigins\.has\(expectedOrigin\)/);
+  assert.match(inspector, /findNativeCheckinAction\(page/);
+  assert.match(inspector, /scoreActionText\(candidate\.text\)/);
+  assert.match(inspector, /new URL\(candidate\.formAction\)\.origin === expectedOrigin/);
+  assert.match(inspector, /findNativeCheckinAction\(page, "challenge-submit"\)/);
+  assert.match(inspector, /!checkinStarted && snapshot\.challengeSelectors/);
+  assert.match(inspector, /candidate\.id === "checkin-submit"/);
+  assert.match(inspector, /challengeSubmitAttempted\s*=\s*true/);
   assert.doesNotMatch(inspector, /lastCheckboxClickAt/);
   assert.match(preflightScript, /reloadOnChallengeAfterSeconds/);
   assert.match(preflightScript, /\$inspectionMode \(\[int\]\$item\.reloadOnChallengeAfterSeconds\)/);
   assert.match(inspector, /challengeReloaded/);
   assert.match(inspector, /page\.reload\(/);
+});
+
+test("斑马验证码过期只重启一次且成功状态来自 API", async () => {
+  const inspector = await fs.readFile(path.join(root, "src", "native-browser-inspect.mjs"), "utf8");
+  assert.match(inspector, /BMAPI_EXPIRED_CHALLENGE/);
+  assert.match(inspector, /验证码\|驗證碼/);
+  assert.match(inspector, /重新\(\?:验证\|驗證\)/);
+  assert.match(inspector, /checkinRestartCount\s*<\s*1/);
+  assert.match(inspector, /checkinRestartCount\s*\+=\s*1/);
+  assert.match(inspector, /state\s*=\s*bmapiState\s*\?\?/);
+  assert.match(inspector, /getBmapiCheckinState\(page\)/);
 });

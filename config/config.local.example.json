@@ -11,7 +11,8 @@
     "https://example.com": {
       "accountKey": "example-primary",
       "accountId": "12345",
-      "accountLabel": "Example primary"
+      "accountLabel": "Example primary",
+      "automationUserDataDir": "data/accounts/example-primary/chrome-user-data"
     }
   },
   "oauthExpectedAccountIds": {

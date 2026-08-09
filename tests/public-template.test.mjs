@@ -68,13 +68,11 @@ test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async (
   assert.equal(rules.loginAsCheckinOrigins.includes("https://agentrouter.org"), false);
   assert.equal(rules.automaticOAuthProviders["https://agentrouter.org"], "LinuxDO");
   assert.equal(rules.oauthLoginUrls["https://agentrouter.org"], "https://agentrouter.org/login");
-  assert.equal(rules.extendedDiscoveryOrigins.includes("https://new.bxacc.xyz"), true);
-  assert.equal(rules.automaticOAuthProviders["https://new.bxacc.xyz"], "LinuxDO");
-  assert.equal(rules.oauthLoginUrls["https://new.bxacc.xyz"], "https://new.bxacc.xyz/sign-in");
-  assert.deepEqual(
-    rules.nativeChallengePreflight.find((entry) => entry.url === "https://new.bxacc.xyz/profile"),
-    { url: "https://new.bxacc.xyz/profile", waitSeconds: 120, action: "checkin" },
-  );
+  assert.equal(rules.disabledCheckinOrigins.includes("https://new.bxacc.xyz"), true);
+  assert.equal(rules.extendedDiscoveryOrigins.includes("https://new.bxacc.xyz"), false);
+  assert.equal(rules.automaticOAuthProviders["https://new.bxacc.xyz"], undefined);
+  assert.equal(rules.oauthLoginUrls["https://new.bxacc.xyz"], undefined);
+  assert.equal(rules.nativeChallengePreflight.some((entry) => entry.url.includes("new.bxacc.xyz")), false);
   const browser = await fs.readFile(new URL("../src/browser.mjs", import.meta.url), "utf8");
   assert.match(browser, /\(\?:用户\\s\*\)\?ID\\s\*\[:：\]\?\\s\*\(\\d\+\)/);
   assert.match(browser, /const discoveredApiResult = await tryNewApiCheckin\(page\)/);
@@ -249,6 +247,11 @@ test("非 Git 安全扫描忽略依赖环境和本地运行数据", async () => 
   } finally {
     await fs.rm(sandbox, { recursive: true, force: true });
   }
+});
+
+test("Git 安全扫描覆盖尚未跟踪的公开候选文件", async () => {
+  const scanner = await fs.readFile(new URL("../scripts/Scan-PublicSafety.ps1", import.meta.url), "utf8");
+  assert.match(scanner, /ls-files --cached --others --exclude-standard/);
 });
 
 test("安装配置优先使用 PowerShell 7，5.1 仅作为可用回退", async () => {
