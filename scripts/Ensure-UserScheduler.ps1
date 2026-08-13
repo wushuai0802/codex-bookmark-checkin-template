@@ -46,8 +46,18 @@ try {
             }
             if ($processes.Count -eq 0 -or -not $fresh) {
                 $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-                Start-Process -FilePath $shell -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$schedulerScript`"") -WindowStyle Hidden
-                Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗已重启调度器。" -Encoding UTF8
+                $launched = Start-Process -FilePath $shell -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$schedulerScript`"") -WindowStyle Hidden -PassThru
+                $started = $false
+                for ($attempt = 0; $attempt -lt 10; $attempt++) {
+                    Start-Sleep -Milliseconds 500
+                    $candidate = Get-CimInstance Win32_Process -Filter "ProcessId = $($launched.Id)" -ErrorAction SilentlyContinue
+                    if ($null -ne $candidate) { $started = $true; break }
+                }
+                if ($started) {
+                    Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗已启动调度器（PID=$($launched.Id)）。" -Encoding UTF8
+                } else {
+                    Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗启动调度器失败（启动 PID=$($launched.Id)）。" -Encoding UTF8
+                }
             }
         }
         catch {

@@ -68,10 +68,14 @@ export function loginHelperOutcome(text, fallback = "failed") {
     failed: "登录恢复流程失败",
   };
   const dailyCheckin = status === "logged_in" ? safeTerminalDailyCheckin(value?.dailyCheckin) : null;
+  const diagnosticCode = ["invalid_credential", "credential_missing", "no_saved_credential"].includes(status)
+    ? status
+    : null;
   return {
     succeeded: status === "logged_in",
     status,
     diagnostic: messages[status] ?? messages.failed,
+    ...(diagnosticCode ? { diagnosticCode } : {}),
     ...(dailyCheckin ? { dailyCheckin } : {}),
   };
 }

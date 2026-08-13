@@ -34,6 +34,25 @@ test("调度器 claim 前异常也进入统一失败状态与通知链", async (
     "异常后应先退出 running_checkin heartbeat，再尝试通知");
 });
 
+test("仅剩凭据拒绝等人工关注时调度器不会每小时空转", async () => {
+  const scheduler = await fs.readFile(path.join(root, "scripts", "Start-UserScheduler.ps1"), "utf8");
+  assert.match(scheduler, /\$automaticRetryProblems/);
+  assert.match(scheduler, /AutomaticRetryCount/);
+  assert.match(scheduler, /automaticRetryCount -eq 0/);
+  assert.match(scheduler, /\$reportState\.AutomaticRetryCount -eq 0/);
+  assert.match(scheduler, /\$automaticRetryCount\s*=\s*if\s*\(\$null -ne \$state\.automaticRetryCount\)/);
+  assert.match(scheduler, /\$hasDeferredWakeups\s*=\s*@\(\$deferredWakeups\)\.Count -gt 0/);
+  assert.match(scheduler, /automaticRetryCount\s*=\s*\$state\.automaticRetryCount/);
+  assert.match(scheduler, /\$manualAttentionOnly\s*=\s*\$latestReportState\.Valid/);
+  assert.match(scheduler, /-not \$manualAttentionOnly\s+-and\s+-not \(Test-SchedulerWaiting/);
+});
+
+test("任务级重试不会为空转凭据拒绝站点", async () => {
+  const runner = await fs.readFile(path.join(root, "scripts", "Run-Checkin.ps1"), "utf8");
+  assert.match(runner, /status -eq 'needs_attention'/);
+  assert.match(runner, /retryCause -eq 'invalid_credential'/);
+});
+
 test("同一调度故障使用稳定哈希和冷却避免每分钟重复通知", async () => {
   const scheduler = await schedulerSource();
   assert.match(scheduler, /Get-SchedulerErrorHash\s+\$safeMessage/);
@@ -81,15 +100,32 @@ test("延迟站点用身份和时间窗令牌获得有界补跑机会", async ()
   assert.match(scheduler, /deferredWakeDate/);
   assert.match(scheduler, /deferredWakeTokens/);
   assert.match(scheduler, /Write-SchedulerClaim\s+\$runStartedAt\s+\$deferredWakeups/);
-  assert.match(scheduler, /attemptsToday\s+-ge\s+\$maxAttempts\s+-and\s+@\(\$deferredWakeups\)\.Count\s+-eq\s+0/);
+  assert.match(scheduler, /\$attemptedToday\s*-and\s+\[int\]\$state\.attemptsToday\s+-ge\s+\$maxAttempts\s+-and\s+-not \$hasDeferredWakeups/);
+  assert.match(scheduler, /\$wakeTokens\s*=\s*@\(\s*@\(\s*@\(\$wakeTokens\)\s*@\(\$deferredWakeups/);
+  assert.doesNotMatch(scheduler, /\$wakeTokens\s*\+\s*@\(\$deferredWakeups/);
+  assert.match(scheduler, /deferredWakeTokens\s*=\s*@\(\$wakeTokens\)/);
+  assert.match(scheduler, /function Get-NormalizedDeferredWakeTokens/);
+  assert.match(scheduler, /function Repair-SchedulerWakeTokens/);
+  assert.match(scheduler, /Repair-SchedulerWakeTokens\s*\r?\n\s*Write-SchedulerLog/);
+  assert.match(scheduler, /-split '\\?\|', 4/);
 });
 
-test("外部报告会通知且同 runId 可恢复被异常清除的完成状态", async () => {
+test("外部报告仅在 runId 变化或有效状态被清除时再次通知", async () => {
   const scheduler = await schedulerSource();
+  assert.match(scheduler, /\[string\]\$state\.lastRunId\s+-ne\s+\[string\]\$latestReportState\.RunId/);
   assert.match(scheduler, /\$state\.reportValid\s+-ne\s+\$true/);
-  assert.match(scheduler, /\$state\.reportComplete\s+-ne\s+\$true/);
+  assert.doesNotMatch(scheduler, /\$hasNewExternalReport\s*=\s*\$latestReportState\.Valid[\s\S]*?\$state\.reportComplete\s+-ne\s+\$true/);
   assert.match(scheduler, /\$reporterScript\s+-RunnerStatus completed[\s\S]*?-ReportPath\s+\$latestReportPath/);
   assert.match(scheduler, /外部续跑报告通知暂未送达/);
+});
+
+test("外部报告元数据变化时同步调度状态但不重复通知", async () => {
+  const scheduler = await schedulerSource();
+  assert.match(scheduler, /\$reportStateNeedsSync\s*=\s*\$latestReportState\.Valid/);
+  assert.match(scheduler, /\[int\]\$state\.automaticRetryCount\s+-ne\s+\[int\]\$latestReportState\.AutomaticRetryCount/);
+  assert.match(scheduler, /自动重试=\$\(\$latestReportState\.AutomaticRetryCount\)/);
+  assert.match(scheduler, /if \(\$hasNewExternalReport\)/);
+  assert.match(scheduler, /\$state\s*=\s*Read-SchedulerState\s*\r?\n\s*\$deferredWakeups\s*=\s*Get-UnclaimedDeferredWakeups/);
 });
 
 test("调度器拒绝结果身份重复或缺失的伪完整报告", async () => {

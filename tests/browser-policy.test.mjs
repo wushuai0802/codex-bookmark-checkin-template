@@ -6,6 +6,7 @@ import {
   configuredLoginCompletion,
   configuredTargetSkip,
   dismissBlockingModal,
+  isTransientNavigationFailure,
   preferCandidateResult,
   shouldTryGenericNewApiCheckin,
   turnstileWaitMs,
@@ -13,6 +14,12 @@ import {
   waitForActiveQuotaBenefit,
   waitForQuotaRequestField,
 } from "../src/browser.mjs";
+
+test("导航超时和连接中断会进入站点故障自动重试", () => {
+  assert.equal(isTransientNavigationFailure(new Error("page.goto: Timeout 20000ms exceeded")), true);
+  assert.equal(isTransientNavigationFailure(new Error("page.goto: net::ERR_CONNECTION_CLOSED")), true);
+  assert.equal(isTransientNavigationFailure(new Error("普通页面断言失败")), false);
+});
 
 test("候选弱结果不会覆盖登录、挑战或延迟状态", () => {
   for (const status of ["login_required", "interactive_challenge", "managed_challenge_timeout", "deferred"]) {

@@ -42,6 +42,39 @@ function Write-SchedulerStateDocument([object]$value) {
     Move-Item -LiteralPath $temporary -Destination $statePath -Force
 }
 
+function Get-NormalizedDeferredWakeTokens([object]$value) {
+    $normalized = @()
+    foreach ($candidate in @($value)) {
+        $token = ([string]$candidate).Trim()
+        if (-not $token) { continue }
+        $parts = @($token -split '\|', 4)
+        if ($parts.Count -ne 4) { continue }
+        try {
+            $originValue = ([string]$parts[0] -split '#account=', 2)[0]
+            $originUri = [uri]$originValue
+            if (-not $originUri.IsAbsoluteUri -or $originUri.Scheme -ne 'https') { continue }
+        }
+        catch { continue }
+        $nextEligible = [datetimeoffset]::MinValue
+        if (-not [datetimeoffset]::TryParse([string]$parts[1], [ref]$nextEligible)) { continue }
+        $sequence = 0
+        if (-not [int]::TryParse([string]$parts[2], [ref]$sequence) -or $sequence -lt 0) { continue }
+        if ([string]$parts[3] -notmatch '^[a-z0-9_.-]+$') { continue }
+        $normalized += $token
+    }
+    return @($normalized | Select-Object -Unique)
+}
+
+function Repair-SchedulerWakeTokens {
+    $state = Read-SchedulerState
+    $raw = @($state.deferredWakeTokens | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    $normalized = @(Get-NormalizedDeferredWakeTokens $state.deferredWakeTokens)
+    if ($raw.Count -eq $normalized.Count -and @(Compare-Object -ReferenceObject $raw -DifferenceObject $normalized).Count -eq 0) { return }
+    $state | Add-Member -NotePropertyName deferredWakeTokens -NotePropertyValue @($normalized) -Force
+    Write-SchedulerStateDocument $state
+    Write-SchedulerLog '已迁移旧版延迟重试令牌；损坏条目已丢弃。'
+}
+
 function Compress-SchedulerError([object]$value) {
     $text = ([string]$value -replace '[\r\n\t]+', ' ' -replace '\s{2,}', ' ').Trim()
     $text = $text -replace '(?i)\b(password|passwd|pwd|token|cookie|secret|api[-_ ]?key)\b\s*[:=]\s*[^\s,;，；]+', '$1=[REDACTED]'
@@ -74,7 +107,7 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
     $cooldownElapsed = $null -eq $notifiedAt -or ($now - $notifiedAt).TotalMinutes -ge $cooldown
     $shouldNotify = -not $sameError -or -not $sameDay -or $cooldownElapsed
     $wakeDate = $now.ToString('yyyy-MM-dd')
-    $wakeTokens = if ([string]$state.deferredWakeDate -eq $wakeDate) { @($state.deferredWakeTokens) } else { @() }
+    $wakeTokens = if ([string]$state.deferredWakeDate -eq $wakeDate) { @(Get-NormalizedDeferredWakeTokens $state.deferredWakeTokens) } else { @() }
     $value = [ordered]@{
         phase = 'error'
         lastAttemptDate = $state.lastAttemptDate
@@ -92,7 +125,7 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
         processedTotal = 0
         nextEligibleAt = if ($claimed) { $now.AddMinutes($failureDelay).ToString('o') } else { $state.nextEligibleAt }
         deferredWakeDate = $wakeDate
-        deferredWakeTokens = $wakeTokens
+        deferredWakeTokens = @($wakeTokens)
         lastSchedulerError = $safeMessage
         lastSchedulerErrorHash = $errorHash
         lastSchedulerErrorAt = $now.ToString('o')
@@ -166,6 +199,9 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
             -and $processedTotal -ge $plannedTotal `
             -and $results.Count -ge $plannedTotal
         $problems = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
+        $automaticRetryProblems = @($problems | Where-Object {
+            $_.status -in @('error', 'login_required', 'interactive_challenge', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred')
+        })
         $missingCount = [Math]::Max(0, $plannedTotal - $processedTotal)
         $nowOffset = [datetimeoffset]$now
         $deferredWakeups = @($problems | Where-Object { $_.status -eq 'deferred' -and $_.nextEligibleAt } | ForEach-Object {
@@ -187,6 +223,7 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
             NextEligibleAt = if ($retryTimes.Count -gt 0) { @($retryTimes | Sort-Object)[0] } else { $null }
             RunId = [string]$latest.runId
             ProblemCount = $problems.Count + $missingCount
+            AutomaticRetryCount = $automaticRetryProblems.Count + $missingCount
             RunState = $runState
             PlannedTotal = $plannedTotal
             ProcessedTotal = $processedTotal
@@ -199,7 +236,7 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
 function Get-UnclaimedDeferredWakeups($state, $reportState, [datetime]$now, $config) {
     if ($null -eq $reportState -or $reportState.Valid -ne $true) { return @() }
     $today = $now.ToString('yyyy-MM-dd')
-    $claimed = if ([string]$state.deferredWakeDate -eq $today) { @($state.deferredWakeTokens) } else { @() }
+    $claimed = if ([string]$state.deferredWakeDate -eq $today) { @(Get-NormalizedDeferredWakeTokens $state.deferredWakeTokens) } else { @() }
     $perIdentityLimit = if ($null -ne $config.schedulerMaxDailyAttempts) { [int]$config.schedulerMaxDailyAttempts } else { 3 }
     $perIdentityLimit = [Math]::Max(1, [Math]::Min(6, $perIdentityLimit))
     $nowOffset = [datetimeoffset]$now
@@ -214,9 +251,14 @@ function Get-UnclaimedDeferredWakeups($state, $reportState, [datetime]$now, $con
 function Test-SchedulerWaiting($state, [datetime]$now, $config, [object[]]$deferredWakeups) {
     $today = $now.ToString('yyyy-MM-dd')
     if ([string]$state.lastRunDate -eq $today -and $state.reportComplete -eq $true) { return $true }
+    $attemptedToday = [string]$state.lastAttemptDate -eq $today
+    $hasAttempt = [int]$state.attemptsToday -ge 1
+    $automaticRetryCount = if ($null -ne $state.automaticRetryCount) { [int]$state.automaticRetryCount } else { 0 }
+    $hasDeferredWakeups = @($deferredWakeups).Count -gt 0
+    if ($attemptedToday -and $hasAttempt -and $automaticRetryCount -eq 0 -and -not $hasDeferredWakeups) { return $true }
     $maxAttempts = if ($null -ne $config.schedulerMaxDailyAttempts) { [int]$config.schedulerMaxDailyAttempts } else { 3 }
     $maxAttempts = [Math]::Max(1, [Math]::Min(6, $maxAttempts))
-    if ([string]$state.lastAttemptDate -eq $today -and [int]$state.attemptsToday -ge $maxAttempts -and @($deferredWakeups).Count -eq 0) { return $true }
+    if ($attemptedToday -and [int]$state.attemptsToday -ge $maxAttempts -and -not $hasDeferredWakeups) { return $true }
     if ([string]$state.phase -eq 'running' -and $state.lastAttemptStartedAt) {
         $claimMaxAge = (if ($null -ne $config.taskTimeoutMinutes) { [int]$config.taskTimeoutMinutes } else { 25 }) + 15
         try {
@@ -234,8 +276,16 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
     $state = Read-SchedulerState
     $today = $startedAt.ToString('yyyy-MM-dd')
     $attemptsToday = if ([string]$state.lastAttemptDate -eq $today) { [int]$state.attemptsToday + 1 } else { 1 }
-    $wakeTokens = if ([string]$state.deferredWakeDate -eq $today) { @($state.deferredWakeTokens) } else { @() }
-    $wakeTokens = @($wakeTokens + @($deferredWakeups | ForEach-Object { [string]$_.Token }) | Where-Object { $_ } | Select-Object -Unique)
+    $wakeTokens = if ([string]$state.deferredWakeDate -eq $today) { @(Get-NormalizedDeferredWakeTokens $state.deferredWakeTokens) } else { @() }
+    # Keep tokens as an actual JSON array. In PowerShell, adding an object[] to
+    # a scalar string can silently concatenate the values into one token and
+    # prevent other deferred sites from receiving their scheduled retry.
+    $wakeTokens = @(
+        @(
+            @($wakeTokens)
+            @($deferredWakeups | ForEach-Object { [string]$_.Token })
+        ) | Where-Object { $_ } | Select-Object -Unique
+    )
     $value = [ordered]@{
         phase = 'running'
         lastAttemptDate = $today
@@ -247,9 +297,14 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         reportValid = $state.reportValid
         reportComplete = $state.reportComplete
         lastRunId = $state.lastRunId
+        problemCount = $state.problemCount
+        automaticRetryCount = $state.automaticRetryCount
+        reportRunState = $state.reportRunState
+        plannedTotal = $state.plannedTotal
+        processedTotal = $state.processedTotal
         nextEligibleAt = $null
         deferredWakeDate = $today
-        deferredWakeTokens = $wakeTokens
+        deferredWakeTokens = @($wakeTokens)
     }
     $temporary = "$statePath.$PID.tmp"
     [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
@@ -266,12 +321,14 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         # Never carry yesterday's exhausted attempt counter into a new day.
         0
     }
-    $wakeTokens = if ([string]$state.deferredWakeDate -eq $finishedDate) { @($state.deferredWakeTokens) } else { @() }
+    $wakeTokens = if ([string]$state.deferredWakeDate -eq $finishedDate) { @(Get-NormalizedDeferredWakeTokens $state.deferredWakeTokens) } else { @() }
     $failureDelay = if ($null -ne $config.schedulerFailureRetryMinutes) { [int]$config.schedulerFailureRetryMinutes } else { 60 }
     $failureDelay = [Math]::Max(5, [Math]::Min(360, $failureDelay))
     $nextEligibleAt = $null
     if (-not $reportState.Complete) {
-        $nextEligibleAt = if ($null -ne $reportState.NextEligibleAt) {
+        $nextEligibleAt = if ($reportState.AutomaticRetryCount -eq 0) {
+            $null
+        } elseif ($null -ne $reportState.NextEligibleAt) {
             ([datetimeoffset]$reportState.NextEligibleAt).ToLocalTime().ToString('o')
         } else {
             $finishedAt.AddMinutes($failureDelay).ToString('o')
@@ -289,12 +346,13 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         reportComplete = [bool]$reportState.Complete
         lastRunId = $reportState.RunId
         problemCount = $reportState.ProblemCount
+        automaticRetryCount = $reportState.AutomaticRetryCount
         reportRunState = $reportState.RunState
         plannedTotal = $reportState.PlannedTotal
         processedTotal = $reportState.ProcessedTotal
         nextEligibleAt = $nextEligibleAt
         deferredWakeDate = $finishedDate
-        deferredWakeTokens = $wakeTokens
+        deferredWakeTokens = @($wakeTokens)
     }
     $temporary = "$statePath.$PID.tmp"
     [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
@@ -302,6 +360,7 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
 }
 
 try {
+    Repair-SchedulerWakeTokens
     Write-SchedulerLog "调度器启动（PID=$PID）。"
     while ($true) {
         $claimedThisLoop = $false
@@ -346,20 +405,42 @@ try {
             $hasNewExternalReport = $latestReportState.Valid `
                 -and $latestReportState.RunId `
                 -and ([string]$state.lastRunId -ne [string]$latestReportState.RunId `
+                    -or $state.reportValid -ne $true)
+            $reportStateNeedsSync = $latestReportState.Valid `
+                -and $latestReportState.RunId `
+                -and ([string]$state.lastRunId -ne [string]$latestReportState.RunId `
                     -or $state.reportValid -ne $true `
-                    -or $state.reportComplete -ne $true)
-            if ($hasNewExternalReport) {
+                    -or [int]$state.automaticRetryCount -ne [int]$latestReportState.AutomaticRetryCount `
+                    -or $state.reportComplete -ne $latestReportState.Complete `
+                    -or ($latestReportState.AutomaticRetryCount -eq 0 -and $null -ne $state.nextEligibleAt))
+            if ($reportStateNeedsSync) {
                 $externalExitCode = if ($latestReportState.Complete) { 0 } else { 2 }
                 Write-SchedulerState $now $externalExitCode $latestReportState $config
                 $state = Read-SchedulerState
-                Write-SchedulerLog "已接收外部续跑报告：runId=$($latestReportState.RunId)，完整=$($latestReportState.Complete)，异常=$($latestReportState.ProblemCount)。"
-                try { & $reporterScript -RunnerStatus completed -RunnerMessage '后台调度器已接收外部续跑报告。' -ReportPath $latestReportPath | Out-Null }
-                catch { Write-SchedulerLog "外部续跑报告入通知队列异常：$(Compress-SchedulerError $_.Exception.Message)" }
-                try { & $outboxScript | Out-Null }
-                catch { Write-SchedulerLog "外部续跑报告通知暂未送达：$(Compress-SchedulerError $_.Exception.Message)" }
+                if ($hasNewExternalReport) {
+                    Write-SchedulerLog "已接收外部续跑报告：runId=$($latestReportState.RunId)，完整=$($latestReportState.Complete)，异常=$($latestReportState.ProblemCount)。"
+                    try { & $reporterScript -RunnerStatus completed -RunnerMessage '后台调度器已接收外部续跑报告。' -ReportPath $latestReportPath | Out-Null }
+                    catch { Write-SchedulerLog "外部续跑报告入通知队列异常：$(Compress-SchedulerError $_.Exception.Message)" }
+                    try { & $outboxScript | Out-Null }
+                    catch { Write-SchedulerLog "外部续跑报告通知暂未送达：$(Compress-SchedulerError $_.Exception.Message)" }
+                } else {
+                    Write-SchedulerLog "已同步外部报告状态：runId=$($latestReportState.RunId)，自动重试=$($latestReportState.AutomaticRetryCount)，下次执行=$($state.nextEligibleAt)。"
+                }
             }
+            # Write-SchedulerState can change retry eligibility. Re-read the persisted
+            # state before making the run decision so a restarted scheduler cannot
+            # act on stale in-memory metadata from an older schema.
+            $state = Read-SchedulerState
             $deferredWakeups = Get-UnclaimedDeferredWakeups $state $latestReportState $now $config
-            if ($now -ge $scheduledToday -and -not (Test-SchedulerWaiting $state $now $config $deferredWakeups)) {
+            $manualAttentionOnly = $latestReportState.Valid -and $latestReportState.AutomaticRetryCount -eq 0 -and -not $latestReportState.Complete
+            if ($manualAttentionOnly) {
+                $state = Read-SchedulerState
+                if ($state.nextEligibleAt) {
+                    $state.nextEligibleAt = $null
+                    Write-SchedulerStateDocument $state
+                }
+            }
+            if ($now -ge $scheduledToday -and -not $manualAttentionOnly -and -not (Test-SchedulerWaiting $state $now $config $deferredWakeups)) {
                 Write-SchedulerHeartbeat 'running_checkin'
                 $attemptNumber = if ([string]$state.lastAttemptDate -eq $now.ToString('yyyy-MM-dd')) { [int]$state.attemptsToday + 1 } else { 1 }
                 Write-SchedulerLog "开始第 $attemptNumber 次签到尝试。"

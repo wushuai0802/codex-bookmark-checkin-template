@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { selectPreflightOrigins } from "../src/preflight-policy.mjs";
+import { configuredNativeWafOrigins, selectPreflightOrigins } from "../src/preflight-policy.mjs";
 
 const execFileAsync = promisify(execFile);
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -38,6 +38,13 @@ test("没有匹配书签时不会生成原生预热范围", () => {
   assert.deepEqual(selectPreflightOrigins({ targets: [] }, {
     nativeWafPreflightUrls: [{ url: "https://unrelated.test/attendance.php" }],
   }), []);
+});
+
+test("WAF 目标集合只包含无调试原生预热站点", () => {
+  assert.deepEqual([...configuredNativeWafOrigins({
+    nativeWafPreflightUrls: [{ url: "https://waf.test/attendance.php" }],
+    nativeChallengePreflight: [{ url: "https://other.test/checkin" }],
+  })], ["https://waf.test"]);
 });
 
 test("已取消的书签目标不会进入原生预热", () => {
@@ -73,20 +80,39 @@ test("原生保存密码恢复显式启用 Chrome 账户密码库", async () => 
   assert.match(syncScript, /SourceName\s*=\s*'Login Data For Account'[\s\S]*TargetName\s*=\s*'Login Data'/);
 });
 
+test("保存密码恢复在 CDP 自动填充失败后使用无调试端口无障碍兜底", async () => {
+  const indexSource = await fs.readFile(path.join(root, "src", "index.mjs"), "utf8");
+  const helper = await fs.readFile(path.join(root, "scripts", "Invoke-PlainSavedPasswordAccessibility.ps1"), "utf8");
+  assert.match(indexSource, /method:\s*"plain_saved_password_accessibility"/);
+  assert.match(indexSource, /Invoke-PlainSavedPasswordAccessibility\.ps1/);
+  assert.match(helper, /Open-PlainLoginChrome\.ps1'[\s\S]*-EnablePasswordManager/);
+  assert.doesNotMatch(helper, /RemoteDebuggingPort/);
+  assert.match(helper, /UIAutomationClient/);
+  assert.match(helper, /SendKeys\]::SendWait\('\{DOWN\}'\)/);
+});
+
 test("原生预热规则使用被动等待或离屏签到且最长检查两分钟", async () => {
   const publicRules = JSON.parse(await fs.readFile(path.join(root, "config", "site-rules.public.json"), "utf8"));
   const preflightScript = await fs.readFile(path.join(root, "scripts", "Prepare-NativeWafSession.ps1"), "utf8");
   const inspector = await fs.readFile(path.join(root, "src", "native-browser-inspect.mjs"), "utf8");
+  const plainWaf = await fs.readFile(path.join(root, "scripts", "Invoke-PlainWafAccessibility.ps1"), "utf8");
+  const openChrome = await fs.readFile(path.join(root, "scripts", "Open-PlainLoginChrome.ps1"), "utf8");
 
   assert.deepEqual(publicRules.nativeWafPreflightUrls, [
-    { url: "https://piggo.me/attendance.php", waitSeconds: 45, passiveOnly: true },
-    { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 30, passiveOnly: true },
+    { url: "https://piggo.me/attendance.php", waitSeconds: 120, passiveOnly: true },
+    { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 90, passiveOnly: true },
   ]);
   assert.deepEqual(publicRules.nativeChallengePreflight.slice(0, 2), [
     { url: "https://audiences.me/attendance.php", waitSeconds: 90, action: "checkin" },
     { url: "https://ourbits.club/attendance.php", waitSeconds: 120, action: "checkin" },
   ]);
-  assert.match(preflightScript, /Open-PlainLoginChrome\.ps1'\) -Offscreen -Urls/);
+  assert.match(preflightScript, /passiveOnly[\s\S]*Open-PlainLoginChrome\.ps1'[\s\S]*-RemoteDebuggingPort/);
+  assert.match(preflightScript, /passiveOnly[\s\S]*\$passiveInspection\.status/);
+  assert.match(preflightScript, /Invoke-PlainWafAccessibility\.ps1/);
+  assert.match(preflightScript, /for\s*\(\$plainAttempt\s*=\s*1;\s*\$plainAttempt\s*-le\s*2/);
+  assert.match(preflightScript, /\[bool\]\$item\.trustAsSigned/);
+  assert.match(preflightScript, /status\s*=\s*if\s*\(\$passivePrepared\)\s*\{\s*'signed'/);
+  assert.doesNotMatch(preflightScript, /inspectionStatus\s*=\s*if\s*\(\$passivePrepared\)\s*\{\s*'passive_wait'/);
   assert.match(preflightScript, /Offscreen\s*=\s*\$true/);
   assert.doesNotMatch(preflightScript, /action\s+-ne\s+'checkin'[\s\S]*?Offscreen/);
   assert.match(inspector, /Math\.min\(120,/);
@@ -106,6 +132,31 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(preflightScript, /\$inspectionMode \(\[int\]\$item\.reloadOnChallengeAfterSeconds\)/);
   assert.match(inspector, /challengeReloaded/);
   assert.match(inspector, /page\.reload\(/);
+  assert.match(plainWaf, /Open-PlainLoginChrome\.ps1'[\s\S]*-Minimized[\s\S]*-DisableExtensions/);
+  assert.match(plainWaf, /UserDataDirOverride/);
+  assert.match(plainWaf, /正在进行安全检测/);
+  assert.match(plainWaf, /正在进行安全验证/);
+  assert.match(plainWaf, /本网站使用安全服务防护恶意自动程序/);
+  assert.match(plainWaf, /签到已得\\s\*\\d\+/);
+  assert.match(plainWaf, /function Test-EquivalentWafOrigin/);
+  assert.match(plainWaf, /-replace '\^www\\\.', ''/);
+  assert.match(plainWaf, /Test-EquivalentWafOrigin \$originUri \$currentUri/);
+  assert.doesNotMatch(plainWaf, /Invoke-PlainPageRefresh/);
+  assert.doesNotMatch(plainWaf, /\{F5\}/);
+  assert.match(plainWaf, /function Invoke-LeichiConfirmationClick/);
+  assert.match(plainWaf, /AutomationId/);
+  assert.match(plainWaf, /sl-check/);
+  assert.match(plainWaf, /InvokePattern/);
+  assert.match(plainWaf, /客户端异常\.\*确认\.\*合法用户/);
+  assert.match(plainWaf, /confirmationClickAttempted/);
+  assert.match(plainWaf, /confirmationClicked/);
+  assert.match(plainWaf, /cloudflareWaf/);
+  assert.doesNotMatch(plainWaf, /RemoteDebuggingPort/);
+  assert.match(openChrome, /\[switch\]\$DisableExtensions/);
+  assert.match(openChrome, /\[switch\]\$Minimized/);
+  assert.match(openChrome, /--start-minimized/);
+  assert.match(openChrome, /不能同时指定离屏和最小化窗口/);
+  assert.match(openChrome, /--disable-extensions/);
 });
 
 test("斑马验证码过期只重启一次且成功状态来自 API", async () => {

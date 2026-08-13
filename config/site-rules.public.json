@@ -85,8 +85,8 @@
   ],
   "visitCheckinRules": {},
   "nativeWafPreflightUrls": [
-    { "url": "https://piggo.me/attendance.php", "waitSeconds": 45, "passiveOnly": true },
-    { "url": "https://www.hdkyl.in/attendance.php", "waitSeconds": 30, "passiveOnly": true }
+    { "url": "https://piggo.me/attendance.php", "waitSeconds": 120, "passiveOnly": true },
+    { "url": "https://www.hdkyl.in/attendance.php", "waitSeconds": 90, "passiveOnly": true }
   ],
   "nativeChallengePreflight": [
     { "url": "https://audiences.me/attendance.php", "waitSeconds": 90, "action": "checkin" },

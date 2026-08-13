@@ -22,17 +22,23 @@ import {
   writeSiteState,
 } from "./site-state.mjs";
 import { loadQaCache, updateQaCache, writeQaCache } from "./qa-solver.mjs";
-import { selectPreflightOrigins } from "./preflight-policy.mjs";
+import { configuredNativeWafOrigins, selectPreflightOrigins } from "./preflight-policy.mjs";
 import { accountMetadataForOrigin, compatiblePriorResult, resultIdentity } from "./result-identity.mjs";
-import { configuredSupplementalOAuthAccounts, runSupplementalOAuthAccount } from "./supplemental-oauth-accounts.mjs";
+import {
+  configuredOAuthAccounts,
+  runOAuthAccount,
+  runSupplementalOAuthAccount,
+} from "./supplemental-oauth-accounts.mjs";
 import {
   TERMINAL_STATUSES,
   advanceAttemptedDeferredRetries,
   applyManualConfirmations,
+  applyTemporaryUnavailableConfirmations,
   deferUnresolvedLogin,
   isCurrentLocalRunId,
   isRetryEligible,
   nextDeferredRetryAt,
+  withRetrySchedule,
 } from "./retry-policy.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -55,6 +61,7 @@ const originsIndex = process.argv.indexOf("--origins");
 const accountKeysIndex = process.argv.indexOf("--account-keys");
 const resumeIndex = process.argv.indexOf("--resume-report");
 const manualConfirmedIndex = process.argv.indexOf("--manual-confirmed-origins");
+const temporaryUnavailableIndex = process.argv.indexOf("--temporary-unavailable-origins");
 const limit = limitIndex >= 0 ? Math.max(1, Number.parseInt(process.argv[limitIndex + 1], 10) || 1) : null;
 const offset = offsetIndex >= 0 ? Math.max(0, Number.parseInt(process.argv[offsetIndex + 1], 10) || 0) : 0;
 let selectedOrigins = originsIndex >= 0
@@ -66,6 +73,9 @@ const selectedAccountKeys = accountKeysIndex >= 0
 const requestedResumePath = resumeIndex >= 0 ? String(process.argv[resumeIndex + 1] ?? "").trim() : null;
 const manualConfirmedOrigins = new Set(manualConfirmedIndex >= 0
   ? String(process.argv[manualConfirmedIndex + 1] ?? "").split(",").map((value) => value.trim()).filter(Boolean)
+  : []);
+const temporaryUnavailableOrigins = new Set(temporaryUnavailableIndex >= 0
+  ? String(process.argv[temporaryUnavailableIndex + 1] ?? "").split(",").map((value) => value.trim()).filter(Boolean)
   : []);
 const lockPath = path.join(rootDirectory, "tmp", "run.lock");
 const nativeWafPreflightPath = path.join(rootDirectory, "tmp", "native-waf-preflight.json");
@@ -105,14 +115,17 @@ async function readFreshNativeWafPreflight() {
   const generatedAt = Date.parse(report?.generatedAt ?? "");
   if (!Number.isFinite(generatedAt) || Date.now() - generatedAt > 10 * 60 * 1000) return new Map();
   return new Map((report?.results ?? [])
-    .filter((result) => allowedOrigins.has(result?.origin) && result?.status === "signed")
+    .filter((result) => allowedOrigins.has(result?.origin))
     .map((result) => [result.origin, result]));
 }
 
 const lockLease = await acquireRunLock(lockPath);
 try {
   const plan = await readValidatedBookmarkPlan();
-  const supplementalAccounts = configuredSupplementalOAuthAccounts(config, rootDirectory);
+  const { isolatedPrimaryAccounts, supplementalAccounts } = configuredOAuthAccounts(config, rootDirectory);
+  const isolatedPrimaryByIdentity = new Map(
+    isolatedPrimaryAccounts.map((account) => [resultIdentity(account), account]),
+  );
   const baseReport = publicBookmarkReport(plan);
   const reportTargets = [
     ...baseReport.targets.map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) })),
@@ -155,8 +168,12 @@ try {
     await ensurePrivateDirectory(logsRoot);
     let resumeBase = null;
     let manualConfirmedResults = [];
+    let temporarilyUnavailableResults = [];
     if (manualConfirmedOrigins.size > 0 && !requestedResumePath) {
       throw new Error("人工完成确认必须配合今天的续跑报告使用");
+    }
+    if (temporaryUnavailableOrigins.size > 0 && !requestedResumePath) {
+      throw new Error("站点暂不可用确认必须配合今天的续跑报告使用");
     }
     if (requestedResumePath) {
       const resolvedResume = path.resolve(requestedResumePath);
@@ -175,12 +192,25 @@ try {
           throw new Error(`人工完成确认对应多个账号，必须保留各账号的权威签到证据：${origin}`);
         }
       }
+      for (const origin of temporaryUnavailableOrigins) {
+        if (!currentTargetOrigins.has(origin) || !previousOrigins.has(origin)) {
+          throw new Error(`站点暂不可用确认不属于当前续跑范围：${origin}`);
+        }
+        if (resumeBase.results.filter((result) => result.origin === origin).length !== 1) {
+          throw new Error(`站点暂不可用确认对应多个账号，必须按账号保留独立结果：${origin}`);
+        }
+      }
       resumeBase = {
         ...resumeBase,
-        results: applyManualConfirmations(resumeBase.results, manualConfirmedOrigins),
+        results: applyTemporaryUnavailableConfirmations(
+          applyManualConfirmations(resumeBase.results, manualConfirmedOrigins),
+          temporaryUnavailableOrigins,
+        ),
       };
       manualConfirmedResults = resumeBase.results.filter((result) => manualConfirmedOrigins.has(result.origin)
         && result.manualConfirmation === true);
+      temporarilyUnavailableResults = resumeBase.results.filter((result) => temporaryUnavailableOrigins.has(result.origin)
+        && result.operatorConfirmedUnavailable === true);
     }
     await cleanupOldLogs(logsRoot, config.logRetentionDays);
     const runLog = await createRunLog(logsRoot);
@@ -194,6 +224,7 @@ try {
     ];
     const results = [];
     const nativeWafPreflight = await readFreshNativeWafPreflight();
+    const nativeWafOrigins = configuredNativeWafOrigins(config);
     const preferredTargets = applyPreferredCandidates(plan.targets, siteState)
       .map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) }));
     const plannedTargets = [...preferredTargets, ...supplementalAccounts];
@@ -209,6 +240,8 @@ try {
         const prior = compatiblePriorResult(target, resumeBase.results);
         return !prior
           || isRetryEligible(prior)
+          || (prior.disabledByConfig === true
+            && !(config.disabledCheckinOrigins ?? []).includes(target.origin))
           || (config.disabledCheckinOrigins ?? []).includes(target.origin);
       })
       : plannedTargets;
@@ -258,7 +291,10 @@ try {
     };
 
     await writeProgress("initial");
-    const context = selectedTargets.some((target) => !configuredTargetSkip(target, config))
+    const globalContextTargets = selectedTargets.filter(
+      (target) => !isolatedPrimaryByIdentity.has(resultIdentity(target)),
+    );
+    const context = globalContextTargets.some((target) => !configuredTargetSkip(target, config))
       ? await launchAutomationContext(config)
       : null;
 
@@ -285,10 +321,42 @@ try {
       }
       const result = await runWithRecentNotAvailableCache(target, siteState, config, async () => {
         const preflight = nativeWafPreflight.get(target.origin);
-        return preflight
-          ? { status: "signed", reason: preflight.reason, url: preflight.url, attempt: 1, nativePreflight: true }
-          : processTarget(activeContext, target, config, qaRules, runLog.directory);
+        if (preflight?.status === "signed") {
+          return { status: "signed", reason: preflight.reason, url: preflight.url, attempt: 1, nativePreflight: true };
+        }
+        // A configured native-WAF target must never fall back to the CDP
+        // browser and become a weak `visited` result. LeiChi detects debugging
+        // sessions, so only the no-debug preflight may authoritatively finish
+        // these targets; an inconclusive preflight remains an automatic retry.
+        if (nativeWafOrigins.has(target.origin)) {
+          return withRetrySchedule({
+            status: "deferred",
+            retryCause: "managed_challenge_timeout",
+            reason: preflight?.reason || "无调试原生 Chrome 未取得 WAF 签到终态，已安排自动重试",
+            url: preflight?.url || target.candidates?.[0] || target.origin,
+            attempt: 1,
+            nativePreflight: true,
+            inspectionStatus: preflight?.inspectionStatus || "missing",
+          }, config);
+        }
+        return processTarget(activeContext, target, config, qaRules, runLog.directory);
       });
+      const timed = { ...result, durationMs: Date.now() - started };
+      rememberLogicalCompletion(target, timed);
+      return timed;
+    };
+
+    const runIsolatedPrimaryTarget = async (target) => {
+      const account = isolatedPrimaryByIdentity.get(resultIdentity(target));
+      if (!account) throw new Error(`隔离 OAuth 主账号绑定缺失：${resultIdentity(target)}`);
+      const configuredSkip = configuredTargetSkip(target, config);
+      if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
+      const started = Date.now();
+      const result = await runOAuthAccount({
+        ...account,
+        title: target.title,
+        folderNames: target.folderNames,
+      }, config, rootDirectory);
       const timed = { ...result, durationMs: Date.now() - started };
       rememberLogicalCompletion(target, timed);
       return timed;
@@ -299,9 +367,14 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
+        const reenabledAfterConfigDisable = prior?.disabledByConfig === true
+          && !(config.disabledCheckinOrigins ?? []).includes(target.origin);
         const targetResult = explicitSelection && prior && TERMINAL_STATUSES.has(prior.status)
+          && !reenabledAfterConfigDisable
           ? prior
-          : await runOneTarget(context, target);
+          : isolatedPrimaryByIdentity.has(resultIdentity(target))
+            ? await runIsolatedPrimaryTarget(target)
+            : await runOneTarget(context, target);
         results.push({
           origin: target.origin,
           title: target.title,
@@ -321,7 +394,8 @@ try {
     const recoveryDelays = Array.isArray(config.recoveryDelaysMs) ? config.recoveryDelaysMs : [5000, 30000];
     for (let round = 0; round < recoveryRounds; round += 1) {
       const recoveryIndexes = results
-        .map((result, index) => isRetryEligible(result) ? index : -1)
+        .map((result, index) => isRetryEligible(result)
+          && !isolatedPrimaryByIdentity.has(resultIdentity(result)) ? index : -1)
         .filter((index) => index >= 0);
       if (recoveryIndexes.length === 0) break;
       console.log(`[recovery ${round + 1}/${recoveryRounds}] 将复查 ${recoveryIndexes.length} 个异常站点`);
@@ -385,10 +459,16 @@ try {
           executable: config.powershellExecutable || "pwsh.exe",
           args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-NativeLogin.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
         });
+        methods.push({
+          method: "plain_saved_password_accessibility",
+          executable: config.powershellExecutable || "pwsh.exe",
+          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Invoke-PlainSavedPasswordAccessibility.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
+        });
 
         const attempts = [];
         let succeeded = false;
         let authoritativeDailyCheckin = null;
+        let terminalLoginFailure = null;
         for (const method of methods) {
           try {
             const helperOutput = await execFileAsync(method.executable, method.args, {
@@ -399,6 +479,10 @@ try {
             });
             const outcome = loginHelperOutcome(helperOutput.stdout);
             attempts.push({ method: method.method, ...outcome });
+            if (outcome.status === "invalid_credential") {
+              terminalLoginFailure = "invalid_credential";
+              break;
+            }
             if (outcome.succeeded) {
               authoritativeDailyCheckin = authoritativeNativeOAuthDailyCheckin(method.method, outcome);
               succeeded = true;
@@ -413,12 +497,17 @@ try {
               ...failedOutcome,
               succeeded: false,
             });
+            if (failedOutcome.status === "invalid_credential") {
+              terminalLoginFailure = "invalid_credential";
+              break;
+            }
           }
         }
         loginOutcomes.set(current.origin, {
           attempted: true,
           succeeded,
           attempts,
+          ...(terminalLoginFailure ? { terminalLoginFailure } : {}),
           ...(authoritativeDailyCheckin ? { authoritativeDailyCheckin } : {}),
         });
       }
@@ -439,6 +528,13 @@ try {
           let recoveredResult;
           if (["signed", "already_signed"].includes(helperDailyCheckin?.status)) {
             recoveredResult = helperDailyCheckin;
+          } else if (loginRecovery?.terminalLoginFailure === "invalid_credential") {
+            recoveredResult = {
+              status: "needs_attention",
+              reason: "站点拒绝了已保存凭据，请更新该站登录信息",
+              url: initialResult.url,
+              retryCause: "invalid_credential",
+            };
           } else {
             recoveryContext ??= await launchAutomationContext(config);
             recoveredResult = await runOneTarget(recoveryContext, target);
@@ -495,7 +591,7 @@ try {
         ?? compatiblePriorResult(target, resumeBase.results)
         ?? { ...target, status: "error", reason: "续跑未生成站点结果" })
       : results;
-    const currentOrigins = new Set([...results, ...manualConfirmedResults].map(resultIdentity));
+    const currentOrigins = new Set([...results, ...manualConfirmedResults, ...temporarilyUnavailableResults].map(resultIdentity));
     const logicallyResolvedResults = applyLogicalCompletionReuse(assembledResults, config.logicalCheckinGroups);
     const finalResults = advanceAttemptedDeferredRetries(
       logicallyResolvedResults.map((result) => currentOrigins.has(resultIdentity(result)) ? deferUnresolvedLogin(result, config, finishedAt) : result),
@@ -526,7 +622,7 @@ try {
     const resultPath = await writeRunResult(logsRoot, runLog, output, {
       updateLatest: isComplete && finalResults.length >= minimumTargets,
     });
-    const primaryResults = [...results, ...manualConfirmedResults]
+    const primaryResults = [...results, ...manualConfirmedResults, ...temporarilyUnavailableResults]
       .filter((result) => result.supplementalAccount !== true);
     await writeSiteState(siteStatePath, updateSiteState(siteState, primaryResults, finishedAt));
     await writeQaCache(qaCachePath, updateQaCache(qaCache, results, finishedAt));

@@ -5,6 +5,10 @@ export const RECOVERABLE_STATUSES = new Set([
   "visited", "clicked", "no_action", "unconfirmed", "deferred",
 ]);
 
+// Credentials explicitly rejected by the site are operator-attention states,
+// not transient browser failures. They must not be retried every hour.
+export const ATTENTION_STATUSES = new Set(["needs_attention"]);
+
 export const TERMINAL_STATUSES = new Set(["signed", "already_signed", "not_available"]);
 
 export function applyManualConfirmations(results, confirmedOrigins, now = new Date()) {
@@ -32,6 +36,36 @@ export function applyManualConfirmations(results, confirmedOrigins, now = new Da
       reason: "用户已确认手动完成",
       manualConfirmation: true,
       manualConfirmedAt: confirmedAt,
+    };
+  });
+}
+
+export function applyTemporaryUnavailableConfirmations(results, confirmedOrigins, now = new Date()) {
+  const confirmed = confirmedOrigins instanceof Set ? confirmedOrigins : new Set(confirmedOrigins ?? []);
+  const unavailableDate = localRunDate(now);
+  const originCounts = new Map();
+  for (const result of results ?? []) {
+    originCounts.set(result?.origin, (originCounts.get(result?.origin) ?? 0) + 1);
+  }
+  return (results ?? []).map((result) => {
+    if (!confirmed.has(result?.origin)
+      || originCounts.get(result?.origin) !== 1
+      || TERMINAL_STATUSES.has(result?.status)) return result;
+    const {
+      retryCause: _retryCause,
+      nextEligibleAt: _nextEligibleAt,
+      retrySequence: _retrySequence,
+      retrySequenceDate: _retrySequenceDate,
+      retryExhaustedForDay: _retryExhaustedForDay,
+      ...preserved
+    } = result;
+    return {
+      ...preserved,
+      status: "not_available",
+      reason: "用户确认站点维护或网络不可用，今日停止重试，明日自动恢复",
+      temporarilyUnavailable: true,
+      unavailableDate,
+      operatorConfirmedUnavailable: true,
     };
   });
 }
@@ -104,6 +138,27 @@ export function advanceDeferredRetry(result, previous, config = {}, now = new Da
   const sameDate = String(previous?.retrySequenceDate || "") === currentDate;
   const previousSequence = Math.max(0, Number(previous?.retrySequence) || (sameCause && sameDate ? 1 : 0));
   const retrySequence = sameCause && sameDate ? previousSequence + 1 : 1;
+  if (result.retryCause === "upstream_unavailable") {
+    const maxDailyAttempts = Math.max(1, Math.min(6,
+      Number(config.upstreamUnavailableMaxDailyAttempts) || 3));
+    if (retrySequence >= maxDailyAttempts) {
+      const {
+        nextEligibleAt: _nextEligibleAt,
+        retryCause: _retryCause,
+        retryExhaustedForDay: _retryExhaustedForDay,
+        ...preserved
+      } = result;
+      return {
+        ...preserved,
+        status: "not_available",
+        reason: "站点维护或网络不可用，今日停止重试，明日自动恢复",
+        temporarilyUnavailable: true,
+        unavailableDate: currentDate,
+        retryAttempts: retrySequence,
+      };
+    }
+    return { ...result, retrySequence, retrySequenceDate: currentDate };
+  }
   if (result.retryCause !== "rate_limit") return { ...result, retrySequence, retrySequenceDate: currentDate };
 
   const baseDelay = Math.max(60_000, Number(config.rateLimitRetryDelayMs) || 60 * 60 * 1000);
@@ -160,8 +215,11 @@ export function isRetryEligible(result, now = new Date()) {
 export function resumeSelectedOrigins(currentTargets, previousResults, config = {}, now = new Date()) {
   const currentOrigins = new Set((currentTargets ?? []).map((target) => target.origin));
   const previousOrigins = new Set((previousResults ?? []).map((result) => result.origin));
+  const currentDate = localRunDate(now);
   return new Set([
     ...(previousResults ?? []).filter((result) => isRetryEligible(result, now)).map((result) => result.origin),
+    ...(previousResults ?? []).filter((result) => result?.temporarilyUnavailable === true
+      && String(result.unavailableDate || "") !== currentDate).map((result) => result.origin),
     ...[...currentOrigins].filter((origin) => !previousOrigins.has(origin)),
     ...(config.disabledCheckinOrigins ?? []).filter((origin) => currentOrigins.has(origin)),
   ]);

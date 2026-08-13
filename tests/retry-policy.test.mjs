@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  ATTENTION_STATUSES,
   advanceAttemptedDeferredRetries,
   advanceDeferredRetry,
   applyManualConfirmations,
+  applyTemporaryUnavailableConfirmations,
   deferUnresolvedLogin,
   isCurrentLocalRunId,
   isRetryEligible,
@@ -12,6 +14,11 @@ import {
   resumeSelectedOrigins,
   withRetrySchedule,
 } from "../src/retry-policy.mjs";
+
+test("凭据被拒绝是人工关注终态，不进入自动重试", () => {
+  assert.equal(ATTENTION_STATUSES.has("needs_attention"), true);
+  assert.equal(isRetryEligible({ status: "needs_attention", retryCause: "invalid_credential" }), false);
+});
 
 test("频率限制会获得有界的下次执行时间", () => {
   const now = new Date("2026-07-23T05:00:00Z");
@@ -41,6 +48,35 @@ test("同站限频使用指数退避并在达到上限后转到次日", () => {
   assert.equal(second.nextEligibleAt, "2026-07-23T14:00:00.000Z");
   assert.equal(third.nextEligibleAt, "2026-07-24T00:05:00.000Z");
   assert.equal(third.retryExhaustedForDay, true);
+});
+
+test("上游站点连续不可用达到上限后只结束当天重试", () => {
+  const config = { upstreamUnavailableMaxDailyAttempts: 3 };
+  const now = new Date("2026-07-23T12:00:00Z");
+  const first = advanceDeferredRetry({
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+    nextEligibleAt: "2026-07-23T12:30:00.000Z",
+  }, null, config, now);
+  const second = advanceDeferredRetry({
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+    nextEligibleAt: "2026-07-23T13:00:00.000Z",
+  }, first, config, now);
+  const settled = advanceDeferredRetry({
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+    nextEligibleAt: "2026-07-23T13:30:00.000Z",
+  }, second, config, now);
+
+  assert.equal(first.status, "deferred");
+  assert.equal(second.status, "deferred");
+  assert.equal(settled.status, "not_available");
+  assert.equal(settled.temporarilyUnavailable, true);
+  assert.equal(settled.unavailableDate, "20260723");
+  assert.equal(settled.retryAttempts, 3);
+  assert.equal("nextEligibleAt" in settled, false);
+  assert.match(settled.reason, /明日自动恢复/);
 });
 
 test("续跑只推进本轮真正尝试过的站点", () => {
@@ -210,4 +246,38 @@ test("同一来源存在多个账号时不接受来源级人工完成确认", ()
     { origin: "https://agent.test", accountKey: "secondary", status: "deferred" },
   ], new Set(["https://agent.test"]), new Date("2026-07-27T01:00:00Z"));
   assert.deepEqual(results.map((result) => result.status), ["deferred", "deferred"]);
+});
+
+test("用户确认站点维护会结束当天重试但不伪报签到成功", () => {
+  const results = applyTemporaryUnavailableConfirmations([{
+    origin: "https://offline.example",
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+    nextEligibleAt: "2026-07-27T02:00:00Z",
+    retrySequence: 4,
+  }], new Set(["https://offline.example"]), new Date("2026-07-27T01:00:00Z"));
+
+  assert.deepEqual(results[0], {
+    origin: "https://offline.example",
+    status: "not_available",
+    reason: "用户确认站点维护或网络不可用，今日停止重试，明日自动恢复",
+    temporarilyUnavailable: true,
+    unavailableDate: "20260727",
+    operatorConfirmedUnavailable: true,
+  });
+});
+
+test("暂不可用的当日终态在次日会重新进入目标计划", () => {
+  const selected = resumeSelectedOrigins(
+    [{ origin: "https://offline.example" }],
+    [{
+      origin: "https://offline.example",
+      status: "not_available",
+      temporarilyUnavailable: true,
+      unavailableDate: "20260727",
+    }],
+    {},
+    new Date("2026-07-28T01:00:00Z"),
+  );
+  assert.deepEqual([...selected], ["https://offline.example"]);
 });

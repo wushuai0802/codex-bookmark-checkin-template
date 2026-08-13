@@ -1072,11 +1072,24 @@ async function resultFromPageFailure(page, error, config) {
   if (pageState?.status === "deferred") {
     return withRetrySchedule({ ...pageState, url: safeLogUrl(page.url()) }, config);
   }
+  if (isTransientNavigationFailure(error)) {
+    return withRetrySchedule({
+      status: "deferred",
+      retryCause: "upstream_unavailable",
+      reason: "站点网络暂时不可用，已安排自动重试",
+      url: safeLogUrl(page.url()),
+    }, config);
+  }
   return {
     status: "error",
     reason: safeErrorMessage(error),
     url: safeLogUrl(page.url()),
   };
+}
+
+export function isTransientNavigationFailure(error) {
+  const message = String(error?.message ?? error ?? "");
+  return /page\.goto:[\s\S]{0,300}Timeout .* exceeded|net::ERR_(?:CONNECTION_CLOSED|CONNECTION_RESET|CONNECTION_REFUSED|CONNECTION_TIMED_OUT|TIMED_OUT|NAME_NOT_RESOLVED|HTTP2_PROTOCOL_ERROR|NETWORK_CHANGED)|\b(?:ECONNRESET|ETIMEDOUT)\b|socket hang up/i.test(message);
 }
 
 export async function launchAutomationContext(config) {

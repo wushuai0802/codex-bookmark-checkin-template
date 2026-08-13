@@ -15,6 +15,15 @@ test("登录助手必须明确返回 logged_in 才算成功", () => {
   assert.equal(loginHelperOutcome("browser startup text").succeeded, false);
 });
 
+test("登录助手保留无敏感信息的凭据拒绝诊断码", () => {
+  const outcome = loginHelperOutcome('{"status":"invalid_credential","diagnostic":{"observedResponses":[{"path":"/api/user/login"}]}}');
+  assert.equal(outcome.succeeded, false);
+  assert.equal(outcome.status, "invalid_credential");
+  assert.equal(outcome.diagnosticCode, "invalid_credential");
+  assert.equal(Object.hasOwn(outcome, "username"), false);
+  assert.equal(Object.hasOwn(outcome, "password"), false);
+});
+
 test("登录助手只保留白名单内的权威签到证据", () => {
   const mockSecretValue = "redacted-test-value";
   const outcome = loginHelperOutcome(JSON.stringify({

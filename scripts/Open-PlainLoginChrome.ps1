@@ -2,13 +2,16 @@
 param(
     [string[]]$Urls = @(),
     [switch]$Offscreen,
+    [switch]$Minimized,
     [int]$RemoteDebuggingPort = 0,
     [switch]$DynamicRemoteDebuggingPort,
     [switch]$EnablePasswordManager,
+    [switch]$DisableExtensions,
     [string]$UserDataDirOverride
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Offscreen -and $Minimized) { throw '不能同时指定离屏和最小化窗口。' }
 $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
@@ -48,7 +51,7 @@ $items = if ($Urls.Count -gt 0) {
 else {
     @(& $node (Join-Path $root 'src\attention-urls.mjs') | ConvertFrom-Json)
 }
-$windowPosition = if ($Offscreen) { '-32000,-32000' } else { '60,60' }
+$windowPosition = if ($Offscreen) { '-32000,-32000' } elseif ($Minimized) { '0,0' } else { '60,60' }
 $arguments = @(
     "--user-data-dir=$profilePath",
     '--profile-directory=Default',
@@ -64,8 +67,14 @@ $arguments = @(
     "--window-position=$windowPosition",
     '--window-size=1400,900'
 )
+if ($Minimized) {
+    $arguments += '--start-minimized'
+}
 if (-not $EnablePasswordManager) {
     $arguments += '--disable-sync'
+}
+if ($DisableExtensions) {
+    $arguments += '--disable-extensions'
 }
 if ($DynamicRemoteDebuggingPort) {
     $arguments += '--remote-debugging-port=0'
