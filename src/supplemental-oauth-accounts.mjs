@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { parseLoginHelperResult } from "./login-recovery.mjs";
+import { loginHelperOutcome, parseLoginHelperResult } from "./login-recovery.mjs";
 import { resultIdentity } from "./result-identity.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -167,11 +167,15 @@ export function oauthHelperResultToCheckin(account, value, fallbackReason = "OAu
       url: value?.finalUrl ?? account.loginUrl,
     };
   }
+  const helperOutcome = loginHelperOutcome(value ? JSON.stringify(value) : "", "failed");
+  const retryable = helperOutcome.retryable === true;
   return {
     ...metadata,
-    status: "login_required",
+    status: retryable ? "login_required" : "needs_attention",
     reason: String(value?.reason ?? daily?.reason ?? fallbackReason).slice(0, 240),
     url: value?.finalUrl ?? account.loginUrl,
+    ...(helperOutcome.failureCode ? { failureCode: helperOutcome.failureCode } : {}),
+    retryableLoginRecovery: retryable,
   };
 }
 
@@ -186,7 +190,11 @@ export function oauthAccountRetryPolicy(config = {}) {
 export async function runOAuthAccount(account, config, rootDirectory) {
   const marker = path.join(account.automationUserDataDir, "Local State");
   try { await fs.access(marker); } catch {
-    return oauthHelperResultToCheckin(account, null, "独立登录会话尚未初始化");
+    return oauthHelperResultToCheckin(account, {
+      status: "needs_attention",
+      reason: "独立登录会话尚未初始化",
+      failureCode: "configuration_mismatch",
+    });
   }
   const executable = config.powershellExecutable || "pwsh.exe";
   const args = [
@@ -219,7 +227,8 @@ export async function runOAuthAccount(account, config, rootDirectory) {
     }
     lastResult = { ...lastResult, oauthAttempt: attempt };
     if (["signed", "already_signed"].includes(lastResult.status)) return lastResult;
-    const nonRetryable = /(账号不匹配|身份不匹配|配置不一致|rate.?limit|too many|请求(?:次数)?过多|操作过于频繁)/iu.test(lastResult.reason);
+    const nonRetryable = lastResult.status === "needs_attention"
+      || /(账号不匹配|身份不匹配|配置不一致|rate.?limit|too many|请求(?:次数)?过多|操作过于频繁)/iu.test(lastResult.reason);
     if (nonRetryable || attempt >= policy.attempts) break;
     if (policy.delayMs > 0) await wait(policy.delayMs);
   }

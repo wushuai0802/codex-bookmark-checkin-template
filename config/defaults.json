@@ -73,6 +73,7 @@
   "rateLimitNextDayTime": "08:05",
   "challengeRetryDelayMs": 3600000,
   "loginRetryDelayMs": 21600000,
+  "loginRetryMaxDailyAttempts": 2,
   "recoveryRounds": 2,
   "recoveryDelaysMs": [5000, 30000],
   "taskRunAttempts": 2,

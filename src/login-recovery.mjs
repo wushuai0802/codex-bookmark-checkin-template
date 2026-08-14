@@ -11,6 +11,27 @@ const LOGIN_HELPER_STATUSES = new Set([
   "failed",
 ]);
 
+const LOGIN_FAILURE_CODES = new Set([
+  "account_mismatch",
+  "configuration_mismatch",
+  "upstream_login_required",
+  "upstream_authorization_required",
+  "managed_challenge",
+  "oauth_timeout",
+  "profile_busy",
+  "browser_startup",
+  "site_flow_changed",
+  "oauth_recovery_failed",
+]);
+
+const RETRYABLE_LOGIN_FAILURE_CODES = new Set([
+  "managed_challenge",
+  "oauth_timeout",
+  "profile_busy",
+  "browser_startup",
+  "oauth_recovery_failed",
+]);
+
 const LOGIN_URL_PATTERN = /\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)|#\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i;
 const TERMINAL_DAILY_CHECKIN_STATUSES = new Set(["signed", "already_signed"]);
 
@@ -57,6 +78,9 @@ export function parseLoginHelperResult(text) {
 export function loginHelperOutcome(text, fallback = "failed") {
   const value = parseLoginHelperResult(text);
   const status = LOGIN_HELPER_STATUSES.has(String(value?.status)) ? String(value.status) : fallback;
+  const failureCode = LOGIN_FAILURE_CODES.has(String(value?.failureCode))
+    ? String(value.failureCode)
+    : null;
   const messages = {
     logged_in: "已取得登录会话",
     needs_attention: "登录需要额外验证",
@@ -71,11 +95,17 @@ export function loginHelperOutcome(text, fallback = "failed") {
   const diagnosticCode = ["invalid_credential", "credential_missing", "no_saved_credential"].includes(status)
     ? status
     : null;
+  const retryable = status !== "logged_in" && (
+    RETRYABLE_LOGIN_FAILURE_CODES.has(failureCode)
+    || (!failureCode && ["timeout", "failed"].includes(status))
+  );
   return {
     succeeded: status === "logged_in",
     status,
     diagnostic: messages[status] ?? messages.failed,
     ...(diagnosticCode ? { diagnosticCode } : {}),
+    ...(failureCode ? { failureCode } : {}),
+    ...(status !== "logged_in" ? { retryable } : {}),
     ...(dailyCheckin ? { dailyCheckin } : {}),
   };
 }

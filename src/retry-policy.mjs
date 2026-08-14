@@ -159,6 +159,28 @@ export function advanceDeferredRetry(result, previous, config = {}, now = new Da
     }
     return { ...result, retrySequence, retrySequenceDate: currentDate };
   }
+  if (result.retryCause === "login_required") {
+    const maxDailyAttempts = Math.max(1, Math.min(4,
+      Number(config.loginRetryMaxDailyAttempts) || 2));
+    if (retrySequence >= maxDailyAttempts) {
+      const {
+        nextEligibleAt: _nextEligibleAt,
+        retryExhaustedForDay: _retryExhaustedForDay,
+        ...preserved
+      } = result;
+      return {
+        ...preserved,
+        status: "needs_attention",
+        reason: String(result.reason || "自动登录恢复未成功")
+          .replace(/；?已安排低频重试$/, "")
+          .concat("；本日自动恢复已达到上限，不再盲目重试"),
+        retrySequence,
+        retrySequenceDate: currentDate,
+        retryExhaustedForDay: true,
+      };
+    }
+    return { ...result, retrySequence, retrySequenceDate: currentDate };
+  }
   if (result.retryCause !== "rate_limit") return { ...result, retrySequence, retrySequenceDate: currentDate };
 
   const baseDelay = Math.max(60_000, Number(config.rateLimitRetryDelayMs) || 60 * 60 * 1000);
@@ -195,11 +217,20 @@ export function advanceAttemptedDeferredRetries(results, attemptedOrigins, previ
 
 export function deferUnresolvedLogin(result, config = {}, now = new Date()) {
   if (result?.status !== "login_required") return result;
+  if (result.retryableLoginRecovery === false) {
+    return {
+      ...result,
+      status: "needs_attention",
+      retryCause: result.retryCause ?? "login_required",
+    };
+  }
+  const reason = String(result.reason || "自动登录恢复未成功")
+    .replace(/；?已安排低频重试$/, "");
   return withRetrySchedule({
     ...result,
     status: "deferred",
     retryCause: "login_required",
-    reason: "自动登录恢复未成功，已安排低频重试",
+    reason: `${reason}；已安排低频重试`,
   }, {
     deferredRetryDelayMs: config.loginRetryDelayMs ?? config.deferredRetryDelayMs,
   }, now);

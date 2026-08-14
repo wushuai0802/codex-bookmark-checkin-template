@@ -123,13 +123,53 @@ function Invoke-NativeOAuthRound {
     [pscustomobject]@{ ExitCode = $roundExitCode; Output = @($roundOutput) }
 }
 
-function Convert-PlainOAuthFailure([object]$PlainResult) {
-    $reason = if ($PlainResult -and $PlainResult.reason) {
-        [string]$PlainResult.reason
+function Get-LastOAuthJsonResult([object[]]$Lines) {
+    $items = @($Lines)
+    for ($index = $items.Count - 1; $index -ge 0; $index--) {
+        try {
+            $value = ([string]$items[$index] | ConvertFrom-Json -ErrorAction Stop)
+            if ($null -ne $value) { return $value }
+        }
+        catch { }
     }
-    else {
-        '原生 Chrome 后台 OAuth 恢复未完成'
+    return $null
+}
+
+function Test-GenericOAuthFailureReason([string]$Reason) {
+    return [string]::IsNullOrWhiteSpace($Reason) -or $Reason -in @(
+        '原生 Chrome 后台 OAuth 恢复未完成',
+        '后台 OAuth 未在限定时间内完成'
+    )
+}
+
+function Get-OAuthFailureCode([object]$PlainResult, [object]$NativeResult, [string]$Reason) {
+    if ($PlainResult -and $PlainResult.upstreamLoginRequired -eq $true) { return 'upstream_login_required' }
+    if ($PlainResult -and $PlainResult.authorizationRequired -eq $true) { return 'upstream_authorization_required' }
+    foreach ($result in @($PlainResult, $NativeResult)) {
+        if ($result -and [string]$result.failureCode -match '^(account_mismatch|configuration_mismatch|upstream_login_required|upstream_authorization_required|managed_challenge|oauth_timeout|profile_busy|browser_startup|site_flow_changed|oauth_recovery_failed)$') {
+            return [string]$result.failureCode
+        }
     }
+    if ($Reason -match '账号.*(?:不匹配|不符)|配置.*不一致|绑定不匹配') { return 'account_mismatch' }
+    if ($Reason -match '上游登录.*失效|需要人工确认一次 .* 登录') { return 'upstream_login_required' }
+    if ($Reason -match '授权') { return 'upstream_authorization_required' }
+    if ($Reason -match '验证|Turnstile|Challenge') { return 'managed_challenge' }
+    if ($Reason -match 'Chrome.*占用') { return 'profile_busy' }
+    if ($Reason -match '限定时间|超时|未完成') { return 'oauth_timeout' }
+    if ($Reason -match '没有可用.*浏览器|没有找到目标登录页') { return 'browser_startup' }
+    if ($Reason -match '没有找到唯一|无法唯一识别|退出动作|退出接口') { return 'site_flow_changed' }
+    return 'oauth_recovery_failed'
+}
+
+function Convert-PlainOAuthFailure([object]$PlainResult, [object]$NativeResult) {
+    $reasons = @(
+        if ($PlainResult -and $PlainResult.reason) { [string]$PlainResult.reason }
+        if ($NativeResult -and $NativeResult.reason) { [string]$NativeResult.reason }
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $reason = @($reasons | Where-Object { -not (Test-GenericOAuthFailureReason $_) } | Select-Object -First 1)[0]
+    if ([string]::IsNullOrWhiteSpace($reason)) { $reason = @($reasons | Select-Object -First 1)[0] }
+    if ([string]::IsNullOrWhiteSpace($reason)) { $reason = '原生 Chrome 后台 OAuth 恢复未完成' }
+    $failureCode = Get-OAuthFailureCode $PlainResult $NativeResult $reason
     [pscustomobject]@{
         origin = $originValue
         provider = $Provider
@@ -140,6 +180,7 @@ function Convert-PlainOAuthFailure([object]$PlainResult) {
         accountLabel = $AccountLabel
         upstreamProvider = $UpstreamProvider
         reason = $reason.Substring(0, [Math]::Min(240, $reason.Length))
+        failureCode = $failureCode
     } | ConvertTo-Json -Compress
 }
 
@@ -155,6 +196,7 @@ if ($firstRound.ExitCode -eq 0) {
 # URL, callback code, cookie, token, or page body leaves that process.
 if ($Provider -eq 'LinuxDO') {
     $plainResult = $null
+    $nativeResult = Get-LastOAuthJsonResult $firstRound.Output
     $plainExitCode = 1
     try {
         $plainOutput = @(& (Join-Path $PSScriptRoot 'Invoke-PlainOAuthAccessibility.ps1') `
@@ -173,7 +215,7 @@ if ($Provider -eq 'LinuxDO') {
         if ($verificationRound.Output) { Write-Output $verificationRound.Output }
         exit $verificationRound.ExitCode
     }
-    Write-Output (Convert-PlainOAuthFailure $plainResult)
+    Write-Output (Convert-PlainOAuthFailure $plainResult $nativeResult)
     exit 2
 }
 

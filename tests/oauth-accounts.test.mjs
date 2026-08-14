@@ -239,6 +239,44 @@ test("隔离 helper 的主账号结果不冒充补充账号并保留权威身份
   assert.equal(supplementalResult.supplementalAccount, true);
 });
 
+test("OAuth 账号只对可自愈失败安排重试", () => {
+  const account = {
+    ...supplemental(),
+    supplementalAccount: true,
+    title: "Secondary target",
+  };
+  const timeout = oauthHelperResultToCheckin(account, {
+    status: "needs_attention",
+    reason: "OAuth 未在限定时间内完成",
+    failureCode: "oauth_timeout",
+  });
+  assert.equal(timeout.status, "login_required");
+  assert.equal(timeout.retryableLoginRecovery, true);
+
+  const mismatch = oauthHelperResultToCheckin(account, {
+    status: "needs_attention",
+    reason: "OAuth 登录账号与配置不匹配",
+    failureCode: "account_mismatch",
+  });
+  assert.equal(mismatch.status, "needs_attention");
+  assert.equal(mismatch.retryableLoginRecovery, false);
+});
+
+test("未初始化的隔离账号会话属于配置问题而不是瞬时失败", () => {
+  const result = oauthHelperResultToCheckin({
+    ...supplemental(),
+    supplementalAccount: true,
+    title: "Secondary target",
+  }, {
+    status: "needs_attention",
+    reason: "独立登录会话尚未初始化",
+    failureCode: "configuration_mismatch",
+  });
+  assert.equal(result.status, "needs_attention");
+  assert.equal(result.failureCode, "configuration_mismatch");
+  assert.equal(result.retryableLoginRecovery, false);
+});
+
 test("OAuth 账号瞬时失败使用有界重试策略", () => {
   assert.deepEqual(oauthAccountRetryPolicy({}), { attempts: 2, delayMs: 5000 });
   assert.deepEqual(oauthAccountRetryPolicy({ oauthAccountAttempts: 9, oauthAccountRetryDelayMs: 999999 }), {
