@@ -8,6 +8,7 @@ import {
   dismissBlockingModal,
   isTransientNavigationFailure,
   preferCandidateResult,
+  resultFromPageFailure,
   shouldTryGenericNewApiCheckin,
   turnstileWaitMs,
   tryBmapiCheckinStatus,
@@ -32,6 +33,28 @@ test("候选弱结果不会覆盖登录、挑战或延迟状态", () => {
 test("候选完成状态会覆盖此前异常状态", () => {
   const completed = { status: "signed", reason: "done" };
   assert.equal(preferCandidateResult({ status: "login_required" }, completed), completed);
+});
+
+test("跳转登录页时执行上下文销毁会恢复为登录失效", async () => {
+  let snapshots = 0;
+  const page = {
+    evaluate: async () => {
+      snapshots += 1;
+      if (snapshots === 1) throw new Error("Execution context was destroyed, most likely because of a navigation");
+      return {
+        bodyText: "登录 使用 LinuxDO 继续",
+        hasPassword: false,
+        challengeSelectors: false,
+      };
+    },
+    title: async () => "登录",
+    url: () => "https://example.test/login?expired=1",
+    waitForLoadState: async () => {},
+  };
+  const result = await resultFromPageFailure(page, new Error("Execution context was destroyed"), {});
+  assert.equal(result.status, "login_required");
+  assert.equal(result.url, "https://example.test/login?expired=%5BVALUE%5D");
+  assert.equal(snapshots, 2);
 });
 
 test("候选历史会脱敏网址和错误原因", () => {

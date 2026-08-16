@@ -12,12 +12,43 @@ import {
   nextDeferredRetryAt,
   nextShanghaiTime,
   resumeSelectedOrigins,
+  terminalResultReenabled,
   withRetrySchedule,
 } from "../src/retry-policy.mjs";
 
 test("凭据被拒绝是人工关注终态，不进入自动重试", () => {
   assert.equal(ATTENTION_STATUSES.has("needs_attention"), true);
   assert.equal(isRetryEligible({ status: "needs_attention", retryCause: "invalid_credential" }), false);
+});
+
+test("移出无签到名单后不复用当天的旧缓存终态", () => {
+  const target = { origin: "https://newly-enabled.example" };
+  const cached = {
+    origin: target.origin,
+    status: "not_available",
+    cached: true,
+  };
+  assert.equal(terminalResultReenabled(cached, target, {
+    knownNoCheckinFeatureOrigins: [target.origin],
+  }), false);
+  assert.equal(terminalResultReenabled(cached, target, {
+    knownNoCheckinFeatureOrigins: [],
+  }), true);
+  assert.equal(terminalResultReenabled({ ...cached, status: "signed" }, target, {
+    knownNoCheckinFeatureOrigins: [],
+  }), false);
+
+  const disabled = {
+    origin: target.origin,
+    status: "not_available",
+    disabledByConfig: true,
+  };
+  assert.equal(terminalResultReenabled(disabled, target, {
+    disabledCheckinOrigins: [target.origin],
+  }), false);
+  assert.equal(terminalResultReenabled(disabled, target, {
+    disabledCheckinOrigins: [],
+  }), true);
 });
 
 test("频率限制会获得有界的下次执行时间", () => {

@@ -106,12 +106,13 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
     { url: "https://audiences.me/attendance.php", waitSeconds: 90, action: "checkin" },
     { url: "https://ourbits.club/attendance.php", waitSeconds: 120, action: "checkin" },
   ]);
-  assert.match(preflightScript, /passiveOnly[\s\S]*Open-PlainLoginChrome\.ps1'[\s\S]*-RemoteDebuggingPort/);
+  assert.match(preflightScript, /passiveOnly[\s\S]*Invoke-PlainWafAccessibility\.ps1[\s\S]*-AllowPreparedSiteBody/);
   assert.match(preflightScript, /passiveOnly[\s\S]*\$passiveInspection\.status/);
   assert.match(preflightScript, /Invoke-PlainWafAccessibility\.ps1/);
   assert.match(preflightScript, /for\s*\(\$plainAttempt\s*=\s*1;\s*\$plainAttempt\s*-le\s*2/);
   assert.match(preflightScript, /\[bool\]\$item\.trustAsSigned/);
-  assert.match(preflightScript, /status\s*=\s*if\s*\(\$passivePrepared\)\s*\{\s*'signed'/);
+  assert.match(preflightScript, /\$preparedOnly/);
+  assert.match(preflightScript, /elseif\s*\(\$preparedOnly\)\s*\{\s*'prepared'/);
   assert.doesNotMatch(preflightScript, /inspectionStatus\s*=\s*if\s*\(\$passivePrepared\)\s*\{\s*'passive_wait'/);
   assert.match(preflightScript, /Offscreen\s*=\s*\$true/);
   assert.doesNotMatch(preflightScript, /action\s+-ne\s+'checkin'[\s\S]*?Offscreen/);
@@ -151,6 +152,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(plainWaf, /confirmationClickAttempted/);
   assert.match(plainWaf, /confirmationClicked/);
   assert.match(plainWaf, /cloudflareWaf/);
+  assert.match(plainWaf, /AllowPreparedSiteBody/);
   assert.doesNotMatch(plainWaf, /RemoteDebuggingPort/);
   assert.match(openChrome, /\[switch\]\$DisableExtensions/);
   assert.match(openChrome, /\[switch\]\$Minimized/);

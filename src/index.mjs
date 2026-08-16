@@ -38,6 +38,7 @@ import {
   isCurrentLocalRunId,
   isRetryEligible,
   nextDeferredRetryAt,
+  terminalResultReenabled,
   withRetrySchedule,
 } from "./retry-policy.mjs";
 
@@ -240,8 +241,7 @@ try {
         const prior = compatiblePriorResult(target, resumeBase.results);
         return !prior
           || isRetryEligible(prior)
-          || (prior.disabledByConfig === true
-            && !(config.disabledCheckinOrigins ?? []).includes(target.origin))
+          || terminalResultReenabled(prior, target, config)
           || (config.disabledCheckinOrigins ?? []).includes(target.origin);
       })
       : plannedTargets;
@@ -367,10 +367,9 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
-        const reenabledAfterConfigDisable = prior?.disabledByConfig === true
-          && !(config.disabledCheckinOrigins ?? []).includes(target.origin);
+        const reenabledTerminal = terminalResultReenabled(prior, target, config);
         const targetResult = explicitSelection && prior && TERMINAL_STATUSES.has(prior.status)
-          && !reenabledAfterConfigDisable
+          && !reenabledTerminal
           ? prior
           : isolatedPrimaryByIdentity.has(resultIdentity(target))
             ? await runIsolatedPrimaryTarget(target)

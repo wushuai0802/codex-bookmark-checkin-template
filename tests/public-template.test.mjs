@@ -62,6 +62,18 @@ test("AnyRouter 使用真实 sign_in 接口且不再以访问页面判成功", a
   assert.match(anyRouter.logSuccessText, /每日签到成功/);
 });
 
+test("Muyuan 启用签到并使用无调试 Cloudflare 预热", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  assert.equal(rules.newApiCheckinOrigins.includes("https://muyuan.do"), true);
+  assert.equal(rules.extendedDiscoveryOrigins.includes("https://muyuan.do"), true);
+  assert.equal(rules.automaticOAuthProviders["https://muyuan.do"], "LinuxDO");
+  assert.equal(rules.knownNoCheckinFeatureOrigins.includes("https://muyuan.do"), false);
+  assert.deepEqual(
+    rules.nativeChallengePreflight.find((item) => item.url === "https://muyuan.do/console"),
+    { url: "https://muyuan.do/console", waitSeconds: 90, passiveOnly: true },
+  );
+});
+
 test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async () => {
   const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
   const agentRouter = rules.oauthReloginCheckinRules["https://agentrouter.org"];

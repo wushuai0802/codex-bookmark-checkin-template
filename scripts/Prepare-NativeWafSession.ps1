@@ -135,38 +135,32 @@ foreach ($item in $items) {
         $passivePrepared = $false
         $passiveInspection = $null
         try {
-            if ([bool]$item.trustAsSigned) {
-                # 雷池会识别远程调试连接并拒绝通行。WAF 签到入口改用无调试
-                # Chrome + Windows 无障碍树确认页面终态，同时禁用扩展避免欢迎页抢占。
-                $powershellExecutable = (Get-Process -Id $PID).Path
-                for ($plainAttempt = 1; $plainAttempt -le 2 -and -not $passivePrepared; $plainAttempt++) {
+            # WAF services may reject any Chrome instance launched with a
+            # remote-debugging port. Passive preparation therefore uses only
+            # the native accessibility tree and persists the resulting cookie
+            # before the automation browser is allowed to inspect the site.
+            $powershellExecutable = (Get-Process -Id $PID).Path
+            for ($plainAttempt = 1; $plainAttempt -le 2 -and -not $passivePrepared; $plainAttempt++) {
+                if ([bool]$item.trustAsSigned) {
                     $inspectionText = & $powershellExecutable -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
                         (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1') `
                         -Origin $origin -Url $url -TimeoutSeconds ([int]$item.waitSeconds) 2>$null
-                    if ($inspectionText) {
-                        $inspection = $inspectionText | ConvertFrom-Json
-                        $passiveInspection = $inspection
-                        $passivePrepared = [string]$inspection.status -in @('signed', 'already_signed') `
-                            -or ([string]$inspection.status -eq 'ready' `
-                                -and [bool]$inspection.inspection.siteBodyLoaded `
-                                -and [bool]$inspection.inspection.attendanceEndpoint)
-                        if ([string]$inspection.status -eq 'login_required') { break }
-                    }
-                    if (-not $passivePrepared -and $plainAttempt -lt 2) { Start-Sleep -Seconds 2 }
                 }
-            }
-            else {
-                [void](Reset-NativeChromeDebugPort $profilePath)
-                $debugPort = Get-NativeChromeDebugPort
-                & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -Urls @($url) -RemoteDebuggingPort $debugPort
-                $nativeChromeStarted = $true
-                $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
-                $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) 'require-confirmed' 0 2>$null
-                if ($LASTEXITCODE -eq 0 -and $inspectionText) {
+                else {
+                    $inspectionText = & $powershellExecutable -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
+                        (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1') `
+                        -Origin $origin -Url $url -TimeoutSeconds ([int]$item.waitSeconds) -AllowPreparedSiteBody 2>$null
+                }
+                if ($inspectionText) {
                     $inspection = $inspectionText | ConvertFrom-Json
                     $passiveInspection = $inspection
-                    $passivePrepared = [string]$inspection.status -in @('signed', 'already_signed')
+                    $passivePrepared = [string]$inspection.status -in @('signed', 'already_signed') `
+                        -or ([string]$inspection.status -eq 'ready' `
+                            -and [bool]$inspection.inspection.siteBodyLoaded `
+                            -and (-not [bool]$item.trustAsSigned -or [bool]$inspection.inspection.attendanceEndpoint))
+                    if ([string]$inspection.status -eq 'login_required') { break }
                 }
+                if (-not $passivePrepared -and $plainAttempt -lt 2) { Start-Sleep -Seconds 2 }
             }
         }
         catch {
@@ -179,12 +173,25 @@ foreach ($item in $items) {
         if (-not $passivePrepared) {
             Write-Warning "被动原生预热未完成：$hostName"
         }
+        $explicitlyConfirmed = $null -ne $passiveInspection `
+            -and [string]$passiveInspection.status -in @('signed', 'already_signed')
+        $preparedOnly = $passivePrepared -and -not $explicitlyConfirmed -and -not [bool]$item.trustAsSigned
         $preflightResults += [pscustomobject]@{
             origin = $origin
             url = $url
-            status = if ($passivePrepared) { 'signed' } elseif ([string]$passiveInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
-            reason = if ($passivePrepared) {
+            status = if ($explicitlyConfirmed -or ($passivePrepared -and [bool]$item.trustAsSigned)) {
+                'signed'
+            } elseif ($preparedOnly) {
+                'prepared'
+            } elseif ([string]$passiveInspection.status -eq 'managed_challenge') {
+                'managed_challenge'
+            } else {
+                'unconfirmed'
+            }
+            reason = if ($explicitlyConfirmed -or ($passivePrepared -and [bool]$item.trustAsSigned)) {
                 if ($passiveInspection.reason) { [string]$passiveInspection.reason } else { '原生 Chrome 已确认签到完成' }
+            } elseif ($preparedOnly) {
+                '无调试原生 Chrome 已完成验证预热，等待自动化复查'
             } else {
                 if ($passiveInspection.reason) { [string]$passiveInspection.reason } else { '原生 Chrome 未取得明确签到终态' }
             }

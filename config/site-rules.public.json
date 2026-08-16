@@ -76,7 +76,6 @@
   ],
   "knownNoCheckinFeatureOrigins": [
     "https://ai-cf.ailinyu.de",
-    "https://muyuan.do",
     "https://rrrapi.com",
     "https://token.fourj.space"
   ],
@@ -91,7 +90,8 @@
   "nativeChallengePreflight": [
     { "url": "https://audiences.me/attendance.php", "waitSeconds": 90, "action": "checkin" },
     { "url": "https://ourbits.club/attendance.php", "waitSeconds": 120, "action": "checkin" },
-    { "url": "https://bmapi.020212.xyz/dashboard", "waitSeconds": 90, "action": "checkin" }
+    { "url": "https://bmapi.020212.xyz/dashboard", "waitSeconds": 90, "action": "checkin" },
+    { "url": "https://muyuan.do/console", "waitSeconds": 90, "passiveOnly": true }
   ],
   "oauthRedirectOverrides": {
     "https://free.lyclaude.site": {

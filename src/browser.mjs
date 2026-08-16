@@ -1067,10 +1067,28 @@ async function saveFailureScreenshot(page, logDirectory, target) {
   return file;
 }
 
-async function resultFromPageFailure(page, error, config) {
-  const pageState = await snapshotState(page).catch(() => null);
+async function snapshotStateAfterNavigation(page) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await snapshotState(page);
+    } catch (snapshotError) {
+      const contextReset = /Execution context was destroyed|Cannot find context with specified id|frame was detached/i
+        .test(String(snapshotError?.message ?? snapshotError));
+      if (!contextReset || attempt >= 2) return null;
+      await page.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => {});
+      await sleep(250);
+    }
+  }
+  return null;
+}
+
+export async function resultFromPageFailure(page, error, config) {
+  const pageState = await snapshotStateAfterNavigation(page);
   if (pageState?.status === "deferred") {
     return withRetrySchedule({ ...pageState, url: safeLogUrl(page.url()) }, config);
+  }
+  if (pageState && pageState.status !== "ready") {
+    return { ...pageState, url: safeLogUrl(page.url()) };
   }
   if (isTransientNavigationFailure(error)) {
     return withRetrySchedule({

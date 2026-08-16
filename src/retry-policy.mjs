@@ -11,6 +11,16 @@ export const ATTENTION_STATUSES = new Set(["needs_attention"]);
 
 export const TERMINAL_STATUSES = new Set(["signed", "already_signed", "not_available"]);
 
+export function terminalResultReenabled(prior, target, config = {}) {
+  if (prior?.status !== "not_available") return false;
+  const origin = String(target?.origin ?? prior?.origin ?? "");
+  const disabledOriginReenabled = prior.disabledByConfig === true
+    && !(config.disabledCheckinOrigins ?? []).includes(origin);
+  const cachedNoFeatureReenabled = prior.cached === true
+    && !(config.knownNoCheckinFeatureOrigins ?? []).includes(origin);
+  return disabledOriginReenabled || cachedNoFeatureReenabled;
+}
+
 export function applyManualConfirmations(results, confirmedOrigins, now = new Date()) {
   const confirmed = confirmedOrigins instanceof Set ? confirmedOrigins : new Set(confirmedOrigins ?? []);
   const confirmedAt = now.toISOString();

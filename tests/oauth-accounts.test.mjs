@@ -357,8 +357,8 @@ test("同域多账号支持按 accountKey 精确续跑并绕过该账号冷却",
 
 test("重新启用的站点不会复用旧的配置取消终态", async () => {
   const source = await fs.readFile(path.join(root, "src", "index.mjs"), "utf8");
-  assert.match(source, /prior\.disabledByConfig === true[\s\S]*?!\(config\.disabledCheckinOrigins/);
-  assert.match(source, /reenabledAfterConfigDisable[\s\S]*?!reenabledAfterConfigDisable/);
+  assert.match(source, /terminalResultReenabled\(prior, target, config\)/);
+  assert.match(source, /reenabledTerminal[\s\S]*?!reenabledTerminal/);
 });
 
 test("PowerShell wrapper 支持 HTTPS 来源级定向续跑", async () => {

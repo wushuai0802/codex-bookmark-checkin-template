@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Origin,
     [Parameter(Mandatory = $true)][string]$Url,
     [ValidateRange(5, 120)][int]$TimeoutSeconds = 60,
-    [string]$UserDataDirOverride
+    [string]$UserDataDirOverride,
+    [switch]$AllowPreparedSiteBody
 )
 
 $ErrorActionPreference = 'Stop'
@@ -230,6 +231,16 @@ try {
             [pscustomobject]@{
                 status = 'ready'
                 reason = '无调试原生 Chrome 已通过 WAF 并加载签到页面'
+                confirmationClickAttempted = $confirmationClickAttempted
+                confirmationClicked = $confirmationClicked
+                inspection = $last
+            } | ConvertTo-Json -Depth 8
+            exit 0
+        }
+        if ($AllowPreparedSiteBody -and $last.siteBodyLoaded -and -not $last.loginRoute) {
+            [pscustomobject]@{
+                status = 'ready'
+                reason = '无调试原生 Chrome 已完成安全验证预热'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 inspection = $last
