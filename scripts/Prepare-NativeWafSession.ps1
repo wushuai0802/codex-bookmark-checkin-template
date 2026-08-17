@@ -61,6 +61,8 @@ if (-not $AllConfigured) {
 
 $knownNoCheckin = @{}
 foreach ($value in @($config.knownNoCheckinFeatureOrigins)) { $knownNoCheckin[[string]$value] = $true }
+$autoClickTurnstile = @{}
+foreach ($value in @($config.autoClickTurnstileOrigins)) { $autoClickTurnstile[[string]$value] = $true }
 $siteStatePath = Join-Path $root 'data\site-state.json'
 if ($knownNoCheckin.Count -gt 0 -and (Test-Path -LiteralPath $siteStatePath)) {
     try {
@@ -141,16 +143,14 @@ foreach ($item in $items) {
             # before the automation browser is allowed to inspect the site.
             $powershellExecutable = (Get-Process -Id $PID).Path
             for ($plainAttempt = 1; $plainAttempt -le 2 -and -not $passivePrepared; $plainAttempt++) {
-                if ([bool]$item.trustAsSigned) {
-                    $inspectionText = & $powershellExecutable -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
-                        (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1') `
-                        -Origin $origin -Url $url -TimeoutSeconds ([int]$item.waitSeconds) 2>$null
-                }
-                else {
-                    $inspectionText = & $powershellExecutable -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
-                        (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1') `
-                        -Origin $origin -Url $url -TimeoutSeconds ([int]$item.waitSeconds) -AllowPreparedSiteBody 2>$null
-                }
+                $plainArguments = @(
+                    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                    (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1'),
+                    '-Origin', $origin, '-Url', $url, '-TimeoutSeconds', [string]([int]$item.waitSeconds)
+                )
+                if (-not [bool]$item.trustAsSigned) { $plainArguments += '-AllowPreparedSiteBody' }
+                if ($autoClickTurnstile.ContainsKey($origin)) { $plainArguments += '-AllowCloudflareChallengeClick' }
+                $inspectionText = & $powershellExecutable @plainArguments 2>$null
                 if ($inspectionText) {
                     $inspection = $inspectionText | ConvertFrom-Json
                     $passiveInspection = $inspection

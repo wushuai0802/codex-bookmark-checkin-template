@@ -72,7 +72,8 @@
     }
   },
   "autoClickTurnstileOrigins": [
-    "https://bmapi.020212.xyz"
+    "https://bmapi.020212.xyz",
+    "https://muyuan.do"
   ],
   "knownNoCheckinFeatureOrigins": [
     "https://ai-cf.ailinyu.de",

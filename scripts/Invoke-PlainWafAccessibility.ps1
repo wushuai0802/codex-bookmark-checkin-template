@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Url,
     [ValidateRange(5, 120)][int]$TimeoutSeconds = 60,
     [string]$UserDataDirOverride,
-    [switch]$AllowPreparedSiteBody
+    [switch]$AllowPreparedSiteBody,
+    [switch]$AllowCloudflareChallengeClick
 )
 
 $ErrorActionPreference = 'Stop'
@@ -201,6 +202,51 @@ function Invoke-LeichiConfirmationClick {
     return $false
 }
 
+function Invoke-CloudflareChallengeClick {
+    $allowedNames = @{
+        'Verify you are human' = $true
+        '请验证您是真人' = $true
+        '請驗證您是真人' = $true
+        '验证您是真人' = $true
+        '驗證您是真人' = $true
+        '验证你是真人' = $true
+        '驗證你是真人' = $true
+    }
+    $matches = @()
+    foreach ($element in @(Get-AllAutomationElements)) {
+        try {
+            $name = ([string]$element.Current.Name).Trim()
+            if (-not $allowedNames.ContainsKey($name) -or -not $element.Current.IsEnabled) { continue }
+            if ($element.Current.ControlType -notin @(
+                [System.Windows.Automation.ControlType]::Button,
+                [System.Windows.Automation.ControlType]::CheckBox
+            )) { continue }
+            $matches += $element
+        }
+        catch { }
+    }
+    if ($matches.Count -ne 1) { return $false }
+    $control = $matches[0]
+    try {
+        $invoke = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $invoke.Invoke()
+        return $true
+    }
+    catch { }
+    try {
+        $toggle = $control.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+        if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { $toggle.Toggle() }
+        return $true
+    }
+    catch { }
+    try {
+        $legacy = $control.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        $legacy.DoDefaultAction()
+        return $true
+    }
+    catch { return $false }
+}
+
 if ((Get-ProfileChromeProcesses).Count -gt 0) { throw '机器人专用 Chrome 配置正被占用。' }
 $started = $false
 try {
@@ -214,6 +260,8 @@ try {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $confirmationClickAttempted = $false
     $confirmationClicked = $false
+    $cloudflareObservedAt = $null
+    $cloudflareChallengeClicked = $false
     $last = $null
     do {
         $last = Read-PageSnapshot
@@ -223,6 +271,7 @@ try {
                 reason = '无调试原生 Chrome 页面确认签到完成'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
+                cloudflareChallengeClicked = $cloudflareChallengeClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 0
@@ -233,6 +282,7 @@ try {
                 reason = '无调试原生 Chrome 已通过 WAF 并加载签到页面'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
+                cloudflareChallengeClicked = $cloudflareChallengeClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 0
@@ -243,6 +293,7 @@ try {
                 reason = '无调试原生 Chrome 已完成安全验证预热'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
+                cloudflareChallengeClicked = $cloudflareChallengeClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 0
@@ -253,6 +304,7 @@ try {
                 reason = '无调试原生 Chrome 进入登录页'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
+                cloudflareChallengeClicked = $cloudflareChallengeClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 2
@@ -265,13 +317,23 @@ try {
                 continue
             }
         }
+        if ($last.cloudflareWaf -and $null -eq $cloudflareObservedAt) { $cloudflareObservedAt = Get-Date }
+        if ($AllowCloudflareChallengeClick -and $last.cloudflareWaf -and -not $cloudflareChallengeClicked -and
+            $null -ne $cloudflareObservedAt -and ((Get-Date) - $cloudflareObservedAt).TotalSeconds -ge 8) {
+            $cloudflareChallengeClicked = Invoke-CloudflareChallengeClick
+            if ($cloudflareChallengeClicked) {
+                Start-Sleep -Seconds 3
+                continue
+            }
+        }
         Start-Sleep -Milliseconds 750
     } while ((Get-Date) -lt $deadline)
     [pscustomobject]@{
         status = if ($last.waf) { 'managed_challenge' } else { 'unconfirmed' }
-        reason = "无调试原生 Chrome 未取得签到终态（雷池确认点击=$confirmationClicked）"
+        reason = "无调试原生 Chrome 未取得签到终态（雷池确认点击=$confirmationClicked，Cloudflare 验证点击=$cloudflareChallengeClicked）"
         confirmationClickAttempted = $confirmationClickAttempted
         confirmationClicked = $confirmationClicked
+        cloudflareChallengeClicked = $cloudflareChallengeClicked
         inspection = $last
     } | ConvertTo-Json -Depth 8
     exit 2

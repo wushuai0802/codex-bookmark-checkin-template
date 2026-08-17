@@ -153,6 +153,12 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(plainWaf, /confirmationClicked/);
   assert.match(plainWaf, /cloudflareWaf/);
   assert.match(plainWaf, /AllowPreparedSiteBody/);
+  assert.match(plainWaf, /AllowCloudflareChallengeClick/);
+  assert.match(plainWaf, /function Invoke-CloudflareChallengeClick/);
+  assert.match(plainWaf, /请验证您是真人/);
+  assert.match(plainWaf, /cloudflareChallengeClicked/);
+  assert.match(preflightScript, /autoClickTurnstileOrigins/);
+  assert.match(preflightScript, /-AllowCloudflareChallengeClick/);
   assert.doesNotMatch(plainWaf, /RemoteDebuggingPort/);
   assert.match(openChrome, /\[switch\]\$DisableExtensions/);
   assert.match(openChrome, /\[switch\]\$Minimized/);

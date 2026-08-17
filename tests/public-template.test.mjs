@@ -68,6 +68,7 @@ test("Muyuan 启用签到并使用无调试 Cloudflare 预热", async () => {
   assert.equal(rules.extendedDiscoveryOrigins.includes("https://muyuan.do"), true);
   assert.equal(rules.automaticOAuthProviders["https://muyuan.do"], "LinuxDO");
   assert.equal(rules.knownNoCheckinFeatureOrigins.includes("https://muyuan.do"), false);
+  assert.equal(rules.autoClickTurnstileOrigins.includes("https://muyuan.do"), true);
   assert.deepEqual(
     rules.nativeChallengePreflight.find((item) => item.url === "https://muyuan.do/console"),
     { url: "https://muyuan.do/console", waitSeconds: 90, passiveOnly: true },
