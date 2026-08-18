@@ -152,6 +152,29 @@ $primaryIdentityProfiles = @($config.oauthAccountIdentities.PSObject.Properties 
 $supplementalProfiles = @($supplementalAccounts | ForEach-Object {
     Get-OAuthProfileHealth ([string]$_.automationUserDataDir) ([string]$_.accountKey) 'supplemental'
 })
+$isolatedOAuthSiteProfiles = @($config.isolatedOAuthSiteProfiles.PSObject.Properties | ForEach-Object {
+    $profile = Get-OAuthProfileHealth ([string]$_.Value) ([string]$_.Name) 'isolated_site'
+    $profile | Add-Member -NotePropertyName origin -NotePropertyValue ([string]$_.Name) -PassThru
+})
+$oauthSessionProfiles = @(if ($null -ne $config.oauthSessionProfiles) {
+    $config.oauthSessionProfiles.PSObject.Properties | ForEach-Object {
+        Get-OAuthProfileHealth ([string]$_.Value) ([string]$_.Name) 'oauth_session'
+    }
+})
+$oauthSessionBindings = @(if ($null -ne $config.oauthSiteSessionBindings) {
+    $config.oauthSiteSessionBindings.PSObject.Properties | ForEach-Object {
+        $origin = try { ([uri][string]$_.Name).GetLeftPart([System.UriPartial]::Authority) } catch { $null }
+        $sessionKey = [string]$_.Value
+        [pscustomobject]@{
+            origin = $origin
+            sessionKey = $sessionKey
+            validOrigin = [bool]($origin -and ([string]$_.Name).TrimEnd('/') -eq $origin)
+            configured = @($oauthSessionProfiles | Where-Object { $_.accountKey -eq $sessionKey }).Count -eq 1
+        }
+    }
+})
+$oauthSessionProfilesReady = @($oauthSessionProfiles | Where-Object { -not $_.valid -or -not $_.present }).Count -eq 0
+$oauthSessionBindingsReady = @($oauthSessionBindings | Where-Object { -not $_.validOrigin -or -not $_.configured }).Count -eq 0
 $rawAllowedOAuthProviders = if (@($config.oauthAllowedProviders).Count -gt 0) { @($config.oauthAllowedProviders) }
 else { @('LinuxDO', 'GitHub', 'Google') }
 $allowedOAuthProviders = @(
@@ -227,11 +250,16 @@ $oauthBindingReady = @($oauthAccountBindings | Where-Object { -not $_.ready }).C
 $oauthBindingConsistent = @($oauthAccountBindings | Where-Object { -not $_.consistent }).Count -eq 0
 $oauthBindingSelfContained = $config.requireInlineOAuthIdentityTuple -ne $true -or @($primaryOAuthBindings | Where-Object { -not $_.selfContained }).Count -eq 0
 $oauthAccountProfiles = @($primaryIdentityProfiles) + @($supplementalProfiles)
-$reservedOAuthProfiles = @($globalProfile) + @($oauthAccountProfiles)
+$reservedOAuthProfiles = @($globalProfile) + @($oauthAccountProfiles) + @($isolatedOAuthSiteProfiles) + @($oauthSessionProfiles)
 $duplicateOAuthProfileGroups = @($reservedOAuthProfiles | Where-Object { $_.valid } | Group-Object { $_.path.ToLowerInvariant() } | Where-Object { $_.Count -gt 1 })
 $configuredOAuthProfilePathKeys = @($reservedOAuthProfiles | Where-Object { $_.valid } | ForEach-Object { $_.path.ToLowerInvariant() } | Sort-Object -Unique)
 $accountsRoot = Join-Path $root 'data\accounts'
 $orphanOAuthProfiles = @(Get-ChildItem -LiteralPath $accountsRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+    $candidate = [System.IO.Path]::GetFullPath((Join-Path $_.FullName 'chrome-user-data'))
+    (Test-Path -LiteralPath (Join-Path $candidate 'Local State')) -and $configuredOAuthProfilePathKeys -notcontains $candidate.ToLowerInvariant()
+} | ForEach-Object { $_.Name })
+$sitesRoot = Join-Path $root 'data\sites'
+$orphanIsolatedOAuthSiteProfiles = @(Get-ChildItem -LiteralPath $sitesRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
     $candidate = [System.IO.Path]::GetFullPath((Join-Path $_.FullName 'chrome-user-data'))
     (Test-Path -LiteralPath (Join-Path $candidate 'Local State')) -and $configuredOAuthProfilePathKeys -notcontains $candidate.ToLowerInvariant()
 } | ForEach-Object { $_.Name })
@@ -269,6 +297,9 @@ $checks = [ordered]@{
     automationProfilePresent = [bool]$globalProfile.present
     oauthIdentityProfilesPresent = @($primaryIdentityProfiles | Where-Object { -not $_.present }).Count -eq 0
     supplementalProfilesPresent = @($supplementalProfiles | Where-Object { -not $_.present }).Count -eq 0
+    isolatedOAuthSiteProfilesPresent = @($isolatedOAuthSiteProfiles | Where-Object { -not $_.present }).Count -eq 0
+    oauthSessionProfilesPresent = [bool]$oauthSessionProfilesReady
+    oauthSessionBindingsReady = [bool]$oauthSessionBindingsReady
     oauthAccountProfilesUnique = $duplicateOAuthProfileGroups.Count -eq 0
     oauthAccountBindingsReady = [bool]$oauthBindingReady
     oauthAccountBindingsConsistent = [bool]$oauthBindingConsistent
@@ -286,6 +317,7 @@ $checks = [ordered]@{
     runtimeAclPrivate = [bool]$runtimeAclPrivate
     noOrphanOAuthProfiles = $orphanOAuthProfiles.Count -eq 0
     noOrphanSupplementalProfiles = $orphanOAuthProfiles.Count -eq 0
+    noOrphanIsolatedOAuthSiteProfiles = $orphanIsolatedOAuthSiteProfiles.Count -eq 0
     stalePrivateTempClean = $staleTempCount -eq 0
     latestResultPresent = [bool]$latest
     latestResultValid = [bool]$latestResultValid
@@ -326,10 +358,14 @@ $result = [ordered]@{
     notificationPendingCount = $notificationPendingCount
     orphanOAuthProfiles = $orphanOAuthProfiles
     orphanSupplementalProfiles = $orphanOAuthProfiles
+    orphanIsolatedOAuthSiteProfiles = $orphanIsolatedOAuthSiteProfiles
     stalePrivateTempCount = $staleTempCount
     trackedSiteCount = if ($siteState -and $siteState.sites) { @($siteState.sites.PSObject.Properties).Count } else { 0 }
     oauthIdentityProfiles = $primaryIdentityProfiles
     supplementalProfiles = $supplementalProfiles
+    isolatedOAuthSiteProfiles = $isolatedOAuthSiteProfiles
+    oauthSessionProfiles = $oauthSessionProfiles
+    oauthSessionBindings = $oauthSessionBindings
     oauthAccountBindings = $oauthAccountBindings
     checks = $checks
 }

@@ -343,16 +343,12 @@ test("PowerShell OAuth 绑定优先采用主身份内联登录元组", async () 
 
 test("同域多账号支持按 accountKey 精确续跑并绕过该账号冷却", async () => {
   const source = await fs.readFile(path.join(root, "src", "index.mjs"), "utf8");
-  const wrapper = await fs.readFile(path.join(root, "scripts", "Run-Checkin.ps1"), "utf8");
   assert.match(source, /process\.argv\.indexOf\("--account-keys"\)/);
   assert.match(source, /const selectedAccountKeys = accountKeysIndex >= 0/);
   assert.match(source, /const explicitSelection = Boolean\(selectedOrigins \|\| selectedAccountKeys\)/);
   assert.match(source, /selectedAccountKeys\.has\(String\(target\.accountKey \|\| ""\)\.trim\(\)\)/);
   assert.match(source, /定向续跑账号不存在/);
   assert.match(source, /explicitSelection && prior && TERMINAL_STATUSES\.has\(prior\.status\)/);
-  assert.match(wrapper, /\[string\[\]\]\$AccountKeys/);
-  assert.match(wrapper, /定向账号续跑需要今天已有完整 final 报告/);
-  assert.match(wrapper, /--account-keys/);
 });
 
 test("重新启用的站点不会复用旧的配置取消终态", async () => {

@@ -223,27 +223,6 @@ test("站点故障在通知中显示为自动重试而不是人工关注", async
   assert.doesNotMatch(report.summary, /需关注/);
 });
 
-test("当天已停止重试的维护站点不计入未开放签到", async () => {
-  const report = await previewReport({
-    runId: "20260723-120004-settled",
-    runState: "final",
-    plannedTotal: 1,
-    processedTotal: 1,
-    isComplete: true,
-    results: [{
-      origin: "https://maintenance.example.test",
-      status: "not_available",
-      temporarilyUnavailable: true,
-      reason: "站点维护或网络不可用，今日停止重试，明日自动恢复",
-    }],
-  });
-
-  assert.equal(report.status, "skipped");
-  assert.match(report.summary, /1 个站点暂不可用（今日不再重试）/);
-  assert.match(report.summary, /0 个未开放签到/);
-  assert.doesNotMatch(report.summary, /待自动重试/);
-});
-
 test("完整报告中的弱结果和可恢复异常统一显示为自动重试", async () => {
   const statuses = ["visited", "clicked", "no_action", "unconfirmed", "error", "managed_challenge_timeout"];
   const report = await previewReport({
@@ -278,6 +257,27 @@ test("真正需要登录或交互验证时仍明确要求人工处理", async ()
     assert.equal(report.status, "needs_attention");
     assert.match(report.summary, /需关注 1 个：/);
   }
+});
+
+test("当天已停止重试的维护站点不计入未开放签到", async () => {
+  const report = await previewReport({
+    runId: "20260723-120004-settled",
+    runState: "final",
+    plannedTotal: 1,
+    processedTotal: 1,
+    isComplete: true,
+    results: [{
+      origin: "https://maintenance.example.test",
+      status: "not_available",
+      temporarilyUnavailable: true,
+      reason: "站点维护或网络不可用，今日停止重试，明日自动恢复",
+    }],
+  });
+
+  assert.equal(report.status, "skipped");
+  assert.match(report.summary, /1 个站点暂不可用（今日不再重试）/);
+  assert.match(report.summary, /0 个未开放签到/);
+  assert.doesNotMatch(report.summary, /待自动重试/);
 });
 
 test("伪造相同数量的重复 signed 结果不能冒充完整报告", async () => {

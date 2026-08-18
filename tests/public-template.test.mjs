@@ -24,6 +24,9 @@ test("公开默认配置不启用外部通知", async () => {
   assert.deepEqual(defaults.newApiCaptchaRules, {});
   assert.deepEqual(defaults.newApiSignInRules, {});
   assert.deepEqual(defaults.oauthReloginCheckinRules, {});
+  assert.deepEqual(defaults.isolatedOAuthSiteProfiles, {});
+  assert.deepEqual(defaults.oauthSessionProfiles, {});
+  assert.deepEqual(defaults.oauthSiteSessionBindings, {});
 });
 
 test("CI 使用最小权限、固定 Action 提交并扫描 Git 历史", async () => {
@@ -262,6 +265,11 @@ test("非 Git 安全扫描忽略依赖环境和本地运行数据", async () => 
   } finally {
     await fs.rm(sandbox, { recursive: true, force: true });
   }
+});
+
+test("非 Git 安全扫描容忍遍历时消失的临时目录", async () => {
+  const scanner = await fs.readFile(new URL("../scripts/Scan-PublicSafety.ps1", import.meta.url), "utf8");
+  assert.match(scanner, /Get-ChildItem -LiteralPath \$root -Recurse -File -ErrorAction SilentlyContinue/);
 });
 
 test("Git 安全扫描覆盖尚未跟踪的公开候选文件", async () => {

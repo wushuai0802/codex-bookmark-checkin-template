@@ -30,6 +30,14 @@ import {
   runSupplementalOAuthAccount,
 } from "./supplemental-oauth-accounts.mjs";
 import {
+  configuredIsolatedOAuthSiteProfiles,
+  configForIsolatedOAuthSite,
+} from "./isolated-site-profiles.mjs";
+import {
+  configuredOAuthSessionProfiles,
+  configForOAuthSession,
+} from "./oauth-session-profiles.mjs";
+import {
   TERMINAL_STATUSES,
   advanceAttemptedDeferredRetries,
   applyManualConfirmations,
@@ -120,10 +128,13 @@ async function readFreshNativeWafPreflight() {
     .map((result) => [result.origin, result]));
 }
 
+const activeContexts = new Set();
 const lockLease = await acquireRunLock(lockPath);
 try {
   const plan = await readValidatedBookmarkPlan();
   const { isolatedPrimaryAccounts, supplementalAccounts } = configuredOAuthAccounts(config, rootDirectory);
+  const isolatedOAuthSiteProfiles = configuredIsolatedOAuthSiteProfiles(config, rootDirectory);
+  const oauthSessionProfiles = configuredOAuthSessionProfiles(config, rootDirectory);
   const isolatedPrimaryByIdentity = new Map(
     isolatedPrimaryAccounts.map((account) => [resultIdentity(account), account]),
   );
@@ -152,7 +163,6 @@ try {
   };
   const reportPath = path.join(rootDirectory, "outputs", "bookmark-comparison.json");
   await atomicWriteJson(reportPath, report);
-
   if (printPreflightOrigins) {
     console.log(JSON.stringify(selectPreflightOrigins(plan, config)));
   } else if (dryRun) {
@@ -292,11 +302,24 @@ try {
 
     await writeProgress("initial");
     const globalContextTargets = selectedTargets.filter(
-      (target) => !isolatedPrimaryByIdentity.has(resultIdentity(target)),
+      (target) => !isolatedPrimaryByIdentity.has(resultIdentity(target))
+        && !isolatedOAuthSiteProfiles.has(target.origin),
     );
-    const context = globalContextTargets.some((target) => !configuredTargetSkip(target, config))
-      ? await launchAutomationContext(config)
-      : null;
+    const sharedContexts = new Map();
+    const getSharedContext = async (target) => {
+      const runtimeConfig = configForOAuthSession(config, oauthSessionProfiles, target.origin);
+      const profileKey = path.resolve(runtimeConfig.automationUserDataDir);
+      let context = sharedContexts.get(profileKey);
+      if (!context) {
+        context = await launchAutomationContext(runtimeConfig);
+        sharedContexts.set(profileKey, context);
+        activeContexts.add(context);
+      }
+      return context;
+    };
+    if (globalContextTargets.some((target) => !configuredTargetSkip(target, config))) {
+      await getSharedContext(globalContextTargets.find((target) => !configuredTargetSkip(target, config)));
+    }
 
     const rememberLogicalCompletion = (target, result) => {
       const key = logicalCompletionKey({ ...target, ...result }, config.logicalCheckinGroups);
@@ -362,8 +385,32 @@ try {
       return timed;
     };
 
-    try {
-      for (let index = 0; index < selectedTargets.length; index += 1) {
+    const runIsolatedOAuthSiteTarget = async (target) => {
+      const configuredSkip = configuredTargetSkip(target, config);
+      if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
+      const siteConfig = configForIsolatedOAuthSite(config, isolatedOAuthSiteProfiles, target.origin);
+      const profileReady = await fs.access(path.join(siteConfig.automationUserDataDir, "Local State"))
+        .then(() => true)
+        .catch(() => false);
+      if (!profileReady) {
+        return {
+          status: "login_required",
+          reason: `隔离 OAuth 站点会话尚未初始化，已进入自动恢复：${target.origin}`,
+          retryCause: "login_required",
+          url: target.candidates?.[0] || target.origin,
+          attempt: 1,
+          candidateHistory: [],
+        };
+      }
+      const siteContext = await launchAutomationContext(siteConfig);
+      try {
+        return await runOneTarget(siteContext, target);
+      } finally {
+        await siteContext.close().catch(() => {});
+      }
+    };
+
+    for (let index = 0; index < selectedTargets.length; index += 1) {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
@@ -373,7 +420,9 @@ try {
           ? prior
           : isolatedPrimaryByIdentity.has(resultIdentity(target))
             ? await runIsolatedPrimaryTarget(target)
-            : await runOneTarget(context, target);
+            : isolatedOAuthSiteProfiles.has(target.origin)
+              ? await runIsolatedOAuthSiteTarget(target)
+            : await runOneTarget(await getSharedContext(target), target);
         results.push({
           origin: target.origin,
           title: target.title,
@@ -382,9 +431,6 @@ try {
           ...targetResult,
         });
         await writeProgress("checkin");
-      }
-    } finally {
-      await context?.close();
     }
 
     // Only unresolved sites enter recovery.  Login repair is attempted before
@@ -513,9 +559,7 @@ try {
 
       const delayMs = Math.max(0, Number(recoveryDelays[Math.min(round, recoveryDelays.length - 1)]) || 0);
       if (delayMs > 0) await wait(delayMs);
-      let recoveryContext = null;
-      try {
-        for (let recoveryIndex = 0; recoveryIndex < recoveryIndexes.length; recoveryIndex += 1) {
+      for (let recoveryIndex = 0; recoveryIndex < recoveryIndexes.length; recoveryIndex += 1) {
           const resultIndex = recoveryIndexes[recoveryIndex];
           const target = selectedTargets[resultIndex];
           const initialResult = results[resultIndex];
@@ -535,8 +579,11 @@ try {
               retryCause: "invalid_credential",
             };
           } else {
-            recoveryContext ??= await launchAutomationContext(config);
-            recoveredResult = await runOneTarget(recoveryContext, target);
+            if (isolatedOAuthSiteProfiles.has(target.origin)) {
+              recoveredResult = await runIsolatedOAuthSiteTarget(target);
+            } else {
+              recoveredResult = await runOneTarget(await getSharedContext(target), target);
+            }
           }
           const priorHistory = initialResult.recovery?.history ?? [];
           results[resultIndex] = {
@@ -559,9 +606,6 @@ try {
             recoveryCompleted: recoveryIndex + 1,
             recoveryTotal: recoveryIndexes.length,
           });
-        }
-      } finally {
-        await recoveryContext?.close();
       }
     }
 
@@ -632,5 +676,6 @@ try {
     }
   }
 } finally {
+  await Promise.all([...activeContexts].map((context) => context.close().catch(() => {})));
   await releaseRunLock(lockLease).catch(() => {});
 }

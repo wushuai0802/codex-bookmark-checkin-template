@@ -5,6 +5,14 @@ import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { safeLogUrl } from "./security.mjs";
 import {
+  configuredIsolatedOAuthSiteProfiles,
+  configForIsolatedOAuthSite,
+} from "./isolated-site-profiles.mjs";
+import {
+  configuredOAuthSessionProfiles,
+  configForOAuthSession,
+} from "./oauth-session-profiles.mjs";
+import {
   configuredOAuthReloginRule,
   forceConfiguredOAuthLogout,
   tryOAuthReloginCheckinStatus,
@@ -18,6 +26,10 @@ const provider = process.argv[3] || "LinuxDO";
 if (!requestedOrigin) throw new Error("用法: node src/oauth-login.mjs <origin> [provider]");
 const origin = new URL(requestedOrigin).origin;
 await findBookmarkTarget(config.bookmarksPath, origin, config);
+const isolatedOAuthSiteProfiles = configuredIsolatedOAuthSiteProfiles(config, rootDirectory);
+const oauthSessionProfiles = configuredOAuthSessionProfiles(config, rootDirectory);
+const isolatedConfig = configForIsolatedOAuthSite(config, isolatedOAuthSiteProfiles, origin);
+const runtimeConfig = configForOAuthSession(isolatedConfig, oauthSessionProfiles, origin);
 
 async function trySavedLinuxDoLogin(page) {
   const location = new URL(page.url());
@@ -108,7 +120,7 @@ async function revealAlternateLoginOptions(page) {
   return false;
 }
 
-const context = await launchAutomationContext(config);
+const context = await launchAutomationContext(runtimeConfig);
 try {
   let page = await context.newPage();
   const reloginRule = configuredOAuthReloginRule(origin, config);
@@ -118,9 +130,13 @@ try {
   if (loginUrl.origin !== origin || loginUrl.protocol !== "https:") throw new Error("OAuth 登录入口不属于目标站点");
   await page.goto(loginUrl.href, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
-  const agreementCheckbox = page.locator('input[type="checkbox"]:visible');
-  if (await agreementCheckbox.count() === 1 && !await agreementCheckbox.isChecked()) {
-    await agreementCheckbox.check({ force: true, timeout: 5000 });
+  for (const agreementCheckbox of await page.getByRole("checkbox").all()) {
+    if (!await agreementCheckbox.isVisible()) continue;
+    const checked = await agreementCheckbox.isChecked().catch(async () => (
+      await agreementCheckbox.getAttribute("aria-checked") === "true"
+    ));
+    if (!checked) await agreementCheckbox.click({ force: true, timeout: 5000 });
+    break;
   }
   const providerVariants = [...new Set([provider, provider.replace(/linuxdo/i, "Linux DO")])];
   const providerLabels = providerVariants.flatMap((name) => [
@@ -189,6 +205,9 @@ try {
   const finalUrl = page.url();
   const bodyText = String(await page.locator("body").innerText()).replace(/\s+/g, " ").trim();
   const finalLocation = new URL(finalUrl);
+  const oauthFailure = finalLocation.searchParams.has("error")
+    || finalLocation.hash.includes("error=")
+    || /管理员关闭了新用户注册|注册已关闭|禁止注册|registration is disabled|sign[- ]up is disabled|oauth(?:\s+|[-_])?(?:failed|error)|authorization failed/i.test(bodyText);
   const visiblePassword = await page.locator('input[type="password"]:visible').count() > 0;
   let visibleProviderLogin = false;
   for (const label of providerLabels) {
@@ -210,7 +229,8 @@ try {
   let loggedIn = finalLocation.origin === origin
     && !/\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(finalLocation.href)
     && !visiblePassword
-    && !visibleProviderLogin;
+    && !visibleProviderLogin
+    && !oauthFailure;
   let dailyCheckin = null;
   if (loggedIn && reloginRule) {
     const verificationDeadline = Date.now() + reloginRule.verificationWaitMs;

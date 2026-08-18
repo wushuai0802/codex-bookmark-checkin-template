@@ -34,6 +34,18 @@ test("调度器 claim 前异常也进入统一失败状态与通知链", async (
     "异常后应先退出 running_checkin heartbeat，再尝试通知");
 });
 
+test("调度器与看门狗使用唯一临时文件和有界原子替换", async () => {
+  const scheduler = await schedulerSource();
+  const watchdog = await fs.readFile(path.join(root, "scripts", "Ensure-UserScheduler.ps1"), "utf8");
+  for (const source of [scheduler, watchdog]) {
+    assert.match(source, /function Write-AtomicTextFile/);
+    assert.match(source, /\[guid\]::NewGuid\(\)\.ToString\('N'\)/);
+    assert.match(source, /\[System\.IO\.File\]::Replace/);
+    assert.match(source, /for \(\$attempt = 0; \$attempt -lt 8;/);
+    assert.doesNotMatch(source, /Move-Item -LiteralPath \$temporary -Destination/);
+  }
+});
+
 test("仅剩凭据拒绝等人工关注时调度器不会每小时空转", async () => {
   const scheduler = await fs.readFile(path.join(root, "scripts", "Start-UserScheduler.ps1"), "utf8");
   assert.match(scheduler, /\$automaticRetryProblems/);

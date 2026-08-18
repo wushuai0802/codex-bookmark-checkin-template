@@ -19,10 +19,36 @@ $mutexCreated = $false
 $mutex = [System.Threading.Mutex]::new($true, 'Local\CodexBookmarkDailyCheckinWatchdog', [ref]$mutexCreated)
 if (-not $mutexCreated) { exit 0 }
 
+function Write-AtomicTextFile([string]$destination, [string]$content) {
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+    $nonce = [guid]::NewGuid().ToString('N')
+    $temporary = "$destination.$PID.$nonce.tmp"
+    $backup = "$destination.$PID.$nonce.bak"
+    try {
+        [System.IO.File]::WriteAllText($temporary, $content, [System.Text.UTF8Encoding]::new($false))
+        for ($attempt = 0; $attempt -lt 8; $attempt += 1) {
+            try {
+                if ([System.IO.File]::Exists($destination)) {
+                    [System.IO.File]::Replace($temporary, $destination, $backup, $true)
+                } else {
+                    [System.IO.File]::Move($temporary, $destination)
+                }
+                return
+            }
+            catch {
+                if ($attempt -ge 7) { throw }
+                Start-Sleep -Milliseconds ([int](50 * [math]::Pow(2, $attempt)))
+            }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Write-Heartbeat {
-    $temp = "$watchdogHeartbeatPath.$PID.tmp"
-    [System.IO.File]::WriteAllText($temp, ([ordered]@{ processId = $PID; updatedAt = (Get-Date).ToString('o') } | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $watchdogHeartbeatPath -Force
+    Write-AtomicTextFile $watchdogHeartbeatPath ([ordered]@{ processId = $PID; updatedAt = (Get-Date).ToString('o') } | ConvertTo-Json)
 }
 
 try {

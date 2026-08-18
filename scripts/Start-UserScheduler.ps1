@@ -23,11 +23,37 @@ function Write-SchedulerLog([string]$message) {
     Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $message" -Encoding UTF8
 }
 
+function Write-AtomicTextFile([string]$destination, [string]$content) {
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+    $nonce = [guid]::NewGuid().ToString('N')
+    $temporary = "$destination.$PID.$nonce.tmp"
+    $backup = "$destination.$PID.$nonce.bak"
+    try {
+        [System.IO.File]::WriteAllText($temporary, $content, [System.Text.UTF8Encoding]::new($false))
+        for ($attempt = 0; $attempt -lt 8; $attempt += 1) {
+            try {
+                if ([System.IO.File]::Exists($destination)) {
+                    [System.IO.File]::Replace($temporary, $destination, $backup, $true)
+                } else {
+                    [System.IO.File]::Move($temporary, $destination)
+                }
+                return
+            }
+            catch {
+                if ($attempt -ge 7) { throw }
+                Start-Sleep -Milliseconds ([int](50 * [math]::Pow(2, $attempt)))
+            }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Write-SchedulerHeartbeat([string]$phase) {
     $value = [ordered]@{ processId = $PID; updatedAt = (Get-Date).ToString('o'); phase = $phase }
-    $temporary = "$heartbeatPath.$PID.tmp"
-    [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporary -Destination $heartbeatPath -Force
+    Write-AtomicTextFile $heartbeatPath ($value | ConvertTo-Json)
 }
 
 function Read-SchedulerState {
@@ -37,9 +63,7 @@ function Read-SchedulerState {
 }
 
 function Write-SchedulerStateDocument([object]$value) {
-    $temporary = "$statePath.$PID.tmp"
-    [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporary -Destination $statePath -Force
+    Write-AtomicTextFile $statePath ($value | ConvertTo-Json -Depth 6)
 }
 
 function Get-NormalizedDeferredWakeTokens([object]$value) {
@@ -306,9 +330,7 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         deferredWakeDate = $today
         deferredWakeTokens = @($wakeTokens)
     }
-    $temporary = "$statePath.$PID.tmp"
-    [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporary -Destination $statePath -Force
+    Write-AtomicTextFile $statePath ($value | ConvertTo-Json)
 }
 
 function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportState, $config) {
@@ -354,9 +376,7 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         deferredWakeDate = $finishedDate
         deferredWakeTokens = @($wakeTokens)
     }
-    $temporary = "$statePath.$PID.tmp"
-    [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporary -Destination $statePath -Force
+    Write-AtomicTextFile $statePath ($value | ConvertTo-Json)
 }
 
 try {
