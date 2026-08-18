@@ -17,6 +17,7 @@ trap {
 
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'ResultIdentity.ps1')
+. (Join-Path $PSScriptRoot 'HealthReportClassification.ps1')
 $configPath = Join-Path $root 'config\config.json'
 if (-not (Test-Path -LiteralPath $configPath)) {
     [ordered]@{
@@ -121,6 +122,7 @@ $latestResultValid = $latestRunToday `
     -and $plannedTotal -ge $minimumTargets `
     -and $processedTotal -ge $plannedTotal `
     -and @($latest.results).Count -ge $plannedTotal
+$reportStatus = Get-CheckinReportStatus -LatestResultValid $latestResultValid -ProblemCount ([int]$problemCount)
 $notificationReady = $config.notification.mode -in @($null, '', 'none') -or (
     $config.notification.mode -eq 'command' -and
     ((Test-Path -LiteralPath ([string]$config.notification.executable)) -or (Get-Command ([string]$config.notification.executable) -ErrorAction SilentlyContinue))
@@ -322,8 +324,8 @@ $checks = [ordered]@{
     latestResultPresent = [bool]$latest
     latestResultValid = [bool]$latestResultValid
     latestMatchesCurrentPlan = [bool]$latestMatchesCurrentPlan
-    latestResultConfirmed = $latestResultValid -and $problemCount -eq 0
-    latestResultComplete = $latestResultValid -and $problemCount -eq 0
+    latestResultConfirmed = [bool]$latestResultValid
+    latestResultComplete = [bool]$latestResultValid
     siteStatePresent = $null -ne $siteState
 }
 $failedChecks = @($checks.GetEnumerator() | Where-Object { -not [bool]$_.Value } | ForEach-Object { [string]$_.Key })
@@ -331,7 +333,7 @@ $healthy = $failedChecks.Count -eq 0
 $result = [ordered]@{
     schemaVersion = 1
     healthy = $healthy
-    reason = if ($healthy) { 'ok' } else { 'checks_failed' }
+    reason = if (-not $healthy) { 'checks_failed' } elseif ($reportStatus -eq 'complete_with_attention') { 'ok_with_attention' } else { 'ok' }
     checkedAt = (Get-Date).ToString('o')
     failedChecks = $failedChecks
     schedule = [string]$config.schedule
@@ -343,6 +345,7 @@ $result = [ordered]@{
     supervisorProcessCount = $supervisorCount
     schedulerHeartbeat = $heartbeat
     latestRunId = if ($latest) { [string]$latest.runId } else { $null }
+    reportStatus = $reportStatus
     latestSiteCount = if ($latest) { @($latest.results).Count } else { $null }
     currentPlannedTotal = $currentPlannedTotal
     latestPlannedTotal = if ($latest -and $null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { $null }
