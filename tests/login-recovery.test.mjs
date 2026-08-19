@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  authoritativeOAuthDailyCheckin,
+  authoritativeLoginDailyCheckin,
   loginHelperOutcome,
   parseLoginHelperResult,
   resolveLoginRecoveryUrl,
@@ -93,16 +93,17 @@ test("登录助手只保留白名单内的权威签到证据", () => {
   assert.doesNotMatch(JSON.stringify(outcome), /private|cookie|token|body|accountId/);
 });
 
-test("只有成功的内置 OAuth 助手可以直接提交权威签到结果", () => {
+test("只有成功的受信登录助手可以直接提交权威签到结果", () => {
   const outcome = loginHelperOutcome(JSON.stringify({
     status: "logged_in",
     dailyCheckin: { status: "already_signed", reason: "当日使用日志已确认" },
   }));
-  assert.deepEqual(authoritativeOAuthDailyCheckin("native_oauth", outcome), outcome.dailyCheckin);
-  assert.deepEqual(authoritativeOAuthDailyCheckin("oauth", outcome), outcome.dailyCheckin);
-  assert.equal(authoritativeOAuthDailyCheckin("saved_password", outcome), null);
-  assert.equal(authoritativeOAuthDailyCheckin("native_oauth", { ...outcome, succeeded: false }), null);
-  assert.equal(authoritativeOAuthDailyCheckin("native_oauth", loginHelperOutcome(JSON.stringify({
+  assert.deepEqual(authoritativeLoginDailyCheckin("native_oauth", outcome), outcome.dailyCheckin);
+  assert.deepEqual(authoritativeLoginDailyCheckin("oauth", outcome), outcome.dailyCheckin);
+  assert.deepEqual(authoritativeLoginDailyCheckin("protected_credential", outcome), outcome.dailyCheckin);
+  assert.equal(authoritativeLoginDailyCheckin("saved_password", outcome), null);
+  assert.equal(authoritativeLoginDailyCheckin("native_oauth", { ...outcome, succeeded: false }), null);
+  assert.equal(authoritativeLoginDailyCheckin("native_oauth", loginHelperOutcome(JSON.stringify({
     status: "logged_in", dailyCheckin: { status: "login_required", reason: "not terminal" },
   }))), null);
 });

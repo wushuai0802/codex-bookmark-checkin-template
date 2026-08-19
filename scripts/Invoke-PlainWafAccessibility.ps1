@@ -298,7 +298,10 @@ try {
             } | ConvertTo-Json -Depth 8
             exit 0
         }
-        if ($last.loginRoute -or $last.nonAddressEdits -ge 2) {
+        # A WAF challenge can keep the original /login.php URL while its own
+        # interstitial is still rendered. Do not classify that URL as an
+        # authenticated-site login form until the challenge body is gone.
+        if (-not $last.waf -and $last.siteBodyLoaded -and ($last.loginRoute -or $last.nonAddressEdits -ge 2)) {
             [pscustomobject]@{
                 status = 'login_required'
                 reason = '无调试原生 Chrome 进入登录页'

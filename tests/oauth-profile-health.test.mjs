@@ -56,9 +56,9 @@ test("PowerShell 主账号解析优先使用身份内联的完整登录元组", 
   assert.match(source, /LoginUrl = if \(\$identity\.loginUrl\)/);
 });
 
-test("内置 OAuth 的权威终态直接进入恢复结果且不启动全局 profile 复查", async () => {
+test("受信登录助手的权威终态直接进入恢复结果且不启动全局 profile 复查", async () => {
   const source = await fs.readFile(path.join(root, "src", "index.mjs"), "utf8");
-  assert.match(source, /authoritativeOAuthDailyCheckin\(method\.method, outcome\)/);
+  assert.match(source, /authoritativeLoginDailyCheckin\(method\.method, outcome\)/);
   assert.match(source, /loginRecovery\?\.authoritativeDailyCheckin/);
   assert.match(source, /\["signed", "already_signed"\]\.includes\(helperDailyCheckin\?\.status\)/);
   assert.match(source, /getSharedContext\(target\)/);

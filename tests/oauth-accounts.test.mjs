@@ -359,9 +359,17 @@ test("重新启用的站点不会复用旧的配置取消终态", async () => {
 
 test("PowerShell wrapper 支持 HTTPS 来源级定向续跑", async () => {
   const source = await fs.readFile(path.join(root, "scripts", "Run-Checkin.ps1"), "utf8");
+  const runner = await fs.readFile(path.join(root, "src", "index.mjs"), "utf8");
   assert.match(source, /\[string\[\]\]\$Origins\s*=\s*@\(\)/);
   assert.match(source, /@\('--origins',\s*\(\$selectedOrigins -join ','\)\)/);
   assert.match(source, /定向站点必须是 HTTPS 来源/);
+  assert.match(source, /Test-HasImmediateRetry\(\$Report, \[datetime\]\$RetryAt, \[string\[\]\]\$SelectedOrigins/);
+  assert.match(source, /\$SelectedOrigins -contains \[string\]\$_.origin/);
+  assert.match(source, /Test-HasImmediateRetry \$resumeCandidate\.Report \(\(Get-Date\)\.AddMinutes\(\$retryDelayMinutes\)\) \$selectedOrigins \$selectedAccountKeys/);
+  assert.match(runner, /定向续跑来源不存在/);
+  assert.match(runner, /const exitResults = explicitSelection/);
+  assert.match(runner, /selectedIdentities\.has\(resultIdentity\(result\)\)/);
+  assert.match(runner, /selectedResultSetComplete/);
 });
 
 test("专属 profile 主账号首轮和恢复阶段都不会落入全局 context", async () => {

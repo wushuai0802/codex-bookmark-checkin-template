@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protected-login-flow.mjs";
+import {
+  credentialVerificationUrl,
+  verifyCredentialSession,
+} from "./credential-session-verification.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
 
@@ -18,6 +22,7 @@ const origin = new URL(requestedOrigin).origin;
 const { target } = await findBookmarkTarget(config.bookmarksPath, origin, config);
 const loginUrl = assertBookmarkNavigation(requestedLoginUrl, target.allowedOrigins ?? [origin]);
 if (new URL(loginUrl).origin !== origin) throw new Error("受保护登录地址必须与凭据来源同源");
+const verificationPath = process.argv[4] ?? config.protectedLoginVerificationPaths?.[origin];
 
 let input = "";
 for await (const chunk of process.stdin) {
@@ -29,6 +34,7 @@ if (typeof credential.username !== "string" || credential.username.length < 1 ||
   || typeof credential.password !== "string" || credential.password.length < 1 || credential.password.length > 1024) {
   throw new Error("凭据输入格式无效");
 }
+credentialVerificationUrl(origin, verificationPath);
 
 function isLoginUrl(value) {
   try { return isCredentialLoginRoute(new URL(value).href); }
@@ -41,6 +47,7 @@ let page;
 let storageSaved = false;
 let authCheckStatus = null;
 let diagnostic = null;
+let dailyCheckin = null;
 try {
   page = await context.newPage();
   const observedResponses = [];
@@ -77,7 +84,15 @@ try {
   await acceptConfiguredLoginTerms(page, origin, config);
   const password = page.locator('input[type="password"]:visible');
   if (await password.count() < 1) {
-    status = isLoginUrl(page.url()) ? "unsupported" : "logged_in";
+    const verification = await verifyCredentialSession(page, {
+      origin,
+      verificationPath,
+      navigationTimeoutMs: config.navigationTimeoutMs,
+    });
+    authCheckStatus = verification.statusCode;
+    dailyCheckin = verification.dailyCheckin ?? null;
+    status = verification.authenticated ? "logged_in" : (verification.failureCode === "challenge" ? "needs_attention" : "failed");
+    diagnostic = verification.authenticated ? null : { verificationFailure: verification.failureCode };
   } else {
     const usernames = page.locator('input:visible:not([type="password"]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])');
     if (await usernames.count() < 1) status = "unsupported";
@@ -97,16 +112,30 @@ try {
       else {
         const submitReady = await waitForLoginSubmitEnabled(page, submit, origin, config);
         if (!submitReady) status = "needs_attention";
-        else await submit.click({ timeout: 10000 }).catch(() => {});
-        const deadline = Date.now() + Math.max(30000, Math.min(90000, Number(config.cloudflareWaitMs) || 60000));
-        while (Date.now() < deadline) {
-          const stillHasPassword = await page.locator('input[type="password"]:visible').count() > 0;
-          if (!stillHasPassword && !isLoginUrl(page.url())) { status = "logged_in"; break; }
-          const cap = page.locator('cap-widget:visible, [data-cap-api-endpoint]:visible');
-          if (await cap.count() === 1) await cap.click({ timeout: 5000 }).catch(() => {});
-          await page.waitForTimeout(1000);
+        else {
+          await submit.click({ timeout: 10000 }).catch(() => {});
+          await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+          await page.waitForTimeout(1200);
+          const postSubmitText = String(await page.locator("body").innerText().catch(() => ""));
+          const responseInvalidCredential = observedResponses.some((item) => item.json?.messageFlags?.invalidCredential === true);
+          if (/(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(postSubmitText)
+            || responseInvalidCredential) {
+            status = "invalid_credential";
+          } else {
+            const verification = await verifyCredentialSession(page, {
+              origin,
+              verificationPath,
+              navigationTimeoutMs: config.navigationTimeoutMs,
+            });
+            authCheckStatus = verification.statusCode;
+            dailyCheckin = verification.dailyCheckin ?? null;
+            status = verification.authenticated
+              ? "logged_in"
+              : (verification.failureCode === "challenge" ? "needs_attention" : "failed");
+            diagnostic = verification.authenticated ? null : { verificationFailure: verification.failureCode };
+          }
         }
-        if (status !== "logged_in") {
+        if (status !== "logged_in" && status !== "invalid_credential" && status !== "needs_attention") {
           const text = String(await page.locator("body").innerText().catch(() => ""));
           const passwordVisible = await page.locator('input[type="password"]:visible').count() > 0;
           const challengeVisible = await page.locator('cap-widget:visible, [data-cap-api-endpoint]:visible, .cf-turnstile:visible, .h-captcha:visible, iframe[src*="turnstile" i]:visible, iframe[src*="hcaptcha" i]:visible').count() > 0;
@@ -127,9 +156,7 @@ try {
               name: String(element.name || ""),
             })),
           }))).catch(() => []);
-          const responseInvalidCredential = observedResponses.some((item) => item.json?.messageFlags?.invalidCredential === true);
           status = /(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(text)
-            || responseInvalidCredential
             ? "invalid_credential"
             : (challengeVisible
               ? "needs_attention"
@@ -143,34 +170,21 @@ try {
             bodyLength: text.length,
             formShape,
             observedResponses,
+            ...diagnostic,
           };
         }
       }
     }
   }
-  if (status === "logged_in") {
-    await page.waitForTimeout(1200);
-    await page.reload({ waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs }).catch(() => {});
-    const passwordVisible = await page.locator('input[type="password"]:visible').count() > 0;
-    if (passwordVisible || isLoginUrl(page.url())) status = "failed";
-    else {
-      const verificationPath = config.protectedLoginVerificationPaths?.[origin];
-      const verificationUrl = verificationPath ? new URL(verificationPath, origin) : null;
-      if (verificationUrl && (verificationUrl.protocol !== "https:" || verificationUrl.origin !== origin)) {
-        throw new Error("登录验证端点必须与凭据来源同源");
-      }
-      authCheckStatus = verificationUrl ? await page.evaluate(async (pathValue) => {
-        const token = localStorage.getItem("auth_token");
-        const headers = { Accept: "application/json" };
-        if (token) headers.Authorization = `Bearer ${token}`;
-        const response = await fetch(pathValue, { credentials: "include", headers }).catch(() => null);
-        return response?.status ?? 0;
-      }, verificationUrl.href) : 200;
-      if (authCheckStatus === 200) storageSaved = false;
-      else status = "failed";
-    }
-  }
-  process.stdout.write(JSON.stringify({ status, origin, finalUrl: safeLogUrl(page.url()), storageSaved, authCheckStatus, diagnostic }));
+  process.stdout.write(JSON.stringify({
+    status,
+    origin,
+    finalUrl: safeLogUrl(page.url()),
+    storageSaved,
+    authCheckStatus,
+    diagnostic,
+    ...(dailyCheckin ? { dailyCheckin } : {}),
+  }));
   if (status !== "logged_in") process.exitCode = 2;
 } catch (error) {
   status = /Timeout|timed out/i.test(String(error?.message ?? error)) ? "timeout" : "failed";

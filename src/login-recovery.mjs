@@ -128,8 +128,8 @@ export function loginHelperOutcome(text, fallback = "failed") {
   };
 }
 
-export function authoritativeOAuthDailyCheckin(method, outcome) {
-  if (!["oauth", "native_oauth"].includes(method) || outcome?.succeeded !== true) return null;
+export function authoritativeLoginDailyCheckin(method, outcome) {
+  if (!["oauth", "native_oauth", "protected_credential"].includes(method) || outcome?.succeeded !== true) return null;
   return safeTerminalDailyCheckin(outcome.dailyCheckin);
 }
 
