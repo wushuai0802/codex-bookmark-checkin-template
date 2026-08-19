@@ -12,6 +12,7 @@ import {
 } from "./oauth-relogin-checkin.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
+import { isLoginOrSignInRoute } from "./url-routes.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -283,7 +284,7 @@ async function startLinuxDoUpstreamLogin(page, loginProvider) {
 }
 
 function isTargetLogin(url) {
-  return url.origin === origin && /\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(url.href);
+  return url.origin === origin && isLoginOrSignInRoute(url.href);
 }
 
 function safeFailureReason(error) {
@@ -292,6 +293,18 @@ function safeFailureReason(error) {
     .replace(/[\r\n\t]+/g, " ")
     .trim();
   return message.slice(0, 240);
+}
+
+function oauthFailureCode(error) {
+  const message = safeFailureReason(error);
+  if (/账号与配置不匹配|账号不匹配|绑定不匹配/i.test(message)) return "account_mismatch";
+  if (/需要人工确认一次 .* 登录|登录已失效/i.test(message)) return "upstream_login_required";
+  if (/需要人工确认一次 .* 授权|授权步骤超过安全点击上限/i.test(message)) return "upstream_authorization_required";
+  if (/验证|turnstile|challenge/i.test(message)) return "managed_challenge";
+  if (/限定时间|超时/i.test(message)) return "oauth_timeout";
+  if (/没有可用浏览器上下文|没有找到目标登录页|连接.*调试/i.test(message)) return "browser_startup";
+  if (/没有找到唯一|无法唯一识别|退出动作|退出接口/i.test(message)) return "site_flow_changed";
+  return "oauth_recovery_failed";
 }
 
 let browser = null;
@@ -501,6 +514,7 @@ try {
     accountLabel,
     upstreamProvider,
     reason: safeFailureReason(error),
+    failureCode: oauthFailureCode(error),
   }));
   process.exitCode = 2;
 } finally {

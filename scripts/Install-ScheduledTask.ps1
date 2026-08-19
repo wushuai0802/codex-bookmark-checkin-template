@@ -23,7 +23,9 @@ $scheduleTime = [datetime]::ParseExact($schedule, 'HH:mm', $null)
 $probeInterval = if ($null -ne $config.schedulerProbeIntervalMinutes) { [int]$config.schedulerProbeIntervalMinutes } else { 60 }
 $probeInterval = [Math]::Max(30, [Math]::Min(180, $probeInterval))
 $startMinutes = $scheduleTime.Hour * 60 + $scheduleTime.Minute
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $trigger = @(
+    New-ScheduledTaskTrigger -AtLogOn -User $identity
     for ($minute = $startMinutes; $minute -lt 24 * 60; $minute += $probeInterval) {
         New-ScheduledTaskTrigger -Daily -At $scheduleTime.Date.AddMinutes($minute)
     }
@@ -42,7 +44,6 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Minutes $executionLimitMinutes) `
     -MultipleInstances IgnoreNew
 
-$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
 $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
     -Description '后台读取 Chrome 的签到与公益站书签，使用独立无界面浏览器每日签到。'
@@ -75,4 +76,4 @@ Get-CimInstance Win32_Process | Where-Object {
     Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-Write-Output "计划任务已安装：$taskName，从每天 $schedule 起每 $probeInterval 分钟探测一次，仅在需要时执行或补跑。"
+Write-Output "计划任务已安装：$taskName；登录时执行补偿探测，并从每天 $schedule 起每 $probeInterval 分钟探测一次，仅在需要时执行或补跑。"

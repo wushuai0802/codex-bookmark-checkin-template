@@ -4,6 +4,9 @@ param(
     [switch]$SuppressReport,
     [int]$Attempts = 0,
     [string[]]$ManualConfirmedOrigins = @(),
+    [string[]]$TemporarilyUnavailableOrigins = @(),
+    [string[]]$AccountKeys = @(),
+    [string[]]$Origins = @(),
     [string]$ConfigPath
 )
 
@@ -95,6 +98,7 @@ function Test-HasImmediateRetry($Report, [datetime]$RetryAt) {
     $unresolved = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
     if ($unresolved.Count -eq 0) { return $false }
     foreach ($result in $unresolved) {
+        if ([string]$result.status -eq 'needs_attention' -or [string]$result.retryCause -eq 'invalid_credential') { continue }
         if ([string]$result.status -ne 'deferred') { return $true }
         try {
             if (-not $result.nextEligibleAt -or [datetime]$result.nextEligibleAt -le $RetryAt) { return $true }
@@ -153,10 +157,49 @@ try {
 
     if (-not $DryRun) { $resumeCandidate = Get-TodayResumeReport }
     $manualConfirmed = @($ManualConfirmedOrigins | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $temporaryUnavailable = @($TemporarilyUnavailableOrigins | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    $selectedAccountKeys = @($AccountKeys | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    $selectedOrigins = @($Origins | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    if ($selectedOrigins.Count -gt 0) {
+        if ($DryRun) { throw '定向站点续跑不能与 DryRun 同时使用。' }
+        if ($null -eq $resumeCandidate) { throw '定向站点续跑需要今天已有完整 final 报告。' }
+        foreach ($origin in $selectedOrigins) {
+            $parsedOrigin = $null
+            if (-not [uri]::TryCreate($origin, [UriKind]::Absolute, [ref]$parsedOrigin) `
+                -or $parsedOrigin.Scheme -ne 'https' `
+                -or $origin -ne $parsedOrigin.GetLeftPart([UriPartial]::Authority)) {
+                throw "定向站点必须是 HTTPS 来源：$origin"
+            }
+        }
+        $arguments += @('--origins', ($selectedOrigins -join ','))
+    }
+    foreach ($accountKey in $selectedAccountKeys) {
+        if ($accountKey.Length -gt 80 -or $accountKey -match '[\r\n,]') {
+            throw "定向续跑 accountKey 无效：$accountKey"
+        }
+    }
+    if ($selectedAccountKeys.Count -gt 0) {
+        if ($DryRun) { throw '定向账号续跑不能与 DryRun 同时使用。' }
+        if ($null -eq $resumeCandidate) { throw '定向账号续跑需要今天已有完整 final 报告。' }
+        $arguments += @('--account-keys', ($selectedAccountKeys -join ','))
+    }
     if ($manualConfirmed.Count -gt 0) {
         if ($DryRun) { throw '人工完成确认不能与 DryRun 同时使用。' }
         if ($null -eq $resumeCandidate) { throw '人工完成确认需要今天已有完整 final 报告。' }
         $arguments += @('--manual-confirmed-origins', ($manualConfirmed -join ','))
+    }
+    if ($temporaryUnavailable.Count -gt 0) {
+        if ($DryRun) { throw '站点暂不可用确认不能与 DryRun 同时使用。' }
+        if ($null -eq $resumeCandidate) { throw '站点暂不可用确认需要今天已有完整 final 报告。' }
+        foreach ($origin in $temporaryUnavailable) {
+            $parsedOrigin = $null
+            if (-not [uri]::TryCreate($origin, [UriKind]::Absolute, [ref]$parsedOrigin) `
+                -or $parsedOrigin.Scheme -ne 'https' `
+                -or $origin -ne $parsedOrigin.GetLeftPart([UriPartial]::Authority)) {
+                throw "站点暂不可用确认必须是 HTTPS 来源：$origin"
+            }
+        }
+        $arguments += @('--temporary-unavailable-origins', ($temporaryUnavailable -join ','))
     }
 
     $shouldSyncSavedLogins = -not $DryRun `
@@ -194,7 +237,8 @@ try {
                 if ($null -ne $resumeCandidate) {
                     $preflightOrigins = @($resumeCandidate.Report.results | Where-Object {
                         ($_.status -notin @('signed', 'already_signed', 'not_available')) `
-                            -and ($manualConfirmed -notcontains [string]$_.origin)
+                            -and ($manualConfirmed -notcontains [string]$_.origin) `
+                            -and ($temporaryUnavailable -notcontains [string]$_.origin)
                     } | ForEach-Object { [string]$_.origin })
                 }
                 elseif ($attempt -eq 1) {

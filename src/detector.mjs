@@ -1,3 +1,5 @@
+import { isCredentialLoginRoute } from "./url-routes.mjs";
+
 const CHECKIN_EXACT = new Set([
   "签到", "簽到", "立即签到", "立即簽到", "每日签到", "每日簽到",
   "今日签到", "今日簽到", "去签到", "去簽到", "打卡", "立即打卡",
@@ -44,7 +46,7 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
   // A login form can legitimately contain an image CAPTCHA.  Treating every
   // CAPTCHA marker as a standalone browser challenge hides the real action
   // required (refreshing the site's login session).
-  if (hasPassword || /\/(log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)/i.test(lowerUrl)) {
+  if (hasPassword || isCredentialLoginRoute(lowerUrl)) {
     const suffix = challengeSelectors ? "，登录页包含验证码" : "";
     return { status: "login_required", reason: `登录状态失效${suffix}` };
   }

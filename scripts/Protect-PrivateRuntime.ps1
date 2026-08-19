@@ -4,9 +4,8 @@ param()
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$acl = Get-Acl -LiteralPath $root
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
 $acl.SetAccessRuleProtection($true, $false)
-foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
 $inheritance = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
 $propagation = [System.Security.AccessControl.PropagationFlags]::None
 $allow = [System.Security.AccessControl.AccessControlType]::Allow
@@ -17,5 +16,6 @@ foreach ($principal in @($identity, 'SYSTEM')) {
     )
     [void]$acl.AddAccessRule($rule)
 }
-Set-Acl -LiteralPath $root -AclObject $acl
+$directory = [System.IO.DirectoryInfo]::new($root)
+[System.IO.FileSystemAclExtensions]::SetAccessControl($directory, $acl)
 Write-Output "已将运行端目录权限限制为当前用户与 SYSTEM：$root"

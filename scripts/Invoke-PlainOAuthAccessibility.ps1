@@ -227,7 +227,7 @@ try {
         $location = Get-PrivateCurrentUri
         if ($location) {
             $locationOrigin = $location.GetLeftPart([System.UriPartial]::Authority)
-            if ($locationOrigin -eq $originValue -and $location.AbsolutePath -notmatch '^/(?:log[-_]?in|sign[-_]?in)(?:/|$)') {
+            if ($locationOrigin -eq $originValue -and $location.AbsolutePath -notmatch '^/(?:log[-_]?in|sign[-_]?in)(?:\.(?:php|asp|aspx|html?))?(?:/|$)') {
                 $callbackReached = $true
                 break
             }

@@ -6,6 +6,7 @@ import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protected-login-flow.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
+import { isCredentialLoginRoute } from "./url-routes.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -30,7 +31,7 @@ if (typeof credential.username !== "string" || credential.username.length < 1 ||
 }
 
 function isLoginUrl(value) {
-  try { return /\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)|#\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(new URL(value).href); }
+  try { return isCredentialLoginRoute(new URL(value).href); }
   catch { return true; }
 }
 
@@ -39,8 +40,38 @@ let status = "failed";
 let page;
 let storageSaved = false;
 let authCheckStatus = null;
+let diagnostic = null;
 try {
   page = await context.newPage();
+  const observedResponses = [];
+  page.on("response", async (response) => {
+    try {
+      const url = new URL(response.url());
+      if (url.origin !== origin || observedResponses.length >= 12) return;
+      const method = response.request().method();
+      if (method !== "POST" && method !== "PUT" && method !== "PATCH") return;
+      const item = { method, path: url.pathname, status: response.status() };
+      observedResponses.push(item);
+      if (url.pathname === "/api/user/login") {
+        const value = await response.json().catch(() => null);
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          const message = String(value.message ?? value.error ?? "");
+          item.json = {
+            keys: Object.keys(value).filter((key) => /^[a-z0-9_-]{1,40}$/i.test(key)).slice(0, 12),
+            success: typeof value.success === "boolean" ? value.success : null,
+            code: Number.isFinite(Number(value.code)) ? Number(value.code) : null,
+            dataPresent: value.data !== undefined && value.data !== null,
+            messageFlags: {
+              invalidCredential: /(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(message),
+              disabled: /(封禁|禁用|disabled|banned)/i.test(message),
+              rateLimited: /(请求过多|操作频繁|too many requests|rate limit)/i.test(message),
+              verification: /(验证|驗證|captcha|verify)/i.test(message),
+            },
+          };
+        }
+      }
+    } catch { }
+  });
   await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
   await acceptConfiguredLoginTerms(page, origin, config);
@@ -77,11 +108,42 @@ try {
         }
         if (status !== "logged_in") {
           const text = String(await page.locator("body").innerText().catch(() => ""));
-          status = /(密码错误|账号或密码|invalid credentials|incorrect password)/i.test(text)
+          const passwordVisible = await page.locator('input[type="password"]:visible').count() > 0;
+          const challengeVisible = await page.locator('cap-widget:visible, [data-cap-api-endpoint]:visible, .cf-turnstile:visible, .h-captcha:visible, iframe[src*="turnstile" i]:visible, iframe[src*="hcaptcha" i]:visible').count() > 0;
+          const submitEnabled = await submit.isEnabled().catch(() => false);
+          const bodyFlags = {
+            invalidCredentialText: /(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(text),
+            loginFailedText: /(登录失败|登入失败|login failed|authentication failed)/i.test(text),
+            captchaText: /(验证码|驗證碼|captcha|turnstile|人机|真人)/i.test(text),
+            rateLimitText: /(请求过多|操作频繁|too many requests|rate limit)/i.test(text),
+            errorText: /(错误|錯誤|error|failed|失败|失敗)/i.test(text),
+          };
+          const formShape = await page.locator("form").evaluateAll((forms) => forms.slice(0, 4).map((form) => ({
+            method: String(form.method || "GET").toUpperCase(),
+            actionPath: (() => { try { return new URL(form.action || location.href).pathname; } catch { return ""; } })(),
+            controls: [...form.querySelectorAll("input,button")].slice(0, 12).map((element) => ({
+              tag: element.tagName,
+              type: String(element.type || ""),
+              name: String(element.name || ""),
+            })),
+          }))).catch(() => []);
+          const responseInvalidCredential = observedResponses.some((item) => item.json?.messageFlags?.invalidCredential === true);
+          status = /(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(text)
+            || responseInvalidCredential
             ? "invalid_credential"
-            : (await page.locator('cap-widget:visible, .cf-turnstile:visible, .h-captcha:visible').count() > 0
+            : (challengeVisible
               ? "needs_attention"
               : "failed");
+          diagnostic = {
+            passwordVisible,
+            challengeVisible,
+            submitEnabled,
+            loginRoute: isLoginUrl(page.url()),
+            bodyFlags,
+            bodyLength: text.length,
+            formShape,
+            observedResponses,
+          };
         }
       }
     }
@@ -108,7 +170,7 @@ try {
       else status = "failed";
     }
   }
-  process.stdout.write(JSON.stringify({ status, origin, finalUrl: safeLogUrl(page.url()), storageSaved, authCheckStatus }));
+  process.stdout.write(JSON.stringify({ status, origin, finalUrl: safeLogUrl(page.url()), storageSaved, authCheckStatus, diagnostic }));
   if (status !== "logged_in") process.exitCode = 2;
 } catch (error) {
   status = /Timeout|timed out/i.test(String(error?.message ?? error)) ? "timeout" : "failed";

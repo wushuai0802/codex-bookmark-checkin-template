@@ -45,6 +45,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 未知站点先走通用入口发现；Codex 只把经过页面成功确认的规则写入本机 `config/config.local.json`。
 - 书签暂未同步时可用本机 `configuredTargets` 临时补入 HTTPS 目标；复杂验证站可用 `disabledCheckinOrigins` 明确取消，登录成功即算完成的站点可用 `loginAsCheckinOrigins` 配置。需要每日退出并重新 OAuth 才发放奖励的站点使用 `oauthReloginCheckinRules`；规则可选择原生 Chrome 完成受浏览器验证保护的 OAuth，并且只在同源使用日志出现当天的预期奖励记录后确认成功。这些配置默认均为空。
 - 同一个 OAuth 站点需要签到多个账号时，主书签账号使用 `oauthAccountIdentities` 标注身份，其他账号放入 `supplementalOAuthAccounts`。主身份可用 `automationUserDataDir` 显式绑定专属配置；所有专属账号都必须使用 `data/` 下互不重复的 Chrome 配置目录。运行器会逐个执行、核对账号 ID，并在统一回执中分别显示。完整匿名结构见 `config/config.local.example.json`。
+- 多个站点如果使用同一个 L 站身份，可在本机 `config/config.local.json` 中用 `oauthSessionProfiles` 定义一个位于 `data/` 下的共享 Profile，再用 `oauthSiteSessionBindings` 将站点绑定到该会话名称。绑定到同一会话的站点会串行复用同一次 L 站登录；不同身份仍必须使用不同 Profile。共享会话不能与全局、补充账号或隔离站点 Profile 重复，避免账号串线。
 - 原生 WAF/验证预热只处理已校验书签计划中的站点；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。若验证 Cookie 需要等待扩展下载，可在单个 `nativeChallengePreflight` 条目中设置 `reloadOnChallengeAfterSeconds`；脚本到时最多重载一次，且该值必须小于总等待时间。
 - 单站重试、异常复查和任务级断点续跑只重新访问未确认目标。
 - 用户明确完成当次人工验证后，可通过 `Run-Checkin.ps1 -ManualConfirmedOrigins 'https://example.com'` 将结果以“用户已确认手动完成”写回当天续跑报告；该状态保留审计字段，不冒充自动签到。同一来源存在多个账号时会拒绝来源级人工确认，避免把其他账号误报为完成。
@@ -82,7 +83,7 @@ pwsh -NoProfile -File .\scripts\Scan-PublicSafety.ps1
 npm run --silent health
 ```
 
-该命令只读取本机配置、书签文件是否可访问、主账号及补充账号的独立 Chrome 配置、调度入口与进程、调度心跳、当前已验证签到计划与当天最终结果是否一致、站点状态和通知隔离队列；它不会启动签到、修改配置或发送通知。标准输出始终是一个 JSON 对象，`schemaVersion` 当前为 `1`。`healthy=true` 时退出码为 `0`；未初始化或任一健康检查失败时，`healthy=false`、`failedChecks` 列出失败项，退出码为 `2`；健康检查自身无法执行时退出码为 `3`。
+该命令只读取本机配置、书签文件是否可访问、主账号及补充账号的独立 Chrome 配置、调度入口与进程、调度心跳、当前已验证签到计划与当天最终结果是否一致、站点状态和通知隔离队列；它不会启动签到、修改配置或发送通知。标准输出始终是一个 JSON 对象，`schemaVersion` 当前为 `1`。`reportStatus` 会明确区分 `complete`、`complete_with_attention` 和 `incomplete`：完整报告中存在待重试或需关注站点时仍属于完整报告，调用方应读取 `reportStatus` 处理注意项，而不是把它误判为任务未完成。`healthy=true` 时退出码为 `0`；未初始化或任一基础设施健康检查失败时，`healthy=false`、`failedChecks` 列出失败项，退出码为 `2`；健康检查自身无法执行时退出码为 `3`。
 
 外部调用方应在每日计划时间和预计任务时长之后执行，并同时判断退出码、`healthy` 和 `latestRunId`，不要仅凭进程存在判定签到成功。首次完整签到和调度安装尚未完成前，健康检查返回异常属于预期行为。检查结果可能包含本机路径和站点数量，适合留在本机监控系统，不应原样提交到公开 Issue 或仓库。
 

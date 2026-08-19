@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { parseLoginHelperResult } from "./login-recovery.mjs";
+import { loginHelperOutcome, parseLoginHelperResult } from "./login-recovery.mjs";
 import { resultIdentity } from "./result-identity.mjs";
 
 const execFileAsync = promisify(execFile);
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function requiredText(value, field, maximum = 120) {
   const text = String(value ?? "").trim();
@@ -13,7 +14,7 @@ function requiredText(value, field, maximum = 120) {
   return text;
 }
 
-export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) {
+export function configuredOAuthAccounts(config = {}, rootDirectory) {
   const dataRoot = path.resolve(rootDirectory, "data");
   const rawAccounts = config.supplementalOAuthAccounts ?? [];
   if (!Array.isArray(rawAccounts)) throw new Error("supplementalOAuthAccounts 必须是数组");
@@ -38,18 +39,66 @@ export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) 
   if (config.automationUserDataDir) {
     reserveProfile(resolveDataProfile(config.automationUserDataDir, "automationUserDataDir"), "automationUserDataDir");
   }
+  const isolatedPrimaryAccounts = [];
   for (const [configuredOrigin, raw] of Object.entries(config.oauthAccountIdentities ?? {})) {
-    const origin = new URL(configuredOrigin).origin;
+    const originUrl = new URL(configuredOrigin);
+    if (originUrl.protocol !== "https:" || originUrl.username || originUrl.password) {
+      throw new Error(`OAuth 主账号来源必须是无凭据 HTTPS 地址：${configuredOrigin}`);
+    }
+    const origin = originUrl.origin;
     const accountKey = String(raw?.accountKey ?? "").trim();
     const accountId = String(raw?.accountId ?? "").trim();
-    if (accountKey) identities.add(resultIdentity({ origin, accountKey }));
-    if (accountId) accountIds.add(`${origin}#id=${accountId}`);
+    if (accountKey) {
+      const identity = resultIdentity({ origin, accountKey });
+      if (identities.has(identity)) throw new Error(`OAuth 主账号重复：${identity}`);
+      identities.add(identity);
+    }
+    if (accountId) {
+      const accountIdIdentity = `${origin}#id=${accountId}`;
+      if (accountIds.has(accountIdIdentity)) throw new Error(`OAuth 主账号 ID 重复：${origin} ${accountId}`);
+      accountIds.add(accountIdIdentity);
+    }
     if (raw?.automationUserDataDir != null && String(raw.automationUserDataDir).trim()) {
+      const isolatedAccountKey = requiredText(accountKey, `主账号 ${configuredOrigin} accountKey`, 80);
+      const isolatedAccountId = requiredText(accountId, `主账号 ${configuredOrigin} accountId`, 80);
+      const accountLabel = requiredText(
+        raw?.accountLabel ?? raw?.displayName ?? isolatedAccountId,
+        `主账号 ${isolatedAccountKey} accountLabel`,
+        120,
+      );
+      const provider = requiredText(
+        raw?.provider ?? config.automaticOAuthProviders?.[origin],
+        `主账号 ${isolatedAccountKey} provider`,
+        40,
+      );
+      const upstreamProvider = requiredText(
+        raw?.upstreamProvider ?? config.oauthUpstreamProviders?.[origin],
+        `主账号 ${isolatedAccountKey} upstreamProvider`,
+        40,
+      );
+      const loginUrl = new URL(requiredText(
+        raw?.loginUrl ?? config.oauthLoginUrls?.[origin] ?? `${origin}/login`,
+        `主账号 ${isolatedAccountKey} loginUrl`,
+      ));
+      if (loginUrl.protocol !== "https:" || loginUrl.origin !== origin || loginUrl.username || loginUrl.password) {
+        throw new Error(`OAuth 主账号 ${isolatedAccountKey} 的 loginUrl 必须属于目标 HTTPS origin`);
+      }
       const profile = resolveDataProfile(raw.automationUserDataDir, `OAuth 主账号 ${accountKey || configuredOrigin} automationUserDataDir`);
       reserveProfile(profile, accountKey || configuredOrigin);
+      isolatedPrimaryAccounts.push({
+        accountKey: isolatedAccountKey,
+        accountId: isolatedAccountId,
+        accountLabel,
+        provider,
+        upstreamProvider,
+        origin,
+        loginUrl: loginUrl.href,
+        automationUserDataDir: profile,
+        title: requiredText(raw?.title ?? `OAuth ${accountLabel}`, `主账号 ${isolatedAccountKey} title`, 160),
+      });
     }
   }
-  return rawAccounts.map((raw, index) => {
+  const supplementalAccounts = rawAccounts.map((raw, index) => {
     const accountKey = requiredText(raw?.accountKey, `第 ${index + 1} 项 accountKey`, 80);
     const accountId = requiredText(raw?.accountId, `第 ${index + 1} 项 accountId`, 80);
     const accountLabel = requiredText(raw?.accountLabel ?? accountId, `第 ${index + 1} 项 accountLabel`, 120);
@@ -72,6 +121,7 @@ export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) 
       accountKey, accountId, accountLabel, provider, upstreamProvider,
       origin, loginUrl: loginUrl.href, automationUserDataDir,
       title: requiredText(raw?.title ?? `OAuth ${accountLabel}`, `第 ${index + 1} 项 title`, 160),
+      supplementalAccount: true,
     };
     const identity = resultIdentity(account);
     if (identities.has(identity)) throw new Error(`补充 OAuth 账号重复：${identity}`);
@@ -84,45 +134,67 @@ export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) 
     profilePaths.add(profileIdentity);
     return account;
   });
+  return { isolatedPrimaryAccounts, supplementalAccounts };
 }
 
-function helperResultToCheckin(account, value, fallbackReason = "补充 OAuth 账号恢复失败") {
-  const daily = value?.dailyCheckin;
-  if (["signed", "already_signed"].includes(daily?.status)) {
-    return {
-      origin: account.origin,
-      title: account.title,
-      folderNames: ["supplemental-oauth"],
-      accountKey: account.accountKey,
-      accountId: account.accountId,
-      accountLabel: account.accountLabel,
-      provider: account.provider,
-      status: daily.status,
-      reason: daily.reason,
-      evidence: daily.evidence,
-      url: value?.finalUrl ?? account.loginUrl,
-      supplementalAccount: true,
-    };
-  }
-  return {
+export function configuredIsolatedPrimaryOAuthAccounts(config = {}, rootDirectory) {
+  return configuredOAuthAccounts(config, rootDirectory).isolatedPrimaryAccounts;
+}
+
+export function configuredSupplementalOAuthAccounts(config = {}, rootDirectory) {
+  return configuredOAuthAccounts(config, rootDirectory).supplementalAccounts;
+}
+
+export function oauthHelperResultToCheckin(account, value, fallbackReason = "OAuth 账号恢复失败") {
+  const supplementalAccount = account.supplementalAccount === true;
+  const metadata = {
     origin: account.origin,
     title: account.title,
-    folderNames: ["supplemental-oauth"],
+    folderNames: account.folderNames ?? (supplementalAccount ? ["supplemental-oauth"] : []),
     accountKey: account.accountKey,
     accountId: account.accountId,
     accountLabel: account.accountLabel,
     provider: account.provider,
-    status: "login_required",
+    ...(supplementalAccount ? { supplementalAccount: true } : {}),
+  };
+  const daily = value?.dailyCheckin;
+  if (["signed", "already_signed"].includes(daily?.status)) {
+    return {
+      ...metadata,
+      status: daily.status,
+      reason: daily.reason,
+      evidence: daily.evidence,
+      url: value?.finalUrl ?? account.loginUrl,
+    };
+  }
+  const helperOutcome = loginHelperOutcome(value ? JSON.stringify(value) : "", "failed");
+  const retryable = helperOutcome.retryable === true;
+  return {
+    ...metadata,
+    status: retryable ? "login_required" : "needs_attention",
     reason: String(value?.reason ?? daily?.reason ?? fallbackReason).slice(0, 240),
     url: value?.finalUrl ?? account.loginUrl,
-    supplementalAccount: true,
+    ...(helperOutcome.failureCode ? { failureCode: helperOutcome.failureCode } : {}),
+    retryableLoginRecovery: retryable,
   };
 }
 
-export async function runSupplementalOAuthAccount(account, config, rootDirectory) {
+export function oauthAccountRetryPolicy(config = {}) {
+  const rawAttempts = Number(config.oauthAccountAttempts);
+  const rawDelayMs = Number(config.oauthAccountRetryDelayMs);
+  const attempts = Math.max(1, Math.min(3, Number.isFinite(rawAttempts) && rawAttempts > 0 ? Math.trunc(rawAttempts) : 2));
+  const delayMs = Math.max(0, Math.min(60_000, Number.isFinite(rawDelayMs) && rawDelayMs >= 0 ? rawDelayMs : 5_000));
+  return { attempts, delayMs };
+}
+
+export async function runOAuthAccount(account, config, rootDirectory) {
   const marker = path.join(account.automationUserDataDir, "Local State");
   try { await fs.access(marker); } catch {
-    return helperResultToCheckin(account, null, "独立登录会话尚未初始化");
+    return oauthHelperResultToCheckin(account, {
+      status: "needs_attention",
+      reason: "独立登录会话尚未初始化",
+      failureCode: "configuration_mismatch",
+    });
   }
   const executable = config.powershellExecutable || "pwsh.exe";
   const args = [
@@ -137,13 +209,32 @@ export async function runSupplementalOAuthAccount(account, config, rootDirectory
     "-AccountLabel", account.accountLabel,
     "-UpstreamProvider", account.upstreamProvider,
   ];
-  try {
-    const { stdout } = await execFileAsync(executable, args, {
-      cwd: rootDirectory, windowsHide: true, timeout: 180000, maxBuffer: 1024 * 1024,
-    });
-    return helperResultToCheckin(account, parseLoginHelperResult(stdout));
-  } catch (error) {
-    const parsed = parseLoginHelperResult(`${error?.stdout ?? ""}\n${error?.stderr ?? ""}`);
-    return helperResultToCheckin(account, parsed, error?.code === "ETIMEDOUT" ? "补充 OAuth 账号恢复超时" : "补充 OAuth 账号恢复失败");
+  const policy = oauthAccountRetryPolicy(config);
+  let lastResult = oauthHelperResultToCheckin(account, null);
+  for (let attempt = 1; attempt <= policy.attempts; attempt += 1) {
+    try {
+      const { stdout } = await execFileAsync(executable, args, {
+        cwd: rootDirectory, windowsHide: true, timeout: 180000, maxBuffer: 1024 * 1024,
+      });
+      lastResult = oauthHelperResultToCheckin(account, parseLoginHelperResult(stdout));
+    } catch (error) {
+      const parsed = parseLoginHelperResult(`${error?.stdout ?? ""}\n${error?.stderr ?? ""}`);
+      lastResult = oauthHelperResultToCheckin(
+        account,
+        parsed,
+        error?.code === "ETIMEDOUT" ? "OAuth 账号恢复超时" : "OAuth 账号恢复失败",
+      );
+    }
+    lastResult = { ...lastResult, oauthAttempt: attempt };
+    if (["signed", "already_signed"].includes(lastResult.status)) return lastResult;
+    const nonRetryable = lastResult.status === "needs_attention"
+      || /(账号不匹配|身份不匹配|配置不一致|rate.?limit|too many|请求(?:次数)?过多|操作过于频繁)/iu.test(lastResult.reason);
+    if (nonRetryable || attempt >= policy.attempts) break;
+    if (policy.delayMs > 0) await wait(policy.delayMs);
   }
+  return lastResult;
+}
+
+export async function runSupplementalOAuthAccount(account, config, rootDirectory) {
+  return runOAuthAccount(account, config, rootDirectory);
 }

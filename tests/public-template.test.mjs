@@ -24,6 +24,9 @@ test("公开默认配置不启用外部通知", async () => {
   assert.deepEqual(defaults.newApiCaptchaRules, {});
   assert.deepEqual(defaults.newApiSignInRules, {});
   assert.deepEqual(defaults.oauthReloginCheckinRules, {});
+  assert.deepEqual(defaults.isolatedOAuthSiteProfiles, {});
+  assert.deepEqual(defaults.oauthSessionProfiles, {});
+  assert.deepEqual(defaults.oauthSiteSessionBindings, {});
 });
 
 test("CI 使用最小权限、固定 Action 提交并扫描 Git 历史", async () => {
@@ -60,6 +63,19 @@ test("AnyRouter 使用真实 sign_in 接口且不再以访问页面判成功", a
   assert.equal(anyRouter.emptySuccessMeansAlreadySigned, true);
   assert.match(anyRouter.responseSuccessText, /签到成功/);
   assert.match(anyRouter.logSuccessText, /每日签到成功/);
+});
+
+test("Muyuan 启用签到并使用无调试 Cloudflare 预热", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  assert.equal(rules.newApiCheckinOrigins.includes("https://muyuan.do"), true);
+  assert.equal(rules.extendedDiscoveryOrigins.includes("https://muyuan.do"), true);
+  assert.equal(rules.automaticOAuthProviders["https://muyuan.do"], "LinuxDO");
+  assert.equal(rules.knownNoCheckinFeatureOrigins.includes("https://muyuan.do"), false);
+  assert.equal(rules.autoClickTurnstileOrigins.includes("https://muyuan.do"), true);
+  assert.deepEqual(
+    rules.nativeChallengePreflight.find((item) => item.url === "https://muyuan.do/console"),
+    { url: "https://muyuan.do/console", waitSeconds: 90, passiveOnly: true },
+  );
 });
 
 test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async () => {
@@ -195,6 +211,8 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(scheduler, /Get-LatestReportState \$now \$config/);
   assert.match(scheduler, /\$hasNewExternalReport = \$latestReportState\.Valid/);
   assert.match(scheduler, /\[string\]\$state\.lastRunId -ne \[string\]\$latestReportState\.RunId/);
+  assert.match(scheduler, /\$state\.reportValid -ne \$true/);
+  assert.doesNotMatch(scheduler, /\$hasNewExternalReport\s*=\s*\$latestReportState\.Valid[\s\S]*?\$state\.reportComplete\s+-ne\s+\$true/);
   assert.match(scheduler, /\[datetimeoffset\]\$_\.nextEligibleAt/);
   assert.match(scheduler, /\[datetimeoffset\]\$reportState\.NextEligibleAt\)\.ToLocalTime\(\)\.ToString\('o'\)/);
   assert.match(scheduler, /已接收外部续跑报告/);
@@ -247,6 +265,11 @@ test("非 Git 安全扫描忽略依赖环境和本地运行数据", async () => 
   } finally {
     await fs.rm(sandbox, { recursive: true, force: true });
   }
+});
+
+test("非 Git 安全扫描容忍遍历时消失的临时目录", async () => {
+  const scanner = await fs.readFile(new URL("../scripts/Scan-PublicSafety.ps1", import.meta.url), "utf8");
+  assert.match(scanner, /Get-ChildItem -LiteralPath \$root -Recurse -File -ErrorAction SilentlyContinue/);
 });
 
 test("Git 安全扫描覆盖尚未跟踪的公开候选文件", async () => {

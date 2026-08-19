@@ -121,24 +121,20 @@ else { $plannedTotal }
 $logicalProcessedTotal = $reportingResults.Count
 $done = @($statuses | Where-Object { $_ -in @('signed', 'already_signed') }).Count
 $disabled = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -eq $true }).Count
-$notAvailable = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -ne $true }).Count
+$temporarilyUnavailable = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.temporarilyUnavailable -eq $true }).Count
+$notAvailable = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -ne $true -and $_.temporarilyUnavailable -ne $true }).Count
 $problems = @($reportingResults | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
-$deferredProblems = @($problems | Where-Object { $_.status -eq 'deferred' })
-$attentionProblems = @($problems | Where-Object { $_.status -ne 'deferred' })
-$attentionCount = @($problems | Where-Object { $_.status -in @('interactive_challenge', 'login_required', 'needs_attention') }).Count
-$timeoutCount = @($problems | Where-Object { $_.status -eq 'managed_challenge_timeout' }).Count
-$hardFailureCount = @($problems | Where-Object { $_.status -in @('error', 'failed') }).Count
+$automaticRetryStatuses = @('error', 'failed', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred')
+$automaticRetryProblems = @($problems | Where-Object { $_.status -in $automaticRetryStatuses })
+$attentionProblems = @($problems | Where-Object { $_.status -notin $automaticRetryStatuses })
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'signed') { $status = 'success' }
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'already_signed') { $status = 'already_done' }
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0) { $status = 'skipped' }
-elseif ($reportingResults.Count -gt 0 -and $attentionCount -gt 0) { $status = 'needs_attention' }
-elseif ($reportingResults.Count -gt 0 -and ($done -gt 0 -or $notAvailable -gt 0 -or $disabled -gt 0)) { $status = 'unconfirmed' }
-elseif ($reportingResults.Count -gt 0 -and $timeoutCount -eq $reportingResults.Count) { $status = 'timeout' }
-elseif ($reportingResults.Count -gt 0 -and $hardFailureCount -eq $reportingResults.Count) { $status = 'failed' }
-elseif ($reportingResults.Count -gt 0 -and $statuses -contains 'deferred') { $status = 'skipped' }
+elseif ($reportingResults.Count -gt 0 -and $attentionProblems.Count -gt 0) { $status = 'needs_attention' }
+elseif ($reportingResults.Count -gt 0 -and $automaticRetryProblems.Count -eq $problems.Count) { $status = 'retrying' }
 elseif ($reportingResults.Count -gt 0) { $status = 'unconfirmed' }
 elseif ($RunnerStatus -eq 'failed') { $status = 'failed' }
 elseif ($RunnerStatus -eq 'skipped') { $status = 'skipped' }
@@ -147,6 +143,7 @@ else { $status = 'unconfirmed' }
 $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
     $heading = if ($isCompleteFinalReport) { "共 $logicalPlannedTotal 个签到项：" } else { "已处理 $logicalProcessedTotal/$logicalPlannedTotal 个签到项（任务未完成）：" }
     $summaryValue = "$heading`n$done 个签到正常`n$notAvailable 个未开放签到"
+    if ($temporarilyUnavailable -gt 0) { $summaryValue += "`n$temporarilyUnavailable 个站点暂不可用（今日不再重试）" }
     if ($disabled -gt 0) { $summaryValue += "`n$disabled 个已取消签到" }
     $summaryValue
 }
@@ -155,21 +152,33 @@ $accountResults = @($reportingResults | Where-Object { [string]$_.accountKey })
 if ($accountResults.Count -gt 0) {
     $summary += "`n账号结果："
     $summary += "`n" + (($accountResults | ForEach-Object {
-        $marker = if ($_.status -in @('signed', 'already_signed')) { '✅' } elseif ($_.status -eq 'not_available') { '⏭️' } else { '❌' }
+        $marker = if ($_.status -in @('signed', 'already_signed')) { '✅' } elseif ($_.status -eq 'not_available') { '⏭️' } elseif ($_.status -in $automaticRetryStatuses) { '🔄' } else { '❌' }
         $reward = if ($_.evidence.rewardAmount) { " `$$([decimal]$_.evidence.rewardAmount)" } else { '' }
         "- $marker $(Get-ResultDisplayName $_)$reward"
     }) -join "`n")
 }
-if ($deferredProblems.Count -gt 0) {
-    $summary += "`n待自动重试 $($deferredProblems.Count) 个："
-    $retryBrief = @($deferredProblems | ForEach-Object {
+if ($automaticRetryProblems.Count -gt 0) {
+    $summary += "`n待自动重试 $($automaticRetryProblems.Count) 个："
+    $retryBrief = @($automaticRetryProblems | ForEach-Object {
         $problem = $_
         $hostName = Get-ResultDisplayName $problem
         $retryLabel = switch ([string]$problem.retryCause) {
             'login_required' { '登录恢复未成功'; break }
             'managed_challenge_timeout' { '验证未自动通过'; break }
             'upstream_unavailable' { '站点暂时不可用'; break }
-            default { '限频' }
+            'rate_limit' { '站点限频'; break }
+            default {
+                switch ([string]$problem.status) {
+                    'managed_challenge_timeout' { '验证未自动通过'; break }
+                    'visited' { '签到结果尚未取得权威确认'; break }
+                    'clicked' { '签到结果尚未取得权威确认'; break }
+                    'no_action' { '暂未找到可确认的签到入口'; break }
+                    'unconfirmed' { '签到结果尚未取得权威确认'; break }
+                    'error' { '执行发生可恢复异常'; break }
+                    'failed' { '执行发生可恢复异常'; break }
+                    default { '已安排后台重试' }
+                }
+            }
         }
         $reason = if ($problem.nextEligibleAt) { try { "$retryLabel，计划 $(([datetime]$problem.nextEligibleAt).ToLocalTime().ToString('HH:mm')) 重试" } catch { "$retryLabel，已安排重试" } }
         else { "$retryLabel，已安排重试" }

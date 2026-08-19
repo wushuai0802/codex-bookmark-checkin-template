@@ -5,6 +5,13 @@ function configuredPreflightUrls(config = {}) {
   ].filter(Boolean);
 }
 
+export function configuredNativeWafOrigins(config = {}) {
+  return new Set((config.nativeWafPreflightUrls ?? [])
+    .map((value) => typeof value === "string" ? value : value?.url)
+    .filter(Boolean)
+    .map((value) => new URL(value).origin));
+}
+
 export function selectPreflightOrigins(plan, config = {}) {
   const allowedOrigins = new Set();
   const disabledOrigins = new Set(config.disabledCheckinOrigins ?? []);

@@ -19,10 +19,36 @@ $mutexCreated = $false
 $mutex = [System.Threading.Mutex]::new($true, 'Local\CodexBookmarkDailyCheckinWatchdog', [ref]$mutexCreated)
 if (-not $mutexCreated) { exit 0 }
 
+function Write-AtomicTextFile([string]$destination, [string]$content) {
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+    $nonce = [guid]::NewGuid().ToString('N')
+    $temporary = "$destination.$PID.$nonce.tmp"
+    $backup = "$destination.$PID.$nonce.bak"
+    try {
+        [System.IO.File]::WriteAllText($temporary, $content, [System.Text.UTF8Encoding]::new($false))
+        for ($attempt = 0; $attempt -lt 8; $attempt += 1) {
+            try {
+                if ([System.IO.File]::Exists($destination)) {
+                    [System.IO.File]::Replace($temporary, $destination, $backup, $true)
+                } else {
+                    [System.IO.File]::Move($temporary, $destination)
+                }
+                return
+            }
+            catch {
+                if ($attempt -ge 7) { throw }
+                Start-Sleep -Milliseconds ([int](50 * [math]::Pow(2, $attempt)))
+            }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Write-Heartbeat {
-    $temp = "$watchdogHeartbeatPath.$PID.tmp"
-    [System.IO.File]::WriteAllText($temp, ([ordered]@{ processId = $PID; updatedAt = (Get-Date).ToString('o') } | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $watchdogHeartbeatPath -Force
+    Write-AtomicTextFile $watchdogHeartbeatPath ([ordered]@{ processId = $PID; updatedAt = (Get-Date).ToString('o') } | ConvertTo-Json)
 }
 
 try {
@@ -46,8 +72,18 @@ try {
             }
             if ($processes.Count -eq 0 -or -not $fresh) {
                 $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-                Start-Process -FilePath $shell -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$schedulerScript`"") -WindowStyle Hidden
-                Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗已重启调度器。" -Encoding UTF8
+                $launched = Start-Process -FilePath $shell -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$schedulerScript`"") -WindowStyle Hidden -PassThru
+                $started = $false
+                for ($attempt = 0; $attempt -lt 10; $attempt++) {
+                    Start-Sleep -Milliseconds 500
+                    $candidate = Get-CimInstance Win32_Process -Filter "ProcessId = $($launched.Id)" -ErrorAction SilentlyContinue
+                    if ($null -ne $candidate) { $started = $true; break }
+                }
+                if ($started) {
+                    Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗已启动调度器（PID=$($launched.Id)）。" -Encoding UTF8
+                } else {
+                    Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 看门狗启动调度器失败（启动 PID=$($launched.Id)）。" -Encoding UTF8
+                }
             }
         }
         catch {
