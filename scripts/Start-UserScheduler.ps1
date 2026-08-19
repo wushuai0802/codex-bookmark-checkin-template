@@ -291,7 +291,7 @@ function Test-SchedulerWaiting($state, [datetime]$now, $config, [object[]]$defer
         catch { }
     }
     if ($state.nextEligibleAt) {
-        try { if ([datetime]$state.nextEligibleAt -gt $now) { return $true } } catch { }
+        try { if ([datetimeoffset]$state.nextEligibleAt -gt [datetimeoffset]$now) { return $true } } catch { }
     }
     return $false
 }

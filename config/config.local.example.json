@@ -29,6 +29,7 @@
     "https://another-example.com": "linuxdo-shared",
     "https://third-example.com": "linuxdo-shared"
   },
+  "oauthRecoveryAccountBindings": {},
   "oauthUpstreamProviders": {
     "https://example.com": "GitHub"
   },

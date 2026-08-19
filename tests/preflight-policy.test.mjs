@@ -66,6 +66,13 @@ test("原生预热脚本拒绝未显式指定范围", async () => {
   );
 });
 
+test("定向续跑只预热选中的来源或账号", async () => {
+  const runner = await fs.readFile(path.join(root, "scripts", "Run-Checkin.ps1"), "utf8");
+  assert.match(runner, /\$selectedOrigins -contains \[string\]\$_\.origin/);
+  assert.match(runner, /\$selectedAccountKeys -contains \[string\]\$_\.accountKey/);
+  assert.match(runner, /\$preflightResults[\s\S]*Sort-Object -Unique/);
+});
+
 test("原生保存密码恢复显式启用 Chrome 账户密码库", async () => {
   const recoverScript = await fs.readFile(path.join(root, "scripts", "Recover-NativeLogin.ps1"), "utf8");
   const openScript = await fs.readFile(path.join(root, "scripts", "Open-PlainLoginChrome.ps1"), "utf8");
@@ -101,6 +108,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.deepEqual(publicRules.nativeWafPreflightUrls, [
     { url: "https://piggo.me/attendance.php", waitSeconds: 120, passiveOnly: true },
     { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 90, passiveOnly: true },
+    { url: "https://ubits.club/attendance.php", waitSeconds: 120, passiveOnly: true },
   ]);
   assert.deepEqual(publicRules.nativeChallengePreflight.slice(0, 2), [
     { url: "https://audiences.me/attendance.php", waitSeconds: 90, action: "checkin" },

@@ -67,6 +67,17 @@ test("识别 Cloudflare 522 为站点故障并延后处理", () => {
   assert.equal(result.retryCause, "upstream_unavailable");
 });
 
+test("识别站点维护页和容量耗尽页并延后处理", () => {
+  for (const bodyText of [
+    "SCHEDULED MAINTENANCE 正在进行系统维护 HTTP 503 Service Unavailable",
+    "系统维护进行中 号池用尽，自动切换维护页",
+  ]) {
+    const result = classifyPageText({ bodyText });
+    assert.equal(result.status, "deferred");
+    assert.equal(result.retryCause, "upstream_unavailable");
+  }
+});
+
 test("额度申请理由按上海日期生成唯一文案", () => {
   assert.equal(formatDailyReason("{date} 用于开发测试", new Date("2026-07-23T00:30:00Z")), "2026年7月23日 用于开发测试");
 });

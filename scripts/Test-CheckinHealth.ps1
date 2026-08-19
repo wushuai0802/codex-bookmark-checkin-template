@@ -251,6 +251,53 @@ $oauthAccountIdTuplesUnique = @($oauthAccountBindings | Group-Object { "$($_.ori
 $oauthBindingReady = @($oauthAccountBindings | Where-Object { -not $_.ready }).Count -eq 0
 $oauthBindingConsistent = @($oauthAccountBindings | Where-Object { -not $_.consistent }).Count -eq 0
 $oauthBindingSelfContained = $config.requireInlineOAuthIdentityTuple -ne $true -or @($primaryOAuthBindings | Where-Object { -not $_.selfContained }).Count -eq 0
+function ConvertTo-OAuthProviderHealthKey([string]$Value) {
+    return ([string]$Value).Trim().ToLowerInvariant() -replace '[^a-z0-9]', ''
+}
+$oauthRecoveryAccountBindings = @(if ($null -ne $config.oauthRecoveryAccountBindings) {
+    $config.oauthRecoveryAccountBindings.PSObject.Properties | ForEach-Object {
+        $rawOrigin = ([string]$_.Name).Trim()
+        $originUri = $null
+        $origin = try {
+            $originUri = [uri]$rawOrigin
+            $originUri.GetLeftPart([System.UriPartial]::Authority)
+        } catch { $null }
+        $validOrigin = [bool](
+            $origin -and
+            $originUri.IsAbsoluteUri -and
+            $originUri.Scheme -eq 'https' -and
+            -not $originUri.UserInfo -and
+            $rawOrigin -eq $origin
+        )
+        $accountKey = ([string]$_.Value).Trim()
+        $accountKeyValid = -not [string]::IsNullOrWhiteSpace($accountKey) `
+            -and $accountKey.Length -le 80 `
+            -and $accountKey -notmatch '[\r\n]'
+        $accountMatches = @($oauthAccountBindings | Where-Object { $_.accountKey -eq $accountKey })
+        $targetProvider = if ($origin) { [string](Get-OAuthHealthMapValue $config.automaticOAuthProviders $origin) } else { '' }
+        $accountProvider = if ($accountMatches.Count -eq 1) { [string]$accountMatches[0].provider } else { '' }
+        $providerMatches = -not [string]::IsNullOrWhiteSpace($targetProvider) `
+            -and -not [string]::IsNullOrWhiteSpace($accountProvider) `
+            -and (ConvertTo-OAuthProviderHealthKey $targetProvider) -eq (ConvertTo-OAuthProviderHealthKey $accountProvider)
+        [pscustomobject]@{
+            origin = $origin
+            configuredOrigin = $rawOrigin
+            accountKey = $accountKey
+            targetProvider = $targetProvider
+            accountProvider = $accountProvider
+            validOrigin = [bool]$validOrigin
+            accountKeyValid = [bool]$accountKeyValid
+            accountMatchCount = $accountMatches.Count
+            accountConfiguredUniquely = [bool]($accountKeyValid -and $accountMatches.Count -eq 1)
+            providerMatches = [bool]$providerMatches
+            ready = [bool]($validOrigin -and $accountKeyValid -and $accountMatches.Count -eq 1 -and $providerMatches)
+        }
+    }
+})
+$oauthRecoveryOriginsValid = @($oauthRecoveryAccountBindings | Where-Object { -not $_.validOrigin }).Count -eq 0
+$oauthRecoveryAccountsResolvable = @($oauthRecoveryAccountBindings | Where-Object { -not $_.accountConfiguredUniquely }).Count -eq 0
+$oauthRecoveryProvidersConsistent = @($oauthRecoveryAccountBindings | Where-Object { -not $_.providerMatches }).Count -eq 0
+$oauthRecoveryBindingsReady = @($oauthRecoveryAccountBindings | Where-Object { -not $_.ready }).Count -eq 0
 $oauthAccountProfiles = @($primaryIdentityProfiles) + @($supplementalProfiles)
 $reservedOAuthProfiles = @($globalProfile) + @($oauthAccountProfiles) + @($isolatedOAuthSiteProfiles) + @($oauthSessionProfiles)
 $duplicateOAuthProfileGroups = @($reservedOAuthProfiles | Where-Object { $_.valid } | Group-Object { $_.path.ToLowerInvariant() } | Where-Object { $_.Count -gt 1 })
@@ -307,6 +354,10 @@ $checks = [ordered]@{
     oauthAccountBindingsConsistent = [bool]$oauthBindingConsistent
     oauthIdentityTuplesUnique = [bool]($oauthAccountBindingKeysUnique -and $oauthAccountIdTuplesUnique)
     oauthIdentityTuplesSelfContained = [bool]$oauthBindingSelfContained
+    oauthRecoveryOriginsValid = [bool]$oauthRecoveryOriginsValid
+    oauthRecoveryAccountsResolvable = [bool]$oauthRecoveryAccountsResolvable
+    oauthRecoveryProvidersConsistent = [bool]$oauthRecoveryProvidersConsistent
+    oauthRecoveryBindingsReady = [bool]$oauthRecoveryBindingsReady
     notificationReady = [bool]$notificationReady
     notificationOutboxClean = $notificationQuarantinedCount -eq 0 -and $notificationPendingCount -eq 0
     scheduleValid = [bool]$scheduleValid
@@ -370,6 +421,7 @@ $result = [ordered]@{
     oauthSessionProfiles = $oauthSessionProfiles
     oauthSessionBindings = $oauthSessionBindings
     oauthAccountBindings = $oauthAccountBindings
+    oauthRecoveryAccountBindings = $oauthRecoveryAccountBindings
     checks = $checks
 }
 $result | ConvertTo-Json -Depth 6

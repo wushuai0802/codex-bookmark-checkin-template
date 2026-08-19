@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const execFileAsync = promisify(execFile);
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const runner = path.join(root, "scripts", "Run-Checkin.ps1");
-const mutexName = "Local\\CodexBookmarkCheckinRun";
+const mutexName = `Local\\CodexBookmarkCheckinRun-Test-${process.pid}-${Date.now()}`;
 
 test("第二个 wrapper 在命名互斥被占用时快速退出且不启动签到", async () => {
   const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "wrapper-mutex-test-"));

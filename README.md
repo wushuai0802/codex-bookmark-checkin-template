@@ -46,6 +46,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 书签暂未同步时可用本机 `configuredTargets` 临时补入 HTTPS 目标；复杂验证站可用 `disabledCheckinOrigins` 明确取消，登录成功即算完成的站点可用 `loginAsCheckinOrigins` 配置。需要每日退出并重新 OAuth 才发放奖励的站点使用 `oauthReloginCheckinRules`；规则可选择原生 Chrome 完成受浏览器验证保护的 OAuth，并且只在同源使用日志出现当天的预期奖励记录后确认成功。这些配置默认均为空。
 - 同一个 OAuth 站点需要签到多个账号时，主书签账号使用 `oauthAccountIdentities` 标注身份，其他账号放入 `supplementalOAuthAccounts`。主身份可用 `automationUserDataDir` 显式绑定专属配置；所有专属账号都必须使用 `data/` 下互不重复的 Chrome 配置目录。运行器会逐个执行、核对账号 ID，并在统一回执中分别显示。完整匿名结构见 `config/config.local.example.json`。
 - 多个站点如果使用同一个 L 站身份，可在本机 `config/config.local.json` 中用 `oauthSessionProfiles` 定义一个位于 `data/` 下的共享 Profile，再用 `oauthSiteSessionBindings` 将站点绑定到该会话名称。绑定到同一会话的站点会串行复用同一次 L 站登录；不同身份仍必须使用不同 Profile。共享会话不能与全局、补充账号或隔离站点 Profile 重复，避免账号串线。
+- 已隔离账号中已经存在合格的上游 OAuth 会话时，可用 `oauthRecoveryAccountBindings` 将另一站的登录恢复显式绑定到该 `accountKey`。该映射只在内置 OAuth 恢复器中使用，并且只有站点的权威签到 API 返回 `signed` 或 `already_signed` 后才直接完成结果；普通保存密码登录不能借此冒充签到成功。
 - 原生 WAF/验证预热只处理已校验书签计划中的站点；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。若验证 Cookie 需要等待扩展下载，可在单个 `nativeChallengePreflight` 条目中设置 `reloadOnChallengeAfterSeconds`；脚本到时最多重载一次，且该值必须小于总等待时间。
 - 单站重试、异常复查和任务级断点续跑只重新访问未确认目标。
 - 用户明确完成当次人工验证后，可通过 `Run-Checkin.ps1 -ManualConfirmedOrigins 'https://example.com'` 将结果以“用户已确认手动完成”写回当天续跑报告；该状态保留审计字段，不冒充自动签到。同一来源存在多个账号时会拒绝来源级人工确认，避免把其他账号误报为完成。

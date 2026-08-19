@@ -94,6 +94,7 @@ function Test-IsCompleteFinalReport($Report) {
 
 function Test-HasImmediateRetry($Report, [datetime]$RetryAt) {
     $results = @($Report.results)
+    $retryOffset = [datetimeoffset]$RetryAt
     if (-not (Test-IsCompleteFinalReport $Report)) { return $true }
     $unresolved = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
     if ($unresolved.Count -eq 0) { return $false }
@@ -101,7 +102,7 @@ function Test-HasImmediateRetry($Report, [datetime]$RetryAt) {
         if ([string]$result.status -eq 'needs_attention' -or [string]$result.retryCause -eq 'invalid_credential') { continue }
         if ([string]$result.status -ne 'deferred') { return $true }
         try {
-            if (-not $result.nextEligibleAt -or [datetime]$result.nextEligibleAt -le $RetryAt) { return $true }
+            if (-not $result.nextEligibleAt -or [datetimeoffset]$result.nextEligibleAt -le $retryOffset) { return $true }
         }
         catch { return $true }
     }
@@ -110,11 +111,12 @@ function Test-HasImmediateRetry($Report, [datetime]$RetryAt) {
 
 function Test-NeedsSavedLoginSync($ResumeCandidate, [datetime]$Now) {
     if ($null -eq $ResumeCandidate) { return $true }
+    $nowOffset = [datetimeoffset]$Now
     foreach ($result in @($ResumeCandidate.Report.results)) {
         $isLoginProblem = [string]$result.status -eq 'login_required' `
             -or ([string]$result.status -eq 'deferred' -and [string]$result.retryCause -eq 'login_required')
         if (-not $isLoginProblem) { continue }
-        try { if (-not $result.nextEligibleAt -or [datetime]$result.nextEligibleAt -le $Now) { return $true } }
+        try { if (-not $result.nextEligibleAt -or [datetimeoffset]$result.nextEligibleAt -le $nowOffset) { return $true } }
         catch { return $true }
     }
     return $false
@@ -235,11 +237,18 @@ try {
             if (@($config.nativeWafPreflightUrls).Count -gt 0 -or @($config.nativeChallengePreflight).Count -gt 0) {
                 $preflightOrigins = @()
                 if ($null -ne $resumeCandidate) {
-                    $preflightOrigins = @($resumeCandidate.Report.results | Where-Object {
+                    $preflightResults = @($resumeCandidate.Report.results | Where-Object {
                         ($_.status -notin @('signed', 'already_signed', 'not_available')) `
                             -and ($manualConfirmed -notcontains [string]$_.origin) `
                             -and ($temporaryUnavailable -notcontains [string]$_.origin)
-                    } | ForEach-Object { [string]$_.origin })
+                    })
+                    if ($selectedOrigins.Count -gt 0) {
+                        $preflightResults = @($preflightResults | Where-Object { $selectedOrigins -contains [string]$_.origin })
+                    }
+                    if ($selectedAccountKeys.Count -gt 0) {
+                        $preflightResults = @($preflightResults | Where-Object { $selectedAccountKeys -contains [string]$_.accountKey })
+                    }
+                    $preflightOrigins = @($preflightResults | ForEach-Object { [string]$_.origin } | Sort-Object -Unique)
                 }
                 elseif ($attempt -eq 1) {
                     $preflightOutput = & $node (Join-Path $root 'src\index.mjs') '--preflight-origins'
