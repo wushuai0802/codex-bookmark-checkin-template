@@ -20,6 +20,14 @@ test("健康检查把主 OAuth 专属 profile 纳入存在、唯一和孤立校�
   assert.match(source, /oauthIdentityTuplesSelfContained/);
   assert.match(source, /oauthSessionProfiles/);
   assert.match(source, /oauthSiteSessionBindings/);
+  assert.match(source, /config\.oauthRecoveryAccountBindings\.PSObject\.Properties/);
+  assert.match(source, /oauthRecoveryOriginsValid/);
+  assert.match(source, /oauthRecoveryAccountsResolvable/);
+  assert.match(source, /oauthRecoveryProvidersConsistent/);
+  assert.match(source, /oauthRecoveryBindingsReady/);
+  assert.match(source, /accountMatchCount/);
+  assert.match(source, /targetProvider/);
+  assert.match(source, /accountProvider/);
 });
 
 test("健康检查覆盖隔离 OAuth 站点 profile", async () => {
@@ -48,9 +56,9 @@ test("PowerShell 主账号解析优先使用身份内联的完整登录元组", 
   assert.match(source, /LoginUrl = if \(\$identity\.loginUrl\)/);
 });
 
-test("原生 OAuth 的权威终态直接进入恢复结果且不启动全局 profile 复查", async () => {
+test("内置 OAuth 的权威终态直接进入恢复结果且不启动全局 profile 复查", async () => {
   const source = await fs.readFile(path.join(root, "src", "index.mjs"), "utf8");
-  assert.match(source, /authoritativeNativeOAuthDailyCheckin\(method\.method, outcome\)/);
+  assert.match(source, /authoritativeOAuthDailyCheckin\(method\.method, outcome\)/);
   assert.match(source, /loginRecovery\?\.authoritativeDailyCheckin/);
   assert.match(source, /\["signed", "already_signed"\]\.includes\(helperDailyCheckin\?\.status\)/);
   assert.match(source, /getSharedContext\(target\)/);

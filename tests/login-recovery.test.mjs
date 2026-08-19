@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  authoritativeNativeOAuthDailyCheckin,
+  authoritativeOAuthDailyCheckin,
   loginHelperOutcome,
   parseLoginHelperResult,
   resolveLoginRecoveryUrl,
@@ -23,6 +23,27 @@ test("登录助手区分可自愈超时与确定性身份错误", () => {
   const mismatch = loginHelperOutcome('{"status":"needs_attention","failureCode":"account_mismatch"}');
   assert.equal(mismatch.failureCode, "account_mismatch");
   assert.equal(mismatch.retryable, false);
+});
+
+test("OAuth 上游限流保留可退避诊断码", () => {
+  const outcome = loginHelperOutcome(JSON.stringify({ status: "failed", failureCode: "oauth_rate_limited" }));
+  assert.equal(outcome.failureCode, "oauth_rate_limited");
+  assert.equal(outcome.retryable, true);
+  assert.match(outcome.diagnostic, /请求过多/);
+});
+
+test("OAuth 上游回调故障保留可退避诊断码", () => {
+  const outcome = loginHelperOutcome(JSON.stringify({ status: "failed", failureCode: "oauth_upstream_unavailable" }));
+  assert.equal(outcome.failureCode, "oauth_upstream_unavailable");
+  assert.equal(outcome.diagnostic, "OAuth 上游回调服务暂时不可用");
+  assert.equal(outcome.retryable, true);
+});
+
+test("OAuth 结构变化保留安全且可执行的诊断", () => {
+  const outcome = loginHelperOutcome(JSON.stringify({ status: "failed", failureCode: "site_flow_changed" }));
+  assert.equal(outcome.failureCode, "site_flow_changed");
+  assert.equal(outcome.retryable, false);
+  assert.match(outcome.diagnostic, /流程已变化/);
 });
 
 test("登录助手保留无敏感信息的凭据拒绝诊断码", () => {
@@ -72,15 +93,16 @@ test("登录助手只保留白名单内的权威签到证据", () => {
   assert.doesNotMatch(JSON.stringify(outcome), /private|cookie|token|body|accountId/);
 });
 
-test("只有成功的 native OAuth 助手可以直接提交权威签到结果", () => {
+test("只有成功的内置 OAuth 助手可以直接提交权威签到结果", () => {
   const outcome = loginHelperOutcome(JSON.stringify({
     status: "logged_in",
     dailyCheckin: { status: "already_signed", reason: "当日使用日志已确认" },
   }));
-  assert.deepEqual(authoritativeNativeOAuthDailyCheckin("native_oauth", outcome), outcome.dailyCheckin);
-  assert.equal(authoritativeNativeOAuthDailyCheckin("saved_password", outcome), null);
-  assert.equal(authoritativeNativeOAuthDailyCheckin("native_oauth", { ...outcome, succeeded: false }), null);
-  assert.equal(authoritativeNativeOAuthDailyCheckin("native_oauth", loginHelperOutcome(JSON.stringify({
+  assert.deepEqual(authoritativeOAuthDailyCheckin("native_oauth", outcome), outcome.dailyCheckin);
+  assert.deepEqual(authoritativeOAuthDailyCheckin("oauth", outcome), outcome.dailyCheckin);
+  assert.equal(authoritativeOAuthDailyCheckin("saved_password", outcome), null);
+  assert.equal(authoritativeOAuthDailyCheckin("native_oauth", { ...outcome, succeeded: false }), null);
+  assert.equal(authoritativeOAuthDailyCheckin("native_oauth", loginHelperOutcome(JSON.stringify({
     status: "logged_in", dailyCheckin: { status: "login_required", reason: "not terminal" },
   }))), null);
 });

@@ -6,6 +6,8 @@
   "relatedCandidateUrls": {
     "https://x666.me": ["https://up.x666.me/"],
     "https://checkin.new-api.abrdns.com": ["https://checkin.new-api.abrdns.com/checkin"],
+    "https://free.lyclaude.site": ["https://free.lyclaude.site/console/personal"],
+    "https://new-api.koyeb.app": ["https://new-api.koyeb.app/console/personal"],
     "https://new-api.abrdns.com": ["https://checkin.new-api.abrdns.com/checkin"]
   },
   "logicalCheckinGroups": {
@@ -15,9 +17,11 @@
   "newApiCheckinOrigins": [
     "https://ai-cf.ailinyu.de",
     "https://checkin.new-api.abrdns.com",
+    "https://free.lyclaude.site",
     "https://jianzhile.vip",
     "https://muyuan.do",
     "https://new-api.abrdns.com",
+    "https://new-api.koyeb.app",
     "https://rrrapi.com",
     "https://token.fourj.space"
   ],
@@ -28,11 +32,13 @@
     "https://jianzhile.vip",
     "https://muyuan.do",
     "https://new-api.abrdns.com",
+    "https://new-api.koyeb.app",
     "https://rrrapi.com",
     "https://token.fourj.space"
   ],
   "autoDetectOAuthOrigins": [
-    "https://free.lyclaude.site"
+    "https://free.lyclaude.site",
+    "https://new-api.koyeb.app"
   ],
   "loginAsCheckinOrigins": [],
   "newApiCaptchaRules": {
@@ -77,6 +83,7 @@
   ],
   "knownNoCheckinFeatureOrigins": [
     "https://ai-cf.ailinyu.de",
+    "https://conduit.ozdoev.net",
     "https://rrrapi.com",
     "https://token.fourj.space"
   ],
@@ -86,7 +93,8 @@
   "visitCheckinRules": {},
   "nativeWafPreflightUrls": [
     { "url": "https://piggo.me/attendance.php", "waitSeconds": 120, "passiveOnly": true },
-    { "url": "https://www.hdkyl.in/attendance.php", "waitSeconds": 90, "passiveOnly": true }
+    { "url": "https://www.hdkyl.in/attendance.php", "waitSeconds": 90, "passiveOnly": true },
+    { "url": "https://ubits.club/attendance.php", "waitSeconds": 120, "passiveOnly": true }
   ],
   "nativeChallengePreflight": [
     { "url": "https://audiences.me/attendance.php", "waitSeconds": 90, "action": "checkin" },
@@ -97,16 +105,23 @@
   "oauthRedirectOverrides": {
     "https://free.lyclaude.site": {
       "LinuxDO": "https://free.lyclaude.site/oauth/linuxdo"
+    },
+    "https://new-api.koyeb.app": {
+      "LinuxDO": "https://new-api.koyeb.app/api/oauth/linuxdo"
     }
   },
   "oauthLoginUrls": {
     "https://agentrouter.org": "https://agentrouter.org/login",
-    "https://checkin.new-api.abrdns.com": "https://checkin.new-api.abrdns.com/"
+    "https://checkin.new-api.abrdns.com": "https://checkin.new-api.abrdns.com/",
+    "https://free.lyclaude.site": "https://free.lyclaude.site/login",
+    "https://new-api.koyeb.app": "https://new-api.koyeb.app/login"
   },
   "automaticOAuthProviders": {
     "https://agentrouter.org": "LinuxDO",
     "https://muyuan.do": "LinuxDO",
-    "https://checkin.new-api.abrdns.com": "LinuxDO"
+    "https://checkin.new-api.abrdns.com": "LinuxDO",
+    "https://free.lyclaude.site": "LinuxDO",
+    "https://new-api.koyeb.app": "LinuxDO"
   },
   "attentionPreferredOrigins": [
     "https://audiences.me",

@@ -656,7 +656,7 @@ async function tryQaFlow(page, rules, origin, config) {
   return null;
 }
 
-async function tryNewApiCheckin(page) {
+export async function tryNewApiCheckin(page) {
   return page.evaluate(async () => {
     let userId = null;
     const storages = [localStorage, sessionStorage];

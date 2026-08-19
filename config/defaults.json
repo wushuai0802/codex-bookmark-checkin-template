@@ -42,6 +42,7 @@
   "oauthExpectedAccountIds": {},
   "oauthSessionProfiles": {},
   "oauthSiteSessionBindings": {},
+  "oauthRecoveryAccountBindings": {},
   "requireInlineOAuthIdentityTuple": false,
   "oauthAllowedProviders": ["LinuxDO", "GitHub", "Google"],
   "oauthAccountAttempts": 2,

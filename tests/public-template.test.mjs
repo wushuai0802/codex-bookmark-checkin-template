@@ -51,6 +51,26 @@ test("简直了使用个人中心和有界图片验证码签到规则", async ()
   });
 });
 
+test("New API 公益站从个人设置页调用已启用的签到接口", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  for (const origin of ["https://free.lyclaude.site", "https://new-api.koyeb.app"]) {
+    assert.equal(rules.newApiCheckinOrigins.includes(origin), true);
+    assert.equal(rules.extendedDiscoveryOrigins.includes(origin), true);
+    assert.deepEqual(rules.relatedCandidateUrls[origin], [`${origin}/console/personal`]);
+    assert.equal(rules.automaticOAuthProviders[origin], "LinuxDO");
+    assert.equal(rules.oauthLoginUrls[origin], `${origin}/login`);
+  }
+});
+
+test("Conduit 无每日签到接口且 UBits 使用无调试原生预热", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  assert.equal(rules.knownNoCheckinFeatureOrigins.includes("https://conduit.ozdoev.net"), true);
+  assert.deepEqual(
+    rules.nativeWafPreflightUrls.find((item) => item.url === "https://ubits.club/attendance.php"),
+    { url: "https://ubits.club/attendance.php", waitSeconds: 120, passiveOnly: true },
+  );
+});
+
 test("AnyRouter 使用真实 sign_in 接口且不再以访问页面判成功", async () => {
   const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
   const anyRouter = rules.newApiSignInRules["https://anyrouter.top"];
@@ -174,6 +194,15 @@ test("wrapper 覆盖前置步骤并且只在子进程退出后清理运行锁", 
   assert.match(runner, /\$processExited\s*=\s*\$process\.WaitForExit\(10000\)/);
   assert.match(runner, /if \(-not \$processExited\)[\s\S]*?保留运行锁/);
   assert.match(runner, /Remove-RunLockOwnedByProcess/);
+  assert.match(runner, /\[datetimeoffset\]\$result\.nextEligibleAt -le \$retryOffset/);
+  assert.match(runner, /\[datetimeoffset\]\$result\.nextEligibleAt -le \$nowOffset/);
+});
+
+test("PowerShell 按绝对时间解释 UTC 重试时间", async () => {
+  const scheduler = await fs.readFile(new URL("../scripts/Start-UserScheduler.ps1", import.meta.url), "utf8");
+  const reporter = await fs.readFile(new URL("../scripts/Submit-UnifiedCheckinReport.ps1", import.meta.url), "utf8");
+  assert.match(scheduler, /\[datetimeoffset\]\$state\.nextEligibleAt -gt \[datetimeoffset\]\$now/);
+  assert.match(reporter, /\[datetimeoffset\]\$problem\.nextEligibleAt\)\.ToLocalTime\(\)/);
 });
 
 test("用户级调度器包含独立守护并在健康检查中验证三层进程", async () => {

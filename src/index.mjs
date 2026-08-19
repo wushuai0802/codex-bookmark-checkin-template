@@ -12,7 +12,7 @@ import {
 } from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
 import {
-  authoritativeNativeOAuthDailyCheckin,
+  authoritativeOAuthDailyCheckin,
   loginHelperOutcome,
   resolveLoginRecoveryUrl,
 } from "./login-recovery.mjs";
@@ -363,6 +363,17 @@ try {
         if (preflight?.status === "signed") {
           return { status: "signed", reason: preflight.reason, url: preflight.url, attempt: 1, nativePreflight: true };
         }
+        if (nativeWafOrigins.has(target.origin) && preflight?.inspectionStatus === "login_required") {
+          return {
+            status: "login_required",
+            retryCause: "login_required",
+            reason: preflight.reason || "无调试原生 Chrome 已通过安全验证，但站点登录状态失效",
+            url: preflight.url || target.candidates?.[0] || target.origin,
+            attempt: 1,
+            nativePreflight: true,
+            inspectionStatus: "login_required",
+          };
+        }
         // A configured native-WAF target must never fall back to the CDP
         // browser and become a weak `visited` result. LeiChi detects debugging
         // sessions, so only the no-debug preflight may authoritatively finish
@@ -551,7 +562,7 @@ try {
               break;
             }
             if (outcome.succeeded) {
-              authoritativeDailyCheckin = authoritativeNativeOAuthDailyCheckin(method.method, outcome);
+              authoritativeDailyCheckin = authoritativeOAuthDailyCheckin(method.method, outcome);
               succeeded = true;
               break;
             }
@@ -566,6 +577,10 @@ try {
             });
             if (failedOutcome.status === "invalid_credential") {
               terminalLoginFailure = "invalid_credential";
+              break;
+            }
+            if (["oauth_rate_limited", "oauth_upstream_unavailable"].includes(failedOutcome.failureCode)) {
+              terminalLoginFailure = failedOutcome.failureCode;
               break;
             }
           }
@@ -593,6 +608,15 @@ try {
           let recoveredResult;
           if (["signed", "already_signed"].includes(helperDailyCheckin?.status)) {
             recoveredResult = helperDailyCheckin;
+          } else if (loginRecovery?.succeeded && nativeWafOrigins.has(target.origin)) {
+            recoveredResult = withRetrySchedule({
+              status: "deferred",
+              retryCause: "managed_challenge_timeout",
+              reason: "站点登录已自动恢复，等待下一次无调试原生 Chrome 完成安全验证与签到",
+              url: initialResult.url,
+              nativePreflight: true,
+              loginRecovered: true,
+            }, config);
           } else if (loginRecovery?.terminalLoginFailure === "invalid_credential") {
             recoveredResult = {
               status: "needs_attention",
@@ -600,6 +624,20 @@ try {
               url: initialResult.url,
               retryCause: "invalid_credential",
             };
+          } else if (loginRecovery?.terminalLoginFailure === "oauth_rate_limited") {
+            recoveredResult = withRetrySchedule({
+              status: "deferred",
+              retryCause: "rate_limit",
+              reason: "LinuxDO OAuth 触发频率限制，已延后重试",
+              url: initialResult.url,
+            }, config);
+          } else if (loginRecovery?.terminalLoginFailure === "oauth_upstream_unavailable") {
+            recoveredResult = withRetrySchedule({
+              status: "deferred",
+              retryCause: "upstream_unavailable",
+              reason: "OAuth 上游仍回调到不可用旧站，备用站拒绝跨域转交，已延后复核",
+              url: initialResult.url,
+            }, config);
           } else {
             if (isolatedOAuthSiteProfiles.has(target.origin)) {
               recoveredResult = await runIsolatedOAuthSiteTarget(target);

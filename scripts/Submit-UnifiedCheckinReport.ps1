@@ -180,7 +180,7 @@ if ($automaticRetryProblems.Count -gt 0) {
                 }
             }
         }
-        $reason = if ($problem.nextEligibleAt) { try { "$retryLabel，计划 $(([datetime]$problem.nextEligibleAt).ToLocalTime().ToString('HH:mm')) 重试" } catch { "$retryLabel，已安排重试" } }
+        $reason = if ($problem.nextEligibleAt) { try { "$retryLabel，计划 $(([datetimeoffset]$problem.nextEligibleAt).ToLocalTime().ToString('HH:mm')) 重试" } catch { "$retryLabel，已安排重试" } }
         else { "$retryLabel，已安排重试" }
         "- $hostName：$reason"
     }) -join "`n"
