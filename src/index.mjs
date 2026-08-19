@@ -43,6 +43,7 @@ import {
   configuredOAuthSessionProfiles,
   configForOAuthSession,
 } from "./oauth-session-profiles.mjs";
+import { buildSessionPreflightPlan, probeSessionPage } from "./session-preflight.mjs";
 import {
   TERMINAL_STATUSES,
   advanceAttemptedDeferredRetries,
@@ -53,6 +54,7 @@ import {
   isRetryEligible,
   nextDeferredRetryAt,
   terminalResultReenabled,
+  upstreamRetryGroup,
   withRetrySchedule,
 } from "./retry-policy.mjs";
 
@@ -240,6 +242,7 @@ try {
       ...qaCache.entries.map((entry) => ({ ...entry, source: "verified_cache" })),
     ];
     const results = [];
+    let sessionPreflightResults = [];
     const nativeWafPreflight = await readFreshNativeWafPreflight();
     const nativeWafOrigins = configuredNativeWafOrigins(config);
     const preferredTargets = applyPreferredCandidates(plan.targets, siteState)
@@ -307,6 +310,7 @@ try {
         completed: progressResults.length,
         total: plannedTotal,
         updatedAt: new Date().toISOString(),
+        sessionPreflight: sessionPreflightResults,
         ...details,
         results: progressResults,
       });
@@ -340,6 +344,42 @@ try {
       }
       return getSharedContext(target);
     };
+    const accountPreflightByIdentity = new Map();
+    const sessionPreflightPlan = buildSessionPreflightPlan({
+      targets: [...selectedTargets, ...selectedSupplementalAccounts],
+      isolatedPrimaryAccounts,
+      supplementalAccounts,
+      sessionProfiles: oauthSessionProfiles,
+      config,
+    });
+    for (const probe of sessionPreflightPlan) {
+      let value;
+      if (probe.kind === "shared_oauth") {
+        const representative = selectedTargets.find((target) => target.origin === probe.representativeOrigin);
+        value = representative
+          ? await probeSessionPage(
+            await getSharedContext(representative),
+            probe,
+            config.sessionPreflightTimeoutMs,
+          )
+          : { key: probe.key, kind: probe.kind, status: "unavailable" };
+      } else {
+        const profileConfig = { ...config, automationUserDataDir: probe.profilePath };
+        let probeContext = null;
+        try {
+          probeContext = await launchAutomationContext(profileConfig);
+          value = await probeSessionPage(probeContext, probe, config.sessionPreflightTimeoutMs);
+        } catch {
+          value = { key: probe.key, kind: probe.kind, status: "unavailable" };
+        } finally {
+          await probeContext?.close().catch(() => {});
+        }
+      }
+      const recorded = { ...value, ...(probe.identity ? { identity: probe.identity } : {}) };
+      sessionPreflightResults.push(recorded);
+      if (probe.identity) accountPreflightByIdentity.set(probe.identity, recorded);
+    }
+    await writeProgress("session_preflight");
     if (globalContextTargets.some((target) => !configuredTargetSkip(target, config))) {
       await getSharedContext(globalContextTargets.find((target) => !configuredTargetSkip(target, config)));
     }
@@ -412,6 +452,16 @@ try {
     const runIsolatedPrimaryTarget = async (target) => {
       const account = isolatedPrimaryByIdentity.get(resultIdentity(target));
       if (!account) throw new Error(`隔离 OAuth 主账号绑定缺失：${resultIdentity(target)}`);
+      const preflight = accountPreflightByIdentity.get(resultIdentity(target));
+      if (preflight?.status === "account_mismatch") {
+        return {
+          status: "needs_attention",
+          reason: "登录会话账号与配置的权威账号 ID 不一致，已停止自动操作",
+          failureCode: "account_mismatch",
+          retryableLoginRecovery: false,
+          url: account.loginUrl,
+        };
+      }
       const configuredSkip = configuredTargetSkip(target, config);
       if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
       const started = Date.now();
@@ -491,11 +541,38 @@ try {
         await closeSharedContexts(sharedContexts, activeContexts);
       }
       const loginOutcomes = new Map();
+      const upstreamCircuitLimit = Math.max(1, Math.min(12,
+        Number(config.upstreamFailureGroupMaxDailyAttempts) || 3));
+      const upstreamCircuitAttempts = new Map();
+      for (const prior of resumeBase?.results ?? []) {
+        const group = upstreamRetryGroup(prior, config);
+        if (!group) continue;
+        upstreamCircuitAttempts.set(group,
+          (upstreamCircuitAttempts.get(group) ?? 0) + Math.max(1, Number(prior.retrySequence) || 1));
+      }
       for (const resultIndex of recoveryIndexes) {
         const current = results[resultIndex];
         if (current.status !== "login_required") continue;
         const target = selectedTargets[resultIndex];
         const provider = config.automaticOAuthProviders?.[current.origin];
+        const upstreamProvider = String(config.oauthUpstreamProviders?.[current.origin] ?? "").trim();
+        const oauthRetryGroup = provider ? upstreamRetryGroup({
+          origin: current.origin,
+          retryCause: "upstream_unavailable",
+          failureCode: "oauth_upstream_unavailable",
+          provider,
+          upstreamProvider,
+        }, config) : null;
+        if (oauthRetryGroup && (upstreamCircuitAttempts.get(oauthRetryGroup) ?? 0) >= upstreamCircuitLimit) {
+          loginOutcomes.set(current.origin, {
+            attempted: false,
+            succeeded: false,
+            attempts: [],
+            terminalLoginFailure: "oauth_upstream_circuit_open",
+            retryGroup: oauthRetryGroup,
+          });
+          continue;
+        }
         const nativeOAuth = provider && config.oauthReloginCheckinRules?.[current.origin]?.nativeBrowser === true;
         const savedLoginUrl = resolveLoginRecoveryUrl(
           current.origin,
@@ -517,7 +594,6 @@ try {
           ).trim();
           const accountKey = String(accountIdentity.accountKey ?? current.accountKey ?? "").trim();
           const accountLabel = String(accountIdentity.accountLabel ?? current.accountLabel ?? expectedAccountId).trim();
-          const upstreamProvider = String(config.oauthUpstreamProviders?.[current.origin] ?? "").trim();
           methods.push({
             method: "native_oauth",
             executable: config.powershellExecutable || "pwsh.exe",
@@ -594,6 +670,9 @@ try {
             }
             if (["oauth_rate_limited", "oauth_upstream_unavailable"].includes(failedOutcome.failureCode)) {
               terminalLoginFailure = failedOutcome.failureCode;
+              if (failedOutcome.failureCode === "oauth_upstream_unavailable" && oauthRetryGroup) {
+                upstreamCircuitAttempts.set(oauthRetryGroup, (upstreamCircuitAttempts.get(oauthRetryGroup) ?? 0) + 1);
+              }
               break;
             }
           }
@@ -603,6 +682,7 @@ try {
           succeeded,
           attempts,
           ...(terminalLoginFailure ? { terminalLoginFailure } : {}),
+          ...(oauthRetryGroup ? { retryGroup: oauthRetryGroup } : {}),
           ...(authoritativeDailyCheckin ? { authoritativeDailyCheckin } : {}),
         });
       }
@@ -644,11 +724,17 @@ try {
               reason: "LinuxDO OAuth 触发频率限制，已延后重试",
               url: initialResult.url,
             }, config);
-          } else if (loginRecovery?.terminalLoginFailure === "oauth_upstream_unavailable") {
+          } else if (["oauth_upstream_unavailable", "oauth_upstream_circuit_open"].includes(loginRecovery?.terminalLoginFailure)) {
             recoveredResult = withRetrySchedule({
               status: "deferred",
               retryCause: "upstream_unavailable",
-              reason: "OAuth 上游仍回调到不可用旧站，备用站拒绝跨域转交，已延后复核",
+              failureCode: loginRecovery.terminalLoginFailure,
+              retryGroup: loginRecovery.retryGroup,
+              provider: config.automaticOAuthProviders?.[target.origin],
+              upstreamProvider: config.oauthUpstreamProviders?.[target.origin],
+              reason: loginRecovery.terminalLoginFailure === "oauth_upstream_circuit_open"
+                ? "同一 OAuth 上游本日已达到自动探测上限，已停止重复认证"
+                : "OAuth 上游仍回调到不可用旧站，备用站拒绝跨域转交，已延后复核",
               url: initialResult.url,
             }, config);
           } else {
@@ -692,7 +778,17 @@ try {
       const shouldReuse = prior && (TERMINAL_STATUSES.has(prior.status)
         || (!explicitSelection && !isRetryEligible(prior)));
       if (!shouldReuse) {
-        results.push(await runSupplementalOAuthAccount(account, config, rootDirectory));
+        const preflight = accountPreflightByIdentity.get(resultIdentity(account));
+        results.push(preflight?.status === "account_mismatch"
+          ? {
+            ...account,
+            status: "needs_attention",
+            reason: "登录会话账号与配置的权威账号 ID 不一致，已停止自动操作",
+            failureCode: "account_mismatch",
+            retryableLoginRecovery: false,
+            url: account.loginUrl,
+          }
+          : await runSupplementalOAuthAccount(account, config, rootDirectory));
       }
       await writeProgress("supplemental_oauth", {
         supplementalCompleted: accountIndex + 1,
@@ -721,17 +817,24 @@ try {
     );
     const processedTotal = finalResults.length;
     const isComplete = processedTotal === plannedTotal;
+    const businessProblems = finalResults.filter((result) => !TERMINAL_STATUSES.has(result.status));
+    const businessComplete = isComplete && businessProblems.length === 0;
+    const pendingExternalCount = businessProblems.filter((result) => result.retryCause === "upstream_unavailable").length;
     const output = {
       runId: runLog.runId,
       runState: "final",
       plannedTotal,
       processedTotal,
       isComplete,
+      executionComplete: isComplete,
+      businessComplete,
+      pendingExternalCount,
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       bookmarkSummary: report,
       summary,
       nextRetryAt: nextDeferredRetryAt(finalResults, finishedAt),
+      sessionPreflight: sessionPreflightResults,
       results: finalResults,
     };
     const minimumTargets = Math.max(1, Number(config.minimumBookmarkTargetCount) || 1);

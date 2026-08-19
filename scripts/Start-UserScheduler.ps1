@@ -142,6 +142,8 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
         lastExitCode = 1
         reportValid = $false
         reportComplete = $false
+        reportExecutionComplete = $false
+        reportBusinessComplete = $false
         lastRunId = $state.lastRunId
         problemCount = 1
         reportRunState = 'scheduler_error'
@@ -187,7 +189,8 @@ function Invoke-SchedulerFailureNotification([string]$message, $config, [bool]$e
 
 function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[datetime]]$notBefore = $null) {
     $empty = [pscustomobject]@{
-        Valid = $false; Complete = $false; NextEligibleAt = $null; RunId = $null
+        Valid = $false; Complete = $false; ExecutionComplete = $false; BusinessComplete = $false
+        NextEligibleAt = $null; RunId = $null
         ProblemCount = $null; RunState = $null; PlannedTotal = 0; ProcessedTotal = 0; DeferredWakeups = @()
     }
     if (-not (Test-Path -LiteralPath $latestReportPath)) { return $empty }
@@ -244,6 +247,8 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
         return [pscustomobject]@{
             Valid = $true
             Complete = $contractComplete -and $problems.Count -eq 0
+            ExecutionComplete = $contractComplete
+            BusinessComplete = $contractComplete -and $problems.Count -eq 0
             NextEligibleAt = if ($retryTimes.Count -gt 0) { @($retryTimes | Sort-Object)[0] } else { $null }
             RunId = [string]$latest.runId
             ProblemCount = $problems.Count + $missingCount
@@ -320,6 +325,8 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         lastExitCode = $state.lastExitCode
         reportValid = $state.reportValid
         reportComplete = $state.reportComplete
+        reportExecutionComplete = $state.reportExecutionComplete
+        reportBusinessComplete = $state.reportBusinessComplete
         lastRunId = $state.lastRunId
         problemCount = $state.problemCount
         automaticRetryCount = $state.automaticRetryCount
@@ -361,11 +368,13 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         lastAttemptDate = $finishedDate
         attemptsToday = $attemptsToday
         lastAttemptStartedAt = $state.lastAttemptStartedAt
-        lastRunDate = if ($reportState.Complete) { $finishedDate } else { $null }
+        lastRunDate = if ($reportState.ExecutionComplete) { $finishedDate } else { $null }
         lastFinishedAt = $finishedAt.ToString('o')
         lastExitCode = $exitCode
         reportValid = [bool]$reportState.Valid
         reportComplete = [bool]$reportState.Complete
+        reportExecutionComplete = [bool]$reportState.ExecutionComplete
+        reportBusinessComplete = [bool]$reportState.BusinessComplete
         lastRunId = $reportState.RunId
         problemCount = $reportState.ProblemCount
         automaticRetryCount = $reportState.AutomaticRetryCount
@@ -432,6 +441,8 @@ try {
                     -or $state.reportValid -ne $true `
                     -or [int]$state.automaticRetryCount -ne [int]$latestReportState.AutomaticRetryCount `
                     -or $state.reportComplete -ne $latestReportState.Complete `
+                    -or $state.reportExecutionComplete -ne $latestReportState.ExecutionComplete `
+                    -or $state.reportBusinessComplete -ne $latestReportState.BusinessComplete `
                     -or ($latestReportState.AutomaticRetryCount -eq 0 -and $null -ne $state.nextEligibleAt))
             if ($reportStateNeedsSync) {
                 $externalExitCode = if ($latestReportState.Complete) { 0 } else { 2 }

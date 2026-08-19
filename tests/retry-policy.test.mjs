@@ -6,6 +6,7 @@ import {
   advanceDeferredRetry,
   applyManualConfirmations,
   applyTemporaryUnavailableConfirmations,
+  applyUpstreamGroupCircuitBreakers,
   deferUnresolvedLogin,
   isCurrentLocalRunId,
   isRetryEligible,
@@ -102,12 +103,54 @@ test("上游站点连续不可用达到上限后只结束当天重试", () => {
 
   assert.equal(first.status, "deferred");
   assert.equal(second.status, "deferred");
-  assert.equal(settled.status, "not_available");
-  assert.equal(settled.temporarilyUnavailable, true);
-  assert.equal(settled.unavailableDate, "20260723");
-  assert.equal(settled.retryAttempts, 3);
-  assert.equal("nextEligibleAt" in settled, false);
-  assert.match(settled.reason, /明日自动恢复/);
+  assert.equal(settled.status, "deferred");
+  assert.equal(settled.retryExhaustedForDay, true);
+  assert.equal(settled.retrySequence, 3);
+  assert.equal(settled.nextEligibleAt, "2026-07-24T00:05:00.000Z");
+  assert.match(settled.reason, /次日再检查/);
+});
+
+test("同一 OAuth 上游故障按组熔断且不伪装成无签到功能", () => {
+  const now = new Date("2026-07-23T12:00:00Z");
+  const results = ["one", "two", "three"].map((name) => ({
+    origin: `https://${name}.example`,
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+    failureCode: "oauth_upstream_unavailable",
+    provider: "LinuxDO",
+    upstreamProvider: "GitHub",
+    retrySequence: 1,
+  }));
+  const circuit = applyUpstreamGroupCircuitBreakers(results, {
+    upstreamFailureGroupMaxDailyAttempts: 3,
+    schedule: "08:05",
+  }, now);
+  assert.equal(circuit.every((result) => result.status === "deferred"), true);
+  assert.equal(circuit.every((result) => result.upstreamCircuitOpen === true), true);
+  assert.equal(circuit.every((result) => result.retryExhaustedForDay === true), true);
+  assert.equal(circuit.every((result) => result.retryGroup === "oauth:linuxdo:github"), true);
+  assert.equal(circuit[0].nextEligibleAt, "2026-07-24T00:05:00.000Z");
+});
+
+test("OAuth 熔断分组沿用恢复账号绑定的真实上游身份", () => {
+  const [result] = applyUpstreamGroupCircuitBreakers([{
+    origin: "https://target.example",
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+    failureCode: "oauth_upstream_unavailable",
+  }], {
+    upstreamFailureGroupMaxDailyAttempts: 3,
+    automaticOAuthProviders: { "https://target.example": "LinuxDO" },
+    oauthRecoveryAccountBindings: { "https://target.example": "primary" },
+    oauthAccountIdentities: {
+      "https://account.example": {
+        accountKey: "primary",
+        provider: "LinuxDO",
+        upstreamProvider: "Google",
+      },
+    },
+  });
+  assert.equal(result.retryGroup, "oauth:linuxdo:google");
 });
 
 test("续跑只推进本轮真正尝试过的站点", () => {

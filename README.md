@@ -46,6 +46,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 书签暂未同步时可用本机 `configuredTargets` 临时补入 HTTPS 目标；复杂验证站可用 `disabledCheckinOrigins` 明确取消，登录成功即算完成的站点可用 `loginAsCheckinOrigins` 配置。需要每日退出并重新 OAuth 才发放奖励的站点使用 `oauthReloginCheckinRules`；规则可选择原生 Chrome 完成受浏览器验证保护的 OAuth，并且只在同源使用日志出现当天的预期奖励记录后确认成功。这些配置默认均为空。
 - 同一个 OAuth 站点需要签到多个账号时，主书签账号使用 `oauthAccountIdentities` 标注身份，其他账号放入 `supplementalOAuthAccounts`。主身份可用 `automationUserDataDir` 显式绑定专属配置；所有专属账号都必须使用 `data/` 下互不重复的 Chrome 配置目录。运行器会逐个执行、核对账号 ID，并在统一回执中分别显示。完整匿名结构见 `config/config.local.example.json`。
 - 多个站点如果使用同一个 L 站身份，可在本机 `config/config.local.json` 中用 `oauthSessionProfiles` 定义一个位于 `data/` 下的共享 Profile，再用 `oauthSiteSessionBindings` 将站点绑定到该会话名称。绑定到同一会话的站点会串行复用同一次 L 站登录；不同身份仍必须使用不同 Profile。共享会话不能与全局、补充账号或隔离站点 Profile 重复，避免账号串线。
+- 可为共享 OAuth Profile 配置只读 `oauthSessionProbeRules`，使同一登录身份在签到前只体检一次；可为隔离账号配置 `oauthAccountProbeRules`，先访问同源页面，再通过同源只读接口核对权威账号 ID。体检只执行 HTTPS GET，不点击签到、不退出登录，也不输出 Cookie、Token 或页面正文；未配置规则时保持原有流程。
 - 已隔离账号中已经存在合格的上游 OAuth 会话时，可用 `oauthRecoveryAccountBindings` 将另一站的登录恢复显式绑定到该 `accountKey`。该映射只在内置 OAuth 恢复器中使用，并且只有站点的权威签到 API 返回 `signed` 或 `already_signed` 后才直接完成结果；普通保存密码登录不能借此冒充签到成功。
 - 原生 WAF/验证预热只处理已校验书签计划中的站点；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。若验证 Cookie 需要等待扩展下载，可在单个 `nativeChallengePreflight` 条目中设置 `reloadOnChallengeAfterSeconds`；脚本到时最多重载一次，且该值必须小于总等待时间。
 - 单站重试、异常复查和任务级断点续跑只重新访问未确认目标。
@@ -55,7 +56,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 主 Chrome 和可选 Edge 书签文件只作为只读来源；后台运行始终使用独立 Chrome 配置。普通原生窗口禁用同步，只有已授权的保存密码恢复窗口会临时启用 Chrome 账户密码库。
 - 默认不配置外部通知。用户可选择安全的命令型通知器，敏感值应从环境变量或凭据管理器读取。
 - 主 Chrome 保存密码同步和外部问答搜索默认关闭；初始化问卷获得明确授权后才启用，未授权时不会读取密码库或访问搜索引擎。启用密码同步后，账户密码库中仍保持加密的匹配记录会桥接到独立配置的本地密码库，脚本不解密、输出或提交密码。
-- 机器人 Chrome 默认关闭 Chromium 的本地大模型下载；限频重试采用有界指数退避，达到当日上限后转到次日计划时间，避免空转。
+- 机器人 Chrome 默认关闭 Chromium 的本地大模型下载；限频重试采用有界指数退避，达到当日上限后转到次日计划时间，避免空转。OAuth 上游故障会按提供方和上游账号链路分组熔断，同一上游达到当日探测上限后保留真实 `deferred` 状态并转到次日，不会被误计为“无签到功能”。
 
 Chrome 保存密码和 OAuth 都无法恢复的站点，可选择使用 Windows DPAPI 凭据。运行 `scripts\Set-ProtectedSiteCredential.ps1 -Origin https://example.com` 交互录入，用户名和密码不会显示；密文只写入被 Git 忽略的 `data\credentials\`，且仅能由当前 Windows 用户解密。随后在本机 `config/config.json` 的 `protectedCredentialOrigins` 中加入站点，并按需配置 `protectedLoginVerificationPaths`。登录器只通过子进程标准输入接收临时明文，不写命令行、日志或额外的浏览器存储快照。
 
@@ -84,7 +85,7 @@ pwsh -NoProfile -File .\scripts\Scan-PublicSafety.ps1
 npm run --silent health
 ```
 
-该命令只读取本机配置、书签文件是否可访问、主账号及补充账号的独立 Chrome 配置、调度入口与进程、调度心跳、当前已验证签到计划与当天最终结果是否一致、站点状态和通知隔离队列；它不会启动签到、修改配置或发送通知。标准输出始终是一个 JSON 对象，`schemaVersion` 当前为 `1`。`reportStatus` 会明确区分 `complete`、`complete_with_attention` 和 `incomplete`：完整报告中存在待重试或需关注站点时仍属于完整报告，调用方应读取 `reportStatus` 处理注意项，而不是把它误判为任务未完成。`healthy=true` 时退出码为 `0`；未初始化或任一基础设施健康检查失败时，`healthy=false`、`failedChecks` 列出失败项，退出码为 `2`；健康检查自身无法执行时退出码为 `3`。
+该命令只读取本机配置、书签文件是否可访问、主账号及补充账号的独立 Chrome 配置、调度入口与进程、调度心跳、当前已验证签到计划与当天最终结果是否一致、站点状态和通知隔离队列；它不会启动签到、修改配置或发送通知。标准输出始终是一个 JSON 对象，`schemaVersion` 当前为 `1`。`reportStatus` 会明确区分 `complete`、`complete_with_attention` 和 `incomplete`；同时 `latestExecutionComplete` 表示所有计划项均已执行并形成结果，`latestBusinessComplete` 表示所有签到业务都已完成或进入明确终态，外部站点故障数量见 `pendingExternalCount`。完整报告中存在待重试或需关注站点时仍属于完整报告，调用方不应把它误判为执行中断。`healthy=true` 时退出码为 `0`；未初始化或任一基础设施健康检查失败时，`healthy=false`、`failedChecks` 列出失败项，退出码为 `2`；健康检查自身无法执行时退出码为 `3`。
 
 外部调用方应在每日计划时间和预计任务时长之后执行，并同时判断退出码、`healthy` 和 `latestRunId`，不要仅凭进程存在判定签到成功。首次完整签到和调度安装尚未完成前，健康检查返回异常属于预期行为。检查结果可能包含本机路径和站点数量，适合留在本机监控系统，不应原样提交到公开 Issue 或仓库。
 

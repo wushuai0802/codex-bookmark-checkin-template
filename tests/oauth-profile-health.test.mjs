@@ -46,7 +46,7 @@ test("公开示例为主身份使用匿名专属 profile", async () => {
   assert.equal(identity.provider, "LinuxDO");
   assert.equal(identity.upstreamProvider, "GitHub");
   assert.equal(identity.loginUrl, "https://example.com/login");
-  assert.doesNotMatch(JSON.stringify(example), /agentrouter|245770|336/iu);
+  assert.doesNotMatch(JSON.stringify(example), /agentrouter|private-account|users[\\/][^\\/]+/iu);
 });
 
 test("PowerShell 主账号解析优先使用身份内联的完整登录元组", async () => {

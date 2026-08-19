@@ -78,6 +78,7 @@ $supervisorHeartbeatFresh = $supervisorHeartbeat -and ((Get-Date) - [datetime]$s
 $siteState = if (Test-Path -LiteralPath $statePath) { try { Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json } catch { $null } } else { $null }
 $currentPlan = if (Test-Path -LiteralPath $currentPlanPath) { try { Get-Content -Raw -Encoding UTF8 -LiteralPath $currentPlanPath | ConvertFrom-Json } catch { $null } } else { $null }
 $problemCount = if ($latest) { @($latest.results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') }).Count } else { $null }
+$pendingExternalCount = if ($latest) { @($latest.results | Where-Object { $_.retryCause -eq 'upstream_unavailable' }).Count } else { $null }
 $minimumTargets = [Math]::Max(1, [int]$config.minimumBookmarkTargetCount)
 $latestRunToday = $latest -and [string]$latest.runId -like "$(Get-Date -Format 'yyyyMMdd')-*"
 $plannedTotal = if ($latest -and $null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { 0 }
@@ -122,6 +123,10 @@ $latestResultValid = $latestRunToday `
     -and $plannedTotal -ge $minimumTargets `
     -and $processedTotal -ge $plannedTotal `
     -and @($latest.results).Count -ge $plannedTotal
+$latestExecutionComplete = $latestResultValid -and ($null -eq $latest.executionComplete -or $latest.executionComplete -eq $true)
+$latestBusinessComplete = if (-not $latestExecutionComplete) { $false }
+elseif ($null -ne $latest.businessComplete) { $latest.businessComplete -eq $true }
+else { [int]$problemCount -eq 0 }
 $reportStatus = Get-CheckinReportStatus -LatestResultValid $latestResultValid -ProblemCount ([int]$problemCount)
 $notificationReady = $config.notification.mode -in @($null, '', 'none') -or (
     $config.notification.mode -eq 'command' -and
@@ -180,9 +185,10 @@ $oauthSessionBindingsReady = @($oauthSessionBindings | Where-Object { -not $_.va
 $rawAllowedOAuthProviders = if (@($config.oauthAllowedProviders).Count -gt 0) { @($config.oauthAllowedProviders) }
 else { @('LinuxDO', 'GitHub', 'Google') }
 $allowedOAuthProviders = @(
-    $rawAllowedOAuthProviders | ForEach-Object { ([string]$_).Trim() }
-    | Where-Object { $_ }
-    | Sort-Object -Unique
+    $rawAllowedOAuthProviders |
+        ForEach-Object { ([string]$_).Trim() } |
+        Where-Object { $_ } |
+        Sort-Object -Unique
 )
 function Get-OAuthHealthMapValue([object]$Map, [string]$Key) {
     if ($null -eq $Map) { return $null }
@@ -405,9 +411,21 @@ $result = [ordered]@{
     latestPlanIdentityCount = $latestPlanIdentities.Count
     latestResultIdentityCount = $latestResultIdentities.Count
     latestProblemCount = $problemCount
+    latestExecutionComplete = [bool]$latestExecutionComplete
+    latestBusinessComplete = [bool]$latestBusinessComplete
+    pendingExternalCount = $pendingExternalCount
     schedulerAttemptsToday = if ($schedulerState) { [int]$schedulerState.attemptsToday } else { 0 }
     schedulerNextEligibleAt = if ($schedulerState -and $schedulerState.nextEligibleAt) { try { ([datetime]$schedulerState.nextEligibleAt).ToString('o') } catch { [string]$schedulerState.nextEligibleAt } } else { $null }
     schedulerReportComplete = if ($schedulerState) { [bool]$schedulerState.reportComplete } else { $false }
+    schedulerExecutionComplete = if ($schedulerState) {
+        if ($null -ne $schedulerState.reportExecutionComplete) { [bool]$schedulerState.reportExecutionComplete }
+        else { [bool]$schedulerState.reportComplete }
+    } else { $false }
+    schedulerBusinessComplete = if ($schedulerState) {
+        if ($null -ne $schedulerState.reportBusinessComplete) { [bool]$schedulerState.reportBusinessComplete }
+        else { [bool]$schedulerState.reportComplete }
+    } else { $false }
+    sessionPreflight = if ($latest -and $null -ne $latest.sessionPreflight) { @($latest.sessionPreflight) } else { @() }
     notificationQuarantinedCount = $notificationQuarantinedCount
     notificationPendingCount = $notificationPendingCount
     orphanOAuthProfiles = $orphanOAuthProfiles

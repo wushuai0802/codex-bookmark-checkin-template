@@ -119,6 +119,81 @@ export function nextShanghaiTimeNextDay(time, now = new Date()) {
   return new Date(utcMidnight - 8 * 60 * 60 * 1000 + requestedMinutes * 60 * 1000).toISOString();
 }
 
+function normalizedGroupPart(value, fallback = "unknown") {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+  return normalized || fallback;
+}
+
+function oauthFailureCode(result) {
+  if (String(result?.failureCode ?? "").startsWith("oauth_")) return String(result.failureCode);
+  const history = Array.isArray(result?.recovery?.history) ? result.recovery.history : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const code = String(history[index]?.login?.terminalLoginFailure ?? "");
+    if (code.startsWith("oauth_")) return code;
+  }
+  return "";
+}
+
+function recoveryOAuthAccount(config, origin) {
+  const accountKey = String(config.oauthRecoveryAccountBindings?.[origin] ?? "").trim();
+  if (!accountKey) return null;
+  for (const [configuredOrigin, identity] of Object.entries(config.oauthAccountIdentities ?? {})) {
+    if (String(identity?.accountKey ?? "").trim() === accountKey) {
+      return { ...identity, origin: new URL(configuredOrigin).origin };
+    }
+  }
+  return (config.supplementalOAuthAccounts ?? []).find(
+    (account) => String(account?.accountKey ?? "").trim() === accountKey,
+  ) ?? null;
+}
+
+export function upstreamRetryGroup(result, config = {}) {
+  if (result?.retryCause !== "upstream_unavailable") return null;
+  const origin = new URL(String(result.origin)).origin;
+  const explicit = String(result.retryGroup ?? config.upstreamFailureGroups?.[origin] ?? "").trim();
+  if (explicit) return normalizedGroupPart(explicit);
+  if (["oauth_upstream_unavailable", "oauth_upstream_circuit_open"].includes(oauthFailureCode(result))) {
+    const recoveryAccount = recoveryOAuthAccount(config, origin);
+    const provider = result.provider ?? config.automaticOAuthProviders?.[origin] ?? recoveryAccount?.provider;
+    const upstream = result.upstreamProvider
+      ?? config.oauthUpstreamProviders?.[origin]
+      ?? recoveryAccount?.upstreamProvider;
+    return `oauth:${normalizedGroupPart(provider)}:${normalizedGroupPart(upstream, "shared")}`;
+  }
+  return `origin:${origin}`;
+}
+
+export function applyUpstreamGroupCircuitBreakers(results, config = {}, now = new Date()) {
+  const configuredLimit = Number(config.upstreamFailureGroupMaxDailyAttempts);
+  const limit = Math.max(1, Math.min(12, Number.isFinite(configuredLimit) ? configuredLimit : 3));
+  const groups = new Map();
+  const annotated = (results ?? []).map((result) => {
+    const retryGroup = upstreamRetryGroup(result, config);
+    if (!retryGroup) return result;
+    const value = { ...result, retryGroup };
+    const attempts = Math.max(1, Number(value.retrySequence) || 1);
+    groups.set(retryGroup, (groups.get(retryGroup) ?? 0) + attempts);
+    return value;
+  });
+  const nextDayTime = [config.rateLimitNextDayTime, config.schedule, "08:05"]
+    .map((value) => String(value ?? ""))
+    .find((value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value)) || "08:05";
+  return annotated.map((result) => {
+    const attempts = result.retryGroup ? groups.get(result.retryGroup) ?? 0 : 0;
+    if (!result.retryGroup || attempts < limit) return result;
+    return {
+      ...result,
+      retryGroupAttempts: attempts,
+      upstreamCircuitOpen: true,
+      retryExhaustedForDay: true,
+      nextEligibleAt: nextShanghaiTimeNextDay(nextDayTime, now),
+      reason: String(result.reason || "上游服务暂时不可用")
+        .replace(/；?同一上游本日自动探测已达到上限，次日再检查$/, "")
+        .concat("；同一上游本日自动探测已达到上限，次日再检查"),
+    };
+  });
+}
+
 export function withRetrySchedule(result, config = {}, now = new Date()) {
   if (result?.status !== "deferred") return result;
   const existing = Date.parse(result.nextEligibleAt ?? "");
@@ -152,22 +227,28 @@ export function advanceDeferredRetry(result, previous, config = {}, now = new Da
     const maxDailyAttempts = Math.max(1, Math.min(6,
       Number(config.upstreamUnavailableMaxDailyAttempts) || 3));
     if (retrySequence >= maxDailyAttempts) {
-      const {
-        nextEligibleAt: _nextEligibleAt,
-        retryCause: _retryCause,
-        retryExhaustedForDay: _retryExhaustedForDay,
-        ...preserved
-      } = result;
       return {
-        ...preserved,
-        status: "not_available",
-        reason: "站点维护或网络不可用，今日停止重试，明日自动恢复",
-        temporarilyUnavailable: true,
-        unavailableDate: currentDate,
-        retryAttempts: retrySequence,
+        ...result,
+        retrySequence,
+        retrySequenceDate: currentDate,
+        retryExhaustedForDay: true,
+        nextEligibleAt: nextShanghaiTimeNextDay(
+          [config.rateLimitNextDayTime, config.schedule, "08:05"]
+            .map((value) => String(value ?? ""))
+            .find((value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value)) || "08:05",
+          now,
+        ),
+        reason: String(result.reason || "站点维护或网络不可用")
+          .replace(/；?本日自动探测已达到上限，次日再检查$/, "")
+          .concat("；本日自动探测已达到上限，次日再检查"),
       };
     }
-    return { ...result, retrySequence, retrySequenceDate: currentDate };
+    return {
+      ...result,
+      retrySequence,
+      retrySequenceDate: currentDate,
+      retryExhaustedForDay: false,
+    };
   }
   if (result.retryCause === "login_required") {
     const maxDailyAttempts = Math.max(1, Math.min(4,
@@ -220,9 +301,10 @@ export function advanceDeferredRetry(result, previous, config = {}, now = new Da
 
 export function advanceAttemptedDeferredRetries(results, attemptedOrigins, previousResults, config = {}, now = new Date()) {
   const attempted = attemptedOrigins instanceof Set ? attemptedOrigins : new Set(attemptedOrigins ?? []);
-  return (results ?? []).map((result) => attempted.has(resultIdentity(result))
+  const advanced = (results ?? []).map((result) => attempted.has(resultIdentity(result))
     ? advanceDeferredRetry(result, compatiblePriorResult(result, previousResults ?? []), config, now)
     : result);
+  return applyUpstreamGroupCircuitBreakers(advanced, config, now);
 }
 
 export function deferUnresolvedLogin(result, config = {}, now = new Date()) {
@@ -234,15 +316,24 @@ export function deferUnresolvedLogin(result, config = {}, now = new Date()) {
       retryCause: result.retryCause ?? "login_required",
     };
   }
+  const oauthFailure = String(result.failureCode ?? "");
+  const retryCause = oauthFailure === "oauth_upstream_unavailable"
+    ? "upstream_unavailable"
+    : oauthFailure === "oauth_rate_limited"
+      ? "rate_limit"
+      : "login_required";
   const reason = String(result.reason || "自动登录恢复未成功")
     .replace(/；?已安排低频重试$/, "");
   return withRetrySchedule({
     ...result,
     status: "deferred",
-    retryCause: "login_required",
+    retryCause,
     reason: `${reason}；已安排低频重试`,
   }, {
-    deferredRetryDelayMs: config.loginRetryDelayMs ?? config.deferredRetryDelayMs,
+    deferredRetryDelayMs: retryCause === "login_required"
+      ? config.loginRetryDelayMs ?? config.deferredRetryDelayMs
+      : config.deferredRetryDelayMs,
+    rateLimitRetryDelayMs: config.rateLimitRetryDelayMs,
   }, now);
 }
 

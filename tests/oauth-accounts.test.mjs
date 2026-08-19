@@ -137,6 +137,37 @@ test("补充账号必须显式声明上游登录方式", () => {
   ]), root), /upstreamProvider 无效/);
 });
 
+test("账号显示名中的旧数字自动采用权威账号 ID，内部 accountKey 保持稳定", () => {
+  const [account] = configuredSupplementalOAuthAccounts(configWith([supplemental({
+    accountKey: "example-100001",
+    accountId: "100002",
+    accountLabel: "Agent 100001 (OAuth)",
+    title: "Example 100001",
+  })]), root);
+  assert.equal(account.accountKey, "example-100001");
+  assert.equal(account.accountId, "100002");
+  assert.equal(account.accountLabel, "Agent 100002 (OAuth)");
+  assert.equal(account.title, "Example 100002");
+});
+
+test("续跑复用旧结果时刷新权威账号展示字段", () => {
+  const current = supplemental({
+    accountKey: "example-100001",
+    accountId: "100002",
+    accountLabel: "Agent 100002 (OAuth)",
+    title: "Example 100002",
+  });
+  const reused = compatiblePriorResult(current, [{
+    ...current,
+    accountLabel: "Agent 100001 (OAuth)",
+    title: "Example 100001",
+    status: "signed",
+  }]);
+  assert.equal(reused.status, "signed");
+  assert.equal(reused.accountLabel, "Agent 100002 (OAuth)");
+  assert.equal(reused.title, "Example 100002");
+});
+
 test("主 OAuth 身份的专属浏览器目录参与 data 边界和唯一性校验", () => {
   const customPrimary = {
     ...configWith([]),
