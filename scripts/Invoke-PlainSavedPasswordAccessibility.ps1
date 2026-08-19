@@ -132,6 +132,63 @@ function Focus-Control([System.Windows.Automation.AutomationElement]$Element) {
     catch { return $false }
 }
 
+function Dismiss-PasswordProtectionPrompt {
+    $paneNames = @('使用 Windows Hello 保护密码', 'Use Windows Hello to protect passwords')
+    $closeNames = @('关闭', 'Close')
+    foreach ($automationRoot in @(Get-ChromeAutomationRoots)) {
+        try {
+            $panes = @($automationRoot.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )) | Where-Object {
+                try {
+                    $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Pane `
+                        -and ([string]$_.Current.Name) -in $paneNames
+                }
+                catch { $false }
+            }
+            foreach ($pane in $panes) {
+                $button = @($pane.FindAll(
+                    [System.Windows.Automation.TreeScope]::Descendants,
+                    [System.Windows.Automation.Condition]::TrueCondition
+                )) | Where-Object {
+                    try {
+                        $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button `
+                            -and ([string]$_.Current.Name) -in $closeNames
+                    }
+                    catch { $false }
+                } | Select-Object -First 1
+                if ($button -and (Invoke-Control $button)) { return $true }
+            }
+        }
+        catch { }
+    }
+    return $false
+}
+
+function Disable-AutoLogoutOption {
+    foreach ($element in @(Get-AllAutomationElements)) {
+        try {
+            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Group) { continue }
+            $name = ([string]$element.Current.Name).Trim()
+            if ($name -notmatch '(?:15\s*(?:分钟|分鐘|minutes?)\s*(?:后|後)?\s*(?:自动|自動)?(?:登出|退出|log\s*out)|(?:自动|自動)(?:登出|退出).{0,20}15)') { continue }
+            $checkbox = @($element.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )) | Where-Object {
+                try { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox }
+                catch { $false }
+            } | Select-Object -First 1
+            if (-not $checkbox) { continue }
+            $toggle = $checkbox.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+            if ($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { $toggle.Toggle() }
+            return $true
+        }
+        catch { }
+    }
+    return $false
+}
+
 function Close-ProfileChrome {
     $targets = @(Get-ProfileChromeProcesses)
     $ids = @($targets.ProcessId)
@@ -157,6 +214,8 @@ if ((Get-ProfileChromeProcesses).Count -gt 0) {
 $attemptedPasswordSelection = $false
 $submitted = $false
 $loggedIn = $false
+$passwordPromptDismissed = $false
+$autoLogoutDisabled = $false
 try {
     & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -Urls @($loginUri.AbsoluteUri) | Out-Null
     $windowDeadline = (Get-Date).AddSeconds(20)
@@ -166,13 +225,18 @@ try {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $selectionAttempts = 0
     while ((Get-Date) -lt $deadline) {
+        if (-not $passwordPromptDismissed) {
+            $passwordPromptDismissed = Dismiss-PasswordProtectionPrompt
+            if ($passwordPromptDismissed) { Start-Sleep -Milliseconds 500 }
+        }
         $location = Get-PrivateCurrentUri
         if ($location -and $location.GetLeftPart([System.UriPartial]::Authority) -eq $originValue -and
-            $location.AbsolutePath -notmatch '^/(?:log[-_]?in|sign[-_]?in|auth)(?:/|$)') {
+            $location.AbsolutePath -notmatch '^/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)') {
             $loggedIn = $true
             break
         }
 
+        if (-not $autoLogoutDisabled) { $autoLogoutDisabled = Disable-AutoLogoutOption }
         $edits = @(Get-LoginEditControls)
         if ($edits.Count -ge 2 -and $selectionAttempts -lt 3) {
             foreach ($control in @($edits[0], $edits[1], $edits[0])) {
@@ -201,6 +265,8 @@ try {
         status = if ($loggedIn) { 'logged_in' } elseif ($attemptedPasswordSelection) { 'needs_attention' } else { 'no_saved_credential' }
         attemptedPasswordSelection = $attemptedPasswordSelection
         submitted = $submitted
+        passwordPromptDismissed = $passwordPromptDismissed
+        autoLogoutDisabled = $autoLogoutDisabled
     } | ConvertTo-Json -Compress
     if (-not $loggedIn) { exit 2 }
 }

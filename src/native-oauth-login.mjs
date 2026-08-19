@@ -12,6 +12,7 @@ import {
 } from "./oauth-relogin-checkin.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
+import { isLoginOrSignInRoute } from "./url-routes.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -283,7 +284,7 @@ async function startLinuxDoUpstreamLogin(page, loginProvider) {
 }
 
 function isTargetLogin(url) {
-  return url.origin === origin && /\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(url.href);
+  return url.origin === origin && isLoginOrSignInRoute(url.href);
 }
 
 function safeFailureReason(error) {

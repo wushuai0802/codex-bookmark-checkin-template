@@ -124,7 +124,7 @@ function Read-PageSnapshot {
     $cloudflareWaf = $bodyText -match '请稍候[.…]*\s*[^ ]+\s*正在进行安全验证|本网站使用安全服务防护恶意自动程序|Just a moment|Performing security verification|Verify you are human|Cloudflare.*performance and security'
     $waf = $leichiWaf -or $cloudflareWaf
     $success = $bodyText -match '签到成功|签到已得\s*\d+|今日已签到|今天已签到|已签到'
-    $loginRoute = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:log[-_]?in|sign[-_]?in|auth)(?:/|$)'
+    $loginRoute = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)'
     # Some NexusPHP sites canonicalize between www and the bare host after the
     # WAF challenge. Treat only that narrow host alias as equivalent; scheme,
     # port, and the remaining hostname must still match.

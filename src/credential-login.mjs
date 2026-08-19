@@ -6,6 +6,7 @@ import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protected-login-flow.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
+import { isCredentialLoginRoute } from "./url-routes.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -30,7 +31,7 @@ if (typeof credential.username !== "string" || credential.username.length < 1 ||
 }
 
 function isLoginUrl(value) {
-  try { return /\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)|#\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(new URL(value).href); }
+  try { return isCredentialLoginRoute(new URL(value).href); }
   catch { return true; }
 }
 

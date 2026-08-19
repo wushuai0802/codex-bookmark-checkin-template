@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { safeLogUrl } from "./security.mjs";
+import { isLoginOrSignInRoute } from "./url-routes.mjs";
 import {
   configuredIsolatedOAuthSiteProfiles,
   configForIsolatedOAuthSite,
@@ -227,7 +228,7 @@ try {
     }
   }
   let loggedIn = finalLocation.origin === origin
-    && !/\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i.test(finalLocation.href)
+    && !isLoginOrSignInRoute(finalLocation.href)
     && !visiblePassword
     && !visibleProviderLogin
     && !oauthFailure;

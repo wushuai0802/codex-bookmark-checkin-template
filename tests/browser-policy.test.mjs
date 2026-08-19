@@ -9,11 +9,24 @@ import {
   preferCandidateResult,
   resultFromPageFailure,
   shouldTryGenericNewApiCheckin,
+  shouldRefreshAutomationContext,
   turnstileWaitMs,
   tryBmapiCheckinStatus,
   waitForActiveQuotaBenefit,
   waitForQuotaRequestField,
 } from "../src/browser.mjs";
+
+test("瞬时上游失败请求重建共享浏览器上下文", () => {
+  assert.equal(shouldRefreshAutomationContext({
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+  }), true);
+  assert.equal(shouldRefreshAutomationContext({
+    status: "deferred",
+    retryCause: "login_required",
+  }), false);
+  assert.equal(shouldRefreshAutomationContext({ status: "already_signed" }), false);
+});
 
 test("候选弱结果不会覆盖登录、挑战或延迟状态", () => {
   for (const status of ["login_required", "interactive_challenge", "managed_challenge_timeout", "deferred"]) {

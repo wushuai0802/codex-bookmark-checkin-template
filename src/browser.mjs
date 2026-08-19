@@ -1110,6 +1110,13 @@ export function isTransientNavigationFailure(error) {
   return /page\.goto:[\s\S]{0,300}Timeout .* exceeded|net::ERR_(?:CONNECTION_CLOSED|CONNECTION_RESET|CONNECTION_REFUSED|CONNECTION_TIMED_OUT|TIMED_OUT|NAME_NOT_RESOLVED|HTTP2_PROTOCOL_ERROR|NETWORK_CHANGED)|\b(?:ECONNRESET|ETIMEDOUT)\b|socket hang up/i.test(message);
 }
 
+// A browser network service can lose a connection for one target while the
+// underlying host remains reachable. The caller may recreate the shared
+// context once, preserving the same profile and its login state.
+export function shouldRefreshAutomationContext(result) {
+  return result?.status === "deferred" && result?.retryCause === "upstream_unavailable";
+}
+
 export async function launchAutomationContext(config) {
   await fs.access(config.chromeExecutable);
   const disabledFeatures = [

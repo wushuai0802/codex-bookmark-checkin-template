@@ -1,4 +1,5 @@
 import { safeErrorMessage } from "./security.mjs";
+import { isCredentialLoginRoute } from "./url-routes.mjs";
 
 const LOGIN_HELPER_STATUSES = new Set([
   "logged_in",
@@ -32,7 +33,6 @@ const RETRYABLE_LOGIN_FAILURE_CODES = new Set([
   "oauth_recovery_failed",
 ]);
 
-const LOGIN_URL_PATTERN = /\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)|#\/(?:log[-_]?in|sign[-_]?in)(?:[/?#]|$)/i;
 const TERMINAL_DAILY_CHECKIN_STATUSES = new Set(["signed", "already_signed"]);
 
 function safeTerminalDailyCheckin(value) {
@@ -130,7 +130,7 @@ export function resolveLoginRecoveryUrl(origin, configuredUrl, observedUrl) {
   if (observedUrl) {
     try {
       const observed = sameOriginHttpsUrl(observedUrl, expected);
-      if (LOGIN_URL_PATTERN.test(observed.href)) {
+      if (isCredentialLoginRoute(observed.href)) {
         // Result URLs are diagnostics and their query values may already be
         // redacted as [VALUE]. Keep only the stable route when replaying them.
         observed.search = "";

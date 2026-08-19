@@ -4,7 +4,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { publicBookmarkReport, readBookmarkPlanWithBackup } from "./bookmarks.mjs";
-import { configuredTargetSkip, launchAutomationContext, processTarget } from "./browser.mjs";
+import {
+  configuredTargetSkip,
+  launchAutomationContext,
+  processTarget,
+  shouldRefreshAutomationContext,
+} from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
 import {
   authoritativeNativeOAuthDailyCheckin,
@@ -317,6 +322,17 @@ try {
       }
       return context;
     };
+    const refreshSharedContext = async (target) => {
+      const runtimeConfig = configForOAuthSession(config, oauthSessionProfiles, target.origin);
+      const profileKey = path.resolve(runtimeConfig.automationUserDataDir);
+      const previous = sharedContexts.get(profileKey);
+      if (previous) {
+        sharedContexts.delete(profileKey);
+        activeContexts.delete(previous);
+        await previous.close().catch(() => {});
+      }
+      return getSharedContext(target);
+    };
     if (globalContextTargets.some((target) => !configuredTargetSkip(target, config))) {
       await getSharedContext(globalContextTargets.find((target) => !configuredTargetSkip(target, config)));
     }
@@ -367,6 +383,12 @@ try {
       const timed = { ...result, durationMs: Date.now() - started };
       rememberLogicalCompletion(target, timed);
       return timed;
+    };
+    const runGlobalTarget = async (target) => {
+      let result = await runOneTarget(await getSharedContext(target), target);
+      if (!shouldRefreshAutomationContext(result)) return result;
+      result = await runOneTarget(await refreshSharedContext(target), target, false);
+      return { ...result, browserContextRecovery: "fresh_shared_context" };
     };
 
     const runIsolatedPrimaryTarget = async (target) => {
@@ -422,7 +444,7 @@ try {
             ? await runIsolatedPrimaryTarget(target)
             : isolatedOAuthSiteProfiles.has(target.origin)
               ? await runIsolatedOAuthSiteTarget(target)
-            : await runOneTarget(await getSharedContext(target), target);
+            : await runGlobalTarget(target);
         results.push({
           origin: target.origin,
           title: target.title,
@@ -582,7 +604,7 @@ try {
             if (isolatedOAuthSiteProfiles.has(target.origin)) {
               recoveredResult = await runIsolatedOAuthSiteTarget(target);
             } else {
-              recoveredResult = await runOneTarget(await getSharedContext(target), target);
+              recoveredResult = await runGlobalTarget(target);
             }
           }
           const priorHistory = initialResult.recovery?.history ?? [];

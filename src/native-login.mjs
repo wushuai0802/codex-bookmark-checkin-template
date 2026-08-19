@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protected-login-flow.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
+import { isCredentialLoginRoute } from "./url-routes.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -103,7 +104,7 @@ try {
             const rect = element.getBoundingClientRect();
             return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
           });
-          return !visiblePassword || !/\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)/i.test(location.href);
+          return !visiblePassword || !isCredentialLoginRoute(location.href);
         }, null, { timeout: 12000 }).catch(() => {});
         let stillHasPassword = await page.locator('input[type="password"]:visible').count() > 0;
         if (stillHasPassword) {
@@ -152,7 +153,7 @@ try {
   const finalLocation = new URL(page.url());
   const visiblePassword = await page.locator('input[type="password"]:visible').count() > 0;
   if (finalLocation.origin === expectedOrigin
-    && !/\/(?:log[-_]?in|sign[-_]?in|auth)(?:[/?#]|$)/i.test(finalLocation.href)
+    && !isCredentialLoginRoute(finalLocation.href)
     && !visiblePassword) {
     status = "logged_in";
   }
