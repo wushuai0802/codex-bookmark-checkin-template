@@ -4,6 +4,8 @@
   ],
   "disabledCheckinOrigins": [],
   "upstreamUnavailableMaxDailyAttempts": 3,
+  "upstreamFailureGroupMaxDailyAttempts": 3,
+  "upstreamFailureGroups": {},
   "loginAsCheckinOrigins": [],
   "newApiCaptchaRules": {},
   "newApiSignInRules": {},
@@ -28,6 +30,18 @@
   "oauthSiteSessionBindings": {
     "https://another-example.com": "linuxdo-shared",
     "https://third-example.com": "linuxdo-shared"
+  },
+  "sessionPreflightEnabled": true,
+  "oauthSessionProbeRules": {
+    "linuxdo-shared": { "url": "https://linux.do/my/preferences/account" }
+  },
+  "oauthAccountProbeRules": {
+    "example-primary": {
+      "url": "https://example.com/console",
+      "apiUrl": "https://example.com/api/user/self",
+      "userIdHeader": "New-Api-User",
+      "accountIdPaths": ["data.id", "data.user.id", "id"]
+    }
   },
   "oauthRecoveryAccountBindings": {},
   "oauthUpstreamProviders": {

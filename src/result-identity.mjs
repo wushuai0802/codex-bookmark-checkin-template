@@ -4,6 +4,17 @@ export function resultIdentity(value) {
   return accountKey ? `${origin}#account=${encodeURIComponent(accountKey)}` : origin;
 }
 
+export function authoritativeAccountDisplay(value, accountId, fallback = accountId) {
+  const expected = String(accountId ?? "").trim();
+  const text = String(value ?? "").trim() || String(fallback ?? "").trim();
+  if (!expected || !text) return text;
+  const numericTokens = text.match(/(?<!\d)\d{4,}(?!\d)/g) ?? [];
+  if (numericTokens.length === 1 && numericTokens[0] !== expected) {
+    return text.replace(numericTokens[0], expected);
+  }
+  return text;
+}
+
 export function compatiblePriorResult(target, previousResults = []) {
   const expectedIdentity = resultIdentity(target);
   const exact = previousResults.find((result) => resultIdentity(result) === expectedIdentity);
@@ -13,9 +24,12 @@ export function compatiblePriorResult(target, previousResults = []) {
     if (targetAccountId && priorAccountId && targetAccountId !== priorAccountId) return null;
     return {
       ...exact,
+      ...(target?.title ? { title: target.title } : {}),
       ...(target?.accountKey ? { accountKey: target.accountKey } : {}),
       ...(targetAccountId ? { accountId: targetAccountId } : {}),
       ...(target?.accountLabel ? { accountLabel: target.accountLabel } : {}),
+      ...(target?.provider ? { provider: target.provider } : {}),
+      ...(target?.upstreamProvider ? { upstreamProvider: target.upstreamProvider } : {}),
     };
   }
 
@@ -30,9 +44,12 @@ export function compatiblePriorResult(target, previousResults = []) {
   if (legacy.length !== 1) return null;
   return {
     ...legacy[0],
+    ...(target?.title ? { title: target.title } : {}),
     accountKey: target.accountKey,
     ...(target.accountId ? { accountId: target.accountId } : {}),
     ...(target.accountLabel ? { accountLabel: target.accountLabel } : {}),
+    ...(target?.provider ? { provider: target.provider } : {}),
+    ...(target?.upstreamProvider ? { upstreamProvider: target.upstreamProvider } : {}),
     migratedLegacyIdentity: true,
   };
 }
@@ -47,7 +64,11 @@ export function accountMetadataForOrigin(origin, config = {}) {
   if (accountId && expectedAccountId && accountId !== expectedAccountId) {
     throw new Error(`OAuth 主账号身份与预期账号不一致：${expectedOrigin}`);
   }
-  const accountLabel = String(raw.accountLabel ?? raw.displayName ?? accountId).trim();
+  const accountLabel = authoritativeAccountDisplay(
+    raw.accountLabel ?? raw.displayName ?? accountId,
+    accountId,
+    accountId,
+  );
   for (const [field, value, maximum] of [
     ["accountKey", accountKey, 80],
     ["accountId", accountId, 80],

@@ -113,6 +113,8 @@ $isCompleteFinalReport = $null -ne $report `
     -and $results.Count -ge $plannedTotal `
     -and $reportIdentityContractValid
 $isPartialReport = $null -ne $report -and -not $isCompleteFinalReport
+$executionComplete = [bool]$isCompleteFinalReport
+$businessComplete = $executionComplete -and @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') }).Count -eq 0
 $logicalPlannedTotal = if ($null -ne $report -and $null -ne $report.bookmarkSummary -and $null -ne $report.bookmarkSummary.targets) {
     @($report.bookmarkSummary.targets | ForEach-Object { Get-LogicalSiteKey $_ } | Select-Object -Unique).Count
 }
@@ -182,6 +184,7 @@ if ($automaticRetryProblems.Count -gt 0) {
         }
         $reason = if ($problem.nextEligibleAt) { try { "$retryLabel，计划 $(([datetimeoffset]$problem.nextEligibleAt).ToLocalTime().ToString('HH:mm')) 重试" } catch { "$retryLabel，已安排重试" } }
         else { "$retryLabel，已安排重试" }
+        if ($problem.retryExhaustedForDay -eq $true) { $reason = "$retryLabel，本日停止重复探测，次日再检查" }
         "- $hostName：$reason"
     }) -join "`n"
     $summary += "`n$retryBrief"
@@ -230,6 +233,8 @@ $payload = [ordered]@{
     plannedTotal = $logicalPlannedTotal
     processedTotal = $logicalProcessedTotal
     isComplete = [bool]$isCompleteFinalReport
+    executionComplete = $executionComplete
+    businessComplete = $businessComplete
     eventKey = $eventKey
     mode = $mode
 }

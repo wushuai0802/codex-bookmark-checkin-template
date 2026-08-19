@@ -232,6 +232,9 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(health, /schedulerStartupShortcutPresent/);
   assert.match(health, /schemaVersion\s*=\s*1/);
   assert.match(health, /failedChecks/);
+  assert.match(health, /latestExecutionComplete/);
+  assert.match(health, /latestBusinessComplete/);
+  assert.match(health, /pendingExternalCount/);
   assert.match(health, /if \(-not \$healthy\) \{ exit 2 \}/);
   assert.match(supervisor, /WatchdogIsRunning/);
   assert.match(supervisor, /WScript\.Arguments/);

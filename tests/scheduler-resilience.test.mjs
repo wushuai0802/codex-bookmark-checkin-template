@@ -147,3 +147,12 @@ test("调度器拒绝结果身份重复或缺失的伪完整报告", async () =>
   assert.match(scheduler, /Compare-Object\s+-ReferenceObject\s+@\(\$currentPlan\.identities\)\s+-DifferenceObject\s+\$uniqueResultIdentities/);
   assert.match(scheduler, /-and\s+\$resultIdentitiesMatch/);
 });
+
+test("调度状态分别记录执行完成与业务完成", async () => {
+  const scheduler = await schedulerSource();
+  assert.match(scheduler, /ExecutionComplete = \$contractComplete/);
+  assert.match(scheduler, /BusinessComplete = \$contractComplete -and \$problems\.Count -eq 0/);
+  assert.match(scheduler, /reportExecutionComplete = \[bool\]\$reportState\.ExecutionComplete/);
+  assert.match(scheduler, /reportBusinessComplete = \[bool\]\$reportState\.BusinessComplete/);
+  assert.match(scheduler, /lastRunDate = if \(\$reportState\.ExecutionComplete\)/);
+});

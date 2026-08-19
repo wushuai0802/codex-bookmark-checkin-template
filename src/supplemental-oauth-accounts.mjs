@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loginHelperOutcome, parseLoginHelperResult } from "./login-recovery.mjs";
-import { resultIdentity } from "./result-identity.mjs";
+import { authoritativeAccountDisplay, resultIdentity } from "./result-identity.mjs";
 
 const execFileAsync = promisify(execFile);
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -61,11 +61,11 @@ export function configuredOAuthAccounts(config = {}, rootDirectory) {
     if (raw?.automationUserDataDir != null && String(raw.automationUserDataDir).trim()) {
       const isolatedAccountKey = requiredText(accountKey, `主账号 ${configuredOrigin} accountKey`, 80);
       const isolatedAccountId = requiredText(accountId, `主账号 ${configuredOrigin} accountId`, 80);
-      const accountLabel = requiredText(
+      const accountLabel = authoritativeAccountDisplay(requiredText(
         raw?.accountLabel ?? raw?.displayName ?? isolatedAccountId,
         `主账号 ${isolatedAccountKey} accountLabel`,
         120,
-      );
+      ), isolatedAccountId, isolatedAccountId);
       const provider = requiredText(
         raw?.provider ?? config.automaticOAuthProviders?.[origin],
         `主账号 ${isolatedAccountKey} provider`,
@@ -94,14 +94,22 @@ export function configuredOAuthAccounts(config = {}, rootDirectory) {
         origin,
         loginUrl: loginUrl.href,
         automationUserDataDir: profile,
-        title: requiredText(raw?.title ?? `OAuth ${accountLabel}`, `主账号 ${isolatedAccountKey} title`, 160),
+        title: authoritativeAccountDisplay(
+          requiredText(raw?.title ?? `OAuth ${accountLabel}`, `主账号 ${isolatedAccountKey} title`, 160),
+          isolatedAccountId,
+          `OAuth ${accountLabel}`,
+        ),
       });
     }
   }
   const supplementalAccounts = rawAccounts.map((raw, index) => {
     const accountKey = requiredText(raw?.accountKey, `第 ${index + 1} 项 accountKey`, 80);
     const accountId = requiredText(raw?.accountId, `第 ${index + 1} 项 accountId`, 80);
-    const accountLabel = requiredText(raw?.accountLabel ?? accountId, `第 ${index + 1} 项 accountLabel`, 120);
+    const accountLabel = authoritativeAccountDisplay(
+      requiredText(raw?.accountLabel ?? accountId, `第 ${index + 1} 项 accountLabel`, 120),
+      accountId,
+      accountId,
+    );
     const provider = requiredText(raw?.provider, `第 ${index + 1} 项 provider`, 40);
     const upstreamProvider = requiredText(raw?.upstreamProvider, `第 ${index + 1} 项 upstreamProvider`, 40);
     const originUrl = new URL(requiredText(raw?.origin, `第 ${index + 1} 项 origin`));
@@ -120,7 +128,11 @@ export function configuredOAuthAccounts(config = {}, rootDirectory) {
     const account = {
       accountKey, accountId, accountLabel, provider, upstreamProvider,
       origin, loginUrl: loginUrl.href, automationUserDataDir,
-      title: requiredText(raw?.title ?? `OAuth ${accountLabel}`, `第 ${index + 1} 项 title`, 160),
+      title: authoritativeAccountDisplay(
+        requiredText(raw?.title ?? `OAuth ${accountLabel}`, `第 ${index + 1} 项 title`, 160),
+        accountId,
+        `OAuth ${accountLabel}`,
+      ),
       supplementalAccount: true,
     };
     const identity = resultIdentity(account);
@@ -155,6 +167,7 @@ export function oauthHelperResultToCheckin(account, value, fallbackReason = "OAu
     accountId: account.accountId,
     accountLabel: account.accountLabel,
     provider: account.provider,
+    upstreamProvider: account.upstreamProvider,
     ...(supplementalAccount ? { supplementalAccount: true } : {}),
   };
   const daily = value?.dailyCheckin;
