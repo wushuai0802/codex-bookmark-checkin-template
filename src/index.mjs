@@ -12,7 +12,7 @@ import {
 } from "./browser.mjs";
 import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
 import {
-  authoritativeOAuthDailyCheckin,
+  authoritativeLoginDailyCheckin,
   loginHelperOutcome,
   resolveLoginRecoveryUrl,
 } from "./login-recovery.mjs";
@@ -29,6 +29,7 @@ import {
 import { loadQaCache, updateQaCache, writeQaCache } from "./qa-solver.mjs";
 import { configuredNativeWafOrigins, selectPreflightOrigins } from "./preflight-policy.mjs";
 import { accountMetadataForOrigin, compatiblePriorResult, resultIdentity } from "./result-identity.mjs";
+import { closeSharedContexts } from "./shared-context-lifecycle.mjs";
 import {
   configuredOAuthAccounts,
   runOAuthAccount,
@@ -244,6 +245,12 @@ try {
     const preferredTargets = applyPreferredCandidates(plan.targets, siteState)
       .map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) }));
     const plannedTargets = [...preferredTargets, ...supplementalAccounts];
+    if (selectedOrigins) {
+      const configuredOrigins = new Set(plannedTargets.map((target) => target.origin));
+      for (const origin of selectedOrigins) {
+        if (!configuredOrigins.has(origin)) throw new Error(`定向续跑来源不存在：${origin}`);
+      }
+    }
     if (selectedAccountKeys) {
       const configuredAccountKeys = new Set(plannedTargets.map((target) => String(target.accountKey || "").trim()).filter(Boolean));
       for (const accountKey of selectedAccountKeys) {
@@ -477,6 +484,12 @@ try {
         .filter((index) => index >= 0);
       if (recoveryIndexes.length === 0) break;
       console.log(`[recovery ${round + 1}/${recoveryRounds}] 将复查 ${recoveryIndexes.length} 个异常站点`);
+      if (recoveryIndexes.some((index) => results[index].status === "login_required")) {
+        // External recovery helpers need exclusive access to the same persistent
+        // browser profile. Release only contexts owned by this run; the later
+        // target recheck recreates them on demand after helpers have exited.
+        await closeSharedContexts(sharedContexts, activeContexts);
+      }
       const loginOutcomes = new Map();
       for (const resultIndex of recoveryIndexes) {
         const current = results[resultIndex];
@@ -562,7 +575,7 @@ try {
               break;
             }
             if (outcome.succeeded) {
-              authoritativeDailyCheckin = authoritativeOAuthDailyCheckin(method.method, outcome);
+              authoritativeDailyCheckin = authoritativeLoginDailyCheckin(method.method, outcome);
               succeeded = true;
               break;
             }
@@ -731,7 +744,12 @@ try {
     await writeQaCache(qaCachePath, updateQaCache(qaCache, results, finishedAt));
     await fs.rm(nativeWafPreflightPath, { force: true }).catch(() => {});
     console.log(JSON.stringify({ resultPath, summary }, null, 2));
-    if (!isComplete || finalResults.some((result) => !TERMINAL_STATUSES.has(result.status))) {
+    const exitResults = explicitSelection
+      ? finalResults.filter((result) => selectedIdentities.has(resultIdentity(result)))
+      : finalResults;
+    const selectedResultSetComplete = !explicitSelection || exitResults.length === selectedIdentities.size;
+    if (!isComplete || !selectedResultSetComplete
+      || exitResults.some((result) => !TERMINAL_STATUSES.has(result.status))) {
       process.exitCode = 2;
     }
   }

@@ -11,6 +11,8 @@ test("登录路由识别覆盖 NexusPHP 的 login.php", () => {
   for (const value of [
     "https://tracker.example/login",
     "https://tracker.example/login.php?returnto=%2Fattendance.php",
+    "https://tracker.example/takelogin.php",
+    "https://tracker.example/takelogin.php?returnto=%2Fattendance.php",
     "https://tracker.example/sign-in.aspx",
     "https://tracker.example/#/signin",
   ]) assert.equal(isCredentialLoginRoute(value), true, value);
@@ -25,4 +27,5 @@ test("原生恢复脚本不会把 login.php 误报为已登录", async () => {
   assert.match(plainWaf, /\(\?:\\\.\(\?:php\|asp\|aspx\|html\?\)\)\?/i);
   assert.match(savedPassword, /Dismiss-PasswordProtectionPrompt/);
   assert.match(savedPassword, /Disable-AutoLogoutOption/);
+  assert.match(plainWaf, /if \(-not \$last\.waf -and \$last\.siteBodyLoaded -and \(\$last\.loginRoute -or \$last\.nonAddressEdits -ge 2\)\)/);
 });

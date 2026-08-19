@@ -1,4 +1,4 @@
-const CREDENTIAL_LOGIN_PATH = /\/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:\/|$)/i;
+const CREDENTIAL_LOGIN_PATH = /\/(?:take[-_]?(?:log[-_]?in|sign[-_]?in)|log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:\/|$)/i;
 const LOGIN_OR_SIGN_IN_PATH = /\/(?:log[-_]?in|sign[-_]?in)(?:\.(?:php|asp|aspx|html?))?(?:\/|$)/i;
 
 function routeParts(value) {

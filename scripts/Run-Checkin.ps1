@@ -92,8 +92,14 @@ function Test-IsCompleteFinalReport($Report) {
     return $plannedTotal -gt 0 -and $processedTotal -ge $plannedTotal -and @($Report.results).Count -ge $plannedTotal
 }
 
-function Test-HasImmediateRetry($Report, [datetime]$RetryAt) {
+function Test-HasImmediateRetry($Report, [datetime]$RetryAt, [string[]]$SelectedOrigins = @(), [string[]]$SelectedAccountKeys = @()) {
     $results = @($Report.results)
+    if ($SelectedOrigins.Count -gt 0 -or $SelectedAccountKeys.Count -gt 0) {
+        $results = @($results | Where-Object {
+            ($SelectedOrigins.Count -gt 0 -and $SelectedOrigins -contains [string]$_.origin) `
+                -or ($SelectedAccountKeys.Count -gt 0 -and $SelectedAccountKeys -contains [string]$_.accountKey)
+        })
+    }
     $retryOffset = [datetimeoffset]$RetryAt
     if (-not (Test-IsCompleteFinalReport $Report)) { return $true }
     $unresolved = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
@@ -296,7 +302,7 @@ try {
             }
             if ($nodeExitCode -eq 0) { break }
             if ($attempt -lt $runAttempts) {
-                if ($null -ne $resumeCandidate -and -not (Test-HasImmediateRetry $resumeCandidate.Report ((Get-Date).AddMinutes($retryDelayMinutes)))) {
+                if ($null -ne $resumeCandidate -and -not (Test-HasImmediateRetry $resumeCandidate.Report ((Get-Date).AddMinutes($retryDelayMinutes)) $selectedOrigins $selectedAccountKeys)) {
                     Write-Warning '剩余站点尚未到可重试时间，本次不空转，交由调度器按 nextEligibleAt 定向补跑。'
                     break
                 }
