@@ -64,15 +64,6 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
     return { status: "deferred", retryCause: "upstream_unavailable", reason: "站点服务器暂时不可用，已安排自动重试" };
   }
 
-  // Visible Turnstile/recaptcha widgets and an explicit checkbox prompt need
-  // interaction.  Mere explanatory copy such as “完成人机验证即可签到” does
-  // not prove that a challenge is currently active.
-  if (challengeSelectors || /(请验证您是真人|請驗證您是真人|verify you are human)/i.test(text)) {
-    return { status: "interactive_challenge", reason: "检测到交互式安全验证" };
-  }
-  if (/(just a moment|performing security verification|请稍候.*安全|正在验证您是否是真人)/i.test(text)) {
-    return { status: "managed_challenge", reason: "等待托管安全验证" };
-  }
   if ((/(^|\s)(登录|登入)(\s|$)/.test(text) && /注册/.test(text)) || (/(^|\s)log[ -]?in(\s|$)/i.test(text) && /sign[ -]?up/i.test(text))) {
     return { status: "login_required", reason: "页面仅显示登录/注册入口" };
   }
@@ -81,6 +72,15 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
   }
   if (/(签到成功|簽到成功|成功签到|成功簽到|打卡成功|回答正确|回答正確|本次签到获得|本次簽到獲得|申请额度成功|申請額度成功|额度已发放|額度已發放|额度申请成功|額度申請成功|额度申请已提交|額度申請已提交|申请已提交|申請已提交|申请成功.*额度|申請成功.*額度|(?:领取|領取)\s*codex\s*(?:权益|權益)\s*成功|codex\s*(?:权益|權益)\s*(?:领取|領取)成功|successfully checked[ -]?in)/i.test(text)) {
     return { status: "signed", reason: "页面显示签到成功" };
+  }
+  // A page can keep a hidden CAPTCHA/Turnstile widget in the DOM after the
+  // site's daily check-in has already been completed. Authoritative success
+  // text is evaluated above, so it wins over this leftover challenge marker.
+  if (challengeSelectors || /(请验证您是真人|請驗證您是真人|verify you are human)/i.test(text)) {
+    return { status: "interactive_challenge", reason: "检测到交互式安全验证" };
+  }
+  if (/(just a moment|performing security verification|请稍候.*安全|正在验证您是否是真人)/i.test(text)) {
+    return { status: "managed_challenge", reason: "等待托管安全验证" };
   }
   return { status: "ready", reason: "页面可继续处理" };
 }
