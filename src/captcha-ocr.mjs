@@ -121,9 +121,18 @@ export async function recognizeOpenCdCaptcha(input) {
     await worker.setParameters({
       tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
       tessedit_pageseg_mode: PSM.SINGLE_LINE,
+      user_defined_dpi: "300",
     });
-    const result = await worker.recognize(processed, {}, { text: true, box: true });
-    const wholeCode = String(result.data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const lineResult = await worker.recognize(processed, {}, { text: true, box: true });
+    const lineCode = String(lineResult.data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    // Colored interference can make SINGLE_LINE split a glyph into several
+    // characters. SINGLE_WORD preserves the six fixed-width glyphs, so use it
+    // whenever it returns an exact six-character candidate.
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_WORD });
+    const wordResult = await worker.recognize(processed, {}, { text: true, box: true });
+    const wordCode = String(wordResult.data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const wholeCode = wordCode.length === 6 ? wordCode : lineCode;
+    const wholeResult = wordCode.length === 6 ? wordResult : lineResult;
     const glyphs = prepared.components
       .filter((component) => component.height >= prepared.height * 0.22 && component.width >= 2)
       .sort((left, right) => left.minX - right.minX);
@@ -136,12 +145,12 @@ export async function recognizeOpenCdCaptcha(input) {
           height: glyph.height,
           leftStemCoverage: Math.max(...glyph.columnInk.slice(0, Math.min(2, glyph.columnInk.length))) / glyph.height,
         })),
-        confidence: result.data.confidence,
+        confidence: wholeResult.data.confidence,
         processed,
       };
     }
     if (glyphs.length === 6) {
-      const recognizedBoxes = String(result.data.box || "").split(/\r?\n/).map((line) => {
+      const recognizedBoxes = String(lineResult.data.box || "").split(/\r?\n/).map((line) => {
         const match = line.match(/^([A-Z0-9])\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+$/i);
         return match ? { character: match[1].toUpperCase(), left: Number(match[2]), right: Number(match[4]) } : null;
       }).filter(Boolean);
@@ -156,7 +165,7 @@ export async function recognizeOpenCdCaptcha(input) {
         const mappedCode = boxMapped.map((mapping) => mapping.item.character).join("");
         return {
           code: correctCaptchaConfusions(mappedCode, glyphs),
-          confidence: result.data.confidence,
+           confidence: wholeResult.data.confidence,
           processed,
         };
       }
@@ -180,7 +189,7 @@ export async function recognizeOpenCdCaptcha(input) {
         }).extend({ top: 24, bottom: 24, left: 24, right: 24, background: "white" }).png().toBuffer();
         const characterResult = await worker.recognize(characterImage);
         const character = String(characterResult.data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-        if (character.length !== 1) return { code: wholeCode, confidence: result.data.confidence, processed };
+         if (character.length !== 1) return { code: wholeCode, confidence: wholeResult.data.confidence, processed };
         characters.push(character);
         confidences.push(characterResult.data.confidence);
       }
@@ -191,7 +200,7 @@ export async function recognizeOpenCdCaptcha(input) {
         processed,
       };
     }
-    return { code: wholeCode, confidence: result.data.confidence, processed };
+    return { code: wholeCode, confidence: wholeResult.data.confidence, processed };
   } finally {
     await worker.terminate();
   }

@@ -264,6 +264,8 @@ try {
                 Start-Process -FilePath ([string]$config.chromeExecutable) -ArgumentList @(
                     "--user-data-dir=$profilePath", '--profile-directory=Default',
                     '--no-first-run', '--no-default-browser-check',
+                    '--disable-features=OptimizationGuideOnDeviceModel',
+                    '--disable-component-update',
                     '--force-renderer-accessibility', $loginUri.AbsoluteUri
                 ) -WindowStyle Hidden | Out-Null
                 $resumeDeadline = (Get-Date).AddSeconds(20)

@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$Apply,
-    [string]$ConfigPath
+    [string]$ConfigPath,
+    [switch]$AllProfiles
 )
 
 $ErrorActionPreference = 'Stop'
@@ -87,24 +88,57 @@ function Get-DirectoryBytes([string]$Path) {
 }
 
 $items = @()
-foreach ($relative in $relativeTargets) {
-    if ($protectedSegments | Where-Object { $relative -like "*$_*" }) {
-        throw "清理白名单包含受保护路径：$relative"
+
+# 需要清理的配置目录集合。默认只处理主自动化配置；-AllProfiles 会同时覆盖
+# data\accounts、data\sites、data\sessions 下的每个独立 Chrome 配置。
+$profileRoots = [System.Collections.Generic.List[string]]::new()
+$profileRoots.Add($profileRoot)
+if ($AllProfiles) {
+    foreach ($group in @('accounts', 'sites', 'sessions')) {
+        $groupRoot = Join-Path $allowedParent $group
+        if (-not (Test-Path -LiteralPath $groupRoot)) { continue }
+        foreach ($entry in @(Get-ChildItem -LiteralPath $groupRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+            $candidate = [System.IO.Path]::GetFullPath((Join-Path $entry.FullName 'chrome-user-data')).TrimEnd('\')
+            if (-not (Test-Path -LiteralPath (Join-Path $candidate 'Local State'))) { continue }
+            if (-not $candidate.StartsWith("$allowedParent\", [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            if ($profileRoots -notcontains $candidate) { $profileRoots.Add($candidate) }
+        }
     }
-    $target = [System.IO.Path]::GetFullPath((Join-Path $profileRoot $relative))
-    if (-not $target.StartsWith("$profileRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "清理目标越界：$relative"
+}
+
+foreach ($currentProfileRoot in $profileRoots) {
+    Assert-NoReparsePointInPath $currentProfileRoot $allowedParent
+    $profileRunning = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
+        $_.CommandLine -like "*$currentProfileRoot*"
+    })
+    if ($profileRunning.Count -gt 0) {
+        throw "机器人 Chrome 正在运行，拒绝清理缓存：$currentProfileRoot"
     }
-    Assert-NoReparsePointTree $target
-    $bytes = Get-DirectoryBytes $target
-    if ($bytes -le 0) { continue }
-    $items += [pscustomobject]@{ relativePath = $relative; bytes = $bytes }
-    if ($Apply) { Remove-Item -LiteralPath $target -Recurse -Force }
+    foreach ($relative in $relativeTargets) {
+        if ($protectedSegments | Where-Object { $relative -like "*$_*" }) {
+            throw "清理白名单包含受保护路径：$relative"
+        }
+        $target = [System.IO.Path]::GetFullPath((Join-Path $currentProfileRoot $relative))
+        if (-not $target.StartsWith("$currentProfileRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "清理目标越界：$relative"
+        }
+        Assert-NoReparsePointTree $target
+        $bytes = Get-DirectoryBytes $target
+        if ($bytes -le 0) { continue }
+        $items += [pscustomobject]@{
+            profileRoot  = $currentProfileRoot
+            relativePath = $relative
+            bytes        = $bytes
+        }
+        if ($Apply) { Remove-Item -LiteralPath $target -Recurse -Force }
+    }
 }
 
 [pscustomobject]@{
     mode = if ($Apply) { 'applied' } else { 'dry_run' }
     profileRoot = $profileRoot
+    profileRootCount = $profileRoots.Count
+    profileRoots = @($profileRoots)
     itemCount = $items.Count
     totalBytes = [int64](($items | Measure-Object -Property bytes -Sum).Sum)
     items = $items
