@@ -11,6 +11,7 @@ function Invoke-PlainCredentialLoginAccessibility {
         [Parameter(Mandatory = $true)][string]$VerificationUrl,
         [Parameter(Mandatory = $true)][string]$Username,
         [Parameter(Mandatory = $true)][string]$Password,
+        [string]$AutomationUserDataDirOverride,
         [ValidateRange(20, 120)][int]$TimeoutSeconds = 120,
         [switch]$ProbeOnly
     )
@@ -216,8 +217,11 @@ function Invoke-PlainCredentialLoginAccessibility {
     $challengeClicked = $false
     $stage = 'browser_startup'
     try {
-        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') `
-            -Offscreen -DisableExtensions -Urls @($loginUri.AbsoluteUri) | Out-Null
+        $openArguments = @('-Offscreen', '-DisableExtensions', '-Urls', @($loginUri.AbsoluteUri))
+        if ($AutomationUserDataDirOverride) {
+            $openArguments += @('-UserDataDirOverride', $AutomationUserDataDirOverride)
+        }
+        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openArguments | Out-Null
         $started = $true
         $windowDeadline = (Get-Date).AddSeconds(20)
         while ((Get-Date) -lt $windowDeadline -and @(Get-ChromeAutomationRoots).Count -eq 0) {
