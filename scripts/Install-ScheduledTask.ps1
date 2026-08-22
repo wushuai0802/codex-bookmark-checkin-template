@@ -66,12 +66,36 @@ catch {
 # only one owner of the daily run so no duplicate browser/profile access occurs.
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $runKeyName = if ($config.schedulerRunKeyName) { [string]$config.schedulerRunKeyName } else { 'CodexBookmarkDailyCheckin' }
-Remove-ItemProperty -Path $runKey -Name $runKeyName -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Startup')) "$runKeyName.lnk") -Force -ErrorAction SilentlyContinue
+$supervisorScript = Join-Path $PSScriptRoot 'UserSchedulerSupervisor.vbs'
+$shortcutShell = New-Object -ComObject WScript.Shell
+$legacyRunNames = @($runKeyName, 'CodexBookmarkDailyCheckin', 'ChromeDailyCheckin') | Sort-Object -Unique
+foreach ($legacyName in $legacyRunNames) {
+    $runValue = $null
+    try {
+        $runProperties = Get-ItemProperty -Path $runKey -ErrorAction Stop
+        $runValue = [string]$runProperties.PSObject.Properties[$legacyName].Value
+    } catch { $runValue = $null }
+    if ($runValue -and $runValue.IndexOf($supervisorScript, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        Remove-ItemProperty -Path $runKey -Name $legacyName -ErrorAction SilentlyContinue
+    }
+    $shortcutPath = Join-Path ([Environment]::GetFolderPath('Startup')) "$legacyName.lnk"
+    if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
+        $shortcut = $shortcutShell.CreateShortcut($shortcutPath)
+        $shortcutCommand = "$( [string]$shortcut.TargetPath ) $( [string]$shortcut.Arguments )"
+        if ($shortcutCommand.IndexOf($supervisorScript, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 $schedulerScripts = @($schedulerScript, (Join-Path $PSScriptRoot 'Ensure-UserScheduler.ps1'))
 Get-CimInstance Win32_Process | Where-Object {
     $commandLine = [string]$_.CommandLine
     $_.Name -in @('pwsh.exe', 'powershell.exe') -and @($schedulerScripts | Where-Object { $commandLine -like "*-File*$_*" }).Count -gt 0
+} | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+Get-CimInstance Win32_Process -Filter "Name='wscript.exe'" | Where-Object {
+    [string]$_.CommandLine -like "*$supervisorScript*"
 } | ForEach-Object {
     Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }

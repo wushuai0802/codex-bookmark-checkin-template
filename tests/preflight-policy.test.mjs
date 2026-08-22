@@ -141,7 +141,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(preflightScript, /\$inspectionMode \(\[int\]\$item\.reloadOnChallengeAfterSeconds\)/);
   assert.match(inspector, /challengeReloaded/);
   assert.match(inspector, /page\.reload\(/);
-  assert.match(plainWaf, /Open-PlainLoginChrome\.ps1'[\s\S]*-Minimized[\s\S]*-DisableExtensions/);
+  assert.match(plainWaf, /Open-PlainLoginChrome\.ps1'[\s\S]*-Offscreen[\s\S]*-DisableExtensions/);
   assert.match(plainWaf, /UserDataDirOverride/);
   assert.match(plainWaf, /正在进行安全检测/);
   assert.match(plainWaf, /正在进行安全验证/);

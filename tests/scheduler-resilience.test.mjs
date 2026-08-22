@@ -10,6 +10,28 @@ async function schedulerSource() {
   return fs.readFile(path.join(root, "scripts", "Start-UserScheduler.ps1"), "utf8");
 }
 
+async function scheduledTaskInstallerSource() {
+  return fs.readFile(path.join(root, "scripts", "Install-ScheduledTask.ps1"), "utf8");
+}
+
+test("Windows 计划任务安装器清理本项目的历史用户级调度入口", async () => {
+  const installer = await scheduledTaskInstallerSource();
+  assert.match(installer, /'CodexBookmarkDailyCheckin'/);
+  assert.match(installer, /'ChromeDailyCheckin'/);
+  assert.match(installer, /\$runValue\s+-and\s+\$runValue\.IndexOf\(\$supervisorScript,/);
+  assert.match(installer, /\$shortcutCommand\.IndexOf\(\$supervisorScript,/);
+  assert.match(installer, /Remove-ItemProperty\s+-Path\s+\$runKey\s+-Name\s+\$legacyName/);
+  assert.match(installer, /Remove-Item\s+-LiteralPath\s+\$shortcutPath/);
+  assert.match(installer, /Get-CimInstance Win32_Process -Filter "Name='wscript\.exe'"/);
+  assert.match(installer, /\[string\]\$_\.CommandLine\s+-like\s+"\*\$supervisorScript\*"/);
+  assert.match(installer, /Stop-Process\s+-Id\s+\$_\.ProcessId\s+-Force/);
+});
+
+test("Windows 计划任务空闲时健康检查不要求常驻 heartbeat", async () => {
+  const health = await fs.readFile(path.join(root, "scripts", "Test-CheckinHealth.ps1"), "utf8");
+  assert.match(health, /schedulerHeartbeatFresh\s*=\s*if \(\$scheduledTask\) \{[\s\S]*?State.*Disabled[\s\S]*?\} else \{ \[bool\]\$heartbeatFresh \}/);
+});
+
 test("调度器 claim 前异常也进入统一失败状态与通知链", async () => {
   const scheduler = await schedulerSource();
   assert.match(scheduler, /\$initialConfig\s*=\s*try\s*\{[\s\S]*?ConvertFrom-Json\s*\}\s*catch\s*\{\s*\$null\s*\}/);

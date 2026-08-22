@@ -266,7 +266,8 @@ try {
                     '--no-first-run', '--no-default-browser-check',
                     '--disable-features=OptimizationGuideOnDeviceModel',
                     '--disable-component-update',
-                    '--force-renderer-accessibility', $loginUri.AbsoluteUri
+                    '--force-renderer-accessibility', '--window-position=-32000,-32000',
+                    '--window-size=1400,900', $loginUri.AbsoluteUri
                 ) -WindowStyle Hidden | Out-Null
                 $resumeDeadline = (Get-Date).AddSeconds(20)
                 $providerControl = $null

@@ -250,7 +250,7 @@ function Invoke-CloudflareChallengeClick {
 if ((Get-ProfileChromeProcesses).Count -gt 0) { throw '机器人专用 Chrome 配置正被占用。' }
 $started = $false
 try {
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Minimized -DisableExtensions `
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -DisableExtensions `
         -Urls @($targetUri.AbsoluteUri) -UserDataDirOverride $profilePath | Out-Null
     $windowDeadline = (Get-Date).AddSeconds(25)
     while ((Get-Date) -lt $windowDeadline -and @(Get-ChromeAutomationRoots).Count -eq 0) { Start-Sleep -Milliseconds 500 }

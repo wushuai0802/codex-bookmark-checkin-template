@@ -369,7 +369,9 @@ $checks = [ordered]@{
     scheduleValid = [bool]$scheduleValid
     schedulerReady = if ($scheduledTask) { [bool]$scheduledTaskReady } else { $startupEntryPresent }
     schedulerUnique = if ($scheduledTask) { $true } else { $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1 }
-    schedulerHeartbeatFresh = [bool]$heartbeatFresh
+    # Windows Task Scheduler owns the lifecycle in this mode; an idle task is
+    # healthy even though its one-shot scheduler heartbeat is older than 5m.
+    schedulerHeartbeatFresh = if ($scheduledTask) { [string]$scheduledTask.State -ne 'Disabled' } else { [bool]$heartbeatFresh }
     watchdogHeartbeatFresh = if ($scheduledTask) { $true } else { [bool]$watchdogHeartbeatFresh }
     supervisorHeartbeatFresh = if ($scheduledTask) { $true } else { [bool]$supervisorHeartbeatFresh }
     schedulerClaimFresh = [bool]$claimFresh
