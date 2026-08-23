@@ -283,6 +283,44 @@ async function startLinuxDoUpstreamLogin(page, loginProvider) {
   return activePage;
 }
 
+async function restoreSavedGitHubLogin(page, state) {
+  if (state.attempted || page.isClosed()) return false;
+  const location = parseObservedBrowserUrl(page.url());
+  if (location?.hostname !== "github.com" || !/^\/login(?:[/?#]|$)/i.test(location.pathname)) return false;
+  state.attempted = true;
+
+  // Let Chrome's password manager fill the isolated profile's saved GitHub
+  // credential. Only booleans leave this process; no username or password is
+  // read, logged, or copied into the OAuth flow.
+  const username = page.locator('#login_field:visible, input[name="login"]:visible, input[type="email"]:visible').first();
+  const password = page.locator('#password:visible, input[type="password"]:visible').first();
+  if (await username.count() !== 1 || await password.count() !== 1) return false;
+  const fieldsFilled = async () => Boolean(
+    await username.evaluate((element) => Boolean(element.value)).catch(() => false)
+    && await password.evaluate((element) => Boolean(element.value)).catch(() => false),
+  );
+  let filled = await fieldsFilled();
+  if (!filled) {
+    for (const field of [username, password, username]) {
+      await field.click().catch(() => {});
+      await field.press("ArrowDown").catch(() => {});
+      await field.press("Enter").catch(() => {});
+      await page.waitForTimeout(1000);
+      filled = await fieldsFilled();
+      if (filled) break;
+    }
+  }
+  if (!filled) return false;
+
+  const submit = page.locator('button[type="submit"]:visible, input[type="submit"]:visible').first();
+  if (await submit.count() !== 1) return false;
+  const submitted = await submit.click({ timeout: 10000 }).then(() => true).catch(() => false);
+  if (!submitted) return false;
+  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  return true;
+}
+
 function isTargetLogin(url) {
   return url.origin === origin && isLoginOrSignInRoute(url.href);
 }
@@ -389,6 +427,7 @@ try {
     + Math.max(30000, Math.min(120000, Number(runtimeConfig.cloudflareWaitMs) || 90000));
     let upstreamLoginAttempted = false;
     let resumeTargetAfterUpstream = false;
+    const githubSavedLoginState = { attempted: false };
     const connectAuthorizationState = { clicks: 0, lastClickedAt: 0 };
     const connectTurnstileState = { passiveWaitCompleted: false, interactionAttempted: false };
     let callbackReached = false;
@@ -450,6 +489,9 @@ try {
     }
     if (location.hostname === "github.com") {
       if (/^\/login(?:[/?#]|$)/i.test(location.pathname)) {
+        if (await restoreSavedGitHubLogin(page, githubSavedLoginState)) {
+          continue;
+        }
         throw new Error("机器人 Chrome 需要人工确认一次 GitHub 登录");
       }
       if (/\/login\/oauth\/authorize/i.test(location.pathname)) {

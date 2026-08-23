@@ -24,9 +24,10 @@ $items = @($config.nativeWafPreflightUrls | ForEach-Object {
     $uri = [uri]$rawUrl
     $waitSeconds = if ($_ -is [string] -or $null -eq $_.waitSeconds) { 30 } else { [int]$_.waitSeconds }
     $passiveOnly = $_ -isnot [string] -and [bool]$_.passiveOnly
+    $trustAsSigned = if ($_ -isnot [string] -and $null -ne $_.trustAsSigned) { [bool]$_.trustAsSigned } else { $true }
     if ($uri.Scheme -ne 'https' -or -not $uri.Host) { throw "原生 WAF 预热地址无效：$rawUrl" }
     if ($waitSeconds -lt 5 -or $waitSeconds -gt 120) { throw "原生 WAF 等待时间必须为 5 到 120 秒：$rawUrl" }
-    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $true; passiveOnly = $passiveOnly }
+    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $trustAsSigned; passiveOnly = $passiveOnly }
 })
 $items += @($config.nativeChallengePreflight | ForEach-Object {
     $uri = [uri][string]$_.url

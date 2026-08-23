@@ -62,6 +62,18 @@ test("不在 GitHub 自动授权且不读取 OAuth 正文或浏览器秘密", ()
   assert.doesNotMatch(source, /CHECKIN_OAUTH_CONTROL_DIAGNOSTIC|oauth-connect-debug|screenshot\(/);
 });
 
+test("GitHub 登录页会在隔离 profile 中尝试保存凭据填充后再提交", () => {
+  assert.match(source, /async function restoreSavedGitHubLogin\(page, state\)/);
+  assert.match(source, /#login_field:visible/);
+  assert.match(source, /#password:visible/);
+  assert.match(source, /for \(const field of \[username, password, username\]\)/);
+  assert.match(source, /field\.press\("ArrowDown"\)/);
+  assert.match(source, /button\[type="submit"\]:visible/);
+  assert.match(source, /restoreSavedGitHubLogin\(page, githubSavedLoginState\)/);
+  assert.match(recoveryScript, /EnablePasswordManager\s*=\s*\$true/);
+  assert.doesNotMatch(source, /console\.log\([^\n]*(username|password)/i);
+});
+
 test("LinuxDO 上游登录接管 popup 或同页导航并更新活动页", () => {
   assert.match(source, /page\.waitForEvent\("popup", \{ timeout: 7000 \}\)/);
   assert.match(source, /page\.waitForURL\(\(url\) =>/);

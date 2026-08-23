@@ -106,7 +106,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   const openChrome = await fs.readFile(path.join(root, "scripts", "Open-PlainLoginChrome.ps1"), "utf8");
 
   assert.deepEqual(publicRules.nativeWafPreflightUrls, [
-    { url: "https://piggo.me/attendance.php", waitSeconds: 120, passiveOnly: true },
+    { url: "https://piggo.me/attendance.php", waitSeconds: 120, passiveOnly: true, trustAsSigned: false },
     { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 90, passiveOnly: true },
     { url: "https://ubits.club/attendance.php", waitSeconds: 120, passiveOnly: true },
   ]);
@@ -119,6 +119,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(preflightScript, /Invoke-PlainWafAccessibility\.ps1/);
   assert.match(preflightScript, /for\s*\(\$plainAttempt\s*=\s*1;\s*\$plainAttempt\s*-le\s*2/);
   assert.match(preflightScript, /\[bool\]\$item\.trustAsSigned/);
+  assert.match(preflightScript, /\$trustAsSigned = if \(\$_ -isnot \[string\]/);
   assert.match(preflightScript, /\$preparedOnly/);
   assert.match(preflightScript, /elseif\s*\(\$preparedOnly\)\s*\{\s*'prepared'/);
   assert.doesNotMatch(preflightScript, /inspectionStatus\s*=\s*if\s*\(\$passivePrepared\)\s*\{\s*'passive_wait'/);
@@ -165,6 +166,9 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(plainWaf, /function Invoke-CloudflareChallengeClick/);
   assert.match(plainWaf, /请验证您是真人/);
   assert.match(plainWaf, /cloudflareChallengeClicked/);
+  assert.match(plainWaf, /securityVerification/);
+  assert.match(plainWaf, /异地登录安全验证/);
+  assert.match(plainWaf, /站点要求完成异地登录 2FA 验证/);
   assert.match(preflightScript, /autoClickTurnstileOrigins/);
   assert.match(preflightScript, /-AllowCloudflareChallengeClick/);
   assert.doesNotMatch(plainWaf, /RemoteDebuggingPort/);

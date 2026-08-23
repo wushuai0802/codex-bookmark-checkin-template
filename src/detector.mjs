@@ -56,6 +56,9 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
   if (/(?:使用|用)\s*linux\s*do\s*(?:账号|帳號)?\s*(?:登录|登入)|use\s+linux\s*do\s+to\s+(?:log|sign)\s*in/i.test(text)) {
     return { status: "login_required", reason: "页面要求通过 Linux DO 登录" };
   }
+  if (/(?:异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2fa\b)/i.test(text)) {
+    return { status: "login_required", reason: "站点要求完成异地登录 2FA 验证" };
+  }
 
   if (/(操作过于频繁|操作過於頻繁|请求过于频繁|請求過於頻繁|too many requests|rate limit|try again later|请稍后再试|請稍後再試)/i.test(text)) {
     return { status: "deferred", retryCause: "rate_limit", reason: "站点触发频率限制，请稍后重试" };

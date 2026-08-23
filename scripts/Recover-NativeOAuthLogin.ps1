@@ -108,6 +108,7 @@ function Invoke-NativeOAuthRound {
         $debugPort = Get-NativeChromeDebugPort
         $openParameters = @{
             Offscreen = $true
+            EnablePasswordManager = $true
             RemoteDebuggingPort = $debugPort
             Urls = @($targetUrl.AbsoluteUri)
             UserDataDirOverride = $profilePath

@@ -40,6 +40,15 @@ test("识别 Linux DO 登录入口", () => {
   assert.equal(classifyPageText({ bodyText: "使用 Linux DO 登录" }).status, "login_required");
 });
 
+test("识别 piggo 异地登录 2FA 验证页而不是签到成功", () => {
+  const result = classifyPageText({
+    url: "https://piggo.me/attendance.php",
+    bodyText: "异地登录安全验证 请输入 2FA 验证码 立即提交",
+  });
+  assert.equal(result.status, "login_required");
+  assert.match(result.reason, /2FA/);
+});
+
 test("可见的 Cloudflare 复选框优先识别为交互挑战", () => {
   assert.equal(classifyPageText({ bodyText: "正在进行安全验证 请验证您是真人" }).status, "interactive_challenge");
 });

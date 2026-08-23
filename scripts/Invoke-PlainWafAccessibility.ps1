@@ -124,6 +124,7 @@ function Read-PageSnapshot {
     $cloudflareWaf = $bodyText -match '请稍候[.…]*\s*[^ ]+\s*正在进行安全验证|本网站使用安全服务防护恶意自动程序|Just a moment|Performing security verification|Verify you are human|Cloudflare.*performance and security'
     $waf = $leichiWaf -or $cloudflareWaf
     $success = $bodyText -match '签到成功|签到已得\s*\d+|今日已签到|今天已签到|已签到'
+    $securityVerification = $bodyText -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b'
     $loginRoute = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)'
     # Some NexusPHP sites canonicalize between www and the bare host after the
     # WAF challenge. Treat only that narrow host alias as equivalent; scheme,
@@ -138,6 +139,7 @@ function Read-PageSnapshot {
         leichiWaf = [bool]$leichiWaf
         cloudflareWaf = [bool]$cloudflareWaf
         success = [bool]$success
+        securityVerification = [bool]$securityVerification
         loginRoute = [bool]$loginRoute
         sameOrigin = [bool]$sameOrigin
         attendanceEndpoint = [bool]$attendanceEndpoint
@@ -265,6 +267,17 @@ try {
     $last = $null
     do {
         $last = Read-PageSnapshot
+        if ($last.securityVerification) {
+            [pscustomobject]@{
+                status = 'login_required'
+                reason = '站点要求完成异地登录 2FA 验证'
+                confirmationClickAttempted = $confirmationClickAttempted
+                confirmationClicked = $confirmationClicked
+                cloudflareChallengeClicked = $cloudflareChallengeClicked
+                inspection = $last
+            } | ConvertTo-Json -Depth 8
+            exit 2
+        }
         if ($last.success -and $last.siteBodyLoaded) {
             [pscustomobject]@{
                 status = 'signed'
