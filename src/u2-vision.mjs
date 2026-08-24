@@ -1,6 +1,8 @@
 import sharp from "sharp";
 
 const ANILIST_ENDPOINT = "https://graphql.anilist.co";
+const MYANIMELIST_SEARCH = "https://myanimelist.net/anime.php";
+const REFERENCE_USER_AGENT = "codex-bookmark-checkin/1.0";
 const ANILIST_QUERY = `
   query ($search: String) {
     Page(perPage: 4) {
@@ -51,7 +53,7 @@ async function fetchOptionReferences(option, optionIndex) {
   for (const alias of normalizedAliases(option.text).slice(0, 4)) {
     const response = await fetch(ANILIST_ENDPOINT, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "user-agent": REFERENCE_USER_AGENT },
       body: JSON.stringify({ query: ANILIST_QUERY, variables: { search: alias } }),
     }).catch(() => null);
     if (!response?.ok) continue;
@@ -77,6 +79,57 @@ async function fetchOptionReferences(option, optionIndex) {
         vector: await imageVector(buffer),
       });
     }
+  }
+  return references;
+}
+
+function decodeHtmlAttribute(value) {
+  return String(value || "")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#039;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">");
+}
+
+function normalizedTitle(value) {
+  return decodeHtmlAttribute(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+export function parseMyAnimeListSearchImages(html, aliases) {
+  const expected = aliases.map(normalizedTitle).filter(Boolean);
+  const matches = [];
+  for (const match of String(html || "").matchAll(/<img\b[^>]*\balt="([^"]+)"[^>]*\bdata-src="(https:\/\/cdn\.myanimelist\.net\/[^\"]+)"[^>]*>/gi)) {
+    const title = normalizedTitle(match[1]);
+    if (!expected.some((alias) => title === alias || title.startsWith(`${alias} `))) continue;
+    const url = decodeHtmlAttribute(match[2]);
+    if (!url.startsWith("https://cdn.myanimelist.net/")) continue;
+    matches.push(url.replace(/\/r\/\d+x\d+\//, "/"));
+  }
+  return [...new Set(matches)].slice(0, 5);
+}
+
+async function fetchMyAnimeListReferences(option, optionIndex) {
+  const aliases = normalizedAliases(option.text).slice(0, 4);
+  const urls = new Set();
+  for (const alias of aliases) {
+    const search = new URL(MYANIMELIST_SEARCH);
+    search.searchParams.set("q", alias);
+    search.searchParams.set("cat", "anime");
+    const response = await fetch(search, {
+      headers: { "user-agent": REFERENCE_USER_AGENT, accept: "text/html" },
+    }).catch(() => null);
+    if (!response?.ok) continue;
+    for (const url of parseMyAnimeListSearchImages(await response.text(), aliases)) urls.add(url);
+    if (urls.size >= 3) break;
+  }
+
+  const references = [];
+  for (const url of [...urls].slice(0, 5)) {
+    const response = await fetch(url, { headers: { "user-agent": REFERENCE_USER_AGENT } }).catch(() => null);
+    if (!response?.ok) continue;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    references.push({ optionIndex, optionName: option.name, optionText: option.text, kind: "mal-cover", url, vector: await imageVector(buffer) });
   }
   return references;
 }
@@ -124,10 +177,14 @@ export async function solveU2VisualChallenge(image, options) {
   if (width < 300 || height < 200) return { answer: null, reason: "U2 验证图片尺寸异常" };
   const contentHeight = Math.max(1, height - 33);
 
-  const referenceGroups = await Promise.all(options.map(fetchOptionReferences));
-  const references = referenceGroups.flat();
+  let referenceGroups = await Promise.all(options.map(fetchOptionReferences));
+  let references = referenceGroups.flat();
   if (new Set(references.map((item) => item.optionIndex)).size < 2) {
-    return { answer: null, reason: "AniList 未返回足够的候选作品封面" };
+    referenceGroups = await Promise.all(options.map(fetchMyAnimeListReferences));
+    references = referenceGroups.flat();
+  }
+  if (new Set(references.map((item) => item.optionIndex)).size < 2) {
+    return { answer: null, reason: "AniList 与 MyAnimeList 均未返回足够的候选作品封面" };
   }
 
   const rows = [];

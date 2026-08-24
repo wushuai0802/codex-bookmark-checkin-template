@@ -92,7 +92,7 @@
   ],
   "visitCheckinRules": {},
   "nativeWafPreflightUrls": [
-    { "url": "https://piggo.me/attendance.php", "waitSeconds": 120, "passiveOnly": true, "trustAsSigned": false },
+    { "url": "https://piggo.me/attendance.php", "waitSeconds": 120, "passiveOnly": true, "trustAsSigned": false, "automationUserDataDir": "data/sites/piggo/chrome-user-data" },
     { "url": "https://www.hdkyl.in/attendance.php", "waitSeconds": 90, "passiveOnly": true },
     { "url": "https://ubits.club/attendance.php", "waitSeconds": 120, "passiveOnly": true }
   ],

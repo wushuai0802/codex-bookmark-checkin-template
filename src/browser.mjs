@@ -750,8 +750,8 @@ async function tryOpenCdCaptcha(page, expectedOrigin) {
   if (await input.count() !== 1 || await submit.count() !== 1 || await images.count() !== 1) return null;
   const screenshot = await images.first().screenshot();
   const recognition = await recognizeOpenCdCaptcha(screenshot);
-  if (!/^[A-Z0-9]{6}$/.test(recognition.code)) {
-    return { status: "interactive_challenge", reason: "OpenCD 六位验证码本地识别结果无效" };
+  if (!/^[A-Z0-9]{6}$/.test(recognition.code) || Number(recognition.confidence) < 45) {
+    return { status: "interactive_challenge", reason: "OpenCD 六位验证码本地识别置信度不足，未提交可疑答案" };
   }
   await input.fill(recognition.code);
   await submit.click();
@@ -1119,6 +1119,15 @@ export function shouldRefreshAutomationContext(result) {
 
 export async function launchAutomationContext(config) {
   await fs.access(config.chromeExecutable);
+  const directHosts = [...new Set((config.directConnectionOrigins ?? []).flatMap((value) => {
+    try {
+      const url = new URL(String(value));
+      if (url.protocol !== "https:" || !url.hostname) return [];
+      return [url.hostname, `*.${url.hostname}`];
+    } catch {
+      return [];
+    }
+  }))];
   const disabledFeatures = [
     "Translate",
     "MediaRouter",
@@ -1141,6 +1150,7 @@ export async function launchAutomationContext(config) {
       "--disable-component-update",
       "--disable-features=" + disabledFeatures.join(","),
       "--disable-blink-features=AutomationControlled",
+      ...(directHosts.length > 0 ? [`--proxy-bypass-list=${directHosts.join(";")}`] : []),
       ...(config.backgroundWindowMode === "offscreen" ? ["--window-position=-32000,-32000", "--window-size=1365,900"] : []),
       ...(config.backgroundWindowMode === "visible" ? ["--window-position=80,80", "--window-size=1365,900"] : []),
     ],

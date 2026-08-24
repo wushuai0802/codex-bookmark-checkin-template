@@ -104,9 +104,10 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   const inspector = await fs.readFile(path.join(root, "src", "native-browser-inspect.mjs"), "utf8");
   const plainWaf = await fs.readFile(path.join(root, "scripts", "Invoke-PlainWafAccessibility.ps1"), "utf8");
   const openChrome = await fs.readFile(path.join(root, "scripts", "Open-PlainLoginChrome.ps1"), "utf8");
+  const browser = await fs.readFile(path.join(root, "src", "browser.mjs"), "utf8");
 
   assert.deepEqual(publicRules.nativeWafPreflightUrls, [
-    { url: "https://piggo.me/attendance.php", waitSeconds: 120, passiveOnly: true, trustAsSigned: false },
+    { url: "https://piggo.me/attendance.php", waitSeconds: 120, passiveOnly: true, trustAsSigned: false, automationUserDataDir: "data/sites/piggo/chrome-user-data" },
     { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 90, passiveOnly: true },
     { url: "https://ubits.club/attendance.php", waitSeconds: 120, passiveOnly: true },
   ]);
@@ -120,6 +121,8 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(preflightScript, /for\s*\(\$plainAttempt\s*=\s*1;\s*\$plainAttempt\s*-le\s*2/);
   assert.match(preflightScript, /\[bool\]\$item\.trustAsSigned/);
   assert.match(preflightScript, /\$trustAsSigned = if \(\$_ -isnot \[string\]/);
+  assert.match(preflightScript, /Resolve-NativeProfilePath/);
+  assert.match(preflightScript, /UserDataDirOverride['"]?,?\s*\$profilePath/);
   assert.match(preflightScript, /\$preparedOnly/);
   assert.match(preflightScript, /elseif\s*\(\$preparedOnly\)\s*\{\s*'prepared'/);
   assert.doesNotMatch(preflightScript, /inspectionStatus\s*=\s*if\s*\(\$passivePrepared\)\s*\{\s*'passive_wait'/);
@@ -171,12 +174,17 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(plainWaf, /站点要求完成异地登录 2FA 验证/);
   assert.match(preflightScript, /autoClickTurnstileOrigins/);
   assert.match(preflightScript, /-AllowCloudflareChallengeClick/);
+  assert.match(preflightScript, /站点要求完成异地登录 2FA 验证/);
   assert.doesNotMatch(plainWaf, /RemoteDebuggingPort/);
   assert.match(openChrome, /\[switch\]\$DisableExtensions/);
   assert.match(openChrome, /\[switch\]\$Minimized/);
   assert.match(openChrome, /--start-minimized/);
   assert.match(openChrome, /不能同时指定离屏和最小化窗口/);
   assert.match(openChrome, /--disable-extensions/);
+  assert.match(openChrome, /directConnectionOrigins/);
+  assert.match(openChrome, /--proxy-bypass-list=/);
+  assert.match(browser, /directConnectionOrigins/);
+  assert.match(browser, /--proxy-bypass-list=/);
 });
 
 test("斑马验证码过期只重启一次且成功状态来自 API", async () => {

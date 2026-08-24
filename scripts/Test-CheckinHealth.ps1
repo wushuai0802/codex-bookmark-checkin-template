@@ -163,6 +163,21 @@ $isolatedOAuthSiteProfiles = @($config.isolatedOAuthSiteProfiles.PSObject.Proper
     $profile = Get-OAuthProfileHealth ([string]$_.Value) ([string]$_.Name) 'isolated_site'
     $profile | Add-Member -NotePropertyName origin -NotePropertyValue ([string]$_.Name) -PassThru
 })
+$nativeWafProfileEntries = @(
+    @($config.nativeWafPreflightUrls)
+    @($config.nativeChallengePreflight)
+)
+$nativeWafProfiles = @(
+    $nativeWafProfileEntries |
+        Where-Object { $_ -isnot [string] -and -not [string]::IsNullOrWhiteSpace([string]$_.automationUserDataDir) } |
+        ForEach-Object {
+            $origin = try { ([uri][string]$_.url).GetLeftPart([System.UriPartial]::Authority) } catch { [string]$_.url }
+            $profile = Get-OAuthProfileHealth ([string]$_.automationUserDataDir) $origin 'native_waf'
+            $profile | Add-Member -NotePropertyName origin -NotePropertyValue $origin -PassThru
+        } |
+        Group-Object { if ($_.path) { $_.path.ToLowerInvariant() } else { $_.accountKey } } |
+        ForEach-Object { $_.Group[0] }
+)
 $oauthSessionProfiles = @(if ($null -ne $config.oauthSessionProfiles) {
     $config.oauthSessionProfiles.PSObject.Properties | ForEach-Object {
         Get-OAuthProfileHealth ([string]$_.Value) ([string]$_.Name) 'oauth_session'
@@ -305,7 +320,7 @@ $oauthRecoveryAccountsResolvable = @($oauthRecoveryAccountBindings | Where-Objec
 $oauthRecoveryProvidersConsistent = @($oauthRecoveryAccountBindings | Where-Object { -not $_.providerMatches }).Count -eq 0
 $oauthRecoveryBindingsReady = @($oauthRecoveryAccountBindings | Where-Object { -not $_.ready }).Count -eq 0
 $oauthAccountProfiles = @($primaryIdentityProfiles) + @($supplementalProfiles)
-$reservedOAuthProfiles = @($globalProfile) + @($oauthAccountProfiles) + @($isolatedOAuthSiteProfiles) + @($oauthSessionProfiles)
+$reservedOAuthProfiles = @($globalProfile) + @($oauthAccountProfiles) + @($isolatedOAuthSiteProfiles) + @($nativeWafProfiles) + @($oauthSessionProfiles)
 $duplicateOAuthProfileGroups = @($reservedOAuthProfiles | Where-Object { $_.valid } | Group-Object { $_.path.ToLowerInvariant() } | Where-Object { $_.Count -gt 1 })
 $configuredOAuthProfilePathKeys = @($reservedOAuthProfiles | Where-Object { $_.valid } | ForEach-Object { $_.path.ToLowerInvariant() } | Sort-Object -Unique)
 $accountsRoot = Join-Path $root 'data\accounts'
@@ -353,6 +368,7 @@ $checks = [ordered]@{
     oauthIdentityProfilesPresent = @($primaryIdentityProfiles | Where-Object { -not $_.present }).Count -eq 0
     supplementalProfilesPresent = @($supplementalProfiles | Where-Object { -not $_.present }).Count -eq 0
     isolatedOAuthSiteProfilesPresent = @($isolatedOAuthSiteProfiles | Where-Object { -not $_.present }).Count -eq 0
+    nativeWafProfilesPresent = @($nativeWafProfiles | Where-Object { -not $_.present }).Count -eq 0
     oauthSessionProfilesPresent = [bool]$oauthSessionProfilesReady
     oauthSessionBindingsReady = [bool]$oauthSessionBindingsReady
     oauthAccountProfilesUnique = $duplicateOAuthProfileGroups.Count -eq 0
@@ -438,6 +454,7 @@ $result = [ordered]@{
     oauthIdentityProfiles = $primaryIdentityProfiles
     supplementalProfiles = $supplementalProfiles
     isolatedOAuthSiteProfiles = $isolatedOAuthSiteProfiles
+    nativeWafProfiles = $nativeWafProfiles
     oauthSessionProfiles = $oauthSessionProfiles
     oauthSessionBindings = $oauthSessionBindings
     oauthAccountBindings = $oauthAccountBindings

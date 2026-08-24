@@ -37,6 +37,11 @@ test("不修改普通六位验证码", () => {
   assert.equal(correctCaptchaConfusions("PH16FG", glyphs), "PH16FG");
 });
 
+test("OpenCD 识别器导出接口可用", async () => {
+  const module = await import("../src/captcha-ocr.mjs");
+  assert.equal(typeof module.recognizeOpenCdCaptcha, "function");
+});
+
 test("New API 五位验证码只生成有界的高分候选", () => {
   const recognition = {
     candidates: [

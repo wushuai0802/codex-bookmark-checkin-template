@@ -14,7 +14,23 @@ if (-not $AllConfigured -and (-not $PSBoundParameters.ContainsKey('Origins') -or
 }
 $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
-$profilePath = [string]$config.automationUserDataDir
+$defaultProfilePath = [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir)
+$allowedDataRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
+$allowedDataPrefix = $allowedDataRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+function Resolve-NativeProfilePath([string]$ConfiguredPath) {
+    $candidate = if ([string]::IsNullOrWhiteSpace($ConfiguredPath)) {
+        $defaultProfilePath
+    } elseif ([System.IO.Path]::IsPathRooted($ConfiguredPath)) {
+        [System.IO.Path]::GetFullPath($ConfiguredPath)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $root $ConfiguredPath))
+    }
+    if (-not $candidate.StartsWith($allowedDataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "原生 Chrome profile 必须位于 $allowedDataRoot"
+    }
+    return $candidate
+}
+$profilePath = $defaultProfilePath
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 . (Join-Path $PSScriptRoot 'Native-ChromeDebug.ps1')
 $node = Resolve-CheckinNode $config
@@ -25,9 +41,10 @@ $items = @($config.nativeWafPreflightUrls | ForEach-Object {
     $waitSeconds = if ($_ -is [string] -or $null -eq $_.waitSeconds) { 30 } else { [int]$_.waitSeconds }
     $passiveOnly = $_ -isnot [string] -and [bool]$_.passiveOnly
     $trustAsSigned = if ($_ -isnot [string] -and $null -ne $_.trustAsSigned) { [bool]$_.trustAsSigned } else { $true }
+    $itemProfilePath = Resolve-NativeProfilePath $(if ($_ -isnot [string]) { [string]$_.automationUserDataDir } else { '' })
     if ($uri.Scheme -ne 'https' -or -not $uri.Host) { throw "原生 WAF 预热地址无效：$rawUrl" }
     if ($waitSeconds -lt 5 -or $waitSeconds -gt 120) { throw "原生 WAF 等待时间必须为 5 到 120 秒：$rawUrl" }
-    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $trustAsSigned; passiveOnly = $passiveOnly }
+    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $trustAsSigned; passiveOnly = $passiveOnly; profilePath = $itemProfilePath }
 })
 $items += @($config.nativeChallengePreflight | ForEach-Object {
     $uri = [uri][string]$_.url
@@ -51,6 +68,7 @@ $items += @($config.nativeChallengePreflight | ForEach-Object {
         action = $action
         passiveOnly = $passiveOnly
         reloadOnChallengeAfterSeconds = $reloadOnChallengeAfterSeconds
+        profilePath = Resolve-NativeProfilePath ([string]$_.automationUserDataDir)
     }
 })
 
@@ -95,9 +113,13 @@ function Get-AutomationChromeProcesses {
     })
 }
 
-if ((Get-AutomationChromeProcesses).Count -gt 0) {
-    throw '机器人专用 Chrome 配置正被占用，无法执行原生 WAF 预热。'
+foreach ($configuredProfile in @($items.profilePath | Select-Object -Unique)) {
+    $profilePath = [string]$configuredProfile
+    if ((Get-AutomationChromeProcesses).Count -gt 0) {
+        throw "机器人专用 Chrome 配置正被占用，无法执行原生 WAF 预热：$profilePath"
+    }
 }
+$profilePath = $defaultProfilePath
 
 $preflightResults = @()
 
@@ -130,6 +152,7 @@ function Close-AutomationChrome {
 # Chrome 会节流离屏的非活动标签页，因此逐站打开并正常关闭，确保每个
 # 雷池通行 Cookie 都在独立配置中完成落盘。
 foreach ($item in $items) {
+    $profilePath = [string]$item.profilePath
     $url = [string]$item.url
     $origin = ([uri]$url).GetLeftPart([System.UriPartial]::Authority)
     $hostName = ([uri]$url).Host
@@ -147,7 +170,8 @@ foreach ($item in $items) {
                 $plainArguments = @(
                     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                     (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1'),
-                    '-Origin', $origin, '-Url', $url, '-TimeoutSeconds', [string]([int]$item.waitSeconds)
+                    '-Origin', $origin, '-Url', $url, '-TimeoutSeconds', [string]([int]$item.waitSeconds),
+                    '-UserDataDirOverride', $profilePath
                 )
                 if (-not [bool]$item.trustAsSigned) { $plainArguments += '-AllowPreparedSiteBody' }
                 if ($autoClickTurnstile.ContainsKey($origin)) { $plainArguments += '-AllowCloudflareChallengeClick' }
@@ -190,9 +214,13 @@ foreach ($item in $items) {
                 'unconfirmed'
             }
             reason = if ($explicitlyConfirmed -or ($passivePrepared -and [bool]$item.trustAsSigned)) {
-                if ($passiveInspection.reason) { [string]$passiveInspection.reason } else { '原生 Chrome 已确认签到完成' }
+                '无调试原生 Chrome 页面确认签到完成'
             } elseif ($preparedOnly) {
                 '无调试原生 Chrome 已完成验证预热，等待自动化复查'
+            } elseif ([bool]$passiveInspection.inspection.securityVerification) {
+                '站点要求完成异地登录 2FA 验证'
+            } elseif ([string]$passiveInspection.status -eq 'login_required') {
+                '无调试原生 Chrome 需要重新登录'
             } else {
                 if ($passiveInspection.reason) { [string]$passiveInspection.reason } else { '原生 Chrome 未取得明确签到终态' }
             }
@@ -211,6 +239,7 @@ foreach ($item in $items) {
             RemoteDebuggingPort = $debugPort
             Urls = @($url)
             Offscreen = $true
+            UserDataDirOverride = $profilePath
         }
         # Native preflight is unattended. Keep every real Chrome window
         # offscreen, including action=checkin flows, so retries never interrupt

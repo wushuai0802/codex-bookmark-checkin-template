@@ -67,6 +67,21 @@ $arguments = @(
     "--window-position=$windowPosition",
     '--window-size=1400,900'
 )
+$directHosts = @(
+    $config.directConnectionOrigins |
+        ForEach-Object {
+            try {
+                $uri = [uri][string]$_
+                if ($uri.Scheme -eq 'https' -and $uri.Host) {
+                    @($uri.Host, "*.$($uri.Host)")
+                }
+            } catch { }
+        } |
+        Select-Object -Unique
+)
+if ($directHosts.Count -gt 0) {
+    $arguments += "--proxy-bypass-list=$($directHosts -join ';')"
+}
 if ($Minimized) {
     $arguments += '--start-minimized'
 }

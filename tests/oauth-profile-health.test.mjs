@@ -39,6 +39,15 @@ test("健康检查覆盖隔离 OAuth 站点 profile", async () => {
   assert.match(source, /\$reservedOAuthProfiles[\s\S]*\$isolatedOAuthSiteProfiles/);
 });
 
+test("健康检查识别原生 WAF 站点的专属 profile", async () => {
+  const source = await fs.readFile(path.join(root, "scripts", "Test-CheckinHealth.ps1"), "utf8");
+  assert.match(source, /nativeWafPreflightUrls/);
+  assert.match(source, /nativeChallengePreflight/);
+  assert.match(source, /automationUserDataDir/);
+  assert.match(source, /nativeWafProfilesPresent/);
+  assert.match(source, /\$reservedOAuthProfiles[\s\S]*\$nativeWafProfiles/);
+});
+
 test("公开示例为主身份使用匿名专属 profile", async () => {
   const example = JSON.parse(await fs.readFile(path.join(root, "config", "config.local.example.json"), "utf8"));
   const identity = example.oauthAccountIdentities["https://example.com"];
