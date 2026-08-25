@@ -54,10 +54,22 @@ try {
     if ($null -eq $registeredTask) { throw '计划任务注册后无法读取。' }
 }
 catch {
+    $registrationError = $_.Exception.Message
     if (-not $AllowUserSchedulerFallback) {
-        throw "当前权限无法注册 Windows 计划任务。用户明确接受回退方案后，使用 -AllowUserSchedulerFallback 重试。原因：$($_.Exception.Message)"
+        throw "当前权限无法注册 Windows 计划任务。用户明确接受回退方案后，使用 -AllowUserSchedulerFallback 重试。原因：$registrationError"
     }
-    Write-Warning "当前权限无法注册 Windows 计划任务，回退到已获用户同意的隐藏调度器：$($_.Exception.Message)"
+    # A stale task may still exist with an older trigger cadence.  Disable it
+    # before handing ownership to the user-level supervisor, so both schedulers
+    # cannot keep waking the project indefinitely.
+    try {
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+            Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+        }
+    }
+    catch {
+        Write-Warning "无法停用旧的 Windows 计划任务，将由运行锁阻止重复签到：$($_.Exception.Message)"
+    }
+    Write-Warning "当前权限无法注册 Windows 计划任务，回退到已获用户同意的隐藏调度器：$registrationError"
     & (Join-Path $PSScriptRoot 'Install-UserScheduler.ps1')
     return
 }

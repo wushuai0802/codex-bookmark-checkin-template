@@ -76,6 +76,7 @@
   "retryDelayMs": 5000,
   "deferredRetryDelayMs": 1800000,
   "upstreamUnavailableMaxDailyAttempts": 3,
+  "upstreamUnavailableLateRetryTime": "21:05",
   "upstreamFailureGroupMaxDailyAttempts": 3,
   "upstreamFailureGroups": {},
   "rateLimitRetryDelayMs": 3600000,
@@ -93,7 +94,7 @@
   "runMutexName": "Local\\CodexBookmarkCheckinRun",
   "schedulerFailureRetryMinutes": 60,
   "schedulerMaxDailyAttempts": 5,
-  "schedulerProbeIntervalMinutes": 60,
+  "schedulerProbeIntervalMinutes": 30,
   "failureScreenshots": true,
   "logRetentionDays": 14,
   "notification": {

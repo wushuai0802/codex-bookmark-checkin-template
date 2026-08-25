@@ -205,6 +205,13 @@ test("PowerShell 按绝对时间解释 UTC 重试时间", async () => {
   assert.match(reporter, /\[datetimeoffset\]\$problem\.nextEligibleAt\)\.ToLocalTime\(\)/);
 });
 
+test("默认恢复策略使用半小时探测并保留晚间上游复查", async () => {
+  const defaults = JSON.parse(await fs.readFile(new URL("../config/defaults.json", import.meta.url), "utf8"));
+  assert.equal(defaults.schedulerProbeIntervalMinutes, 30);
+  assert.equal(defaults.challengeRetryDelayMs, 60 * 60 * 1000);
+  assert.match(defaults.upstreamUnavailableLateRetryTime, /^([01]\d|2[0-3]):[0-5]\d$/);
+});
+
 test("用户级调度器包含独立守护并在健康检查中验证三层进程", async () => {
   const installer = await fs.readFile(new URL("../scripts/Install-UserScheduler.ps1", import.meta.url), "utf8");
   const remover = await fs.readFile(new URL("../scripts/Remove-UserScheduler.ps1", import.meta.url), "utf8");

@@ -29,7 +29,22 @@ test("Windows 计划任务安装器清理本项目的历史用户级调度入口
 
 test("Windows 计划任务空闲时健康检查不要求常驻 heartbeat", async () => {
   const health = await fs.readFile(path.join(root, "scripts", "Test-CheckinHealth.ps1"), "utf8");
-  assert.match(health, /schedulerHeartbeatFresh\s*=\s*if \(\$scheduledTask\) \{[\s\S]*?State.*Disabled[\s\S]*?\} else \{ \[bool\]\$heartbeatFresh \}/);
+  assert.match(health, /schedulerHeartbeatFresh\s*=\s*if \(\$useUserScheduler\) \{[\s\S]*?\[bool\]\$heartbeatFresh[\s\S]*?\} else \{[\s\S]*?State.*Disabled[\s\S]*?\}/);
+});
+
+test("用户级回退会停用遗留的旧 Windows 计划任务", async () => {
+  const installer = await scheduledTaskInstallerSource();
+  assert.match(installer, /Disable-ScheduledTask\s+-TaskName\s+\$taskName/);
+  assert.match(installer, /运行锁阻止重复签到/);
+});
+
+test("健康检查核对计划任务触发频率，避免配置更新后继续沿用旧任务", async () => {
+  const health = await fs.readFile(path.join(root, "scripts", "Test-CheckinHealth.ps1"), "utf8");
+  assert.match(health, /expectedTriggerMinutes/);
+  assert.match(health, /actualTriggerMinutes/);
+  assert.match(health, /scheduledTaskTriggerFrequencyValid/);
+  assert.match(health, /Compare-Object\s+-ReferenceObject\s+\$expectedTriggerMinutes/);
+  assert.match(health, /useUserScheduler/);
 });
 
 test("调度器 claim 前异常也进入统一失败状态与通知链", async () => {

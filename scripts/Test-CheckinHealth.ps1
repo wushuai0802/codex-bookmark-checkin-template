@@ -359,7 +359,41 @@ $scheduledTaskActionValid = if ($scheduledTask) {
         [string]$_.Execute -match '(?i)(?:pwsh|powershell)(?:\.exe)?$' -and [string]$_.Arguments -like "*$schedulerScript*"
     }).Count -eq 1
 } else { $false }
-$scheduledTaskReady = $scheduledTask -and [string]$scheduledTask.State -ne 'Disabled' -and $scheduledTaskActionValid
+$probeInterval = if ($null -ne $config.schedulerProbeIntervalMinutes) { [int]$config.schedulerProbeIntervalMinutes } else { 60 }
+$probeInterval = [Math]::Max(30, [Math]::Min(180, $probeInterval))
+$expectedTriggerMinutes = @()
+if ($scheduleValid) {
+    $scheduleParts = [string]$config.schedule -split ':'
+    $scheduleStartMinutes = ([int]$scheduleParts[0] * 60) + [int]$scheduleParts[1]
+    $expectedTriggerMinutes = @(
+        for ($minute = $scheduleStartMinutes; $minute -lt 24 * 60; $minute += $probeInterval) { $minute }
+    )
+}
+$actualTriggerMinutes = @(
+    if ($scheduledTask) {
+        @($scheduledTask.Triggers | Where-Object {
+            [string]$_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger'
+        } | ForEach-Object {
+            try {
+                $start = [datetimeoffset]$_.StartBoundary
+                ($start.Hour * 60) + $start.Minute
+            } catch { }
+        })
+    }
+)
+$scheduledTaskTriggerFrequencyValid = if (-not $scheduledTask) {
+    $false
+} else {
+    $expectedTriggerMinutes.Count -gt 0 -and
+        $expectedTriggerMinutes.Count -eq $actualTriggerMinutes.Count -and
+        @(Compare-Object -ReferenceObject $expectedTriggerMinutes -DifferenceObject $actualTriggerMinutes).Count -eq 0
+}
+$scheduledTaskReady = $scheduledTask -and [string]$scheduledTask.State -ne 'Disabled' -and $scheduledTaskActionValid -and $scheduledTaskTriggerFrequencyValid
+$userSchedulerConfigured = $startupEntryPresent
+$useUserScheduler = $userSchedulerConfigured -and (-not $scheduledTask -or -not $scheduledTaskReady)
+$effectiveSchedulerReady = if ($useUserScheduler) {
+    $startupEntryPresent -and $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1
+} else { [bool]$scheduledTaskReady }
 $checks = [ordered]@{
     configPresent = $true
     bookmarksReadable = Test-Path -LiteralPath ([string]$config.bookmarksPath)
@@ -383,13 +417,14 @@ $checks = [ordered]@{
     notificationReady = [bool]$notificationReady
     notificationOutboxClean = $notificationQuarantinedCount -eq 0 -and $notificationPendingCount -eq 0
     scheduleValid = [bool]$scheduleValid
-    schedulerReady = if ($scheduledTask) { [bool]$scheduledTaskReady } else { $startupEntryPresent }
-    schedulerUnique = if ($scheduledTask) { $true } else { $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1 }
+    schedulerReady = [bool]$effectiveSchedulerReady
+    schedulerUnique = if ($useUserScheduler) { $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1 } else { $true }
+    schedulerTaskTriggerFrequencyValid = if ($useUserScheduler) { $true } else { [bool]$scheduledTaskTriggerFrequencyValid }
     # Windows Task Scheduler owns the lifecycle in this mode; an idle task is
     # healthy even though its one-shot scheduler heartbeat is older than 5m.
-    schedulerHeartbeatFresh = if ($scheduledTask) { [string]$scheduledTask.State -ne 'Disabled' } else { [bool]$heartbeatFresh }
-    watchdogHeartbeatFresh = if ($scheduledTask) { $true } else { [bool]$watchdogHeartbeatFresh }
-    supervisorHeartbeatFresh = if ($scheduledTask) { $true } else { [bool]$supervisorHeartbeatFresh }
+    schedulerHeartbeatFresh = if ($useUserScheduler) { [bool]$heartbeatFresh } else { [string]$scheduledTask.State -ne 'Disabled' }
+    watchdogHeartbeatFresh = if ($useUserScheduler) { [bool]$watchdogHeartbeatFresh } else { $true }
+    supervisorHeartbeatFresh = if ($useUserScheduler) { [bool]$supervisorHeartbeatFresh } else { $true }
     schedulerClaimFresh = [bool]$claimFresh
     runtimeAclPrivate = [bool]$runtimeAclPrivate
     noOrphanOAuthProfiles = $orphanOAuthProfiles.Count -eq 0
@@ -412,7 +447,10 @@ $result = [ordered]@{
     checkedAt = (Get-Date).ToString('o')
     failedChecks = $failedChecks
     schedule = [string]$config.schedule
-    schedulerMode = if ($scheduledTask) { 'windows_task' } elseif ($startupEntryPresent) { 'user_scheduler' } else { 'none' }
+    schedulerMode = if ($useUserScheduler) { 'user_scheduler' } elseif ($scheduledTask) { 'windows_task' } else { 'none' }
+    schedulerExpectedProbeIntervalMinutes = $probeInterval
+    schedulerActualDailyTriggerMinutes = @($actualTriggerMinutes)
+    schedulerTaskTriggerFrequencyValid = [bool]$scheduledTaskTriggerFrequencyValid
     schedulerRunKeyPresent = [bool]$runValue
     schedulerStartupShortcutPresent = Test-Path -LiteralPath $startupShortcutPath -PathType Leaf
     schedulerProcessCount = $schedulerCount

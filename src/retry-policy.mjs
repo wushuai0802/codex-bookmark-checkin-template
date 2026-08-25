@@ -124,6 +124,31 @@ function normalizedGroupPart(value, fallback = "unknown") {
   return normalized || fallback;
 }
 
+function configuredShanghaiTime(names, fallback) {
+  return [...names, fallback]
+    .map((value) => String(value ?? ""))
+    .find((value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value)) || fallback;
+}
+
+function nextSameDayShanghaiTime(time, now = new Date()) {
+  const match = String(time ?? "").match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return null;
+  const parts = shanghaiParts(now);
+  const currentMinutes = Number(parts.hour) * 60 + Number(parts.minute);
+  const requestedMinutes = Number(match[1]) * 60 + Number(match[2]);
+  return requestedMinutes > currentMinutes ? nextShanghaiTime(time, now) : null;
+}
+
+function nextUpstreamLateRetryAt(config = {}, now = new Date()) {
+  return nextSameDayShanghaiTime(
+    configuredShanghaiTime(
+      [config.upstreamUnavailableLateRetryTime, config.rateLimitNextDayTime, config.schedule],
+      "21:05",
+    ),
+    now,
+  );
+}
+
 function oauthFailureCode(result) {
   if (String(result?.failureCode ?? "").startsWith("oauth_")) return String(result.failureCode);
   const history = Array.isArray(result?.recovery?.history) ? result.recovery.history : [];
@@ -181,6 +206,25 @@ export function applyUpstreamGroupCircuitBreakers(results, config = {}, now = ne
   return annotated.map((result) => {
     const attempts = result.retryGroup ? groups.get(result.retryGroup) ?? 0 : 0;
     if (!result.retryGroup || attempts < limit) return result;
+    // Keep one bounded late-day recovery window.  This prevents a transient
+    // OAuth/upstream outage in the morning from being postponed until the
+    // next day, while retaining the daily circuit breaker.
+    if (!result.lateRetryPending) {
+      const lateRetryAt = nextUpstreamLateRetryAt(config, now);
+      if (lateRetryAt) {
+        return {
+          ...result,
+          retryGroupAttempts: attempts,
+          lateRetryPending: true,
+          retryExhaustedForDay: false,
+          nextEligibleAt: lateRetryAt,
+          reason: String(result.reason || "上游服务暂时不可用")
+            .replace(/；?本日自动探测已达到上限，次日再检查$/, "")
+            .replace(/；?同一上游本日自动探测已达到上限，次日再检查$/, "")
+            .concat("；上午探测达到上限，晚间再检查"),
+        };
+      }
+    }
     return {
       ...result,
       retryGroupAttempts: attempts,
@@ -227,6 +271,20 @@ export function advanceDeferredRetry(result, previous, config = {}, now = new Da
     const maxDailyAttempts = Math.max(1, Math.min(6,
       Number(config.upstreamUnavailableMaxDailyAttempts) || 3));
     if (retrySequence >= maxDailyAttempts) {
+      const lateRetryAt = previous?.lateRetryPending ? null : nextUpstreamLateRetryAt(config, now);
+      if (lateRetryAt) {
+        return {
+          ...result,
+          retrySequence,
+          retrySequenceDate: currentDate,
+          lateRetryPending: true,
+          retryExhaustedForDay: false,
+          nextEligibleAt: lateRetryAt,
+          reason: String(result.reason || "站点维护或网络不可用")
+            .replace(/；?本日自动探测已达到上限，次日再检查$/, "")
+            .concat("；上午探测达到上限，晚间再检查"),
+        };
+      }
       return {
         ...result,
         retrySequence,

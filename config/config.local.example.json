@@ -4,6 +4,7 @@
   ],
   "disabledCheckinOrigins": [],
   "upstreamUnavailableMaxDailyAttempts": 3,
+  "upstreamUnavailableLateRetryTime": "21:05",
   "upstreamFailureGroupMaxDailyAttempts": 3,
   "upstreamFailureGroups": {},
   "loginAsCheckinOrigins": [],

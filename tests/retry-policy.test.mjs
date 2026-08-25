@@ -84,7 +84,7 @@ test("同站限频使用指数退避并在达到上限后转到次日", () => {
 
 test("上游站点连续不可用达到上限后只结束当天重试", () => {
   const config = { upstreamUnavailableMaxDailyAttempts: 3 };
-  const now = new Date("2026-07-23T12:00:00Z");
+  const now = new Date("2026-07-23T14:00:00Z");
   const first = advanceDeferredRetry({
     status: "deferred",
     retryCause: "upstream_unavailable",
@@ -110,8 +110,29 @@ test("上游站点连续不可用达到上限后只结束当天重试", () => {
   assert.match(settled.reason, /次日再检查/);
 });
 
+test("上游站点上午达到探测上限后保留一次晚间恢复机会", () => {
+  const config = {
+    upstreamUnavailableMaxDailyAttempts: 3,
+    upstreamUnavailableLateRetryTime: "21:05",
+    schedule: "08:05",
+  };
+  const now = new Date("2026-07-23T02:00:00Z");
+  const first = advanceDeferredRetry({ status: "deferred", retryCause: "upstream_unavailable", nextEligibleAt: "2026-07-23T02:30:00.000Z" }, null, config, now);
+  const second = advanceDeferredRetry({ status: "deferred", retryCause: "upstream_unavailable", nextEligibleAt: "2026-07-23T03:00:00.000Z" }, first, config, now);
+  const late = advanceDeferredRetry({ status: "deferred", retryCause: "upstream_unavailable", nextEligibleAt: "2026-07-23T03:30:00.000Z" }, second, config, now);
+  const exhausted = advanceDeferredRetry({ status: "deferred", retryCause: "upstream_unavailable", nextEligibleAt: "2026-07-23T13:35:00.000Z" }, late, config, new Date("2026-07-23T13:05:00Z"));
+  assert.equal(late.retrySequence, 3);
+  assert.equal(late.lateRetryPending, true);
+  assert.equal(late.retryExhaustedForDay, false);
+  assert.equal(late.nextEligibleAt, "2026-07-23T13:05:00.000Z");
+  assert.match(late.reason, /晚间再检查/);
+  assert.equal(exhausted.retrySequence, 4);
+  assert.equal(exhausted.retryExhaustedForDay, true);
+  assert.equal(exhausted.nextEligibleAt, "2026-07-24T00:05:00.000Z");
+});
+
 test("同一 OAuth 上游故障按组熔断且不伪装成无签到功能", () => {
-  const now = new Date("2026-07-23T12:00:00Z");
+  const now = new Date("2026-07-23T14:00:00Z");
   const results = ["one", "two", "three"].map((name) => ({
     origin: `https://${name}.example`,
     status: "deferred",
