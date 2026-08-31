@@ -277,6 +277,25 @@ test("安全验证可使用独立的低频退避时间", () => {
   assert.equal(result.retryCause, "managed_challenge_timeout");
 });
 
+test("安全验证复测达到每日上限后停止重复打开站点", () => {
+  const now = new Date("2026-07-23T05:00:00Z");
+  const deferred = withRetrySchedule({
+    status: "deferred",
+    retryCause: "managed_challenge_timeout",
+    reason: "原生 Chrome 未取得明确签到终态",
+  }, { challengeRetryDelayMs: 3600000 }, now);
+  const first = advanceDeferredRetry(deferred, null, { challengeRetryMaxDailyAttempts: 2 }, now);
+  const exhausted = advanceDeferredRetry(deferred, first, { challengeRetryMaxDailyAttempts: 2 }, now);
+
+  assert.equal(first.status, "deferred");
+  assert.equal(first.retrySequence, 1);
+  assert.equal(exhausted.status, "needs_attention");
+  assert.equal(exhausted.retrySequence, 2);
+  assert.equal(exhausted.nextEligibleAt, undefined);
+  assert.equal(exhausted.retryExhaustedForDay, true);
+  assert.match(exhausted.reason, /不再重复打开站点/);
+});
+
 test("自动登录恢复仍失败时使用独立的六小时退避时间", () => {
   const now = new Date("2026-07-23T05:00:00Z");
   const result = deferUnresolvedLogin({

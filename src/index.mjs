@@ -105,7 +105,18 @@ async function validateBookmarkPlan(plan) {
   const minimumTargets = Math.max(1, Number(config.minimumBookmarkTargetCount) || 1);
   let lastValid = null;
   try { lastValid = JSON.parse(await fs.readFile(lastValidBookmarkPlanPath, "utf8")); } catch { /* first run */ }
-  const previousCount = Number(lastValid?.targetCount) || 0;
+  // A deliberate scope change (for example temporarily running only the
+  // 公益站 folder while PT sites are paused) must not look like a corrupt or
+  // empty bookmark file. Compare only the origins belonging to the current
+  // configured target folders, while retaining the sudden-drop guard within
+  // that same scope.
+  const configuredFolders = new Set((config.targetFolderNames ?? []).map((name) => String(name).trim()).filter(Boolean));
+  const previousTargets = Array.isArray(lastValid?.targets) ? lastValid.targets : [];
+  const hasFolderMetadata = previousTargets.some((target) => Array.isArray(target.folderNames) && target.folderNames.length > 0);
+  const previousCount = configuredFolders.size > 0 && hasFolderMetadata
+    ? previousTargets.filter((target) => (target.folderNames ?? [])
+      .some((name) => configuredFolders.has(String(name).trim()))).length
+    : (Number(lastValid?.targetCount) || 0);
   const suddenDrop = previousCount >= minimumTargets && plan.targetCount < Math.ceil(previousCount * 0.5);
   if (plan.targetCount < minimumTargets || suddenDrop) {
     throw new Error(`书签目标异常：当前 ${plan.targetCount} 个，上次 ${previousCount || "无记录"} 个；拒绝生成空签到结果`);

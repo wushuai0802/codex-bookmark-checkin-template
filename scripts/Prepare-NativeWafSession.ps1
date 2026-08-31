@@ -72,6 +72,35 @@ $items += @($config.nativeChallengePreflight | ForEach-Object {
     }
 })
 
+$mainFallbackByOrigin = @{}
+foreach ($entry in @($config.mainChromeFallbackUrls)) {
+    $rawUrl = if ($entry -is [string]) { [string]$entry } else { [string]$entry.url }
+    $uri = [uri]$rawUrl
+    $waitSeconds = if ($entry -is [string] -or $null -eq $entry.waitSeconds) { 90 } else { [int]$entry.waitSeconds }
+    if ($uri.Scheme -ne 'https' -or $uri.UserInfo -or -not $uri.Host) { throw "主 Chrome 回退地址无效：$rawUrl" }
+    if ($waitSeconds -lt 10 -or $waitSeconds -gt 180) { throw "主 Chrome 回退等待时间必须为 10 到 180 秒：$rawUrl" }
+    $entryOrigin = $uri.GetLeftPart([System.UriPartial]::Authority)
+    if ($mainFallbackByOrigin.ContainsKey($entryOrigin)) { throw "主 Chrome 回退来源重复：$entryOrigin" }
+    $mainFallbackByOrigin[$entryOrigin] = [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds }
+}
+
+$configuredItemOrigins = @{}
+foreach ($configuredItem in $items) {
+    $configuredItemOrigins[([uri][string]$configuredItem.url).GetLeftPart([System.UriPartial]::Authority)] = $true
+}
+foreach ($entryOrigin in @($mainFallbackByOrigin.Keys)) {
+    if ($configuredItemOrigins.ContainsKey($entryOrigin)) { continue }
+    $fallback = $mainFallbackByOrigin[$entryOrigin]
+    $items += [pscustomobject]@{
+        url = [string]$fallback.url
+        waitSeconds = [int]$fallback.waitSeconds
+        trustAsSigned = $false
+        passiveOnly = $true
+        profilePath = $defaultProfilePath
+        mainChromeFallbackOnly = $true
+    }
+}
+
 if (-not $AllConfigured) {
     $originSet = @{};
     foreach ($origin in $Origins) { $originSet[([uri]$origin).GetLeftPart([System.UriPartial]::Authority)] = $true }
@@ -123,6 +152,22 @@ $profilePath = $defaultProfilePath
 
 $preflightResults = @()
 
+function Invoke-MainChromeFallbackResult([string]$Origin, [string]$Url, [int]$TimeoutSeconds) {
+    if (-not $mainFallbackByOrigin.ContainsKey($Origin)) { return $null }
+    try {
+        $powershellExecutable = (Get-Process -Id $PID).Path
+        $fallbackArguments = @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+            (Join-Path $PSScriptRoot 'Invoke-MainChromeCheckinAccessibility.ps1'),
+            '-Origin', $Origin, '-Url', $Url, '-TimeoutSeconds', [string]$TimeoutSeconds
+        )
+        $fallbackText = & $powershellExecutable @fallbackArguments 2>$null
+        if ($fallbackText) { return ($fallbackText | ConvertFrom-Json) }
+    }
+    catch { }
+    return $null
+}
+
 function Close-AutomationChrome {
     $targets = @(Get-AutomationChromeProcesses)
     $targetIds = @($targets.ProcessId)
@@ -156,6 +201,23 @@ foreach ($item in $items) {
     $url = [string]$item.url
     $origin = ([uri]$url).GetLeftPart([System.UriPartial]::Authority)
     $hostName = ([uri]$url).Host
+
+    $mainInspection = $null
+    if ($mainFallbackByOrigin.ContainsKey($origin)) {
+        $fallbackEntry = $mainFallbackByOrigin[$origin]
+        $mainInspection = Invoke-MainChromeFallbackResult $origin ([string]$fallbackEntry.url) ([int]$fallbackEntry.waitSeconds)
+        $mainConfirmed = $null -ne $mainInspection -and [string]$mainInspection.status -in @('signed', 'already_signed')
+        if ($mainConfirmed -or [bool]$item.mainChromeFallbackOnly) {
+            $preflightResults += [pscustomobject]@{
+                origin = $origin
+                url = [string]$fallbackEntry.url
+                status = if ($mainConfirmed) { 'signed' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
+                reason = if ($mainInspection) { [string]$mainInspection.reason } else { '主 Chrome 回退未取得明确签到终态' }
+                inspectionStatus = if ($mainInspection) { [string]$mainInspection.status } else { 'unavailable' }
+            }
+            continue
+        }
+    }
 
     if ([bool]$item.passiveOnly) {
         $passivePrepared = $false

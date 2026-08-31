@@ -2,11 +2,15 @@ function configuredPreflightUrls(config = {}) {
   return [
     ...(config.nativeWafPreflightUrls ?? []).map((value) => typeof value === "string" ? value : value?.url),
     ...(config.nativeChallengePreflight ?? []).map((value) => value?.url),
+    ...(config.mainChromeFallbackUrls ?? []).map((value) => typeof value === "string" ? value : value?.url),
   ].filter(Boolean);
 }
 
 export function configuredNativeWafOrigins(config = {}) {
-  return new Set((config.nativeWafPreflightUrls ?? [])
+  return new Set([
+    ...(config.nativeWafPreflightUrls ?? []),
+    ...(config.mainChromeFallbackUrls ?? []),
+  ]
     .map((value) => typeof value === "string" ? value : value?.url)
     .filter(Boolean)
     .map((value) => new URL(value).origin));

@@ -26,6 +26,10 @@ test("原生预热只保留实际书签目标及其明确关联来源", () => {
       { url: "https://related.test/dashboard", action: "checkin" },
       { url: "https://also-unrelated.test/dashboard", action: "checkin" },
     ],
+    mainChromeFallbackUrls: [
+      { url: "https://bookmarked.test/profile" },
+      { url: "https://fallback-unrelated.test/profile" },
+    ],
   };
 
   assert.deepEqual(selectPreflightOrigins(plan, config), [
@@ -40,11 +44,23 @@ test("没有匹配书签时不会生成原生预热范围", () => {
   }), []);
 });
 
-test("WAF 目标集合只包含无调试原生预热站点", () => {
+test("WAF 目标集合包含无调试原生预热和主 Chrome 回退站点", () => {
   assert.deepEqual([...configuredNativeWafOrigins({
     nativeWafPreflightUrls: [{ url: "https://waf.test/attendance.php" }],
     nativeChallengePreflight: [{ url: "https://other.test/checkin" }],
-  })], ["https://waf.test"]);
+    mainChromeFallbackUrls: [{ url: "https://main-profile.test/profile" }],
+  })], ["https://waf.test", "https://main-profile.test"]);
+});
+
+test("主 Chrome 回退只选择当前书签范围内的来源", () => {
+  assert.deepEqual(selectPreflightOrigins({
+    targets: [{ origin: "https://selected.test", allowedOrigins: ["https://selected.test"] }],
+  }, {
+    mainChromeFallbackUrls: [
+      { url: "https://selected.test/profile" },
+      { url: "https://not-selected.test/profile" },
+    ],
+  }), ["https://selected.test"]);
 });
 
 test("已取消的书签目标不会进入原生预热", () => {
@@ -185,6 +201,31 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(openChrome, /--proxy-bypass-list=/);
   assert.match(browser, /directConnectionOrigins/);
   assert.match(browser, /--proxy-bypass-list=/);
+});
+
+test("主 Chrome 回退严格限制白名单并只关闭任务创建的窗口", async () => {
+  const helper = await fs.readFile(path.join(root, "scripts", "Invoke-MainChromeCheckinAccessibility.ps1"), "utf8");
+  const preflight = await fs.readFile(path.join(root, "scripts", "Prepare-NativeWafSession.ps1"), "utf8");
+  const defaults = JSON.parse(await fs.readFile(path.join(root, "config", "defaults.json"), "utf8"));
+
+  assert.deepEqual(defaults.mainChromeFallbackUrls, []);
+  assert.match(helper, /mainChromeFallbackUrls/);
+  assert.match(helper, /不在明确白名单中/);
+  assert.match(helper, /\$beforeHandles/);
+  assert.match(helper, /-not \$beforeHandles\.ContainsKey/);
+  assert.match(helper, /function Close-TaskWindow/);
+  assert.match(helper, /WindowPattern/);
+  assert.doesNotMatch(helper, /Stop-Process|Kill\(/);
+  assert.doesNotMatch(helper, /RemoteDebuggingPort|remote-debugging-port/);
+  assert.match(helper, /--window-position=-32000,-32000/);
+  assert.match(helper, /签到成功\|今日已签到\|今天已签到/);
+  assert.match(helper, /\$topMatches\.Count -ne 1/);
+  assert.match(helper, /protectedCredentialOrigins/);
+  assert.match(helper, /keybd_event/);
+  assert.match(helper, /Get-UniqueLoginButton/);
+  assert.doesNotMatch(helper, /SetValue\(|\.fill\(|password\s*=/i);
+  assert.match(preflight, /Invoke-MainChromeCheckinAccessibility\.ps1/);
+  assert.match(preflight, /mainChromeFallbackOnly/);
 });
 
 test("斑马验证码过期只重启一次且成功状态来自 API", async () => {

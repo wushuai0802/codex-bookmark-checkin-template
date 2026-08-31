@@ -330,6 +330,33 @@ export function advanceDeferredRetry(result, previous, config = {}, now = new Da
     }
     return { ...result, retrySequence, retrySequenceDate: currentDate };
   }
+  if (result.retryCause === "managed_challenge_timeout") {
+    const maxDailyAttempts = Math.max(1, Math.min(4,
+      Number(config.challengeRetryMaxDailyAttempts) || 2));
+    if (retrySequence >= maxDailyAttempts) {
+      const {
+        nextEligibleAt: _nextEligibleAt,
+        retryExhaustedForDay: _retryExhaustedForDay,
+        ...preserved
+      } = result;
+      return {
+        ...preserved,
+        status: "needs_attention",
+        reason: String(result.reason || "安全验证未自动通过")
+          .replace(/；?已安排低频重试$/, "")
+          .concat("；本日安全验证复测已达到上限，不再重复打开站点"),
+        retrySequence,
+        retrySequenceDate: currentDate,
+        retryExhaustedForDay: true,
+      };
+    }
+    return {
+      ...result,
+      retrySequence,
+      retrySequenceDate: currentDate,
+      retryExhaustedForDay: false,
+    };
+  }
   if (result.retryCause !== "rate_limit") return { ...result, retrySequence, retrySequenceDate: currentDate };
 
   const baseDelay = Math.max(60_000, Number(config.rateLimitRetryDelayMs) || 60 * 60 * 1000);
