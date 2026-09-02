@@ -4,9 +4,11 @@
    fixture tests. Legacy execution remains authoritative.
 2. **V2.0-beta (prototype now available locally):** NAS ledger, schedule gate,
    and dashboard in shadow mode; compare plans, ownership, freshness, and
-   receipts for at least seven daily runs. The local prototype never grants a
-   lease, and no duplicate clicks are permitted. Site policy edits remain V2
-   metadata and are audited without affecting the legacy runner.
+   receipts for at least seven daily runs. `npm run check:shadow-history` is a
+   read-only gate for the required consecutive fresh history. The local
+   prototype never grants a lease, and no duplicate clicks are permitted. Site
+   policy edits remain V2 metadata and are audited without affecting the legacy
+   runner.
 3. **V2.0 candidate foundations (now):** protocol-only contracts and local
    acceptance for worker capabilities, single-use leases, dry-run/execute
    gating, idempotent evidence receipts, and notification outbox deduplication.

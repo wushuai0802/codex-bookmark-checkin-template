@@ -30,13 +30,17 @@ npm run shadow -- --legacy-root D:\AIWorkspace\bots\chrome-daily-checkin `
   --out outputs\shadow-beta-snapshot.json `
   --ledger outputs\shadow-ledger.jsonl `
   --previous outputs\previous-shadow-snapshot.json
+
+npm run check:shadow-history -- --ledger outputs\shadow-ledger.jsonl --min-days 7
 ```
 
 The output directory is ignored by Git. The bridge also accepts
 `CHECKIN_LEGACY_ROOT`; an explicit `--legacy-root` is preferred. A missing or
 malformed legacy result is a hard error rather than an empty successful plan.
 The shadow command is idempotent for the same ledger record and refuses to
-write anywhere under the legacy root.
+write anywhere under the legacy root. The history check is read-only and exits
+with status 2 until the ledger contains the required consecutive fresh daily
+runs with no invalid records or owner conflicts.
 
 ## Contract and rollout
 

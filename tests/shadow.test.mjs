@@ -7,6 +7,7 @@ import { buildSnapshot } from '../src/bridge.mjs';
 import { appendLedgerRecord, compareSnapshots, createLedgerRecord, readLedger } from '../src/shadow-ledger.mjs';
 import { evaluateShadowGate } from '../src/schedule-gate.mjs';
 import { planHash } from '../src/contracts.mjs';
+import { evaluateShadowHistory } from '../src/shadow-acceptance.mjs';
 
 const legacyRoot = 'D:\\AIWorkspace\\bots\\chrome-daily-checkin';
 
@@ -72,4 +73,52 @@ test('ledger is append-only, redacted, and outside legacy root', { skip: !fs.exi
   appendLedgerRecord(ledger, record, { legacyRoot });
   assert.equal(readLedger(ledger).length, 2);
   assert.throws(() => appendLedgerRecord(path.join(legacyRoot, 'data', 'v2-ledger.jsonl'), record, { legacyRoot }), /legacy project/);
+});
+
+function historyRecord(businessDate, { fresh = true, recordId = null, ownerConflicts = [] } = {}) {
+  return {
+    schemaVersion: 1,
+    recordId: recordId ?? `ledger_${businessDate.replaceAll('-', '')}0000000000000000`,
+    recordedAt: `${businessDate}T12:00:00.000Z`,
+    snapshotId: 'snap_0123456789abcdef01234567',
+    businessDate,
+    planHash: 'a'.repeat(64),
+    sourceRunId: 'run-1',
+    mode: 'shadow_read_only',
+    counts: { logicalSites: 1, executionUnits: 1, status: { signed: 1 }, bookmarkSourceCounts: {} },
+    drift: { classification: 'same_plan', hashValid: true, ownerConflicts, addedTaskIds: [], removedTaskIds: [], changedTaskIds: [], statusChanges: [] },
+    health: { freshness: { fresh } }
+  };
+}
+
+test('shadow history accepts seven consecutive fresh records', () => {
+  const records = Array.from({ length: 7 }, (_, index) => historyRecord(`2026-09-${String(index + 1).padStart(2, '0')}`));
+  const result = evaluateShadowHistory(records);
+  assert.equal(result.accepted, true);
+  assert.equal(result.longestConsecutiveDays, 7);
+  assert.equal(result.freshRecordCount, 7);
+  assert.deepEqual(result.reasons, []);
+});
+
+test('shadow history blocks gaps, stale health, conflicts, and duplicate records', () => {
+  const records = [
+    historyRecord('2026-09-01', { recordId: 'ledger_111111111111111111111111' }),
+    historyRecord('2026-09-03', { fresh: false, recordId: 'ledger_222222222222222222222222', ownerConflicts: [{ taskId: 'task_1', owners: ['legacy-checkin', 'v2-worker'] }] }),
+    historyRecord('2026-09-03', { recordId: 'ledger_111111111111111111111111' })
+  ];
+  const result = evaluateShadowHistory(records);
+  assert.equal(result.accepted, false);
+  assert.equal(result.longestConsecutiveDays, 1);
+  assert.equal(result.invalidRecordCount, 2);
+  assert.equal(result.ownerConflictRecords, 1);
+  assert.equal(result.staleRecordCount, 1);
+  assert.match(result.reasons.join(','), /insufficient_consecutive_days/);
+  assert.match(result.reasons.join(','), /health_not_fresh/);
+});
+
+test('shadow history rejects impossible calendar dates', () => {
+  const result = evaluateShadowHistory([historyRecord('2026-02-30')], { minConsecutiveDays: 1 });
+  assert.equal(result.accepted, false);
+  assert.equal(result.invalidRecordCount, 1);
+  assert.equal(result.reasons.includes('invalid_records'), true);
 });

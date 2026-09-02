@@ -8,9 +8,10 @@
     "test": "node --test tests/*.test.mjs",
     "bridge": "node src/bridge.mjs",
     "simulate:candidate": "node src/candidate-simulator.mjs",
+    "check:shadow-history": "node src/shadow-acceptance.mjs",
     "shadow": "node src/shadow-run.mjs",
     "dashboard": "node src/dashboard-server.mjs",
     "export:nas": "node scripts/export-nas-bundle.mjs",
-    "lint": "node --check src/bridge.mjs && node --check src/contracts.mjs && node --check src/candidate-protocol.mjs && node --check src/candidate-simulator.mjs && node --check src/shadow-ledger.mjs && node --check src/schedule-gate.mjs && node --check src/shadow-run.mjs && node --check src/dashboard-server.mjs && node --check public/app.js"
+    "lint": "node --check src/bridge.mjs && node --check src/contracts.mjs && node --check src/candidate-protocol.mjs && node --check src/candidate-simulator.mjs && node --check src/shadow-acceptance.mjs && node --check src/shadow-ledger.mjs && node --check src/schedule-gate.mjs && node --check src/shadow-run.mjs && node --check src/dashboard-server.mjs && node --check public/app.js"
   }
 }
