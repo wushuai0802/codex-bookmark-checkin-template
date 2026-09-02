@@ -2,8 +2,9 @@
 
 1. **V2.0-alpha (current):** read-only bridge, contracts, privacy scrub, and
    fixture tests. Legacy execution remains authoritative.
-2. **V2.0-beta:** NAS ledger and schedule gate in shadow mode; compare plans,
-   ownership, freshness, and receipts for at least seven daily runs. No
+2. **V2.0-beta (prototype now available locally):** NAS ledger and schedule
+   gate in shadow mode; compare plans, ownership, freshness, and receipts for
+   at least seven daily runs. The local prototype never grants a lease, and no
    duplicate clicks are permitted.
 3. **V2.0 candidate:** authenticated Windows worker leases one task at a time,
    uses isolated profiles, and reports evidence. Enable only for a small

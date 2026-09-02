@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/plan-diff.schema.json",
+  "title": "Shadow plan comparison",
+  "type": "object",
+  "required": ["schemaVersion", "classification", "samePlan", "addedTaskIds", "removedTaskIds", "changedTaskIds", "statusChanges", "ownerConflicts", "hashValid"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "classification": {"enum": ["initial", "same_plan", "plan_changed", "invalid"]},
+    "samePlan": {"type": "boolean"},
+    "fromPlanHash": {"type": ["string", "null"]},
+    "toPlanHash": {"type": ["string", "null"]},
+    "addedTaskIds": {"type": "array", "items": {"type": "string"}},
+    "removedTaskIds": {"type": "array", "items": {"type": "string"}},
+    "changedTaskIds": {"type": "array", "items": {"type": "string"}},
+    "statusChanges": {"type": "array"},
+    "ownerConflicts": {"type": "array"},
+    "hashValid": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

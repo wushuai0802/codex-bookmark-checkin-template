@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/shadow-ledger.schema.json",
+  "title": "V2 shadow ledger record",
+  "type": "object",
+  "required": ["schemaVersion", "recordId", "recordedAt", "snapshotId", "businessDate", "planHash", "mode", "counts", "drift", "health"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "recordId": {"type": "string", "pattern": "^ledger_[a-f0-9]{24}$"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "snapshotId": {"type": "string", "pattern": "^snap_[a-f0-9]{24}$"},
+    "businessDate": {"type": "string", "format": "date"},
+    "planHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "sourceRunId": {"type": ["string", "null"]},
+    "mode": {"const": "shadow_read_only"},
+    "counts": {"type": "object"},
+    "drift": {"type": "object", "required": ["classification", "samePlan", "fromPlanHash", "toPlanHash", "addedTaskIds", "removedTaskIds", "changedTaskIds", "statusChanges", "ownerConflicts", "hashValid"], "properties": {"classification": {"enum": ["initial", "same_plan", "plan_changed", "invalid"]}, "samePlan": {"type": "boolean"}, "fromPlanHash": {"type": ["string", "null"]}, "toPlanHash": {"type": ["string", "null"]}, "addedTaskIds": {"type": "array", "items": {"type": "string"}}, "removedTaskIds": {"type": "array", "items": {"type": "string"}}, "changedTaskIds": {"type": "array", "items": {"type": "string"}}, "statusChanges": {"type": "array"}, "ownerConflicts": {"type": "array"}, "hashValid": {"type": "boolean"}}, "additionalProperties": false},
+    "health": {"type": "object"}
+  },
+  "additionalProperties": false
+}

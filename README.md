@@ -1,11 +1,11 @@
 # codex-checkin-fabric-v2
 
 V2 is an independent control-plane project for the daily check-in automation.
-The first release (`2.0.0-alpha.1`) is deliberately a **read-only shadow
-observer**. The existing Windows runner remains the only system allowed to
-execute check-ins.
+The current release (`2.0.0-beta.1`) is deliberately a **read-only shadow
+observer and ledger prototype**. The existing Windows runner remains the only
+system allowed to execute check-ins.
 
-## What alpha does
+## What the current shadow release does
 
 - Imports the legacy bookmark plan, latest run result, site state, scheduler
   state, and health report.
@@ -13,6 +13,8 @@ execute check-ins.
   action, and schedule occurrence.
 - Emits a redacted JSON snapshot suitable for NAS/control-plane integration.
 - Calculates health freshness and rejects credential-bearing fields.
+- Projects the snapshot into an append-only shadow ledger and reports plan
+  drift without granting a lease.
 
 It never launches Chrome, invokes a browser API, writes the legacy project, or
 sends notifications.
@@ -23,11 +25,18 @@ sends notifications.
 npm test
 node src/bridge.mjs --legacy-root D:\AIWorkspace\bots\chrome-daily-checkin `
   --out outputs\shadow-snapshot.json
+
+npm run shadow -- --legacy-root D:\AIWorkspace\bots\chrome-daily-checkin `
+  --out outputs\shadow-beta-snapshot.json `
+  --ledger outputs\shadow-ledger.jsonl `
+  --previous outputs\previous-shadow-snapshot.json
 ```
 
 The output directory is ignored by Git. The bridge also accepts
 `CHECKIN_LEGACY_ROOT`; an explicit `--legacy-root` is preferred. A missing or
 malformed legacy result is a hard error rather than an empty successful plan.
+The shadow command is idempotent for the same ledger record and refuses to
+write anywhere under the legacy root.
 
 ## Contract and rollout
 
