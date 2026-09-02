@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
-import { planHash, STATUS_VALUES } from './contracts.mjs';
+import { normalizeOrigin, planHash, STATUS_VALUES } from './contracts.mjs';
 
 const TERMINAL_STATUSES = new Set(['signed', 'already_signed']);
+const CAPABILITIES = new Set(['browser_checkin', 'page_evidence', 'api_evidence', 'image_challenge']);
+const EXECUTION_MODES = new Set(['dry_run', 'execute']);
 const SENSITIVE_KEYS = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
   'credential', 'credentials', 'profilepath', 'userdatadir', 'dpapi', 'screenshot'
@@ -72,8 +74,17 @@ export function validateWorkerCapability(worker, { now = new Date().toISOString(
   try { assertString(worker?.workerId, 'workerId', { pattern: /^worker_[A-Za-z0-9_-]{8,80}$/ }); } catch (error) { errors.push(error.message); }
   if (!['windows', 'linux'].includes(worker?.platform)) errors.push('platform is invalid');
   if (!Array.isArray(worker?.capabilities) || new Set(worker.capabilities).size !== worker.capabilities.length) errors.push('capabilities must be unique');
+  else if (!worker.capabilities.every((capability) => CAPABILITIES.has(capability))) errors.push('capabilities contain an unsupported value');
   if (!Array.isArray(worker?.allowedOrigins) || new Set(worker.allowedOrigins).size !== worker.allowedOrigins.length) errors.push('allowedOrigins must be unique');
+  else {
+    for (const origin of worker.allowedOrigins) {
+      try {
+        if (normalizeOrigin(origin) !== origin) errors.push('allowedOrigins must contain normalized origins');
+      } catch { errors.push('allowedOrigins contain an invalid origin'); }
+    }
+  }
   if (!Array.isArray(worker?.executionModes) || new Set(worker.executionModes).size !== worker.executionModes.length) errors.push('executionModes must be unique');
+  else if (!worker.executionModes.every((mode) => EXECUTION_MODES.has(mode))) errors.push('executionModes contain an unsupported value');
   if (worker?.profileIsolation !== true) errors.push('profileIsolation is required');
   let heartbeat;
   try { heartbeat = new Date(worker?.heartbeatAt).getTime(); } catch { heartbeat = Number.NaN; }
@@ -93,6 +104,7 @@ export function evaluateCandidateDispatch({ snapshot, taskId, worker, requestedM
   if (task && TERMINAL_STATUSES.has(task.observedStatus)) reasons.push('legacy_result_terminal');
   const workerCheck = validateWorkerCapability(worker, { now });
   if (!workerCheck.valid) reasons.push('worker_invalid');
+  if (['dry_run', 'execute'].includes(requestedMode) && worker?.executionModes?.includes(requestedMode) !== true) reasons.push('worker_mode_not_supported');
   if (task && worker?.allowedOrigins?.includes(task.origin) !== true) reasons.push('origin_not_allowlisted');
   if (requestedMode === 'execute' && !allowExecute) reasons.push('candidate_execution_disabled');
   if (requestedMode === 'execute' && task?.executionOwner !== 'v2-worker') reasons.push('execution_owner_not_cut_over');
@@ -108,6 +120,32 @@ export function evaluateCandidateDispatch({ snapshot, taskId, worker, requestedM
     leaseGranted: false,
     reasons
   };
+}
+
+export function createTaskEnvelope({ snapshot, task, lease, mode = 'dry_run' } = {}) {
+  if (!snapshot || snapshot.mode !== 'shadow_read_only') throw new Error('snapshot must be shadow_read_only');
+  if (snapshot.planHash !== planHash(snapshot.tasks ?? [])) throw new Error('snapshot plan hash is invalid');
+  if (!task || task.taskId !== lease?.taskId) throw new Error('lease does not match task');
+  if (lease.planHash !== snapshot.planHash || lease.state !== 'active') throw new Error('lease does not match snapshot');
+  if (!['dry_run', 'execute'].includes(mode)) throw new Error('mode is invalid');
+  const envelope = {
+    schemaVersion: 1,
+    envelopeId: `envelope_${digest(`${task.taskId}|${lease.leaseId}|${mode}`)}`,
+    taskId: task.taskId,
+    businessDate: task.businessDate,
+    planHash: snapshot.planHash,
+    idempotencyKey: idempotencyKey({ taskId: task.taskId, businessDate: task.businessDate, actionType: task.actionType }),
+    lease,
+    target: {
+      origin: task.origin,
+      logicalSiteKey: task.logicalSiteKey,
+      accountKey: task.accountKey,
+      actionType: task.actionType
+    },
+    mode
+  };
+  assertNoSensitiveFields(envelope);
+  return envelope;
 }
 
 export function createReceipt({ taskId, leaseId, workerId, businessDate, status, observedAt = new Date().toISOString(), evidence, executionMode = 'dry_run', attempt = 1 } = {}) {

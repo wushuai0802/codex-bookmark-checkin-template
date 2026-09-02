@@ -39,9 +39,25 @@ rejected. Successful receipts must carry authoritative, redacted evidence.
 The notification outbox derives a `notice_*` dedupe key from the receipt and
 does not contain credentials or browser state.
 
+## Local simulator
+
+The protocol can be exercised locally without starting a browser or contacting
+the NAS. Given a redacted bridge snapshot and a worker capability manifest:
+
+```text
+npm run simulate:candidate -- --snapshot <snapshot.json> --worker <worker.json> --out <result.json>
+```
+
+The simulator only requests `dry_run`, never grants an executable lease, and
+emits `deferred` receipts with non-authoritative redacted evidence. Stale
+source health, terminal legacy results, invalid worker heartbeats, and origins
+outside the allowlist are denied. The generated task envelopes remain valid
+against `candidate-task-envelope.schema.json`; simulation provenance is carried
+by the enclosing result metadata.
+
 ## Current acceptance result
 
 The local protocol tests exercise lease expiry, worker heartbeat and allowlist
-checks, dry-run versus execute gating, receipt idempotency, redaction, and
-notification deduplication. No browser, worker process, lease service, or
-notification sender is started by these tests.
+checks, dry-run versus execute gating, stale-health denial, simulator output,
+receipt idempotency, redaction, and notification deduplication. No browser,
+worker process, lease service, or notification sender is started by these tests.

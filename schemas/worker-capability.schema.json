@@ -10,7 +10,7 @@
     "platform": {"enum": ["windows", "linux"]},
     "capabilities": {"type": "array", "items": {"enum": ["browser_checkin", "page_evidence", "api_evidence", "image_challenge"]}, "uniqueItems": true},
     "allowedOrigins": {"type": "array", "items": {"type": "string", "format": "uri"}, "uniqueItems": true},
-    "executionModes": {"type": "array", "items": {"enum": ["shadow_read_only", "execute"]}, "uniqueItems": true},
+    "executionModes": {"type": "array", "items": {"enum": ["dry_run", "execute"]}, "uniqueItems": true},
     "profileIsolation": {"const": true},
     "heartbeatAt": {"type": "string", "format": "date-time"}
   },
