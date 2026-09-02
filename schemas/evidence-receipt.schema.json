@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/evidence-receipt.schema.json",
+  "title": "Check-in evidence receipt",
+  "type": "object",
+  "required": ["schemaVersion", "taskId", "status", "observedAt", "evidence"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "taskId": {"type": "string", "pattern": "^task_[a-f0-9]{24}$"},
+    "status": {"enum": ["signed", "already_signed", "not_available", "needs_attention", "deferred", "login_required", "failed"]},
+    "observedAt": {"type": "string", "format": "date-time"},
+    "evidence": {"type": "object", "required": ["source", "authoritative", "summary", "redacted"], "properties": {"source": {"enum": ["usage_log", "api", "page_text", "user_confirmation", "health_cache", "legacy_authoritative", "none"]}, "authoritative": {"type": "boolean"}, "summary": {"type": "string", "maxLength": 240}, "redacted": {"const": true}}, "additionalProperties": false}
+  },
+  "additionalProperties": false
+}

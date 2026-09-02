@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+config/config.local.json
+config/*.local.json
+work/local/
+outputs/
+logs/
+tmp/
+*.log
+*.tmp
+*.bak
+coverage/

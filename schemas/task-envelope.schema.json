@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/task-envelope.schema.json",
+  "title": "Authenticated future worker task envelope",
+  "type": "object",
+  "required": ["schemaVersion", "taskId", "planHash", "lease", "target", "mode"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "taskId": {"type": "string", "pattern": "^task_[a-f0-9]{24}$"},
+    "planHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "lease": {"type": "object", "required": ["leaseId", "owner", "expiresAt"], "properties": {"leaseId": {"type": "string", "minLength": 8}, "owner": {"type": "string", "minLength": 1}, "expiresAt": {"type": "string", "format": "date-time"}}, "additionalProperties": false},
+    "target": {"type": "object", "required": ["origin", "logicalSiteKey", "accountKey", "actionType"], "properties": {"origin": {"type": "string", "format": "uri"}, "logicalSiteKey": {"type": "string"}, "accountKey": {"type": "string"}, "actionType": {"const": "checkin"}}, "additionalProperties": false},
+    "mode": {"enum": ["shadow_read_only", "execute"]}
+  },
+  "additionalProperties": false
+}

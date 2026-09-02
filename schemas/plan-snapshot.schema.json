@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/plan-snapshot.schema.json",
+  "title": "V2 shadow plan snapshot",
+  "type": "object",
+  "required": ["schemaVersion", "snapshotId", "generatedAt", "businessDate", "mode", "planHash", "source", "counts", "logicalSites", "tasks", "receipts", "health"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "snapshotId": {"type": "string", "pattern": "^snap_[a-f0-9]{24}$"},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "businessDate": {"type": "string", "format": "date"},
+    "mode": {"const": "shadow_read_only"},
+    "planHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source": {"$ref": "#/$defs/source"},
+    "counts": {"$ref": "#/$defs/counts"},
+    "logicalSites": {"type": "array", "items": {"$ref": "#/$defs/logicalSite"}},
+    "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}},
+    "receipts": {"type": "array", "items": {"$ref": "#/$defs/receipt"}},
+    "health": {"$ref": "#/$defs/health"}
+  },
+  "$defs": {
+    "source": {"type": "object", "required": ["system", "runId", "executionComplete", "businessComplete"], "properties": {"system": {"const": "legacy-checkin"}, "runId": {"type": ["string", "null"]}, "bookmarkPlanGeneratedAt": {"type": ["string", "null"]}, "schedulerStateDate": {"type": ["string", "null"]}, "executionComplete": {"type": "boolean"}, "businessComplete": {"type": "boolean"}, "pendingExternalCount": {"type": ["integer", "null"], "minimum": 0}, "siteStateUpdatedAt": {"type": ["string", "null"]}}, "additionalProperties": false},
+    "counts": {"type": "object", "required": ["logicalSites", "executionUnits", "status", "bookmarkSourceCounts"], "properties": {"logicalSites": {"type": "integer", "minimum": 0}, "executionUnits": {"type": "integer", "minimum": 0}, "status": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}, "bookmarkSourceCounts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}}, "additionalProperties": false},
+    "logicalSite": {"type": "object", "required": ["origin", "logicalSiteKey", "executionUnitCount"], "properties": {"origin": {"type": "string", "format": "uri"}, "logicalSiteKey": {"type": "string"}, "logicalGroup": {"type": ["string", "null"]}, "title": {"type": ["string", "null"]}, "folderNames": {"type": "array", "items": {"type": "string"}}, "executionUnitCount": {"type": "integer", "minimum": 1}, "credentialGroup": {"type": ["string", "null"]}}, "additionalProperties": false},
+    "task": {"type": "object", "required": ["schemaVersion", "taskId", "businessDate", "logicalSiteKey", "origin", "accountKey", "accountRef", "actionType", "scheduleOccurrence", "executionOwner", "executionMode", "observedStatus"], "properties": {"schemaVersion": {"const": 1}, "taskId": {"type": "string", "pattern": "^task_[a-f0-9]{24}$"}, "businessDate": {"type": "string", "format": "date"}, "logicalSiteKey": {"type": "string"}, "logicalGroup": {"type": ["string", "null"]}, "origin": {"type": "string", "format": "uri"}, "accountKey": {"type": "string"}, "accountRef": {"type": ["string", "null"]}, "actionType": {"const": "checkin"}, "scheduleOccurrence": {"const": "daily"}, "executionOwner": {"const": "legacy-checkin"}, "executionMode": {"const": "observe_only"}, "observedStatus": {"type": "string"}}, "additionalProperties": false},
+    "receipt": {"type": "object", "required": ["schemaVersion", "taskId", "status", "observedAt", "evidence"], "properties": {"schemaVersion": {"const": 1}, "taskId": {"type": "string"}, "status": {"type": "string"}, "observedAt": {"type": "string", "format": "date-time"}, "evidence": {"type": "object", "required": ["source", "authoritative", "summary", "redacted"], "properties": {"source": {"type": "string"}, "authoritative": {"type": "boolean"}, "summary": {"type": "string", "maxLength": 240}, "redacted": {"const": true}}, "additionalProperties": false}}, "additionalProperties": false},
+    "health": {"type": "object", "required": ["healthy", "sourceCheckedAt", "freshness", "reason", "failedCheckCount"], "properties": {"healthy": {"type": "boolean"}, "sourceCheckedAt": {"type": ["string", "null"], "format": "date-time"}, "freshness": {"type": "object", "required": ["fresh", "ageHours", "maxAgeHours"], "properties": {"fresh": {"type": "boolean"}, "ageHours": {"type": ["number", "null"], "minimum": 0}, "maxAgeHours": {"type": "number", "exclusiveMinimum": 0}}, "additionalProperties": false}, "reason": {"type": ["string", "null"]}, "failedCheckCount": {"type": ["integer", "null"], "minimum": 0}}, "additionalProperties": false}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/worker-capability.schema.json",
+  "title": "Windows worker capability",
+  "type": "object",
+  "required": ["schemaVersion", "workerId", "platform", "capabilities", "allowedOrigins", "executionModes"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "workerId": {"type": "string", "pattern": "^worker_[A-Za-z0-9_-]{8,}$"},
+    "platform": {"enum": ["windows", "linux"]},
+    "capabilities": {"type": "array", "items": {"enum": ["browser_checkin", "page_evidence", "api_evidence", "image_challenge"]}, "uniqueItems": true},
+    "allowedOrigins": {"type": "array", "items": {"type": "string", "format": "uri"}, "uniqueItems": true},
+    "executionModes": {"type": "array", "items": {"enum": ["shadow_read_only", "execute"]}, "uniqueItems": true},
+    "profileIsolation": {"const": true},
+    "heartbeatAt": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}
