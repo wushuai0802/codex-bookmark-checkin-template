@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Codex Check-in Fabric V2 监测与管理控制台">
+  <title>Check-in Fabric · 控制台</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/controls.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">CF</span><div><strong>Check-in Fabric</strong><small>V2 Control Plane</small></div></div>
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item active" data-view="overview">总览</button>
+        <button class="nav-item" data-view="tasks">任务</button>
+        <button class="nav-item" data-view="sites">站点</button>
+        <button class="nav-item" data-view="accounts">账户</button>
+        <button class="nav-item" data-view="ledger">运行记录</button>
+        <button class="nav-item" data-view="settings">设置</button>
+      </nav>
+      <div class="sidebar-footer"><span class="status-dot"></span><span id="service-status">正在连接</span></div>
+    </aside>
+    <main class="main-content">
+      <header class="topbar"><div><p class="eyebrow">CONTROL PLANE / SHADOW MODE</p><h1 id="page-title">签到运行总览</h1></div><div class="top-actions"><span class="mode-pill" id="mode-pill">只读影子</span><button id="refresh-btn" class="button primary">刷新数据</button></div></header>
+      <section id="login-panel" class="login-panel hidden" aria-live="polite"><div><h2>需要控制台令牌</h2><p>令牌只保存在当前浏览器会话中，不会写入项目文件。</p></div><form id="login-form"><label for="token-input">管理令牌</label><div class="token-row"><input id="token-input" type="password" autocomplete="off" required maxlength="256"><button class="button primary" type="submit">连接</button></div><p id="login-error" class="error-text"></p></form></section>
+      <section id="app-error" class="alert error hidden" role="alert"></section>
+      <div id="view-overview" class="view active-view">
+        <div id="kpi-grid" class="kpi-grid"></div>
+        <div class="content-grid two-col"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">EXECUTION HEALTH</p><h2>执行健康</h2></div><span id="health-badge" class="badge">—</span></div><div id="health-content" class="health-content"></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">STATUS MIX</p><h2>状态分布</h2></div></div><div id="status-chart" class="status-chart"></div></article></div>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">LATEST PLAN</p><h2>最近计划</h2></div><button class="link-button" data-view-link="tasks">查看全部任务 →</button></div><div id="latest-plan" class="plan-meta"></div></article>
+      </div>
+      <div id="view-tasks" class="view"><div class="toolbar"><div><p class="eyebrow">TASK LEDGER</p><h2>任务管理</h2></div><div class="filters"><input id="task-search" type="search" placeholder="搜索站点或任务 ID" maxlength="80"><select id="task-status"><option value="">全部状态</option><option value="signed">已签到</option><option value="already_signed">今日已完成</option><option value="not_available">未开放</option><option value="needs_attention">需关注</option><option value="deferred">已延迟</option></select></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>任务</th><th>站点</th><th>账户</th><th>状态</th><th>证据</th><th>执行权</th></tr></thead><tbody id="tasks-body"></tbody></table></div></article></div>
+      <div id="view-sites" class="view"><div class="toolbar"><div><p class="eyebrow">SITE CATALOG</p><h2>站点管理</h2></div><span class="muted">来源：书签计划 · 只读</span></div><div id="sites-grid" class="cards-grid"></div></div>
+      <div id="view-accounts" class="view"><div class="toolbar"><div><p class="eyebrow">ACCOUNT ISOLATION</p><h2>账户管理</h2></div><span class="muted">仅显示脱敏账户引用</span></div><div id="accounts-grid" class="cards-grid"></div></div>
+      <div id="view-ledger" class="view"><div class="toolbar"><div><p class="eyebrow">APPEND-ONLY HISTORY</p><h2>运行记录</h2></div><span class="muted">最多显示最近 30 条</span></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>记录时间</th><th>业务日期</th><th>计划哈希</th><th>漂移</th><th>任务数</th><th>健康</th></tr></thead><tbody id="ledger-body"></tbody></table></div></article></div>
+      <div id="view-settings" class="view"><div class="toolbar"><div><p class="eyebrow">CONTROL PLANE</p><h2>设置与边界</h2></div></div><article class="panel settings-panel"><div id="settings-content"></div></article></div>
+    </main>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

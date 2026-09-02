@@ -1,0 +1,40 @@
+services:
+  checkin-fabric-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codex-checkin-fabric-v2:beta
+    container_name: checkin-fabric-dashboard
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      FABRIC_BIND: 0.0.0.0
+      FABRIC_PORT: 8787
+      FABRIC_DATA_DIR: /data
+      FABRIC_ADMIN_TOKEN_FILE: /run/secrets/fabric_admin_token
+      FABRIC_TRUST_PROXY_TLS: "1"
+      FABRIC_RATE_LIMIT_PER_MINUTE: "120"
+    volumes:
+      # Mount only generated snapshots, ledger, and the V2 control state.
+      - ./nas-data:/data
+    secrets:
+      - fabric_admin_token
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+secrets:
+  fabric_admin_token:
+    file: ./secrets/fabric_admin_token.txt

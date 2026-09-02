@@ -44,3 +44,6 @@ Contracts live in `schemas/`. Architecture and the staged migration are in
 `docs/architecture.md` and `docs/migration-phases.md`. Registration discovery
 is intentionally not an alpha capability; it is planned for V2.1 after a
 read-only review gate.
+
+The dashboard capability map and NAS reverse-proxy instructions are in
+`docs/dashboard.md` and `docs/nas-deployment.md`.

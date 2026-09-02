@@ -8,7 +8,7 @@ V2 bridge -> redacted plan/tasks/receipts/health snapshot
         | shadow ledger + schedule gate (beta, no lease)
         | later: authenticated, leased envelopes
         v
-NAS control plane (ledger, schedule gate, health, notifications)
+NAS control plane + dashboard (ledger, schedule gate, health, notifications)
 ```
 
 ## Ownership and identity
@@ -48,5 +48,7 @@ an old `health.json` cannot be reported as current merely because it says
 
 ## Explicit non-goals
 
-Alpha does not run a worker, open a remote browser endpoint, discover/register
-new sites, mutate bookmarks, retry tasks, or send Telegram messages.
+Alpha/beta does not run a worker, open a remote browser endpoint,
+discover/register new sites, mutate bookmarks, retry tasks, or send Telegram
+messages. The dashboard's site policies are metadata until a future worker
+cutover explicitly consumes them.

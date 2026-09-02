@@ -18,3 +18,12 @@ Any worker implementation must use authenticated, mutually identified leases,
 an explicit allowlist of origins, isolated browser profiles, bounded retries,
 and a kill switch. It must not listen on `0.0.0.0`, accept wildcard CORS, run
 arbitrary JavaScript, or accept arbitrary profile paths.
+
+## Dashboard deployment
+
+The dashboard binds to loopback in the supplied Compose file and is intended to
+sit behind the NAS reverse proxy. Non-loopback binding requires
+`FABRIC_ADMIN_TOKEN` or a Docker secret file. API access uses a constant-time
+token comparison, a bounded request body, a per-client rate limit, and no
+CORS. `GET /healthz` is intentionally minimal and suitable only for a
+container health probe; it does not expose task data.
