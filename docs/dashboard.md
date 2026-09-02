@@ -20,6 +20,10 @@ outside the web process.
   changes, task counts, and health state.
 - **Settings:** explicit display of execution ownership, read-only mode, and
   disabled lease/notification boundaries.
+- **Mobile access:** the navigation becomes an off-canvas drawer on narrow
+  screens, with an overlay and Escape/close controls. The dashboard token is
+  session-only by default; an explicit opt-in stores it locally for 30 days
+  and provides a clear-token action.
 
 ## Deliberately deferred
 

@@ -1,4 +1,33 @@
-const state = { view: 'overview', token: sessionStorage.getItem('fabricToken') ?? '', data: null, loading: false };
+const TOKEN_SESSION_KEY = 'fabricToken';
+const TOKEN_PERSISTED_KEY = 'fabricTokenRemembered';
+const TOKEN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function readSessionToken() {
+  try { return sessionStorage.getItem(TOKEN_SESSION_KEY)?.trim() ?? ''; } catch { return ''; }
+}
+
+function readPersistedToken() {
+  try {
+    const raw = localStorage.getItem(TOKEN_PERSISTED_KEY);
+    if (!raw) return '';
+    const record = JSON.parse(raw);
+    if (typeof record?.token !== 'string' || !record.token.trim() || record.token.length > 256 || !Number.isFinite(record.savedAt)) {
+      localStorage.removeItem(TOKEN_PERSISTED_KEY);
+      return '';
+    }
+    if (Date.now() - record.savedAt > TOKEN_MAX_AGE_MS || record.savedAt > Date.now() + 60_000) {
+      localStorage.removeItem(TOKEN_PERSISTED_KEY);
+      return '';
+    }
+    return record.token.trim();
+  } catch {
+    return '';
+  }
+}
+
+const sessionToken = readSessionToken();
+const persistedToken = sessionToken ? '' : readPersistedToken();
+const state = { view: 'overview', token: sessionToken || persistedToken, rememberToken: Boolean(persistedToken), data: null, loading: false };
 
 const STATUS_LABELS = {
   signed: '已签到', already_signed: '今日已完成', not_available: '未开放',
@@ -45,13 +74,47 @@ function evidenceLabel(task) {
 }
 
 function showLogin(show) {
-  $('#login-panel').classList.toggle('hidden', !show);
+  const panel = $('#login-panel');
+  if (!panel) return;
+  panel.classList.toggle('hidden', !show);
+  if (show) {
+    const remember = $('#remember-token');
+    if (remember) remember.checked = state.rememberToken;
+  }
 }
 
 function showError(message = '') {
   const node = $('#app-error');
   node.textContent = message;
   node.classList.toggle('hidden', !message);
+}
+
+function persistToken(token, remember) {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_SESSION_KEY, token);
+    else sessionStorage.removeItem(TOKEN_SESSION_KEY);
+  } catch { /* storage may be disabled by the browser */ }
+  try {
+    if (remember && token) localStorage.setItem(TOKEN_PERSISTED_KEY, JSON.stringify({ token, savedAt: Date.now() }));
+    else localStorage.removeItem(TOKEN_PERSISTED_KEY);
+  } catch { /* storage may be disabled by the browser */ }
+}
+
+function forgetToken() {
+  state.token = '';
+  state.rememberToken = false;
+  persistToken('', false);
+}
+
+function setSidebarOpen(open) {
+  document.body.classList.toggle('sidebar-open', open);
+  const toggle = $('#menu-toggle');
+  const close = $('#sidebar-close');
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? '关闭导航' : '打开导航');
+  }
+  if (close) close.setAttribute('aria-expanded', String(open));
 }
 
 async function api(pathname, options = {}) {
@@ -242,6 +305,7 @@ async function loadData() {
 
 function switchView(view) {
   state.view = view;
+  setSidebarOpen(false);
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
   document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active-view', item.id === `view-${view}`));
   const titles = { overview: '签到运行总览', tasks: '任务管理', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '设置与边界' };
@@ -258,8 +322,37 @@ function applyTaskFilter() {
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.nav-item').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.view)));
   document.querySelectorAll('[data-view-link]').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.viewLink)));
+  $('#menu-toggle').addEventListener('click', () => setSidebarOpen(!document.body.classList.contains('sidebar-open')));
+  $('#sidebar-close').addEventListener('click', () => setSidebarOpen(false));
+  $('#sidebar-backdrop').addEventListener('click', () => setSidebarOpen(false));
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setSidebarOpen(false); });
   $('#refresh-btn').addEventListener('click', loadData);
   $('#task-search').addEventListener('input', applyTaskFilter); $('#task-status').addEventListener('change', applyTaskFilter);
-  $('#login-form').addEventListener('submit', (event) => { event.preventDefault(); state.token = $('#token-input').value; sessionStorage.setItem('fabricToken', state.token); $('#login-error').textContent = ''; loadData(); });
+  $('#token-visibility').addEventListener('click', () => {
+    const input = $('#token-input');
+    const visible = input.type === 'text';
+    input.type = visible ? 'password' : 'text';
+    $('#token-visibility').textContent = visible ? '显示' : '隐藏';
+    $('#token-visibility').setAttribute('aria-label', visible ? '显示令牌' : '隐藏令牌');
+  });
+  $('#clear-token').addEventListener('click', () => {
+    forgetToken();
+    $('#token-input').value = '';
+    $('#remember-token').checked = false;
+    $('#login-error').textContent = '已清除本地令牌，请重新输入';
+    showLogin(true);
+    $('#token-input').focus();
+  });
+  $('#login-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const token = $('#token-input').value.trim();
+    if (!token) { $('#login-error').textContent = '请输入管理令牌'; return; }
+    state.token = token;
+    state.rememberToken = $('#remember-token').checked;
+    persistToken(state.token, state.rememberToken);
+    $('#login-error').textContent = '';
+    loadData();
+  });
+  $('#remember-token').checked = state.rememberToken;
   loadData();
 });

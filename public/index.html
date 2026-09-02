@@ -10,8 +10,11 @@
 </head>
 <body>
   <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">CF</span><div><strong>Check-in Fabric</strong><small>V2 Control Plane</small></div></div>
+    <aside id="main-sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand"><span class="brand-mark">CF</span><div><strong>Check-in Fabric</strong><small>V2 Control Plane</small></div></div>
+        <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="关闭导航" aria-controls="main-sidebar" aria-expanded="false">×</button>
+      </div>
       <nav class="nav" aria-label="主导航">
         <button class="nav-item active" data-view="overview">总览</button>
         <button class="nav-item" data-view="tasks">任务</button>
@@ -22,9 +25,10 @@
       </nav>
       <div class="sidebar-footer"><span class="status-dot"></span><span id="service-status">正在连接</span></div>
     </aside>
+    <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭导航"></button>
     <main class="main-content">
-      <header class="topbar"><div><p class="eyebrow">CONTROL PLANE / SHADOW MODE</p><h1 id="page-title">签到运行总览</h1></div><div class="top-actions"><span class="mode-pill" id="mode-pill">只读影子</span><button id="refresh-btn" class="button primary">刷新数据</button></div></header>
-      <section id="login-panel" class="login-panel hidden" aria-live="polite"><div><h2>需要控制台令牌</h2><p>令牌只保存在当前浏览器会话中，不会写入项目文件。</p></div><form id="login-form"><label for="token-input">管理令牌</label><div class="token-row"><input id="token-input" type="password" autocomplete="off" required maxlength="256"><button class="button primary" type="submit">连接</button></div><p id="login-error" class="error-text"></p></form></section>
+      <header class="topbar"><div class="topbar-heading"><button id="menu-toggle" class="icon-button menu-toggle" type="button" aria-label="打开导航" aria-controls="main-sidebar" aria-expanded="false">☰</button><div><p class="eyebrow">CONTROL PLANE / SHADOW MODE</p><h1 id="page-title">签到运行总览</h1></div></div><div class="top-actions"><span class="mode-pill" id="mode-pill">只读影子</span><button id="refresh-btn" class="button primary">刷新数据</button></div></header>
+      <section id="login-panel" class="login-panel hidden" aria-live="polite"><div><h2>需要控制台令牌</h2><p>默认只保存在当前浏览器标签页；勾选后会在此设备本地保存 30 天，可随时清除。</p></div><form id="login-form"><label for="token-input">管理令牌</label><div class="token-row"><input id="token-input" type="password" autocomplete="off" spellcheck="false" required maxlength="256"><button id="token-visibility" class="button secondary" type="button" aria-label="显示令牌">显示</button><button class="button primary" type="submit">连接</button></div><div class="token-options"><label class="remember-token"><input id="remember-token" type="checkbox"> <span>在此设备记住令牌（30 天）</span></label><button id="clear-token" class="link-button clear-token" type="button">清除已保存令牌</button></div><p id="login-error" class="error-text"></p></form></section>
       <section id="app-error" class="alert error hidden" role="alert"></section>
       <div id="view-overview" class="view active-view">
         <div id="kpi-grid" class="kpi-grid"></div>

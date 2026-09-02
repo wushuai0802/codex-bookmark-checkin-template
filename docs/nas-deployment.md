@@ -47,6 +47,7 @@ the token secret.
 
 ## Reverse proxy contract
 
+- Recommended public hostname for this deployment: `wsfabric.ugnas.cc`.
 - Upstream: `http://127.0.0.1:8787`
 - WebSocket upgrade is not needed for this beta.
 - Preserve `X-Fabric-Token` or `Authorization: Bearer …` if your proxy does
