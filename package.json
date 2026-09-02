@@ -10,6 +10,6 @@
     "shadow": "node src/shadow-run.mjs",
     "dashboard": "node src/dashboard-server.mjs",
     "export:nas": "node scripts/export-nas-bundle.mjs",
-    "lint": "node --check src/bridge.mjs && node --check src/contracts.mjs && node --check src/shadow-ledger.mjs && node --check src/schedule-gate.mjs && node --check src/shadow-run.mjs && node --check src/dashboard-server.mjs && node --check public/app.js"
+    "lint": "node --check src/bridge.mjs && node --check src/contracts.mjs && node --check src/candidate-protocol.mjs && node --check src/shadow-ledger.mjs && node --check src/schedule-gate.mjs && node --check src/shadow-run.mjs && node --check src/dashboard-server.mjs && node --check public/app.js"
   }
 }

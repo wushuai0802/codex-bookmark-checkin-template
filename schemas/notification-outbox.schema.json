@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/notification-outbox.schema.json",
+  "title": "V2 notification outbox item",
+  "type": "object",
+  "required": ["schemaVersion", "outboxId", "dedupeKey", "taskId", "businessDate", "channel", "state", "attempts", "createdAt", "nextAttemptAt", "payload"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "outboxId": {"type": "string", "pattern": "^outbox_[a-f0-9]{24}$"},
+    "dedupeKey": {"type": "string", "pattern": "^notice_[a-f0-9]{24}$"},
+    "taskId": {"type": "string", "pattern": "^task_[a-f0-9]{24}$"},
+    "businessDate": {"type": "string", "format": "date"},
+    "channel": {"const": "telegram"},
+    "state": {"enum": ["pending", "processing", "delivered", "deferred", "quarantined"]},
+    "attempts": {"type": "integer", "minimum": 0, "maximum": 8},
+    "createdAt": {"type": "string", "format": "date-time"},
+    "nextAttemptAt": {"type": "string", "format": "date-time"},
+    "payload": {"type": "object", "required": ["status", "summary", "observedAt"], "properties": {"status": {"type": "string"}, "summary": {"type": "string", "maxLength": 240}, "observedAt": {"type": "string", "format": "date-time"}}, "additionalProperties": false}
+  },
+  "additionalProperties": false
+}

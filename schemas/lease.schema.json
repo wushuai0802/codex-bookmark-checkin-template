@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/lease.schema.json",
+  "title": "V2 candidate worker lease",
+  "type": "object",
+  "required": ["schemaVersion", "leaseId", "taskId", "planHash", "owner", "issuedAt", "expiresAt", "state", "singleUse"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "leaseId": {"type": "string", "pattern": "^lease_[a-f0-9]{24}$"},
+    "taskId": {"type": "string", "pattern": "^task_[a-f0-9]{24}$"},
+    "planHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "owner": {"type": "string", "pattern": "^worker_[A-Za-z0-9_-]{8,80}$"},
+    "issuedAt": {"type": "string", "format": "date-time"},
+    "expiresAt": {"type": "string", "format": "date-time"},
+    "state": {"enum": ["active", "released", "expired"]},
+    "singleUse": {"const": true}
+  },
+  "additionalProperties": false
+}
