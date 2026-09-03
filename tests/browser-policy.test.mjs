@@ -15,6 +15,11 @@ import {
   waitForActiveQuotaBenefit,
   waitForQuotaRequestField,
 } from "../src/browser.mjs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 test("瞬时上游失败请求重建共享浏览器上下文", () => {
   assert.equal(shouldRefreshAutomationContext({
@@ -39,6 +44,13 @@ test("候选弱结果不会覆盖登录、挑战或延迟状态", () => {
 test("候选完成状态会覆盖此前异常状态", () => {
   const completed = { status: "signed", reason: "done" };
   assert.equal(preferCandidateResult({ status: "login_required" }, completed), completed);
+});
+
+test("打开即签到地址也必须取得权威回读", async () => {
+  const source = await fs.readFile(path.join(root, "src", "browser.mjs"), "utf8");
+  assert.match(source, /Visiting an attendance URL is an action attempt/i);
+  assert.match(source, /const confirmed = await waitForAuthoritativeCheckin\(page, activeOrigin, config\)/);
+  assert.doesNotMatch(source, /return \{ status: "visited", reason: "已访问打开即签到的网址"/);
 });
 
 test("跳转登录页时执行上下文销毁会恢复为登录失效", async () => {
@@ -90,12 +102,14 @@ test("配置取消的站点直接返回终止状态", () => {
     { origin: "https://captcha.example" },
     { disabledCheckinOrigins: ["https://captcha.example"] },
   );
-  assert.deepEqual(result, {
-    status: "not_available",
-    reason: "已按配置取消该站签到任务",
-    url: "https://captcha.example",
-    disabledByConfig: true,
-  });
+  assert.equal(result.status, "not_available");
+  assert.equal(result.reason, "已按配置取消该站签到任务");
+  assert.equal(result.url, "https://captcha.example");
+  assert.equal(result.disabledByConfig, true);
+  assert.equal(result.availabilityKind, "task_disabled");
+  assert.equal(result.evidence.source, "configuration");
+  assert.equal(result.evidence.authoritative, true);
+  assert.ok(Number.isFinite(Date.parse(result.evidence.confirmedAt)));
   assert.equal(configuredTargetSkip(
     { origin: "https://enabled.example" },
     { disabledCheckinOrigins: ["https://captcha.example"] },

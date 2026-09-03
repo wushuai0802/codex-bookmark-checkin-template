@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'ResultIdentity.ps1')
+. (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $localConfigPath = Join-Path $root 'config\config.json'
 $defaultsPath = Join-Path $root 'config\defaults.json'
 $effectiveConfigPath = if ($ConfigPath) { $ConfigPath } elseif (Test-Path -LiteralPath $localConfigPath) { $localConfigPath } else { $defaultsPath }
@@ -114,7 +115,7 @@ $isCompleteFinalReport = $null -ne $report `
     -and $reportIdentityContractValid
 $isPartialReport = $null -ne $report -and -not $isCompleteFinalReport
 $executionComplete = [bool]$isCompleteFinalReport
-$businessComplete = $executionComplete -and @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') }).Count -eq 0
+$businessComplete = $executionComplete -and @($results | Where-Object { -not (Test-TerminalCheckinResult $_) }).Count -eq 0
 $logicalPlannedTotal = if ($null -ne $report -and $null -ne $report.bookmarkSummary -and $null -ne $report.bookmarkSummary.targets) {
     @($report.bookmarkSummary.targets | ForEach-Object { Get-LogicalSiteKey $_ } | Select-Object -Unique).Count
 }
@@ -122,11 +123,12 @@ elseif ($isCompleteFinalReport) { $reportingResults.Count }
 else { $plannedTotal }
 $logicalProcessedTotal = $reportingResults.Count
 $done = @($statuses | Where-Object { $_ -in @('signed', 'already_signed') }).Count
-$disabled = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -eq $true }).Count
-$temporarilyUnavailable = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.temporarilyUnavailable -eq $true }).Count
-$notAvailable = @($reportingResults | Where-Object { $_.status -eq 'not_available' -and $_.disabledByConfig -ne $true -and $_.temporarilyUnavailable -ne $true }).Count
-$problems = @($reportingResults | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
-$automaticRetryStatuses = @('error', 'failed', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred')
+$confirmedUnavailable = @($reportingResults | Where-Object { Test-ConfirmedNotAvailableResult $_ })
+$disabled = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'task_disabled' }).Count
+$temporarilyUnavailable = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'temporary_unavailable' }).Count
+$notAvailable = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'feature_disabled' }).Count
+$problems = @($reportingResults | Where-Object { -not (Test-TerminalCheckinResult $_) })
+$automaticRetryStatuses = @('error', 'failed', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred', 'not_available')
 $automaticRetryProblems = @($problems | Where-Object { $_.status -in $automaticRetryStatuses })
 $attentionProblems = @($problems | Where-Object { $_.status -notin $automaticRetryStatuses })
 
@@ -154,7 +156,10 @@ $accountResults = @($reportingResults | Where-Object { [string]$_.accountKey })
 if ($accountResults.Count -gt 0) {
     $summary += "`n账号结果："
     $summary += "`n" + (($accountResults | ForEach-Object {
-        $marker = if ($_.status -in @('signed', 'already_signed')) { '✅' } elseif ($_.status -eq 'not_available') { '⏭️' } elseif ($_.status -in $automaticRetryStatuses) { '🔄' } else { '❌' }
+        $marker = if ($_.status -in @('signed', 'already_signed')) { '✅' } `
+            elseif ($_.status -eq 'not_available' -and (Test-ConfirmedNotAvailableResult $_)) { '⏭️' } `
+            elseif ($_.status -in $automaticRetryStatuses) { '🔄' } `
+            else { '❌' }
         $reward = if ($_.evidence.rewardAmount) { " `$$([decimal]$_.evidence.rewardAmount)" } else { '' }
         "- $marker $(Get-ResultDisplayName $_)$reward"
     }) -join "`n")
@@ -176,6 +181,7 @@ if ($automaticRetryProblems.Count -gt 0) {
                     'clicked' { '签到结果尚未取得权威确认'; break }
                     'no_action' { '暂未找到可确认的签到入口'; break }
                     'unconfirmed' { '签到结果尚未取得权威确认'; break }
+                    'not_available' { '未开放签到结论缺少可审计证据'; break }
                     'error' { '执行发生可恢复异常'; break }
                     'failed' { '执行发生可恢复异常'; break }
                     default { '已安排后台重试' }
@@ -194,7 +200,9 @@ if ($attentionProblems.Count -gt 0) {
     $brief = @($attentionProblems | ForEach-Object {
         $problem = $_
         $hostName = Get-ResultDisplayName $problem
-        $reason = switch ([string]$problem.status) {
+        $reason = if ([string]$problem.failureCode -eq 'two_factor_required') {
+            '需完成一次二次验证以建立可信设备会话'
+        } else { switch ([string]$problem.status) {
             'login_required' { '登录失效' }
             'interactive_challenge' { '需要验证' }
             'managed_challenge_timeout' { '验证超时' }
@@ -202,7 +210,7 @@ if ($attentionProblems.Count -gt 0) {
             'visited' { '结果未确认' }
             'clicked' { '结果未确认' }
             default { Compress-Text $problem.reason 40 }
-        }
+        } }
         "- $hostName：$reason"
     }) -join "`n"
     $summary += "`n$brief"
@@ -217,7 +225,8 @@ $name = if ($notification.name) { [string]$notification.name } else { '浏览器
 $source = if ($notification.source) { [string]$notification.source } else { 'browser-codex' }
 
 $stateParts = @($reportingResults | Sort-Object { Get-LogicalSiteKey $_ } | ForEach-Object {
-    "$(Get-LogicalSiteKey $_)=$([string]$_.status):$([string]$_.retryCause)"
+    $evidenceSource = if ($_.status -eq 'not_available') { [string]$_.evidence.source } else { '' }
+    "$(Get-LogicalSiteKey $_)=$([string]$_.status):$([string]$_.retryCause):$([string]$_.availabilityKind):$evidenceSource"
 })
 $stateMaterial = if ($stateParts.Count -gt 0) { "$status|$reportRunState|$($stateParts -join '|')" } else { "$status|$RunnerStatus" }
 $stateBytes = [System.Text.Encoding]::UTF8.GetBytes($stateMaterial)

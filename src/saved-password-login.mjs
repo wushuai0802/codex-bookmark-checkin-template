@@ -5,6 +5,7 @@ import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { resolveLoginRecoveryUrl } from "./login-recovery.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
+import { classifyPageText } from "./detector.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -33,6 +34,7 @@ try {
   const username = page.locator('input:visible:not([type="password"]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"])').first();
   await username.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   let status = "unsupported";
+  let failureCode = null;
   if (await password.count() >= 1 && await username.count() >= 1) {
     const fieldsFilled = async () => Boolean(
       await username.evaluate((element) => Boolean(element.value))
@@ -75,7 +77,18 @@ try {
           return !visiblePassword || !/(?:^|#\/)login(?:[/?#]|$)/i.test(location.href);
         }, null, { timeout: 15000 }).catch(() => {});
         const stillHasPassword = await page.locator('input[type="password"]:visible').count() > 0;
-        status = stillHasPassword ? "needs_attention" : "logged_in";
+        const finalState = classifyPageText({
+          url: page.url(),
+          title: await page.title(),
+          bodyText: await page.locator("body").innerText().catch(() => ""),
+          hasPassword: stillHasPassword,
+        });
+        if (finalState.failureCode === "two_factor_required") {
+          status = "needs_attention";
+          failureCode = finalState.failureCode;
+        } else {
+          status = stillHasPassword ? "needs_attention" : "logged_in";
+        }
       } else {
         status = "needs_attention";
       }
@@ -87,6 +100,7 @@ try {
   console.log(JSON.stringify({
     origin,
     status,
+    ...(failureCode ? { failureCode, attentionKind: "trusted_device_initialization" } : {}),
     finalUrl: safeLogUrl(page.url()),
     title: await page.title(),
   }, null, 2));

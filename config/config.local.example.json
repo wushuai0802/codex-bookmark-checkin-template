@@ -45,6 +45,8 @@
     }
   },
   "oauthRecoveryAccountBindings": {},
+  "oauthRecoveryTargetOrigins": {},
+  "oauthApiCheckinRules": {},
   "oauthUpstreamProviders": {
     "https://example.com": "GitHub"
   },

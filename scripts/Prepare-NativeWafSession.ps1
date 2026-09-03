@@ -13,6 +13,7 @@ if (-not $AllConfigured -and (-not $PSBoundParameters.ContainsKey('Origins') -or
     throw '必须显式传入非空 -Origins；确需预热全部配置项时请使用 -AllConfigured。'
 }
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $defaultProfilePath = [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir)
 $allowedDataRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
@@ -30,6 +31,12 @@ function Resolve-NativeProfilePath([string]$ConfiguredPath) {
     }
     return $candidate
 }
+function Test-TwoFactorResult($Result) {
+    return $null -ne $Result -and (
+        [string]$Result.failureCode -eq 'two_factor_required' -or
+        ([string]$Result.status -eq 'needs_attention' -and [string]$Result.attentionKind -eq 'trusted_device_initialization')
+    )
+}
 $profilePath = $defaultProfilePath
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 . (Join-Path $PSScriptRoot 'Native-ChromeDebug.ps1')
@@ -41,17 +48,23 @@ $items = @($config.nativeWafPreflightUrls | ForEach-Object {
     $waitSeconds = if ($_ -is [string] -or $null -eq $_.waitSeconds) { 30 } else { [int]$_.waitSeconds }
     $passiveOnly = $_ -isnot [string] -and [bool]$_.passiveOnly
     $trustAsSigned = if ($_ -isnot [string] -and $null -ne $_.trustAsSigned) { [bool]$_.trustAsSigned } else { $true }
+    $windowMode = if ($_ -isnot [string] -and $_.windowMode) { [string]$_.windowMode } else { 'offscreen' }
+    if ($windowMode -notin @('offscreen', 'minimized', 'visible')) { throw "原生 WAF 窗口模式无效：$rawUrl" }
     $itemProfilePath = Resolve-NativeProfilePath $(if ($_ -isnot [string]) { [string]$_.automationUserDataDir } else { '' })
     if ($uri.Scheme -ne 'https' -or -not $uri.Host) { throw "原生 WAF 预热地址无效：$rawUrl" }
     if ($waitSeconds -lt 5 -or $waitSeconds -gt 120) { throw "原生 WAF 等待时间必须为 5 到 120 秒：$rawUrl" }
-    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $trustAsSigned; passiveOnly = $passiveOnly; profilePath = $itemProfilePath }
+    $nativeActionOrigins = @($config.nativeAccessibilityCheckinOrigins | ForEach-Object { [string]$_ })
+    $action = if ($nativeActionOrigins -contains $uri.GetLeftPart([System.UriPartial]::Authority)) { 'checkin' } else { '' }
+    [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds; trustAsSigned = $trustAsSigned; passiveOnly = $passiveOnly; action = $action; windowMode = $windowMode; profilePath = $itemProfilePath }
 })
 $items += @($config.nativeChallengePreflight | ForEach-Object {
     $uri = [uri][string]$_.url
     $waitSeconds = [int]$_.waitSeconds
     $passiveOnly = [bool]$_.passiveOnly
+    $windowMode = if ($_.windowMode) { [string]$_.windowMode } else { 'offscreen' }
     if ($uri.Scheme -ne 'https' -or -not $uri.Host) { throw "原生验证预热地址无效：$($_.url)" }
     if ($waitSeconds -lt 5 -or $waitSeconds -gt 120) { throw "原生验证等待时间必须为 5 到 120 秒：$($_.url)" }
+    if ($windowMode -notin @('offscreen', 'minimized', 'visible')) { throw "原生验证窗口模式无效：$($_.url)" }
     $action = if ($null -eq $_.action) { '' } else { [string]$_.action }
     if ($action -notin @('', 'checkin')) { throw "原生验证动作无效：$action" }
     $reloadOnChallengeAfterSeconds = if ($null -eq $_.reloadOnChallengeAfterSeconds) { 0 } else { [int]$_.reloadOnChallengeAfterSeconds }
@@ -67,6 +80,7 @@ $items += @($config.nativeChallengePreflight | ForEach-Object {
         trustAsSigned = $false
         action = $action
         passiveOnly = $passiveOnly
+        windowMode = $windowMode
         reloadOnChallengeAfterSeconds = $reloadOnChallengeAfterSeconds
         profilePath = Resolve-NativeProfilePath ([string]$_.automationUserDataDir)
     }
@@ -76,17 +90,43 @@ $mainFallbackByOrigin = @{}
 foreach ($entry in @($config.mainChromeFallbackUrls)) {
     $rawUrl = if ($entry -is [string]) { [string]$entry } else { [string]$entry.url }
     $uri = [uri]$rawUrl
+    $sourceOrigin = if ($entry -isnot [string] -and $entry.sourceOrigin) {
+        ([uri][string]$entry.sourceOrigin).GetLeftPart([System.UriPartial]::Authority)
+    } else {
+        $uri.GetLeftPart([System.UriPartial]::Authority)
+    }
     $waitSeconds = if ($entry -is [string] -or $null -eq $entry.waitSeconds) { 90 } else { [int]$entry.waitSeconds }
     if ($uri.Scheme -ne 'https' -or $uri.UserInfo -or -not $uri.Host) { throw "主 Chrome 回退地址无效：$rawUrl" }
+    $sourceUri = [uri]$sourceOrigin
+    if ($sourceUri.Scheme -ne 'https' -or $sourceUri.UserInfo -or -not $sourceUri.Host) { throw "主 Chrome 回退来源无效：$sourceOrigin" }
+    $relatedProperty = $config.relatedCandidateUrls.PSObject.Properties[$sourceOrigin]
+    $relatedOrigins = @(if ($null -ne $relatedProperty) {
+        $relatedProperty.Value | ForEach-Object {
+            ([uri][string]$_).GetLeftPart([System.UriPartial]::Authority)
+        }
+    })
+    if ($uri.GetLeftPart([System.UriPartial]::Authority) -ne $sourceOrigin -and
+        $uri.GetLeftPart([System.UriPartial]::Authority) -notin $relatedOrigins) {
+        throw "主 Chrome 回退目标不在书签关联来源中：$sourceOrigin"
+    }
     if ($waitSeconds -lt 10 -or $waitSeconds -gt 180) { throw "主 Chrome 回退等待时间必须为 10 到 180 秒：$rawUrl" }
-    $entryOrigin = $uri.GetLeftPart([System.UriPartial]::Authority)
+    $entryOrigin = $sourceOrigin
     if ($mainFallbackByOrigin.ContainsKey($entryOrigin)) { throw "主 Chrome 回退来源重复：$entryOrigin" }
-    $mainFallbackByOrigin[$entryOrigin] = [pscustomobject]@{ url = $uri.AbsoluteUri; waitSeconds = $waitSeconds }
+    $mainFallbackByOrigin[$entryOrigin] = [pscustomobject]@{
+        url = $uri.AbsoluteUri
+        waitSeconds = $waitSeconds
+        oauthProvider = if ($entry -isnot [string]) { [string]$entry.oauthProvider } else { '' }
+    }
 }
 
 $configuredItemOrigins = @{}
 foreach ($configuredItem in $items) {
-    $configuredItemOrigins[([uri][string]$configuredItem.url).GetLeftPart([System.UriPartial]::Authority)] = $true
+    $configuredOrigin = if ($configuredItem.sourceOrigin) {
+        [string]$configuredItem.sourceOrigin
+    } else {
+        ([uri][string]$configuredItem.url).GetLeftPart([System.UriPartial]::Authority)
+    }
+    $configuredItemOrigins[$configuredOrigin] = $true
 }
 foreach ($entryOrigin in @($mainFallbackByOrigin.Keys)) {
     if ($configuredItemOrigins.ContainsKey($entryOrigin)) { continue }
@@ -98,13 +138,17 @@ foreach ($entryOrigin in @($mainFallbackByOrigin.Keys)) {
         passiveOnly = $true
         profilePath = $defaultProfilePath
         mainChromeFallbackOnly = $true
+        sourceOrigin = $entryOrigin
     }
 }
 
 if (-not $AllConfigured) {
     $originSet = @{};
     foreach ($origin in $Origins) { $originSet[([uri]$origin).GetLeftPart([System.UriPartial]::Authority)] = $true }
-    $items = @($items | Where-Object { $originSet.ContainsKey(([uri]$_.url).GetLeftPart([System.UriPartial]::Authority)) })
+    $items = @($items | Where-Object {
+        $itemOrigin = if ($_.sourceOrigin) { [string]$_.sourceOrigin } else { ([uri]$_.url).GetLeftPart([System.UriPartial]::Authority) }
+        $originSet.ContainsKey($itemOrigin)
+    })
 }
 
 $knownNoCheckin = @{}
@@ -122,13 +166,20 @@ if ($knownNoCheckin.Count -gt 0 -and (Test-Path -LiteralPath $siteStatePath)) {
             if (-not $knownNoCheckin.ContainsKey($itemOrigin)) { return $true }
             $prior = $siteState.sites.PSObject.Properties[$itemOrigin].Value
             if ($null -eq $prior -or -not $prior.lastConfirmedAt) { return $true }
-            $confirmedStatus = [string]$prior.lastConfirmedStatus
-            if (-not $confirmedStatus -and -not $prior.lastSuccessAt -and [int]$prior.confirmedCount -gt 0) {
-                $confirmedStatus = 'not_available'
+            $nowOffset = [datetimeoffset]::Now
+            $cachedResult = [pscustomobject]@{
+                status = [string]$prior.lastConfirmedStatus
+                availabilityKind = [string]$prior.lastAvailabilityKind
+                evidence = $prior.lastConfirmedEvidence
             }
-            if ($confirmedStatus -ne 'not_available') { return $true }
-            try { return ((Get-Date) - [datetime]$prior.lastConfirmedAt).TotalHours -ge $recheckHours }
-            catch { return $true }
+            if (-not (Test-ConfirmedNotAvailableResult $cachedResult $nowOffset)) { return $true }
+            $stateConfirmedAt = [datetimeoffset]::MinValue
+            $evidenceConfirmedAt = [datetimeoffset]::MinValue
+            if (-not [datetimeoffset]::TryParse([string]$prior.lastConfirmedAt, [ref]$stateConfirmedAt) -or
+                -not [datetimeoffset]::TryParse([string]$prior.lastConfirmedEvidence.confirmedAt, [ref]$evidenceConfirmedAt) -or
+                $stateConfirmedAt -gt $nowOffset.AddMinutes(5) -or
+                $evidenceConfirmedAt -gt $stateConfirmedAt.AddMinutes(5)) { return $true }
+            return ($nowOffset - $evidenceConfirmedAt).TotalHours -ge $recheckHours
         })
     }
     catch { Write-Warning '无法读取近期未开放签到缓存，将继续执行原生预热。' }
@@ -142,30 +193,44 @@ function Get-AutomationChromeProcesses {
     })
 }
 
-foreach ($configuredProfile in @($items.profilePath | Select-Object -Unique)) {
-    $profilePath = [string]$configuredProfile
-    if ((Get-AutomationChromeProcesses).Count -gt 0) {
-        throw "机器人专用 Chrome 配置正被占用，无法执行原生 WAF 预热：$profilePath"
-    }
-}
-$profilePath = $defaultProfilePath
-
 $preflightResults = @()
 
 function Invoke-MainChromeFallbackResult([string]$Origin, [string]$Url, [int]$TimeoutSeconds) {
     if (-not $mainFallbackByOrigin.ContainsKey($Origin)) { return $null }
-    try {
-        $powershellExecutable = (Get-Process -Id $PID).Path
-        $fallbackArguments = @(
-            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-            (Join-Path $PSScriptRoot 'Invoke-MainChromeCheckinAccessibility.ps1'),
-            '-Origin', $Origin, '-Url', $Url, '-TimeoutSeconds', [string]$TimeoutSeconds
-        )
-        $fallbackText = & $powershellExecutable @fallbackArguments 2>$null
-        if ($fallbackText) { return ($fallbackText | ConvertFrom-Json) }
+    $transientWindowFailures = @(
+        'window_not_created',
+        'target_not_loaded',
+        'window_merged',
+        'accessibility_unavailable'
+    )
+    $lastResult = $null
+    for ($fallbackAttempt = 1; $fallbackAttempt -le 2; $fallbackAttempt++) {
+        try {
+            $powershellExecutable = (Get-Process -Id $PID).Path
+            $fallbackArguments = @(
+                '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                (Join-Path $PSScriptRoot 'Invoke-MainChromeCheckinAccessibility.ps1'),
+                '-Origin', $Origin, '-Url', $Url, '-TimeoutSeconds', [string]$TimeoutSeconds
+            )
+            $fallbackText = & $powershellExecutable @fallbackArguments 2>$null
+            if ($fallbackText) { $lastResult = ($fallbackText | ConvertFrom-Json) }
+        }
+        catch {
+            $lastResult = [pscustomobject]@{
+                status = 'unconfirmed'
+                failureCode = 'accessibility_unavailable'
+                reason = '主 Chrome 回退子进程未能返回可解析结果'
+            }
+        }
+        if ($null -ne $lastResult -and (
+            [string]$lastResult.status -in @('signed', 'already_signed', 'login_required', 'needs_attention', 'managed_challenge') -or
+            [string]$lastResult.failureCode -notin $transientWindowFailures
+        )) {
+            return $lastResult
+        }
+        if ($fallbackAttempt -lt 2) { Start-Sleep -Seconds 1 }
     }
-    catch { }
-    return $null
+    return $lastResult
 }
 
 function Close-AutomationChrome {
@@ -194,26 +259,89 @@ function Close-AutomationChrome {
     if ($remaining.Count -gt 0) { throw '机器人专用原生 Chrome 未能退出。' }
 }
 
+function Clear-StaleAutomationChrome {
+    $targets = @(Get-AutomationChromeProcesses)
+    if ($targets.Count -eq 0) { return $true }
+
+    # A native WAF helper is bounded to at most two minutes plus startup and
+    # shutdown time. A profile process older than five minutes can only be a
+    # leftover from an interrupted helper. This remains strictly scoped to the
+    # already validated project data profile and never matches the user's main
+    # Chrome profile.
+    $staleBefore = (Get-Date).AddMinutes(-5)
+    $recent = @($targets | Where-Object {
+        try { [datetime]$_.CreationDate -gt $staleBefore } catch { $true }
+    })
+    if ($recent.Count -gt 0) { return $false }
+    Close-AutomationChrome
+    return @(Get-AutomationChromeProcesses).Count -eq 0
+}
+
+foreach ($configuredProfile in @($items.profilePath | Select-Object -Unique)) {
+    $profilePath = [string]$configuredProfile
+    if ((Get-AutomationChromeProcesses).Count -gt 0 -and -not (Clear-StaleAutomationChrome)) {
+        throw "机器人专用 Chrome 配置正被占用，无法执行原生 WAF 预热：$profilePath"
+    }
+}
+$profilePath = $defaultProfilePath
+
 # Chrome 会节流离屏的非活动标签页，因此逐站打开并正常关闭，确保每个
 # 雷池通行 Cookie 都在独立配置中完成落盘。
 foreach ($item in $items) {
     $profilePath = [string]$item.profilePath
     $url = [string]$item.url
-    $origin = ([uri]$url).GetLeftPart([System.UriPartial]::Authority)
+    $origin = if ($item.sourceOrigin) { [string]$item.sourceOrigin } else { ([uri]$url).GetLeftPart([System.UriPartial]::Authority) }
     $hostName = ([uri]$url).Host
+
+    if ([string]$item.action -eq 'checkin') {
+        $checkinInspection = $null
+        try {
+            $powershellExecutable = (Get-Process -Id $PID).Path
+            $checkinArguments = @(
+                '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1'),
+                '-Origin', $origin, '-Url', $url, '-TimeoutSeconds', [string]([int]$item.waitSeconds),
+                '-UserDataDirOverride', $profilePath, '-WindowMode', [string]$item.windowMode,
+                '-PerformCheckin'
+            )
+            if ($autoClickTurnstile.ContainsKey($origin)) { $checkinArguments += '-AllowCloudflareChallengeClick' }
+            $checkinText = & $powershellExecutable @checkinArguments 2>$null
+            if ($checkinText) { $checkinInspection = $checkinText | ConvertFrom-Json }
+        } catch { $checkinInspection = $null }
+        finally { if ((Get-AutomationChromeProcesses).Count -gt 0) { Close-AutomationChrome } }
+        $confirmed = $null -ne $checkinInspection -and [string]$checkinInspection.status -in @('signed', 'already_signed')
+        $twoFactorRequired = Test-TwoFactorResult $checkinInspection
+        $preflightResults += [pscustomobject]@{
+            origin = $origin
+            url = $url
+            status = if ($confirmed) { [string]$checkinInspection.status } elseif ($twoFactorRequired) { 'needs_attention' } else { 'unconfirmed' }
+            reason = if ($confirmed) { [string]$checkinInspection.reason } elseif ($checkinInspection) { [string]$checkinInspection.reason } else { '无调试原生 Chrome 未取得签到终态' }
+            inspectionStatus = if ($checkinInspection) { [string]$checkinInspection.status } else { 'unavailable' }
+            failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($checkinInspection) { [string]$checkinInspection.failureCode } else { 'accessibility_unavailable' }
+            attentionKind = if ($twoFactorRequired) { 'trusted_device_initialization' } else { $null }
+            retryableLoginRecovery = if ($twoFactorRequired) { $false } else { $null }
+            checkinClickAttempted = if ($checkinInspection) { [bool]$checkinInspection.checkinClickAttempted } else { $false }
+            checkinClicked = if ($checkinInspection) { [bool]$checkinInspection.checkinClicked } else { $false }
+        }
+        continue
+    }
 
     $mainInspection = $null
     if ($mainFallbackByOrigin.ContainsKey($origin)) {
         $fallbackEntry = $mainFallbackByOrigin[$origin]
         $mainInspection = Invoke-MainChromeFallbackResult $origin ([string]$fallbackEntry.url) ([int]$fallbackEntry.waitSeconds)
         $mainConfirmed = $null -ne $mainInspection -and [string]$mainInspection.status -in @('signed', 'already_signed')
-        if ($mainConfirmed -or [bool]$item.mainChromeFallbackOnly) {
+        $mainTwoFactorRequired = Test-TwoFactorResult $mainInspection
+        if ($mainConfirmed -or $mainTwoFactorRequired -or [bool]$item.mainChromeFallbackOnly) {
             $preflightResults += [pscustomobject]@{
                 origin = $origin
                 url = [string]$fallbackEntry.url
-                status = if ($mainConfirmed) { 'signed' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
+                status = if ($mainConfirmed) { 'signed' } elseif ($mainTwoFactorRequired) { 'needs_attention' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
                 reason = if ($mainInspection) { [string]$mainInspection.reason } else { '主 Chrome 回退未取得明确签到终态' }
                 inspectionStatus = if ($mainInspection) { [string]$mainInspection.status } else { 'unavailable' }
+                failureCode = if ($mainInspection) { [string]$mainInspection.failureCode } else { 'accessibility_unavailable' }
+                attentionKind = if ($mainTwoFactorRequired) { 'trusted_device_initialization' } else { $null }
+                retryableLoginRecovery = if ($mainTwoFactorRequired) { $false } else { $null }
             }
             continue
         }
@@ -233,7 +361,7 @@ foreach ($item in $items) {
                     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                     (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1'),
                     '-Origin', $origin, '-Url', $url, '-TimeoutSeconds', [string]([int]$item.waitSeconds),
-                    '-UserDataDirOverride', $profilePath
+                    '-UserDataDirOverride', $profilePath, '-WindowMode', [string]$item.windowMode
                 )
                 if (-not [bool]$item.trustAsSigned) { $plainArguments += '-AllowPreparedSiteBody' }
                 if ($autoClickTurnstile.ContainsKey($origin)) { $plainArguments += '-AllowCloudflareChallengeClick' }
@@ -245,7 +373,7 @@ foreach ($item in $items) {
                         -or ([string]$inspection.status -eq 'ready' `
                             -and [bool]$inspection.inspection.siteBodyLoaded `
                             -and (-not [bool]$item.trustAsSigned -or [bool]$inspection.inspection.attendanceEndpoint))
-                    if ([string]$inspection.status -eq 'login_required') { break }
+                    if ([string]$inspection.status -eq 'login_required' -or (Test-TwoFactorResult $inspection)) { break }
                 }
                 if (-not $passivePrepared -and $plainAttempt -lt 2) { Start-Sleep -Seconds 2 }
             }
@@ -263,6 +391,7 @@ foreach ($item in $items) {
         $explicitlyConfirmed = $null -ne $passiveInspection `
             -and [string]$passiveInspection.status -in @('signed', 'already_signed')
         $preparedOnly = $passivePrepared -and -not $explicitlyConfirmed -and -not [bool]$item.trustAsSigned
+        $passiveTwoFactorRequired = Test-TwoFactorResult $passiveInspection
         $preflightResults += [pscustomobject]@{
             origin = $origin
             url = $url
@@ -270,6 +399,8 @@ foreach ($item in $items) {
                 'signed'
             } elseif ($preparedOnly) {
                 'prepared'
+            } elseif ($passiveTwoFactorRequired) {
+                'needs_attention'
             } elseif ([string]$passiveInspection.status -eq 'managed_challenge') {
                 'managed_challenge'
             } else {
@@ -287,6 +418,9 @@ foreach ($item in $items) {
                 if ($passiveInspection.reason) { [string]$passiveInspection.reason } else { '原生 Chrome 未取得明确签到终态' }
             }
             inspectionStatus = if ($passiveInspection) { [string]$passiveInspection.status } else { 'unconfirmed' }
+            failureCode = if ($passiveTwoFactorRequired) { 'two_factor_required' } elseif ($passiveInspection) { [string]$passiveInspection.failureCode } else { 'accessibility_unavailable' }
+            attentionKind = if ($passiveTwoFactorRequired) { 'trusted_device_initialization' } else { $null }
+            retryableLoginRecovery = if ($passiveTwoFactorRequired) { $false } else { $null }
         }
         continue
     }
@@ -314,12 +448,14 @@ foreach ($item in $items) {
             $inspectionText = & $node $inspector $debugPort $origin ([int]$item.waitSeconds) $inspectionMode ([int]$item.reloadOnChallengeAfterSeconds) 2>$null
             if ($LASTEXITCODE -eq 0 -and $inspectionText) {
                 $inspection = $inspectionText | ConvertFrom-Json
-                $attemptExplicit = [string]$inspection.status -in @('signed', 'already_signed')
+                $attemptExplicit = [string]$inspection.status -in @('signed', 'already_signed') `
+                    -or (Test-ConfirmedNotAvailableResult $inspection)
                 $attemptEndpoint = [bool]$item.trustAsSigned -and [bool]$inspection.siteBodyLoaded `
                     -and [bool]$inspection.attendanceEndpoint -and [string]$inspection.status -eq 'ready'
                 $attemptPrepared = [string]$item.action -ne 'checkin' -and -not [bool]$item.trustAsSigned -and [bool]$inspection.siteBodyLoaded `
-                    -and [string]$inspection.status -notin @('login_required', 'interactive_challenge', 'managed_challenge')
-                if (-not $attemptExplicit -and -not $attemptEndpoint -and -not $attemptPrepared) { $inspection = $null }
+                    -and [string]$inspection.status -notin @('login_required', 'needs_attention', 'interactive_challenge', 'managed_challenge')
+                $attemptAttention = Test-TwoFactorResult $inspection
+                if (-not $attemptExplicit -and -not $attemptEndpoint -and -not $attemptPrepared -and -not $attemptAttention) { $inspection = $null }
             }
         }
         catch { $inspection = $null }
@@ -328,29 +464,41 @@ foreach ($item in $items) {
         }
         if ($null -eq $inspection -and $inspectionAttempt -lt $maximumInspectionAttempts) { Start-Sleep -Seconds 1 }
     }
-    $explicitlyConfirmed = $null -ne $inspection -and [string]$inspection.status -in @('signed', 'already_signed')
+    $explicitlyConfirmed = $null -ne $inspection -and (
+        [string]$inspection.status -in @('signed', 'already_signed') -or
+        (Test-ConfirmedNotAvailableResult $inspection)
+    )
     $endpointConfirmed = [bool]$item.trustAsSigned -and $null -ne $inspection `
         -and [bool]$inspection.siteBodyLoaded -and [bool]$inspection.attendanceEndpoint `
         -and [string]$inspection.status -eq 'ready'
     $prepared = [string]$item.action -ne 'checkin' -and $null -ne $inspection -and [bool]$inspection.siteBodyLoaded `
-        -and [string]$inspection.status -notin @('login_required', 'interactive_challenge', 'managed_challenge')
+        -and [string]$inspection.status -notin @('login_required', 'needs_attention', 'interactive_challenge', 'managed_challenge')
+    $twoFactorRequired = Test-TwoFactorResult $inspection
     if (-not $explicitlyConfirmed -and -not $endpointConfirmed -and -not $prepared) {
         Write-Warning "原生验证未能确认站点正文：$hostName"
     }
     $preflightResults += [pscustomobject]@{
         origin = $origin
         url = $url
-        status = if ($explicitlyConfirmed -or $endpointConfirmed) { 'signed' } elseif ($prepared) { 'prepared' } else { 'unconfirmed' }
+        status = if ($explicitlyConfirmed) { [string]$inspection.status } elseif ($endpointConfirmed) { 'signed' } elseif ($prepared) { 'prepared' } elseif ($twoFactorRequired) { 'needs_attention' } else { 'unconfirmed' }
         reason = if ($explicitlyConfirmed) {
-            '原生 Chrome 已通过 WAF，并由页面明确确认今天已签到'
+            if ([string]$inspection.status -eq 'not_available') { [string]$inspection.reason }
+            else { '原生 Chrome 已通过 WAF，并由页面明确确认今天已签到' }
         } elseif ($endpointConfirmed) {
             '原生 Chrome 已通过 WAF，并确认签到端点完整加载'
         } elseif ($prepared) {
             '原生 Chrome 已完成验证预热，等待自动化复查'
+        } elseif ($twoFactorRequired) {
+            '站点要求完成异地登录 2FA 验证'
         } else {
             '原生验证页面未能确认签到结果'
         }
         inspectionStatus = if ($null -ne $inspection) { [string]$inspection.status } else { 'unavailable' }
+        failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($inspection) { [string]$inspection.failureCode } else { 'accessibility_unavailable' }
+        attentionKind = if ($twoFactorRequired) { 'trusted_device_initialization' } else { $null }
+        retryableLoginRecovery = if ($twoFactorRequired) { $false } else { $null }
+        availabilityKind = if ($explicitlyConfirmed) { [string]$inspection.availabilityKind } else { $null }
+        evidence = if ($explicitlyConfirmed) { $inspection.evidence } else { $null }
     }
 }
 

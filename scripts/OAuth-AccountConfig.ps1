@@ -1,4 +1,4 @@
-function Get-OAuthMapValue([object]$Map, [string]$Key) {
+﻿function Get-OAuthMapValue([object]$Map, [string]$Key) {
     if ($null -eq $Map) { return $null }
     $property = $Map.PSObject.Properties[$Key]
     if ($null -eq $property) { return $null }
@@ -22,7 +22,7 @@ function Assert-OAuthProfileInData([string]$Root, [string]$ProfilePath, [string]
 }
 
 function Resolve-OAuthAccountConfiguration([object]$Config, [string]$Root, [string]$AccountKey) {
-    if ([string]::IsNullOrWhiteSpace($AccountKey) -or $AccountKey.Length -gt 80 -or $AccountKey -match '[\r\n]') {
+    if ([string]::IsNullOrWhiteSpace($AccountKey) -or $AccountKey.Length -gt 80 -or $AccountKey -notmatch '^[A-Za-z0-9._-]+$') {
         throw 'OAuth accountKey 无效。'
     }
     $globalProfile = Resolve-OAuthProfilePath $Root ([string]$Config.automationUserDataDir)

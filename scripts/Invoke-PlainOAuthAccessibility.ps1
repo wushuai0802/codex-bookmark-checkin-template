@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
     [Parameter(Mandatory = $true)][string]$Provider,
@@ -32,8 +32,7 @@ if ([string]::IsNullOrWhiteSpace($Provider) -or $Provider.Length -gt 40 -or $Pro
     throw '后台 OAuth 提供商无效。'
 }
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
+. (Join-Path $PSScriptRoot 'Safe-UIAutomation.ps1')
 
 function Get-ProfileChromeProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
@@ -110,25 +109,7 @@ function Get-UniqueProviderControl([string[]]$Names) {
 }
 
 function Invoke-AccessibilityControl([System.Windows.Automation.AutomationElement]$Element) {
-    if ($null -eq $Element) { return $false }
-    try {
-        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $pattern.Invoke()
-        return $true
-    }
-    catch { }
-    try {
-        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-        if ($pattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { $pattern.Toggle() }
-        return $true
-    }
-    catch { }
-    try {
-        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
-        $pattern.DoDefaultAction()
-        return $true
-    }
-    catch { return $false }
+    return Invoke-SafeAutomationControl -Element $Element -AllowedPatterns @('Invoke', 'Toggle')
 }
 
 function Get-PrivateCurrentUri {

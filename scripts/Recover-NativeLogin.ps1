@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
-    [string]$LoginUrl
+    [string]$LoginUrl,
+    [string]$UserDataDirOverride
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,7 +18,12 @@ if ($targetUrl.GetLeftPart([System.UriPartial]::Authority) -ne $originUri.GetLef
     throw '原生登录恢复地址不属于目标站点。'
 }
 
-$profilePath = [string]$config.automationUserDataDir
+$allowedDataRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
+$allowedDataPrefix = $allowedDataRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$profilePath = [System.IO.Path]::GetFullPath($(if ($UserDataDirOverride) { $UserDataDirOverride } else { [string]$config.automationUserDataDir }))
+if (-not $profilePath.StartsWith($allowedDataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "机器人 Chrome 目录必须位于 $allowedDataRoot"
+}
 $existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like "*$profilePath*" })
 if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法恢复登录。' }
 
@@ -30,7 +36,7 @@ try {
     # still never reads or prints the saved username/password.
     [void](Reset-NativeChromeDebugPort $profilePath)
     $debugPort = Get-NativeChromeDebugPort
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri)
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri) -UserDataDirOverride $profilePath
     $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
     $loginSucceeded = $false
     for ($loginAttempt = 1; $loginAttempt -le 3 -and -not $loginSucceeded; $loginAttempt++) {

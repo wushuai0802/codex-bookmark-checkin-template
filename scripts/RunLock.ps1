@@ -1,4 +1,4 @@
-function Remove-RunLockOwnedByProcess {
+﻿function Remove-RunLockOwnedByProcess {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$LockPath,

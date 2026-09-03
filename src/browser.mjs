@@ -9,13 +9,14 @@ import { solveU2VisualChallenge } from "./u2-vision.mjs";
 import { resolveQaByWebSearch } from "./qa-solver.mjs";
 import { withRetrySchedule } from "./retry-policy.mjs";
 import { tryOAuthReloginCheckinStatus } from "./oauth-relogin-checkin.mjs";
+import { tryOAuthApiCheckin } from "./oauth-api-checkin.mjs";
 import { tryNewApiCaptchaCheckin, tryNewApiSignIn } from "./new-api-signin.mjs";
+import { isTerminalResult } from "./result-contract.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
 const rootDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-const COMPLETED = new Set(["signed", "already_signed", "not_available"]);
 const CHALLENGE = new Set(["interactive_challenge", "managed_challenge_timeout"]);
 const UNCONFIRMED = new Set(["visited", "clicked"]);
 const CANDIDATE_STATUS_PRIORITY = new Map([
@@ -43,8 +44,12 @@ function sleep(ms) {
 export function preferCandidateResult(current, candidate) {
   if (!candidate) return current;
   if (!current) return candidate;
-  const currentPriority = CANDIDATE_STATUS_PRIORITY.get(current.status) ?? 0;
-  const candidatePriority = CANDIDATE_STATUS_PRIORITY.get(candidate.status) ?? 0;
+  const currentPriority = current.status === "not_available" && !isTerminalResult(current)
+    ? 0
+    : CANDIDATE_STATUS_PRIORITY.get(current.status) ?? 0;
+  const candidatePriority = candidate.status === "not_available" && !isTerminalResult(candidate)
+    ? 0
+    : CANDIDATE_STATUS_PRIORITY.get(candidate.status) ?? 0;
   return candidatePriority > currentPriority ? candidate : current;
 }
 
@@ -55,6 +60,12 @@ export function configuredTargetSkip(target, config = {}) {
     reason: "已按配置取消该站签到任务",
     url: target.origin,
     disabledByConfig: true,
+    availabilityKind: "task_disabled",
+    evidence: {
+      source: "configuration",
+      authoritative: true,
+      confirmedAt: new Date().toISOString(),
+    },
   };
 }
 
@@ -186,7 +197,17 @@ export async function tryBmapiCheckinStatus(page, activeOrigin, successStatus = 
   if (!response?.ok || response.body?.code !== 0 || !response.body?.data) return null;
   const data = response.body.data;
   if (data.enabled === false) {
-    return { status: "not_available", reason: "斑马 API 签到接口确认未启用" };
+    return {
+      status: "not_available",
+      reason: "斑马 API 签到接口确认未启用",
+      availabilityKind: "feature_disabled",
+      evidence: {
+        source: "bmapi_checkin_status",
+        outcome: "enabled_false",
+        authoritative: true,
+        confirmedAt: new Date().toISOString(),
+      },
+    };
   }
   if (data.checked_in === true) {
     return {
@@ -272,6 +293,30 @@ async function classifyManualAttention(page, state, activeOrigin, config) {
     return { status: "needs_attention", reason: "复杂视觉 hCaptcha 需要当次确认" };
   }
   return acceptConfiguredTerms(page, state, activeOrigin, config);
+}
+
+// A click is only an attempt.  Keep polling the same page until a stable
+// business-level success signal appears.  This closes the historical gap where
+// a button click or a visited /attendance.php URL was reported as completion.
+export async function waitForAuthoritativeCheckin(page, activeOrigin, config = {}) {
+  const configured = Number(config.checkinConfirmationWaitMs);
+  const waitMs = Math.max(3000, Math.min(30000, Number.isFinite(configured) ? configured : 15000));
+  const deadline = Date.now() + waitMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    const bmapi = await tryBmapiCheckinStatus(page, activeOrigin, "signed");
+    if (bmapi && bmapi.status !== "ready") return bmapi;
+    last = await snapshotStateAfterNavigation(page);
+    if (last && ["signed", "already_signed", "not_available", "login_required", "interactive_challenge", "managed_challenge_timeout", "deferred"].includes(last.status)) {
+      return last;
+    }
+    await sleep(500);
+  }
+  return {
+    status: "unconfirmed",
+    reason: "签到动作已提交，但在限定时间内未取得页面或接口的权威成功回读",
+    ...(last ? { lastObservedStatus: last.status } : {}),
+  };
 }
 
 export async function dismissBlockingModal(page, config) {
@@ -698,7 +743,17 @@ export async function tryNewApiCheckin(page) {
     const message = String(statusBody?.message || "");
     if (!statusBody?.success) {
       if (/未启用|未啟用|not enabled/i.test(message)) {
-        return { status: "not_available", reason: "站点签到功能未启用" };
+        return {
+          status: "not_available",
+          reason: "站点签到功能未启用",
+          availabilityKind: "feature_disabled",
+          evidence: {
+            source: "new_api_checkin_status",
+            outcome: "message_not_enabled",
+            authoritative: true,
+            confirmedAt: new Date().toISOString(),
+          },
+        };
       }
       if (/turnstile|captcha|人机|人機/i.test(message)) {
         return { status: "interactive_challenge", reason: "站点签到接口要求人机验证" };
@@ -735,7 +790,17 @@ export async function tryNewApiCheckin(page) {
       return { status: "interactive_challenge", reason: "站点签到接口要求人机验证" };
     }
     if (/未启用|未啟用|not enabled/i.test(checkinMessage)) {
-      return { status: "not_available", reason: "站点签到功能未启用" };
+      return {
+        status: "not_available",
+        reason: "站点签到功能未启用",
+        availabilityKind: "feature_disabled",
+        evidence: {
+          source: "new_api_checkin_action",
+          outcome: "message_not_enabled",
+          authoritative: true,
+          confirmedAt: new Date().toISOString(),
+        },
+      };
     }
     return null;
   });
@@ -795,8 +860,11 @@ async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config) 
     };
   }
   return {
-    status: "interactive_challenge",
+    status: "needs_attention",
     reason: "HDDolby 要求完成两步验证，且首页未显示今日签到",
+    failureCode: "two_factor_required",
+    attentionKind: "trusted_device_initialization",
+    retryableLoginRecovery: false,
   };
 }
 
@@ -903,6 +971,9 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
   if (initialBmapiStatus && initialBmapiStatus.status !== "ready") {
     return { ...initialBmapiStatus, url: safeLogUrl(page.url()) };
   }
+
+  const oauthApiStatus = await tryOAuthApiCheckin(page, activeOrigin, config);
+  if (oauthApiStatus) return { ...oauthApiStatus, url: safeLogUrl(page.url()) };
 
   const newApiSignInStatus = await tryNewApiSignIn(page, activeOrigin, config);
   if (newApiSignInStatus) return { ...newApiSignInStatus, url: safeLogUrl(page.url()) };
@@ -1035,18 +1106,26 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
       if (["signed", "already_signed", "login_required", "needs_attention", "interactive_challenge", "managed_challenge_timeout", "deferred"].includes(state.status)) {
         return { ...state, action: `${action.text} → ${secondAction.text}`, url: safeLogUrl(page.url()) };
       }
-      return {
-        status: "clicked",
-        reason: "已依次点击明确的签到流程控件",
-        action: `${action.text} → ${secondAction.text}`,
-        url: safeLogUrl(page.url()),
-      };
+      const confirmed = await waitForAuthoritativeCheckin(page, activeOrigin, config);
+      return { ...confirmed, action: `${action.text} → ${secondAction.text}`, url: safeLogUrl(page.url()) };
     }
-    return { status: "clicked", reason: "已点击明确的签到控件", action: action.text, url: safeLogUrl(page.url()) };
+    const confirmed = await waitForAuthoritativeCheckin(page, activeOrigin, config);
+    return { ...confirmed, action: action.text, url: safeLogUrl(page.url()) };
   }
 
   if (/(attendance|check[-_]?in|showup)\.(php|asp)|\/(attendance|check[-_]?in|showup)(?:[/?#]|$)/i.test(activeUrl)) {
-    return { status: "visited", reason: "已访问打开即签到的网址", url: safeLogUrl(page.url()) };
+    // Visiting an attendance URL is an action attempt, not proof of success.
+    // Some trackers submit the check-in on page load, while others require a
+    // hidden form/API call; only page text or an authoritative endpoint may
+    // close the target as signed/already_signed.
+    const confirmed = await waitForAuthoritativeCheckin(page, activeOrigin, config);
+    return {
+      ...confirmed,
+      reason: confirmed.status === "unconfirmed"
+        ? "已打开签到页，但未取得页面或接口的权威成功回读"
+        : confirmed.reason,
+      url: safeLogUrl(page.url()),
+    };
   }
 
   if (useNewApiCheckin) {
@@ -1054,7 +1133,12 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     if (apiResult) return { ...apiResult, url: safeLogUrl(page.url()) };
   }
   if ((config.knownNoCheckinFeatureOrigins ?? []).includes(activeOrigin)) {
-    return { status: "not_available", reason: "站点当前版本未提供签到功能", url: safeLogUrl(page.url()) };
+    return {
+      status: "no_action",
+      reason: "配置标记该站可能未开放签到，但本次未取得页面或接口证据",
+      failureCode: "not_available_evidence_missing",
+      url: safeLogUrl(page.url()),
+    };
   }
 
   return { status: "no_action", reason: "未发现明确签到控件", url: safeLogUrl(page.url()) };
@@ -1184,13 +1268,13 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         // public/API URL may require login while another dedicated check-in
         // URL already has a valid session, so only a completed result should
         // prevent trying the remaining candidates.
-        if (COMPLETED.has(result.status)) break;
+        if (isTerminalResult(result)) break;
       }
 
       const effectiveResult = preferCandidateResult(lastResult, attemptResult);
       if (effectiveResult && !CHALLENGE.has(effectiveResult.status)
         && (!UNCONFIRMED.has(effectiveResult.status) || attempt === config.retryCount)) {
-        if (config.failureScreenshots && !COMPLETED.has(effectiveResult.status) && effectiveResult.status !== "login_required") {
+        if (config.failureScreenshots && !isTerminalResult(effectiveResult) && effectiveResult.status !== "login_required") {
           effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
         }
         return { ...effectiveResult, attempt: attempt + 1, candidateHistory };

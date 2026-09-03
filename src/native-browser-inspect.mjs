@@ -131,7 +131,17 @@ async function getBmapiCheckinState(page) {
   }).catch(() => null);
   if (!response?.ok || response.body?.code !== 0 || !response.body?.data) return null;
   if (response.body.data.enabled === false) {
-    return { status: "not_available", reason: "斑马 API 签到接口确认未启用" };
+    return {
+      status: "not_available",
+      reason: "斑马 API 签到接口确认未启用",
+      availabilityKind: "feature_disabled",
+      evidence: {
+        source: "bmapi_checkin_status",
+        outcome: "enabled_false",
+        authoritative: true,
+        confirmedAt: new Date().toISOString(),
+      },
+    };
   }
   if (response.body.data.checked_in === true) {
     return { status: "signed", reason: "原生 Chrome 完成斑马签到，API 接口已确认" };

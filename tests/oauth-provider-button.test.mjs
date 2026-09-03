@@ -39,9 +39,10 @@ test("LinuxDO OAuth can fall back to the provider's official authorize endpoint"
 test("OAuth recovery reuses authoritative daily API evidence before looking for a provider button", async () => {
   const source = await fs.readFile(new URL("../src/oauth-login.mjs", import.meta.url), "utf8");
   const evidenceCheck = source.indexOf("let existingDailyCheckin = await tryNewApiSignIn");
-  const providerLookup = source.indexOf("let providerButton = await findVisibleProviderButton");
+  const providerLookup = source.indexOf("let providerButton = null;");
   assert.ok(evidenceCheck > 0 && evidenceCheck < providerLookup);
   assert.match(source, /reusedExistingDailyEvidence: true/);
+  assert.match(source, /existingDailyCheckin = await tryOAuthApiCheckin\(page, origin, config\)/);
   assert.match(source, /existingDailyCheckin = await tryNewApiCheckin\(page\)/);
   assert.match(source, /dailyCheckin = await tryNewApiCheckin\(page\)/);
 });

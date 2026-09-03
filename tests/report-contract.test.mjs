@@ -99,8 +99,16 @@ test("同一逻辑站点的两个取消任务只统计一次", async () => {
     processedTotal: 2,
     isComplete: true,
     results: [
-      { origin: "https://checkin.example", status: "not_available", disabledByConfig: true },
-      { origin: "https://console.example", status: "not_available", disabledByConfig: true },
+      {
+        origin: "https://checkin.example", status: "not_available", disabledByConfig: true,
+        availabilityKind: "task_disabled",
+        evidence: { source: "configuration", authoritative: true, confirmedAt: "2026-07-23T00:00:00Z" },
+      },
+      {
+        origin: "https://console.example", status: "not_available", disabledByConfig: true,
+        availabilityKind: "task_disabled",
+        evidence: { source: "configuration", authoritative: true, confirmedAt: "2026-07-23T00:00:00Z" },
+      },
     ],
   }, "completed", {
     logicalCheckinGroups: {
@@ -259,6 +267,59 @@ test("真正需要登录或交互验证时仍明确要求人工处理", async ()
   }
 });
 
+test("无证据的未开放签到不能伪装成业务完成", async () => {
+  const report = await previewReport({
+    runId: "20260903-invalid-not-available",
+    runState: "final",
+    plannedTotal: 1,
+    processedTotal: 1,
+    isComplete: true,
+    results: [{ origin: "https://invalid.example.test", status: "not_available" }],
+  });
+  assert.equal(report.businessComplete, false);
+  assert.equal(report.problemCount, 1);
+  assert.equal(report.status, "retrying");
+  assert.match(report.summary, /待自动重试 1 个：/);
+});
+
+test("带账号身份的无效未开放结果显示重试而不是跳过", async () => {
+  const report = await previewReport({
+    runId: "20260903-invalid-account-not-available",
+    runState: "final",
+    plannedTotal: 1,
+    processedTotal: 1,
+    isComplete: true,
+    results: [{
+      origin: "https://invalid-account.example.test",
+      accountKey: "primary",
+      accountLabel: "Primary",
+      status: "not_available",
+    }],
+  });
+  assert.equal(report.status, "retrying");
+  assert.match(report.summary, /🔄 .*Primary/);
+  assert.doesNotMatch(report.summary, /⏭️ .*Primary/);
+});
+
+test("二次验证报告明确提示可信设备初始化", async () => {
+  const report = await previewReport({
+    runId: "20260903-two-factor",
+    runState: "final",
+    plannedTotal: 1,
+    processedTotal: 1,
+    isComplete: true,
+    results: [{
+      origin: "https://two-factor.example.test",
+      status: "needs_attention",
+      failureCode: "two_factor_required",
+      reason: "2FA",
+    }],
+  });
+  assert.equal(report.status, "needs_attention");
+  assert.match(report.summary, /建立可信设备会话/);
+  assert.doesNotMatch(report.summary, /待自动重试/);
+});
+
 test("当天已停止重试的维护站点不计入未开放签到", async () => {
   const report = await previewReport({
     runId: "20260723-120004-settled",
@@ -270,6 +331,8 @@ test("当天已停止重试的维护站点不计入未开放签到", async () =>
       origin: "https://maintenance.example.test",
       status: "not_available",
       temporarilyUnavailable: true,
+      availabilityKind: "temporary_unavailable",
+      evidence: { source: "operator_confirmation", authoritative: true, confirmedAt: "2026-07-23T00:00:00Z" },
       reason: "站点维护或网络不可用，今日停止重试，明日自动恢复",
     }],
   });

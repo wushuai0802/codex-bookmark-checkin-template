@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 . (Join-Path $PSScriptRoot 'RunLock.ps1')
+. (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $reporterScript = Join-Path $PSScriptRoot 'Submit-UnifiedCheckinReport.ps1'
 $outboxScript = Join-Path $PSScriptRoot 'Invoke-CheckinNotificationOutbox.ps1'
 $runLockPath = Join-Path $root 'tmp\run.lock'
@@ -102,7 +103,7 @@ function Test-HasImmediateRetry($Report, [datetime]$RetryAt, [string[]]$Selected
     }
     $retryOffset = [datetimeoffset]$RetryAt
     if (-not (Test-IsCompleteFinalReport $Report)) { return $true }
-    $unresolved = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
+    $unresolved = @($results | Where-Object { -not (Test-TerminalCheckinResult $_) })
     if ($unresolved.Count -eq 0) { return $false }
     foreach ($result in $unresolved) {
         if ([string]$result.status -eq 'needs_attention' -or [string]$result.retryCause -eq 'invalid_credential') { continue }
@@ -182,7 +183,7 @@ try {
         $arguments += @('--origins', ($selectedOrigins -join ','))
     }
     foreach ($accountKey in $selectedAccountKeys) {
-        if ($accountKey.Length -gt 80 -or $accountKey -match '[\r\n,]') {
+        if ($accountKey.Length -gt 80 -or $accountKey -notmatch '^[A-Za-z0-9._-]+$') {
             throw "定向续跑 accountKey 无效：$accountKey"
         }
     }
@@ -208,6 +209,23 @@ try {
             }
         }
         $arguments += @('--temporary-unavailable-origins', ($temporaryUnavailable -join ','))
+    }
+
+    if ($null -ne $resumeCandidate) {
+        $currentPlanText = & $node (Join-Path $root 'src\current-plan.mjs') | Select-Object -Last 1
+        if ($LASTEXITCODE -ne 0) { throw '无法校验当前账号与登录计划。' }
+        try { $currentPlan = $currentPlanText | ConvertFrom-Json }
+        catch { throw '当前账号与登录计划没有返回有效 JSON。' }
+        $currentFingerprint = [string]$currentPlan.planFingerprint
+        $resumeFingerprint = [string]$resumeCandidate.Report.bookmarkSummary.planFingerprint
+        if (-not $currentFingerprint -or -not $resumeFingerprint -or $currentFingerprint -ne $resumeFingerprint) {
+            $exactResumeRequired = $selectedOrigins.Count -gt 0 `
+                -or $selectedAccountKeys.Count -gt 0 `
+                -or $manualConfirmed.Count -gt 0 `
+                -or $temporaryUnavailable.Count -gt 0
+            if ($exactResumeRequired) { throw '续跑报告与当前账号或登录计划不一致，必须先完整运行一次。' }
+            $resumeCandidate = $null
+        }
     }
 
     $shouldSyncSavedLogins = -not $DryRun `
@@ -244,7 +262,7 @@ try {
                 $preflightOrigins = @()
                 if ($null -ne $resumeCandidate) {
                     $preflightResults = @($resumeCandidate.Report.results | Where-Object {
-                        ($_.status -notin @('signed', 'already_signed', 'not_available')) `
+                        (-not (Test-TerminalCheckinResult $_)) `
                             -and ($manualConfirmed -notcontains [string]$_.origin) `
                             -and ($temporaryUnavailable -notcontains [string]$_.origin)
                     })

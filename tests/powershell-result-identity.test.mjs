@@ -28,10 +28,12 @@ test("health 与 scheduler 都使用统一的规范身份函数", async () => {
   const { readFile } = await import("node:fs/promises");
   const scheduler = await readFile(path.join(root, "scripts", "Start-UserScheduler.ps1"), "utf8");
   const health = await readFile(path.join(root, "scripts", "Test-CheckinHealth.ps1"), "utf8");
+  const classification = await readFile(path.join(root, "scripts", "HealthReportClassification.ps1"), "utf8");
   for (const source of [scheduler, health]) {
     assert.match(source, /ResultIdentity\.ps1/);
     assert.match(source, /Get-CanonicalResultIdentity/);
   }
   assert.match(health, /\$latestResultIdentities\.Count\s+-eq\s+\$latestResultIdentityValues\.Count/);
-  assert.match(health, /Compare-Object\s+-ReferenceObject\s+\$currentPlanIdentities\s+-DifferenceObject\s+\$latestResultIdentities/);
+  assert.match(health, /Test-CheckinPlanMatch/);
+  assert.match(classification, /Compare-Object\s+-ReferenceObject\s+\$CurrentPlanIdentities\s+-DifferenceObject\s+\$LatestResultIdentities/);
 });

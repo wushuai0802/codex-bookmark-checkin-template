@@ -235,7 +235,7 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(health, /latestMatchesCurrentPlan/);
   assert.match(health, /currentPlannedTotal/);
   assert.match(health, /latestPlannedTotal/);
-  assert.match(health, /Compare-Object -ReferenceObject \$currentPlanIdentities -DifferenceObject \$latestPlanIdentities/);
+  assert.match(health, /Test-CheckinPlanMatch/);
   assert.match(health, /schedulerStartupShortcutPresent/);
   assert.match(health, /schemaVersion\s*=\s*1/);
   assert.match(health, /failedChecks/);

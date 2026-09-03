@@ -14,6 +14,12 @@ function requiredText(value, field, maximum = 120) {
   return text;
 }
 
+function requiredAccountKey(value, field) {
+  const accountKey = requiredText(value, field, 80);
+  if (!/^[A-Za-z0-9._-]+$/.test(accountKey)) throw new Error(`补充 OAuth 账号 ${field} 无效`);
+  return accountKey;
+}
+
 export function configuredOAuthAccounts(config = {}, rootDirectory) {
   const dataRoot = path.resolve(rootDirectory, "data");
   const rawAccounts = config.supplementalOAuthAccounts ?? [];
@@ -59,7 +65,7 @@ export function configuredOAuthAccounts(config = {}, rootDirectory) {
       accountIds.add(accountIdIdentity);
     }
     if (raw?.automationUserDataDir != null && String(raw.automationUserDataDir).trim()) {
-      const isolatedAccountKey = requiredText(accountKey, `主账号 ${configuredOrigin} accountKey`, 80);
+      const isolatedAccountKey = requiredAccountKey(accountKey, `主账号 ${configuredOrigin} accountKey`);
       const isolatedAccountId = requiredText(accountId, `主账号 ${configuredOrigin} accountId`, 80);
       const accountLabel = authoritativeAccountDisplay(requiredText(
         raw?.accountLabel ?? raw?.displayName ?? isolatedAccountId,
@@ -103,7 +109,7 @@ export function configuredOAuthAccounts(config = {}, rootDirectory) {
     }
   }
   const supplementalAccounts = rawAccounts.map((raw, index) => {
-    const accountKey = requiredText(raw?.accountKey, `第 ${index + 1} 项 accountKey`, 80);
+    const accountKey = requiredAccountKey(raw?.accountKey, `第 ${index + 1} 项 accountKey`);
     const accountId = requiredText(raw?.accountId, `第 ${index + 1} 项 accountId`, 80);
     const accountLabel = authoritativeAccountDisplay(
       requiredText(raw?.accountLabel ?? accountId, `第 ${index + 1} 项 accountLabel`, 120),

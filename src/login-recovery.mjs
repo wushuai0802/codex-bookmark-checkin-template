@@ -25,6 +25,7 @@ const LOGIN_FAILURE_CODES = new Set([
   "oauth_recovery_failed",
   "oauth_rate_limited",
   "oauth_upstream_unavailable",
+  "two_factor_required",
 ]);
 
 const RETRYABLE_LOGIN_FAILURE_CODES = new Set([
@@ -108,6 +109,7 @@ export function loginHelperOutcome(text, fallback = "failed") {
     oauth_recovery_failed: "OAuth 自动恢复未完成",
     oauth_rate_limited: "OAuth 上游请求过多，需退避后重试",
     oauth_upstream_unavailable: "OAuth 上游回调服务暂时不可用",
+    two_factor_required: "站点要求完成异地登录 2FA 验证",
   };
   const dailyCheckin = status === "logged_in" ? safeTerminalDailyCheckin(value?.dailyCheckin) : null;
   const diagnosticCode = ["invalid_credential", "credential_missing", "no_saved_credential"].includes(status)

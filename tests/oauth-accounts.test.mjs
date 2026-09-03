@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 import {
   accountMetadataForOrigin,
   compatiblePriorResult,
+  planFingerprint,
   resultIdentity,
+  resumePlanMatches,
 } from "../src/result-identity.mjs";
 import {
   configuredOAuthAccounts,
@@ -97,14 +99,75 @@ test("旧版无账号结果只迁移到主书签账号", () => {
 });
 
 test("主账号展示身份与登录校验身份必须一致", () => {
-  assert.deepEqual(accountMetadataForOrigin(origin, configWith([])), {
+  const metadata = accountMetadataForOrigin(origin, configWith([]));
+  assert.deepEqual({
+    accountKey: metadata.accountKey,
+    accountId: metadata.accountId,
+    accountLabel: metadata.accountLabel,
+  }, {
     accountKey: "primary",
     accountId: "100",
     accountLabel: "Primary",
   });
+  assert.match(metadata.executionBinding, /^[a-f0-9]{64}$/);
+  assert.equal(metadata.loginUrl, undefined);
+  assert.equal(metadata.automationUserDataDir, undefined);
   assert.throws(() => accountMetadataForOrigin(origin, {
     ...configWith([]), oauthExpectedAccountIds: { [origin]: "999" },
   }), /身份与预期账号不一致/);
+});
+
+test("执行绑定任一变化都会改变计划指纹且报告元数据不暴露原始路径", () => {
+  const base = {
+    origin,
+    accountKey: "primary",
+    accountId: "100",
+    provider: "LinuxDO",
+    upstreamProvider: "Google",
+    loginUrl: `${origin}/login`,
+    automationUserDataDir: "D:/private/accounts/primary",
+  };
+  const baseline = planFingerprint([base]);
+  for (const [field, value] of [
+    ["accountId", "101"],
+    ["provider", "GitHub"],
+    ["upstreamProvider", "GitHub"],
+    ["loginUrl", `${origin}/oauth/login`],
+    ["automationUserDataDir", "D:/private/accounts/other"],
+  ]) {
+    assert.notEqual(planFingerprint([{ ...base, [field]: value }]), baseline, field);
+  }
+
+  const config = configWith([]);
+  config.oauthAccountIdentities[origin].automationUserDataDir = "data/accounts/primary/chrome-user-data";
+  const metadata = accountMetadataForOrigin(origin, config);
+  assert.doesNotMatch(JSON.stringify(metadata), /oauth\/login|chrome-user-data|automationUserDataDir|loginUrl/);
+  assert.equal(planFingerprint([{ origin, ...metadata }]), planFingerprint([{
+    origin,
+    accountKey: "primary",
+    accountId: "100",
+    provider: "GitHub",
+    upstreamProvider: "GitHub",
+    loginUrl: `${origin}/oauth/login`,
+    automationUserDataDir: "data/accounts/primary/chrome-user-data",
+  }]));
+});
+
+test("续跑报告必须与当前完整执行计划指纹一致", () => {
+  const fingerprint = planFingerprint([{ origin, candidates: [`${origin}/dashboard`] }]);
+  const report = { bookmarkSummary: { planFingerprint: fingerprint } };
+  assert.equal(resumePlanMatches(report, fingerprint), true);
+  assert.equal(resumePlanMatches(report, planFingerprint([{ origin, accountId: "changed" }])), false);
+  assert.equal(resumePlanMatches({ bookmarkSummary: {} }, fingerprint), false);
+});
+
+test("JS 配置拒绝可能破坏身份编码的 accountKey", () => {
+  const invalidPrimary = configWith([]);
+  invalidPrimary.oauthAccountIdentities[origin].accountKey = "bad/key";
+  assert.throws(() => accountMetadataForOrigin(origin, invalidPrimary), /accountKey 无效/);
+  assert.throws(() => configuredSupplementalOAuthAccounts(configWith([
+    supplemental({ accountKey: "bad key" }),
+  ]), root), /accountKey 无效/);
 });
 
 test("补充账号拒绝主账号碰撞、重复账号 ID 和重复浏览器目录", () => {
@@ -372,6 +435,10 @@ test("PowerShell OAuth 绑定优先采用主身份内联登录元组", async () 
   assert.equal(binding.LoginUrl, `${origin}/inline-login`);
 });
 
+test("PowerShell OAuth 绑定拒绝非法 accountKey", async () => {
+  await assert.rejects(resolvePowerShellBinding(configWith([]), "bad/key"), /accountKey 无效/);
+});
+
 test("同域多账号支持按 accountKey 精确续跑并绕过该账号冷却", async () => {
   const source = await fs.readFile(path.join(root, "src", "index.mjs"), "utf8");
   assert.match(source, /process\.argv\.indexOf\("--account-keys"\)/);
@@ -379,7 +446,7 @@ test("同域多账号支持按 accountKey 精确续跑并绕过该账号冷却",
   assert.match(source, /const explicitSelection = Boolean\(selectedOrigins \|\| selectedAccountKeys\)/);
   assert.match(source, /selectedAccountKeys\.has\(String\(target\.accountKey \|\| ""\)\.trim\(\)\)/);
   assert.match(source, /定向续跑账号不存在/);
-  assert.match(source, /explicitSelection && prior && TERMINAL_STATUSES\.has\(prior\.status\)/);
+  assert.match(source, /explicitSelection && prior && isTerminalResult\(prior\)/);
 });
 
 test("重新启用的站点不会复用旧的配置取消终态", async () => {
@@ -397,7 +464,12 @@ test("PowerShell wrapper 支持 HTTPS 来源级定向续跑", async () => {
   assert.match(source, /Test-HasImmediateRetry\(\$Report, \[datetime\]\$RetryAt, \[string\[\]\]\$SelectedOrigins/);
   assert.match(source, /\$SelectedOrigins -contains \[string\]\$_.origin/);
   assert.match(source, /Test-HasImmediateRetry \$resumeCandidate\.Report \(\(Get-Date\)\.AddMinutes\(\$retryDelayMinutes\)\) \$selectedOrigins \$selectedAccountKeys/);
+  assert.match(source, /src\\current-plan\.mjs/);
+  assert.match(source, /\$currentFingerprint -ne \$resumeFingerprint/);
+  assert.match(source, /续跑报告与当前账号或登录计划不一致/);
   assert.match(runner, /定向续跑来源不存在/);
+  assert.match(runner, /resumePlanMatches\(resumeBase, report\.planFingerprint\)/);
+  assert.match(runner, /exactResumeRequired/);
   assert.match(runner, /const exitResults = explicitSelection/);
   assert.match(runner, /selectedIdentities\.has\(resultIdentity\(result\)\)/);
   assert.match(runner, /selectedResultSetComplete/);

@@ -1,6 +1,6 @@
-Add-Type -AssemblyName UIAutomationClient
+﻿Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Windows.Forms
+. (Join-Path $PSScriptRoot 'Safe-UIAutomation.ps1')
 
 function Invoke-PlainCredentialLoginAccessibility {
     [CmdletBinding()]
@@ -20,7 +20,7 @@ function Invoke-PlainCredentialLoginAccessibility {
     $loginUri = [Uri]$LoginUrl
     $verificationUri = [Uri]$VerificationUrl
     $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
-    $profilePath = [System.IO.Path]::GetFullPath([string]$Config.automationUserDataDir)
+    $profilePath = [System.IO.Path]::GetFullPath($(if ($AutomationUserDataDirOverride) { $AutomationUserDataDirOverride } else { [string]$Config.automationUserDataDir }))
     $root = Split-Path -Parent $PSScriptRoot
     $allowedRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
     $allowedPrefix = $allowedRoot.TrimEnd(
@@ -122,6 +122,38 @@ function Invoke-PlainCredentialLoginAccessibility {
         )
     }
 
+    function Resolve-LoginControls([object[]]$Controls) {
+        $passwordControls = @($Controls | Where-Object { $_.Current.IsPassword })
+        $userControls = @($Controls | Where-Object { -not $_.Current.IsPassword })
+        $semanticUserControls = @($userControls | Where-Object {
+            ([string]$_.Current.Name).Trim() -match '(?i)(?:用户名|用戶名|账号|帳號|帐号|账户|帳戶|邮箱|郵箱|電子郵件|e-?mail|user\s*name|account)'
+        })
+        $anonymousUserControls = @($userControls | Where-Object {
+            [string]::IsNullOrWhiteSpace([string]$_.Current.Name)
+        })
+        $usernameControl = if ($semanticUserControls.Count -eq 1) {
+            $semanticUserControls[0]
+        } elseif ($userControls.Count -eq 1) {
+            $userControls[0]
+        } elseif ($anonymousUserControls.Count -eq 1) {
+            $anonymousUserControls[0]
+        } else { $null }
+        $passwordControl = if ($passwordControls.Count -eq 1) { $passwordControls[0] } else { $null }
+        return [pscustomobject]@{
+            usernameControl = $usernameControl
+            passwordControl = $passwordControl
+            shape = [pscustomobject]@{
+                editControlCount = $Controls.Count
+                nonPasswordControlCount = $userControls.Count
+                passwordControlCount = $passwordControls.Count
+                semanticUsernameCount = $semanticUserControls.Count
+                anonymousUsernameCount = $anonymousUserControls.Count
+                usernameResolved = $null -ne $usernameControl
+                passwordResolved = $null -ne $passwordControl
+            }
+        }
+    }
+
     function Set-ControlValue(
         [System.Windows.Automation.AutomationElement]$Element,
         [string]$Value
@@ -136,19 +168,7 @@ function Invoke-PlainCredentialLoginAccessibility {
     }
 
     function Invoke-Control([System.Windows.Automation.AutomationElement]$Element) {
-        if (-not $Element) { return $false }
-        try {
-            $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-            $pattern.Invoke()
-            return $true
-        }
-        catch { }
-        try {
-            $pattern = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
-            $pattern.DoDefaultAction()
-            return $true
-        }
-        catch { return $false }
+        return Invoke-SafeAutomationControl -Element $Element -AllowedPatterns @('Invoke')
     }
 
     function Get-UniqueButton([string[]]$Labels) {
@@ -164,17 +184,6 @@ function Invoke-PlainCredentialLoginAccessibility {
         )
         if ($found.Count -eq 1) { return $found[0] }
         return $null
-    }
-
-    function Invoke-AddressNavigation([string]$Url) {
-        $address = Get-AddressElement
-        if (-not $address -or -not (Set-ControlValue $address $Url)) { return $false }
-        try {
-            $address.SetFocus()
-            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-            return $true
-        }
-        catch { return $false }
     }
 
     function Get-AccessibleText {
@@ -217,11 +226,18 @@ function Invoke-PlainCredentialLoginAccessibility {
     $challengeClicked = $false
     $stage = 'browser_startup'
     try {
-        $openArguments = @('-Offscreen', '-DisableExtensions', '-Urls', @($loginUri.AbsoluteUri))
-        if ($AutomationUserDataDirOverride) {
-            $openArguments += @('-UserDataDirOverride', $AutomationUserDataDirOverride)
+        # Keep named arguments when invoking the PowerShell helper.  Arrays
+        # are positional splats, so flags such as "-Urls" can otherwise be
+        # consumed as values for unrelated typed parameters.
+        $openParameters = @{
+            Offscreen = $true
+            DisableExtensions = $true
+            Urls = @($loginUri.AbsoluteUri)
         }
-        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openArguments | Out-Null
+        if ($AutomationUserDataDirOverride) {
+            $openParameters.UserDataDirOverride = $AutomationUserDataDirOverride
+        }
+        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters | Out-Null
         $started = $true
         $windowDeadline = (Get-Date).AddSeconds(20)
         while ((Get-Date) -lt $windowDeadline -and @(Get-ChromeAutomationRoots).Count -eq 0) {
@@ -238,8 +254,9 @@ function Invoke-PlainCredentialLoginAccessibility {
             $location = Get-PrivateCurrentUri
             if ($location -and $location.GetLeftPart([System.UriPartial]::Authority) -eq $originValue) {
                 $controls = @(Get-LoginEditControls)
-                $usernameControl = @($controls | Where-Object { -not $_.Current.IsPassword -and [string]::IsNullOrWhiteSpace([string]$_.Current.Name) }) | Select-Object -First 1
-                $passwordControl = @($controls | Where-Object { $_.Current.IsPassword }) | Select-Object -First 1
+                $resolvedControls = Resolve-LoginControls $controls
+                $usernameControl = $resolvedControls.usernameControl
+                $passwordControl = $resolvedControls.passwordControl
                 if ($usernameControl -and $passwordControl) {
                     break
                 }
@@ -248,14 +265,14 @@ function Invoke-PlainCredentialLoginAccessibility {
         }
 
         $controls = @(Get-LoginEditControls)
-        $usernameControl = @($controls | Where-Object {
-            -not $_.Current.IsPassword -and [string]::IsNullOrWhiteSpace([string]$_.Current.Name)
-        }) | Select-Object -First 1
-        $passwordControl = @($controls | Where-Object { $_.Current.IsPassword }) | Select-Object -First 1
+        $resolvedControls = Resolve-LoginControls $controls
+        $usernameControl = $resolvedControls.usernameControl
+        $passwordControl = $resolvedControls.passwordControl
         if (-not $usernameControl -or -not $passwordControl) {
             return [pscustomobject]@{
                 status = 'needs_attention'
                 diagnostic = 'form_unsupported'
+                formShape = $resolvedControls.shape
                 submitted = $false
                 challengeClicked = $challengeClicked
             }
@@ -280,6 +297,7 @@ function Invoke-PlainCredentialLoginAccessibility {
                 status = 'ready_for_submit'
                 submitted = $false
                 challengeClicked = $challengeClicked
+                formShape = $resolvedControls.shape
             }
         }
         $loginButton = Get-UniqueButton @('登录', '登入', '用户登录', '用戶登入', 'Log in', 'Sign in')
@@ -295,12 +313,27 @@ function Invoke-PlainCredentialLoginAccessibility {
         Start-Sleep -Seconds 5
 
         $stage = 'verify_session'
-        if (-not (Invoke-AddressNavigation $verificationUri.AbsoluteUri)) {
+        Close-ProfileChrome
+        $started = $false
+        $verificationOpenParameters = @{
+            Offscreen = $true
+            DisableExtensions = $true
+            Urls = @($verificationUri.AbsoluteUri)
+            UserDataDirOverride = $profilePath
+        }
+        & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @verificationOpenParameters | Out-Null
+        $started = $true
+        $verificationWindowDeadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $verificationWindowDeadline -and @(Get-ChromeAutomationRoots).Count -eq 0) {
+            Start-Sleep -Milliseconds 500
+        }
+        if (@(Get-ChromeAutomationRoots).Count -eq 0) {
             return [pscustomobject]@{ status = 'failed'; diagnostic = 'verification_navigation_failed'; submitted = $true }
         }
         $verified = $false
         $finalLocation = $null
         $accessibleText = ''
+        $twoFactorRequired = $false
         $verifyDeadline = (Get-Date).AddSeconds(30)
         while ((Get-Date) -lt $verifyDeadline) {
             $finalLocation = Get-PrivateCurrentUri
@@ -311,6 +344,8 @@ function Invoke-PlainCredentialLoginAccessibility {
             $onLoginRoute = $finalLocation -and $finalLocation.AbsolutePath -match '^/(?:take[-_]?(?:log[-_]?in|sign[-_]?in)|log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)'
             $loggedOutText = $accessibleText -match '(未登录|尚未登录|请先登录|請先登入|必须登录后|必須登入後|not logged in|sign in to continue|login required)'
             $challengeText = $accessibleText -match '(Just a moment|正在进行安全验证|Performing security verification|当前环境正在被调试|verify you are human)'
+            $twoFactorRequired = $accessibleText -match '(异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b)'
+            if ($twoFactorRequired) { break }
             if ($onVerificationOrigin -and -not $onLoginRoute -and -not $passwordVisible `
                 -and -not $loggedOutText -and -not $challengeText -and $accessibleText.Length -ge 20) {
                 $verified = $true
@@ -319,6 +354,15 @@ function Invoke-PlainCredentialLoginAccessibility {
             Start-Sleep -Seconds 1
         }
 
+        if ($twoFactorRequired) {
+            return [pscustomobject]@{
+                status = 'needs_attention'
+                failureCode = 'two_factor_required'
+                attentionKind = 'trusted_device_initialization'
+                submitted = $true
+                challengeClicked = $challengeClicked
+            }
+        }
         if (-not $verified) {
             $invalidCredential = $accessibleText -match '(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)'
             return [pscustomobject]@{

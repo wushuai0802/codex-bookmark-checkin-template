@@ -8,6 +8,7 @@ $initialConfig = try { Get-Content -Raw -Encoding UTF8 -LiteralPath $configPath 
 $lastGoodConfig = $initialConfig
 $runtimeResolverScript = Join-Path $PSScriptRoot 'Resolve-Runtime.ps1'
 . (Join-Path $PSScriptRoot 'ResultIdentity.ps1')
+. (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $statePath = Join-Path $root 'data\scheduler-state.json'
 $heartbeatPath = Join-Path $root 'data\scheduler-heartbeat.json'
 $schedulerLogPath = Join-Path $root 'logs\scheduler.log'
@@ -149,6 +150,7 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
         reportRunState = 'scheduler_error'
         plannedTotal = 0
         processedTotal = 0
+        planFingerprint = $state.planFingerprint
         nextEligibleAt = if ($claimed) { $now.AddMinutes($failureDelay).ToString('o') } else { $state.nextEligibleAt }
         deferredWakeDate = $wakeDate
         deferredWakeTokens = @($wakeTokens)
@@ -159,6 +161,34 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
     }
     Write-SchedulerStateDocument $value
     return [pscustomobject]@{ Hash = $errorHash; At = $now; Message = $safeMessage; ShouldNotify = [bool]$shouldNotify }
+}
+
+function Reset-SchedulerForPlanChange($state, [string]$newPlanFingerprint) {
+    # A bookmark/account change is a new execution plan, even when its target
+    # count is unchanged.  Do not carry yesterday's completion, retry claims,
+    # cooldown or attempt budget into the new plan.
+    $state | Add-Member -NotePropertyName phase -NotePropertyValue 'idle' -Force
+    $state | Add-Member -NotePropertyName planFingerprint -NotePropertyValue $newPlanFingerprint -Force
+    $state | Add-Member -NotePropertyName lastAttemptDate -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName attemptsToday -NotePropertyValue 0 -Force
+    $state | Add-Member -NotePropertyName lastAttemptStartedAt -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName lastRunDate -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName lastFinishedAt -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName lastExitCode -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName reportValid -NotePropertyValue $false -Force
+    $state | Add-Member -NotePropertyName reportComplete -NotePropertyValue $false -Force
+    $state | Add-Member -NotePropertyName reportExecutionComplete -NotePropertyValue $false -Force
+    $state | Add-Member -NotePropertyName reportBusinessComplete -NotePropertyValue $false -Force
+    $state | Add-Member -NotePropertyName lastRunId -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName problemCount -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName automaticRetryCount -NotePropertyValue 0 -Force
+    $state | Add-Member -NotePropertyName reportRunState -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName plannedTotal -NotePropertyValue 0 -Force
+    $state | Add-Member -NotePropertyName processedTotal -NotePropertyValue 0 -Force
+    $state | Add-Member -NotePropertyName nextEligibleAt -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName deferredWakeDate -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName deferredWakeTokens -NotePropertyValue @() -Force
+    return $state
 }
 
 function Set-SchedulerFailureNotified([string]$errorHash, [datetime]$notifiedAt) {
@@ -192,6 +222,7 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
         Valid = $false; Complete = $false; ExecutionComplete = $false; BusinessComplete = $false
         NextEligibleAt = $null; RunId = $null
         ProblemCount = $null; RunState = $null; PlannedTotal = 0; ProcessedTotal = 0; DeferredWakeups = @()
+        PlanFingerprint = $null; PlanMatches = $false
     }
     if (-not (Test-Path -LiteralPath $latestReportPath)) { return $empty }
     try {
@@ -202,6 +233,7 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
         $runState = [string]$latest.runState
         $plannedTotal = if ($null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { 0 }
         $processedTotal = if ($null -ne $latest.processedTotal) { [int]$latest.processedTotal } else { $results.Count }
+        $reportPlanFingerprint = [string]$latest.bookmarkSummary.planFingerprint
         $latestIdentities = @($latest.bookmarkSummary.targets | ForEach-Object {
             try { Get-CanonicalResultIdentity $_ } catch { }
         } | Sort-Object -Unique)
@@ -215,19 +247,32 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
             -and $uniqueResultIdentities.Count -eq $resultIdentities.Count `
             -and @($currentPlan.identities).Count -eq $uniqueResultIdentities.Count `
             -and @(Compare-Object -ReferenceObject @($currentPlan.identities) -DifferenceObject $uniqueResultIdentities).Count -eq 0
+        # Reports without a fingerprint predate execution-plan validation.
+        # Identity equality alone cannot prove that account bindings, login
+        # strategy, candidate URLs and profile routing are unchanged.
+        $planMatchesByFingerprint = if ($reportPlanFingerprint) {
+            [string]$currentPlan.planFingerprint -eq $reportPlanFingerprint
+        } else {
+            $false
+        }
         $valid = [string]$latest.runId -like "$($now.ToString('yyyyMMdd'))-*" `
             -and $runState -eq 'final' `
             -and $results.Count -ge $minimumTargets `
             -and $plannedTotal -ge $minimumTargets `
-            -and $planMatches `
+            -and $planMatchesByFingerprint `
             -and $resultIdentitiesMatch
-        if (-not $valid) { return $empty }
+        if (-not $valid) {
+            $empty.PlanFingerprint = if ($reportPlanFingerprint) { $reportPlanFingerprint } else { $null }
+            $empty.PlanMatches = [bool]$planMatchesByFingerprint
+            return $empty
+        }
         $contractComplete = $latest.isComplete -eq $true `
             -and $processedTotal -ge $plannedTotal `
             -and $results.Count -ge $plannedTotal
-        $problems = @($results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') })
+        $problems = @($results | Where-Object { -not (Test-TerminalCheckinResult $_) })
         $automaticRetryProblems = @($problems | Where-Object {
-            $_.status -in @('error', 'login_required', 'interactive_challenge', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred')
+            $_.status -in @('error', 'login_required', 'interactive_challenge', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred', 'not_available') `
+                -and -not ($_.status -eq 'deferred' -and $_.retryExhaustedForDay -eq $true)
         })
         $missingCount = [Math]::Max(0, $plannedTotal - $processedTotal)
         $nowOffset = [datetimeoffset]$now
@@ -257,6 +302,8 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
             PlannedTotal = $plannedTotal
             ProcessedTotal = $processedTotal
             DeferredWakeups = $deferredWakeups
+            PlanFingerprint = $reportPlanFingerprint
+            PlanMatches = $true
         }
     }
     catch { return $empty }
@@ -287,7 +334,9 @@ function Test-SchedulerWaiting($state, [datetime]$now, $config, [object[]]$defer
     if ($attemptedToday -and $hasAttempt -and $automaticRetryCount -eq 0 -and -not $hasDeferredWakeups) { return $true }
     $maxAttempts = if ($null -ne $config.schedulerMaxDailyAttempts) { [int]$config.schedulerMaxDailyAttempts } else { 3 }
     $maxAttempts = [Math]::Max(1, [Math]::Min(6, $maxAttempts))
-    if ($attemptedToday -and [int]$state.attemptsToday -ge $maxAttempts -and -not $hasDeferredWakeups) { return $true }
+    # schedulerMaxDailyAttempts is a hard whole-process ceiling. A per-site
+    # wakeup may bypass time cooldowns, but never the global process budget.
+    if ($attemptedToday -and [int]$state.attemptsToday -ge $maxAttempts) { return $true }
     if ([string]$state.phase -eq 'running' -and $state.lastAttemptStartedAt) {
         $claimMaxAge = (if ($null -ne $config.taskTimeoutMinutes) { [int]$config.taskTimeoutMinutes } else { 25 }) + 15
         try {
@@ -296,9 +345,29 @@ function Test-SchedulerWaiting($state, [datetime]$now, $config, [object[]]$defer
         catch { }
     }
     if ($state.nextEligibleAt) {
-        try { if ([datetimeoffset]$state.nextEligibleAt -gt [datetimeoffset]$now) { return $true } } catch { }
+        # A global cooldown is only a fallback for the whole run.  An already
+        # due per-site deferred wakeup must bypass it, otherwise one delayed
+        # site (for example an upstream outage) can starve unrelated sites.
+        try {
+            if ([datetimeoffset]$state.nextEligibleAt -gt [datetimeoffset]$now -and -not $hasDeferredWakeups) { return $true }
+        } catch { }
     }
     return $false
+}
+
+function Test-SchedulerShouldRun($state, [datetime]$now, $config, [object[]]$deferredWakeups, [bool]$manualAttentionOnly, [datetime]$scheduledToday) {
+    if ($now -lt $scheduledToday -or $manualAttentionOnly) { return $false }
+    if ([bool](Test-SchedulerWaiting $state $now $config $deferredWakeups)) { return $false }
+    # This duplicates the most important cooldown invariant at the exact
+    # side-effect boundary. Future cooldowns can only be bypassed by a due,
+    # unclaimed per-site wakeup.
+    if ($state.nextEligibleAt -and @($deferredWakeups).Count -eq 0) {
+        try {
+            if ([datetimeoffset]$state.nextEligibleAt -gt [datetimeoffset]$now) { return $false }
+        }
+        catch { }
+    }
+    return $true
 }
 
 function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups = @()) {
@@ -333,6 +402,7 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         reportRunState = $state.reportRunState
         plannedTotal = $state.plannedTotal
         processedTotal = $state.processedTotal
+        planFingerprint = $state.planFingerprint
         nextEligibleAt = $null
         deferredWakeDate = $today
         deferredWakeTokens = @($wakeTokens)
@@ -381,6 +451,7 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         reportRunState = $reportState.RunState
         plannedTotal = $reportState.PlannedTotal
         processedTotal = $reportState.ProcessedTotal
+        planFingerprint = $state.planFingerprint
         nextEligibleAt = $nextEligibleAt
         deferredWakeDate = $finishedDate
         deferredWakeTokens = @($wakeTokens)
@@ -424,8 +495,28 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "当前书签计划检查失败（退出码 $LASTEXITCODE）。" }
             try { $currentPlan = $currentPlanText | ConvertFrom-Json }
             catch { throw '当前书签计划检查未返回有效 JSON。' }
-            if ($null -eq $currentPlan -or $null -eq $currentPlan.identities) { throw '当前书签计划检查结果不完整。' }
+            if ($null -eq $currentPlan -or $null -eq $currentPlan.identities -or
+                [string]::IsNullOrWhiteSpace([string]$currentPlan.planFingerprint)) {
+                throw '当前书签计划检查结果不完整。'
+            }
             $latestReportState = Get-LatestReportState $now $config $currentPlan
+            $currentPlanFingerprint = [string]$currentPlan.planFingerprint
+            $statePlanFingerprint = [string]$state.planFingerprint
+            $statePlanChanged = $statePlanFingerprint -and $statePlanFingerprint -ne $currentPlanFingerprint
+            $reportPlanChanged = [string]$latestReportState.PlanFingerprint -and
+                [string]$latestReportState.PlanFingerprint -ne $currentPlanFingerprint
+            if ($statePlanChanged -or $reportPlanChanged) {
+                $previousPlanFingerprint = if ($statePlanFingerprint) { $statePlanFingerprint } else { [string]$latestReportState.PlanFingerprint }
+                $state = Reset-SchedulerForPlanChange $state $currentPlanFingerprint
+                Write-SchedulerStateDocument $state
+                Write-SchedulerLog "签到计划指纹已变化，已清除旧完成/重试状态（旧=$previousPlanFingerprint，新=$currentPlanFingerprint）。"
+            } elseif (-not $statePlanFingerprint) {
+                # A legacy state cannot establish which execution plan produced
+                # its completion claim. Reset once and seed the current plan.
+                $state = Reset-SchedulerForPlanChange $state $currentPlanFingerprint
+                Write-SchedulerStateDocument $state
+                Write-SchedulerLog '已迁移旧版调度状态；为验证当前账号与登录策略，今天将重新执行一次。'
+            }
             if ($state.reportComplete -eq $true -and -not $latestReportState.Valid) {
                 $state.reportComplete = $false
                 $state.lastRunDate = $null
@@ -462,7 +553,10 @@ try {
             # state before making the run decision so a restarted scheduler cannot
             # act on stale in-memory metadata from an older schema.
             $state = Read-SchedulerState
-            $deferredWakeups = Get-UnclaimedDeferredWakeups $state $latestReportState $now $config
+            # Run one due identity at a time. This keeps a local outage from
+            # turning a per-site wakeup into another full 22-site pass.
+            $deferredWakeups = @(Get-UnclaimedDeferredWakeups $state $latestReportState $now $config |
+                Sort-Object NextEligibleAt, Identity | Select-Object -First 1)
             $manualAttentionOnly = $latestReportState.Valid -and $latestReportState.AutomaticRetryCount -eq 0 -and -not $latestReportState.Complete
             if ($manualAttentionOnly) {
                 $state = Read-SchedulerState
@@ -471,7 +565,8 @@ try {
                     Write-SchedulerStateDocument $state
                 }
             }
-            if ($now -ge $scheduledToday -and -not $manualAttentionOnly -and -not (Test-SchedulerWaiting $state $now $config $deferredWakeups)) {
+            $shouldRun = [bool](Test-SchedulerShouldRun $state $now $config $deferredWakeups $manualAttentionOnly $scheduledToday)
+            if ($shouldRun) {
                 Write-SchedulerHeartbeat 'running_checkin'
                 $attemptNumber = if ([string]$state.lastAttemptDate -eq $now.ToString('yyyy-MM-dd')) { [int]$state.attemptsToday + 1 } else { 1 }
                 Write-SchedulerLog "开始第 $attemptNumber 次签到尝试。"
@@ -481,10 +576,29 @@ try {
                 $claimedThisLoop = $true
                 $shell = (Get-Command pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
                 if (-not $shell) { throw '未找到 PowerShell 可执行文件。' }
-                $process = Start-Process -FilePath $shell -ArgumentList @(
+                $runArguments = @(
                     '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
-                    '-ExecutionPolicy', 'Bypass', '-File', $runScript
-                ) -WindowStyle Hidden -PassThru
+                    '-ExecutionPolicy', 'Bypass', '-File', "`"$runScript`""
+                )
+                if ($deferredWakeups.Count -eq 1) {
+                    $wakeIdentity = [string]$deferredWakeups[0].Identity
+                    $identityParts = @($wakeIdentity -split '#account=', 2)
+                    if ($identityParts.Count -eq 2) {
+                        $wakeAccountKey = [uri]::UnescapeDataString([string]$identityParts[1])
+                        if (-not $wakeAccountKey -or $wakeAccountKey.Length -gt 80 -or $wakeAccountKey -notmatch '^[A-Za-z0-9._-]+$') {
+                            throw '延迟重试账号标识无效。'
+                        }
+                        $runArguments += @('-AccountKeys', $wakeAccountKey)
+                    }
+                    else {
+                        $wakeOrigin = [uri]$wakeIdentity
+                        if (-not $wakeOrigin.IsAbsoluteUri -or $wakeOrigin.Scheme -ne 'https' -or $wakeOrigin.UserInfo) {
+                            throw '延迟重试站点来源无效。'
+                        }
+                        $runArguments += @('-Origins', $wakeOrigin.GetLeftPart([System.UriPartial]::Authority))
+                    }
+                }
+                $process = Start-Process -FilePath $shell -ArgumentList $runArguments -WindowStyle Hidden -PassThru
                 while (-not $process.HasExited) {
                     Write-SchedulerHeartbeat 'running_checkin'
                     Start-Sleep -Seconds 15

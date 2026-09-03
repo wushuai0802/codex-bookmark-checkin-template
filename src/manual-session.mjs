@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBookmarkPlanWithBackup } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
-import { TERMINAL_STATUSES } from "./retry-policy.mjs";
+import { isTerminalResult } from "./result-contract.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -21,7 +21,7 @@ const context = await launchAutomationContext(visibleConfig);
 
 const attentionOrigins = [...new Set(
   latest.results
-    .filter((result) => !TERMINAL_STATUSES.has(result.status))
+    .filter((result) => !isTerminalResult(result))
     .map((result) => result.origin)
 )];
 const preferredFirst = config.attentionPreferredOrigins ?? [];

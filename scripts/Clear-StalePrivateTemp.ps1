@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([int]$RetentionHours = 48)
 
 $ErrorActionPreference = 'Stop'

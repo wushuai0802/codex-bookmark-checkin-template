@@ -408,6 +408,12 @@ test("用户确认站点维护会结束当天重试但不伪报签到成功", ()
     temporarilyUnavailable: true,
     unavailableDate: "20260727",
     operatorConfirmedUnavailable: true,
+    availabilityKind: "temporary_unavailable",
+    evidence: {
+      source: "operator_confirmation",
+      authoritative: true,
+      confirmedAt: "2026-07-27T01:00:00.000Z",
+    },
   });
 });
 

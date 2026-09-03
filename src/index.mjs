@@ -27,8 +27,18 @@ import {
   writeSiteState,
 } from "./site-state.mjs";
 import { loadQaCache, updateQaCache, writeQaCache } from "./qa-solver.mjs";
-import { configuredNativeWafOrigins, selectPreflightOrigins } from "./preflight-policy.mjs";
-import { accountMetadataForOrigin, compatiblePriorResult, resultIdentity } from "./result-identity.mjs";
+import {
+  configuredNativeWafOrigins,
+  requiresTrustedDeviceInitialization,
+  selectPreflightOrigins,
+} from "./preflight-policy.mjs";
+import {
+  accountMetadataForOrigin,
+  compatiblePriorResult,
+  planFingerprint,
+  resultIdentity,
+  resumePlanMatches,
+} from "./result-identity.mjs";
 import { closeSharedContexts } from "./shared-context-lifecycle.mjs";
 import {
   configuredOAuthAccounts,
@@ -45,7 +55,6 @@ import {
 } from "./oauth-session-profiles.mjs";
 import { buildSessionPreflightPlan, probeSessionPage } from "./session-preflight.mjs";
 import {
-  TERMINAL_STATUSES,
   advanceAttemptedDeferredRetries,
   applyManualConfirmations,
   applyTemporaryUnavailableConfirmations,
@@ -57,6 +66,9 @@ import {
   upstreamRetryGroup,
   withRetrySchedule,
 } from "./retry-policy.mjs";
+import { normalizeResultReasons } from "./report-reason.mjs";
+import { isTerminalResult, normalizeResultContract } from "./result-contract.mjs";
+import { nativeWafProfileForOrigin } from "./native-waf-profile.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -121,7 +133,15 @@ async function validateBookmarkPlan(plan) {
   if (plan.targetCount < minimumTargets || suddenDrop) {
     throw new Error(`书签目标异常：当前 ${plan.targetCount} 个，上次 ${previousCount || "无记录"} 个；拒绝生成空签到结果`);
   }
-  await atomicWriteJson(lastValidBookmarkPlanPath, publicBookmarkReport(plan));
+  const { supplementalAccounts } = configuredOAuthAccounts(config, rootDirectory);
+  const executionTargets = [
+    ...plan.targets.map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) })),
+    ...supplementalAccounts,
+  ];
+  await atomicWriteJson(lastValidBookmarkPlanPath, {
+    ...publicBookmarkReport(plan),
+    planFingerprint: planFingerprint(executionTargets),
+  });
 }
 
 async function readValidatedBookmarkPlan() {
@@ -132,11 +152,16 @@ async function readValidatedBookmarkPlan() {
 
 async function readFreshNativeWafPreflight() {
   if (ignoreNativePreflight) return new Map();
-  const configuredUrls = [
-    ...(config.nativeWafPreflightUrls ?? []).map((value) => typeof value === "string" ? value : value?.url),
-    ...(config.nativeChallengePreflight ?? []).map((value) => value?.url),
+  const configuredOrigins = [
+    ...(config.nativeWafPreflightUrls ?? []).map((value) => (
+      new URL(typeof value === "string" ? value : value?.url).origin
+    )),
+    ...(config.nativeChallengePreflight ?? []).map((value) => new URL(value?.url).origin),
+    ...(config.mainChromeFallbackUrls ?? []).map((value) => (
+      typeof value === "string" ? new URL(value).origin : value?.sourceOrigin ?? new URL(value?.url).origin
+    )),
   ].filter(Boolean);
-  const allowedOrigins = new Set(configuredUrls.map((value) => new URL(value).origin));
+  const allowedOrigins = new Set(configuredOrigins.map((value) => new URL(value).origin));
   const report = await fs.readFile(nativeWafPreflightPath, "utf8")
     .then((text) => JSON.parse(text))
     .catch(() => null);
@@ -179,6 +204,10 @@ try {
     ...baseReport,
     targetCount: baseReport.targetCount + supplementalAccounts.length,
     targets: reportTargets,
+    planFingerprint: planFingerprint([
+      ...plan.targets.map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) })),
+      ...supplementalAccounts,
+    ]),
   };
   const reportPath = path.join(rootDirectory, "outputs", "bookmark-comparison.json");
   await atomicWriteJson(reportPath, report);
@@ -212,35 +241,45 @@ try {
       resumeBase = JSON.parse(await fs.readFile(resolvedResume, "utf8"));
       if (!Array.isArray(resumeBase?.results)) throw new Error("续跑报告缺少站点结果");
       if (!isCurrentLocalRunId(resumeBase.runId)) throw new Error("续跑报告不是今天生成的，拒绝复用旧签到结果");
-      const currentTargetOrigins = new Set(plan.targets.map((target) => target.origin));
-      const previousOrigins = new Set(resumeBase.results.map((result) => result.origin));
-      for (const origin of manualConfirmedOrigins) {
-        if (!currentTargetOrigins.has(origin) || !previousOrigins.has(origin)) {
-          throw new Error(`人工完成确认不属于当前续跑范围：${origin}`);
-        }
-        if (resumeBase.results.filter((result) => result.origin === origin).length !== 1) {
-          throw new Error(`人工完成确认对应多个账号，必须保留各账号的权威签到证据：${origin}`);
-        }
+      const exactResumeRequired = selectedOrigins !== null
+        || selectedAccountKeys !== null
+        || manualConfirmedOrigins.size > 0
+        || temporaryUnavailableOrigins.size > 0;
+      if (!resumePlanMatches(resumeBase, report.planFingerprint)) {
+        if (exactResumeRequired) throw new Error("续跑报告与当前账号或登录计划不一致，必须先完整运行一次");
+        resumeBase = null;
       }
-      for (const origin of temporaryUnavailableOrigins) {
-        if (!currentTargetOrigins.has(origin) || !previousOrigins.has(origin)) {
-          throw new Error(`站点暂不可用确认不属于当前续跑范围：${origin}`);
+      if (resumeBase) {
+        const currentTargetOrigins = new Set(plan.targets.map((target) => target.origin));
+        const previousOrigins = new Set(resumeBase.results.map((result) => result.origin));
+        for (const origin of manualConfirmedOrigins) {
+          if (!currentTargetOrigins.has(origin) || !previousOrigins.has(origin)) {
+            throw new Error(`人工完成确认不属于当前续跑范围：${origin}`);
+          }
+          if (resumeBase.results.filter((result) => result.origin === origin).length !== 1) {
+            throw new Error(`人工完成确认对应多个账号，必须保留各账号的权威签到证据：${origin}`);
+          }
         }
-        if (resumeBase.results.filter((result) => result.origin === origin).length !== 1) {
-          throw new Error(`站点暂不可用确认对应多个账号，必须按账号保留独立结果：${origin}`);
+        for (const origin of temporaryUnavailableOrigins) {
+          if (!currentTargetOrigins.has(origin) || !previousOrigins.has(origin)) {
+            throw new Error(`站点暂不可用确认不属于当前续跑范围：${origin}`);
+          }
+          if (resumeBase.results.filter((result) => result.origin === origin).length !== 1) {
+            throw new Error(`站点暂不可用确认对应多个账号，必须按账号保留独立结果：${origin}`);
+          }
         }
+        resumeBase = {
+          ...resumeBase,
+          results: applyTemporaryUnavailableConfirmations(
+            applyManualConfirmations(resumeBase.results, manualConfirmedOrigins),
+            temporaryUnavailableOrigins,
+          ),
+        };
+        manualConfirmedResults = resumeBase.results.filter((result) => manualConfirmedOrigins.has(result.origin)
+          && result.manualConfirmation === true);
+        temporarilyUnavailableResults = resumeBase.results.filter((result) => temporaryUnavailableOrigins.has(result.origin)
+          && result.operatorConfirmedUnavailable === true);
       }
-      resumeBase = {
-        ...resumeBase,
-        results: applyTemporaryUnavailableConfirmations(
-          applyManualConfirmations(resumeBase.results, manualConfirmedOrigins),
-          temporaryUnavailableOrigins,
-        ),
-      };
-      manualConfirmedResults = resumeBase.results.filter((result) => manualConfirmedOrigins.has(result.origin)
-        && result.manualConfirmation === true);
-      temporarilyUnavailableResults = resumeBase.results.filter((result) => temporaryUnavailableOrigins.has(result.origin)
-        && result.operatorConfirmedUnavailable === true);
     }
     await cleanupOldLogs(logsRoot, config.logRetentionDays);
     const runLog = await createRunLog(logsRoot);
@@ -418,8 +457,21 @@ try {
       }
       const result = await runWithRecentNotAvailableCache(target, siteState, config, async () => {
         const preflight = nativeWafPreflight.get(target.origin);
-        if (preflight?.status === "signed") {
-          return { status: "signed", reason: preflight.reason, url: preflight.url, attempt: 1, nativePreflight: true };
+        if (isTerminalResult(preflight)) {
+          return { ...preflight, attempt: 1, nativePreflight: true };
+        }
+        if (nativeWafOrigins.has(target.origin) && requiresTrustedDeviceInitialization(preflight)) {
+          return {
+            status: "needs_attention",
+            reason: preflight.reason || "站点要求完成异地登录 2FA 验证",
+            failureCode: "two_factor_required",
+            attentionKind: "trusted_device_initialization",
+            retryableLoginRecovery: false,
+            url: preflight.url || target.candidates?.[0] || target.origin,
+            attempt: 1,
+            nativePreflight: true,
+            inspectionStatus: preflight.inspectionStatus || preflight.status,
+          };
         }
         if (nativeWafOrigins.has(target.origin) && preflight?.inspectionStatus === "login_required") {
           return {
@@ -444,7 +496,7 @@ try {
             url: preflight?.url || target.candidates?.[0] || target.origin,
             attempt: 1,
             nativePreflight: true,
-            inspectionStatus: preflight?.inspectionStatus || "missing",
+            inspectionStatus: preflight?.failureCode || preflight?.inspectionStatus || "missing",
           }, config);
         }
         return processTarget(activeContext, target, config, qaRules, runLog.directory);
@@ -516,7 +568,7 @@ try {
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
-        const targetResult = explicitSelection && prior && TERMINAL_STATUSES.has(prior.status)
+        const targetResult = explicitSelection && prior && isTerminalResult(prior)
           && !reenabledTerminal
           ? prior
           : isolatedPrimaryByIdentity.has(resultIdentity(target))
@@ -591,11 +643,18 @@ try {
           current.url,
         );
         const methods = [];
+        const nativeRecoveryProfile = nativeWafProfileForOrigin(config, current.origin, rootDirectory);
         if ((config.protectedCredentialOrigins ?? []).includes(current.origin)) {
           methods.push({
             method: "protected_credential",
             executable: config.powershellExecutable || "pwsh.exe",
-            args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-ProtectedLogin.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
+            args: [
+              "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+              path.join(rootDirectory, "scripts", "Recover-ProtectedLogin.ps1"),
+              "-Origin", current.origin,
+              "-LoginUrl", savedLoginUrl,
+              ...(nativeRecoveryProfile ? ["-UserDataDirOverride", nativeRecoveryProfile] : []),
+            ],
           });
         }
         if (nativeOAuth) {
@@ -627,20 +686,28 @@ try {
           && (config.autoDetectOAuthOrigins ?? []).includes(current.origin)) {
           methods.push({ method: "oauth_autodetect", executable: process.execPath, args: [path.join(sourceDirectory, "oauth-login.mjs"), current.origin, "LinuxDO"] });
         }
-        methods.push({
-          method: "saved_password",
-          executable: process.execPath,
-          args: [path.join(sourceDirectory, "saved-password-login.mjs"), current.origin, savedLoginUrl],
-        });
-        methods.push({
-          method: "native_saved_password",
-          executable: config.powershellExecutable || "pwsh.exe",
-          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-NativeLogin.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
-        });
+        if (!nativeWafOrigins.has(current.origin)) {
+          methods.push({
+            method: "saved_password",
+            executable: process.execPath,
+            args: [path.join(sourceDirectory, "saved-password-login.mjs"), current.origin, savedLoginUrl],
+          });
+          methods.push({
+            method: "native_saved_password",
+            executable: config.powershellExecutable || "pwsh.exe",
+            args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Recover-NativeLogin.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
+          });
+        }
         methods.push({
           method: "plain_saved_password_accessibility",
           executable: config.powershellExecutable || "pwsh.exe",
-          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(rootDirectory, "scripts", "Invoke-PlainSavedPasswordAccessibility.ps1"), "-Origin", current.origin, "-LoginUrl", savedLoginUrl],
+          args: [
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+            path.join(rootDirectory, "scripts", "Invoke-PlainSavedPasswordAccessibility.ps1"),
+            "-Origin", current.origin,
+            "-LoginUrl", savedLoginUrl,
+            ...(nativeRecoveryProfile ? ["-UserDataDirOverride", nativeRecoveryProfile] : []),
+          ],
         });
 
         const attempts = [];
@@ -661,6 +728,10 @@ try {
               terminalLoginFailure = "invalid_credential";
               break;
             }
+            if (outcome.failureCode === "two_factor_required") {
+              terminalLoginFailure = "two_factor_required";
+              break;
+            }
             if (outcome.succeeded) {
               authoritativeDailyCheckin = authoritativeLoginDailyCheckin(method.method, outcome);
               succeeded = true;
@@ -677,6 +748,10 @@ try {
             });
             if (failedOutcome.status === "invalid_credential") {
               terminalLoginFailure = "invalid_credential";
+              break;
+            }
+            if (failedOutcome.failureCode === "two_factor_required") {
+              terminalLoginFailure = "two_factor_required";
               break;
             }
             if (["oauth_rate_limited", "oauth_upstream_unavailable"].includes(failedOutcome.failureCode)) {
@@ -721,6 +796,15 @@ try {
               nativePreflight: true,
               loginRecovered: true,
             }, config);
+          } else if (loginRecovery?.terminalLoginFailure === "two_factor_required") {
+            recoveredResult = {
+              status: "needs_attention",
+              reason: "站点要求完成一次异地登录 2FA 验证，以建立可信设备会话",
+              failureCode: "two_factor_required",
+              attentionKind: "trusted_device_initialization",
+              retryableLoginRecovery: false,
+              url: initialResult.url,
+            };
           } else if (loginRecovery?.terminalLoginFailure === "invalid_credential") {
             recoveredResult = {
               status: "needs_attention",
@@ -786,7 +870,7 @@ try {
       // let a previous deferred cooldown hide that account from the run, but
       // never replace authoritative same-day success with a flaky browser
       // startup result from another account on the same origin.
-      const shouldReuse = prior && (TERMINAL_STATUSES.has(prior.status)
+      const shouldReuse = prior && (isTerminalResult(prior)
         || (!explicitSelection && !isRetryEligible(prior)));
       if (!shouldReuse) {
         const preflight = accountPreflightByIdentity.get(resultIdentity(account));
@@ -815,7 +899,9 @@ try {
         ?? { ...target, status: "error", reason: "续跑未生成站点结果" })
       : results;
     const currentOrigins = new Set([...results, ...manualConfirmedResults, ...temporarilyUnavailableResults].map(resultIdentity));
-    const logicallyResolvedResults = applyLogicalCompletionReuse(assembledResults, config.logicalCheckinGroups);
+    const logicallyResolvedResults = normalizeResultReasons(
+      applyLogicalCompletionReuse(assembledResults, config.logicalCheckinGroups),
+    ).map(normalizeResultContract);
     const finalResults = advanceAttemptedDeferredRetries(
       logicallyResolvedResults.map((result) => currentOrigins.has(resultIdentity(result)) ? deferUnresolvedLogin(result, config, finishedAt) : result),
       currentOrigins,
@@ -828,7 +914,7 @@ try {
     );
     const processedTotal = finalResults.length;
     const isComplete = processedTotal === plannedTotal;
-    const businessProblems = finalResults.filter((result) => !TERMINAL_STATUSES.has(result.status));
+    const businessProblems = finalResults.filter((result) => !isTerminalResult(result));
     const businessComplete = isComplete && businessProblems.length === 0;
     const pendingExternalCount = businessProblems.filter((result) => result.retryCause === "upstream_unavailable").length;
     const output = {
@@ -863,7 +949,7 @@ try {
       : finalResults;
     const selectedResultSetComplete = !explicitSelection || exitResults.length === selectedIdentities.size;
     if (!isComplete || !selectedResultSetComplete
-      || exitResults.some((result) => !TERMINAL_STATUSES.has(result.status))) {
+      || exitResults.some((result) => !isTerminalResult(result))) {
       process.exitCode = 2;
     }
   }

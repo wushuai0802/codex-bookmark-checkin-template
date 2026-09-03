@@ -1,11 +1,13 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
     [Parameter(Mandatory = $true)][string]$Url,
     [ValidateRange(5, 120)][int]$TimeoutSeconds = 60,
     [string]$UserDataDirOverride,
+    [ValidateSet('offscreen', 'minimized', 'visible')][string]$WindowMode = 'offscreen',
     [switch]$AllowPreparedSiteBody,
-    [switch]$AllowCloudflareChallengeClick
+    [switch]$AllowCloudflareChallengeClick,
+    [switch]$PerformCheckin
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,9 +35,7 @@ if (-not $profilePath.StartsWith($allowedPrefix, [System.StringComparison]::Ordi
     throw "机器人 Chrome 目录必须位于 $allowedRoot"
 }
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Windows.Forms
+. (Join-Path $PSScriptRoot 'Safe-UIAutomation.ps1')
 
 function Get-ProfileChromeProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like "*$profilePath*" })
@@ -183,20 +183,8 @@ function Invoke-LeichiConfirmationClick {
                 catch { $false }
             }
             foreach ($button in $buttons) {
-                try {
-                    if (-not $button.Current.IsEnabled) { continue }
-                    $invoke = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                    $invoke.Invoke()
-                    return $true
-                }
-                catch {
-                    try {
-                        $button.SetFocus()
-                        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-                        return $true
-                    }
-                    catch { }
-                }
+                try { if (-not $button.Current.IsEnabled) { continue } } catch { continue }
+                if (Invoke-SafeAutomationControl -Element $button -AllowedPatterns @('Invoke')) { return $true }
             }
         }
         catch { }
@@ -228,32 +216,52 @@ function Invoke-CloudflareChallengeClick {
         catch { }
     }
     if ($matches.Count -ne 1) { return $false }
-    $control = $matches[0]
-    try {
-        $invoke = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $invoke.Invoke()
-        return $true
+    return Invoke-SafeAutomationControl -Element $matches[0] -AllowedPatterns @('Invoke', 'Toggle')
+}
+
+function Invoke-NativeCheckinAction {
+    # Only invoke an unambiguous, same-page attendance control.  We never use
+    # coordinates or broad text matching here: a missing or ambiguous control
+    # is safer to report than to click the wrong action.
+    $labels = @('签到', '簽到', '立即签到', '立即簽到', '今日签到', '今日簽到', '打卡', '立即打卡', 'Check in', 'Check-in', 'Attendance')
+    $matches = @()
+    foreach ($element in @(Get-AllAutomationElements)) {
+        try {
+            if (-not $element.Current.IsEnabled -or $element.Current.ControlType -notin @(
+                [System.Windows.Automation.ControlType]::Button,
+                [System.Windows.Automation.ControlType]::Hyperlink,
+                [System.Windows.Automation.ControlType]::CheckBox
+            )) { continue }
+            $name = ([string]$element.Current.Name).Trim()
+            if ($labels -contains $name) { $matches += $element }
+        }
+        catch { }
     }
-    catch { }
-    try {
-        $toggle = $control.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-        if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { $toggle.Toggle() }
-        return $true
-    }
-    catch { }
-    try {
-        $legacy = $control.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
-        $legacy.DoDefaultAction()
-        return $true
-    }
-    catch { return $false }
+    if ($matches.Count -ne 1) { return $false }
+    return Invoke-SafeAutomationControl -Element $matches[0] -AllowedPatterns @('Invoke', 'Toggle')
 }
 
 if ((Get-ProfileChromeProcesses).Count -gt 0) { throw '机器人专用 Chrome 配置正被占用。' }
 $started = $false
 try {
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -DisableExtensions `
-        -Urls @($targetUri.AbsoluteUri) -UserDataDirOverride $profilePath | Out-Null
+    # Use named-parameter splatting.  An array splat is positional in
+    # PowerShell; it previously bound "-Urls" to Open-PlainLoginChrome's
+    # integer port parameter and prevented Chrome from
+    # starting at all.
+    $openParameters = @{
+        DisableExtensions = $true
+        Urls = @($targetUri.AbsoluteUri)
+        UserDataDirOverride = $profilePath
+    }
+    if ($WindowMode -eq 'minimized') {
+        $openParameters.Minimized = $true
+    } elseif ($WindowMode -eq 'visible') {
+        # Visible mode is intentionally opt-in and is useful for a supervised
+        # diagnostic run. The normal unattended path uses a minimized window.
+    } else {
+        $openParameters.Offscreen = $true
+    }
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters | Out-Null
     $windowDeadline = (Get-Date).AddSeconds(25)
     while ((Get-Date) -lt $windowDeadline -and @(Get-ChromeAutomationRoots).Count -eq 0) { Start-Sleep -Milliseconds 500 }
     if (@(Get-ChromeAutomationRoots).Count -eq 0) { throw '原生 Chrome 没有可用的无障碍窗口。' }
@@ -264,16 +272,23 @@ try {
     $confirmationClicked = $false
     $cloudflareObservedAt = $null
     $cloudflareChallengeClicked = $false
+    $checkinClickAttempted = $false
+    $checkinClicked = $false
     $last = $null
     do {
         $last = Read-PageSnapshot
         if ($last.securityVerification) {
             [pscustomobject]@{
-                status = 'login_required'
+                status = 'needs_attention'
+                failureCode = 'two_factor_required'
+                attentionKind = 'trusted_device_initialization'
+                retryableLoginRecovery = $false
                 reason = '站点要求完成异地登录 2FA 验证'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 cloudflareChallengeClicked = $cloudflareChallengeClicked
+                checkinClickAttempted = $checkinClickAttempted
+                checkinClicked = $checkinClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 2
@@ -285,28 +300,34 @@ try {
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 cloudflareChallengeClicked = $cloudflareChallengeClicked
+                checkinClickAttempted = $checkinClickAttempted
+                checkinClicked = $checkinClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 0
         }
-        if ($last.siteBodyLoaded -and $last.attendanceEndpoint -and -not $last.loginRoute) {
+        if (-not $PerformCheckin -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and -not $last.loginRoute) {
             [pscustomobject]@{
                 status = 'ready'
                 reason = '无调试原生 Chrome 已通过 WAF 并加载签到页面'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 cloudflareChallengeClicked = $cloudflareChallengeClicked
+                checkinClickAttempted = $checkinClickAttempted
+                checkinClicked = $checkinClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 0
         }
-        if ($AllowPreparedSiteBody -and $last.siteBodyLoaded -and -not $last.loginRoute) {
+        if (-not $PerformCheckin -and $AllowPreparedSiteBody -and $last.siteBodyLoaded -and -not $last.loginRoute) {
             [pscustomobject]@{
                 status = 'ready'
                 reason = '无调试原生 Chrome 已完成安全验证预热'
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 cloudflareChallengeClicked = $cloudflareChallengeClicked
+                checkinClickAttempted = $checkinClickAttempted
+                checkinClicked = $checkinClicked
                 inspection = $last
             } | ConvertTo-Json -Depth 8
             exit 0
@@ -333,6 +354,15 @@ try {
                 continue
             }
         }
+        if ($PerformCheckin -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and
+            -not $last.success -and -not $checkinClickAttempted) {
+            $checkinClickAttempted = $true
+            $checkinClicked = Invoke-NativeCheckinAction
+            if ($checkinClicked) {
+                Start-Sleep -Seconds 2
+                continue
+            }
+        }
         if ($last.cloudflareWaf -and $null -eq $cloudflareObservedAt) { $cloudflareObservedAt = Get-Date }
         if ($AllowCloudflareChallengeClick -and $last.cloudflareWaf -and -not $cloudflareChallengeClicked -and
             $null -ne $cloudflareObservedAt -and ((Get-Date) - $cloudflareObservedAt).TotalSeconds -ge 8) {
@@ -350,6 +380,8 @@ try {
         confirmationClickAttempted = $confirmationClickAttempted
         confirmationClicked = $confirmationClicked
         cloudflareChallengeClicked = $cloudflareChallengeClicked
+        checkinClickAttempted = $checkinClickAttempted
+        checkinClicked = $checkinClicked
         inspection = $last
     } | ConvertTo-Json -Depth 8
     exit 2

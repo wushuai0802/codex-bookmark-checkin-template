@@ -11,6 +11,7 @@ import {
 } from "./credential-session-verification.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
+import { classifyPageText } from "./detector.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -48,6 +49,7 @@ let storageSaved = false;
 let authCheckStatus = null;
 let diagnostic = null;
 let dailyCheckin = null;
+let failureCode = null;
 try {
   page = await context.newPage();
   const observedResponses = [];
@@ -83,7 +85,12 @@ try {
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
   await acceptConfiguredLoginTerms(page, origin, config);
   const password = page.locator('input[type="password"]:visible');
-  if (await password.count() < 1) {
+  const initialText = String(await page.locator("body").innerText().catch(() => ""));
+  const initialState = classifyPageText({ url: page.url(), bodyText: initialText, hasPassword: await password.count() > 0 });
+  if (initialState.failureCode === "two_factor_required") {
+    status = "needs_attention";
+    failureCode = initialState.failureCode;
+  } else if (await password.count() < 1) {
     const verification = await verifyCredentialSession(page, {
       origin,
       verificationPath,
@@ -118,7 +125,15 @@ try {
           await page.waitForTimeout(1200);
           const postSubmitText = String(await page.locator("body").innerText().catch(() => ""));
           const responseInvalidCredential = observedResponses.some((item) => item.json?.messageFlags?.invalidCredential === true);
-          if (/(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(postSubmitText)
+          const postSubmitState = classifyPageText({
+            url: page.url(),
+            bodyText: postSubmitText,
+            hasPassword: await page.locator('input[type="password"]:visible').count() > 0,
+          });
+          if (postSubmitState.failureCode === "two_factor_required") {
+            status = "needs_attention";
+            failureCode = postSubmitState.failureCode;
+          } else if (/(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(postSubmitText)
             || responseInvalidCredential) {
             status = "invalid_credential";
           } else {
@@ -183,6 +198,7 @@ try {
     storageSaved,
     authCheckStatus,
     diagnostic,
+    ...(failureCode ? { failureCode, attentionKind: "trusted_device_initialization" } : {}),
     ...(dailyCheckin ? { dailyCheckin } : {}),
   }));
   if (status !== "logged_in") process.exitCode = 2;

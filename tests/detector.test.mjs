@@ -9,6 +9,7 @@ test("识别已签到状态", () => {
   assert.equal(classifyPageText({ bodyText: "[查看簽到記錄] [21點]" }).status, "already_signed");
   assert.equal(classifyPageText({ bodyText: "抱歉 您今天已经签到过了，请勿重复刷新。" }).status, "already_signed");
   assert.equal(classifyPageText({ bodyText: "鲸币 [使用]: 154,464.0 (签到已得350)" }).status, "already_signed");
+  assert.equal(classifyPageText({ bodyText: "每日签到 今日已签到，明天再来吧", challengeSelectors: true }).status, "already_signed");
 });
 
 test("识别签到成功状态", () => {
@@ -27,6 +28,17 @@ test("带图片验证码的登录页仍识别为登录失效", () => {
   assert.match(result.reason, /验证码/);
 });
 
+test("异地 2FA 是确定性可信设备关注状态而不是普通登录重试", () => {
+  const result = classifyPageText({
+    url: "https://example.test/login.php",
+    bodyText: "异地登录安全验证 请输入二级验证代码",
+    hasPassword: true,
+  });
+  assert.equal(result.status, "needs_attention");
+  assert.equal(result.failureCode, "two_factor_required");
+  assert.equal(result.retryableLoginRecovery, false);
+});
+
 test("说明文字不被误判为当前人机挑战", () => {
   assert.equal(classifyPageText({ bodyText: "每日签到 完成人机验证即可领取奖励" }).status, "ready");
 });
@@ -38,15 +50,6 @@ test("签到功能说明和历史入口不被误判为已完成", () => {
 
 test("识别 Linux DO 登录入口", () => {
   assert.equal(classifyPageText({ bodyText: "使用 Linux DO 登录" }).status, "login_required");
-});
-
-test("识别 piggo 异地登录 2FA 验证页而不是签到成功", () => {
-  const result = classifyPageText({
-    url: "https://piggo.me/attendance.php",
-    bodyText: "异地登录安全验证 请输入 2FA 验证码 立即提交",
-  });
-  assert.equal(result.status, "login_required");
-  assert.match(result.reason, /2FA/);
 });
 
 test("可见的 Cloudflare 复选框优先识别为交互挑战", () => {

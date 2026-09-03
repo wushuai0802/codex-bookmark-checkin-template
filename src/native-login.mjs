@@ -6,6 +6,7 @@ import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protect
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
+import { classifyPageText } from "./detector.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -17,6 +18,7 @@ if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/nati
 
 const browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
 let status = "needs_attention";
+let failureCode = null;
 let page = null;
 try {
   page = browser.contexts().flatMap((context) => context.pages()).find((candidate) => {
@@ -152,7 +154,16 @@ try {
 
   const finalLocation = new URL(page.url());
   const visiblePassword = await page.locator('input[type="password"]:visible').count() > 0;
-  if (finalLocation.origin === expectedOrigin
+  const finalState = classifyPageText({
+    url: page.url(),
+    title: await page.title(),
+    bodyText: await page.locator("body").innerText().catch(() => ""),
+    hasPassword: visiblePassword,
+  });
+  if (finalState.failureCode === "two_factor_required") {
+    status = "needs_attention";
+    failureCode = finalState.failureCode;
+  } else if (finalLocation.origin === expectedOrigin
     && !isCredentialLoginRoute(finalLocation.href)
     && !visiblePassword) {
     status = "logged_in";
@@ -161,6 +172,7 @@ try {
   console.log(JSON.stringify({
     origin: expectedOrigin,
     status,
+    ...(failureCode ? { failureCode, attentionKind: "trusted_device_initialization" } : {}),
     finalUrl: safeLogUrl(page.url()),
     title: await page.title(),
   }));

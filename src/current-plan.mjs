@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBookmarkPlanWithBackup } from "./bookmarks.mjs";
-import { accountMetadataForOrigin, resultIdentity } from "./result-identity.mjs";
+import { accountMetadataForOrigin, planFingerprint, resultIdentity } from "./result-identity.mjs";
 import { configuredSupplementalOAuthAccounts } from "./supplemental-oauth-accounts.mjs";
 
 const rootDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -14,4 +14,4 @@ const targets = [
 ];
 const identities = targets.map(resultIdentity).sort();
 if (new Set(identities).size !== identities.length) throw new Error("当前签到计划包含重复身份");
-console.log(JSON.stringify({ targetCount: targets.length, identities }));
+console.log(JSON.stringify({ targetCount: targets.length, identities, planFingerprint: planFingerprint(targets) }));

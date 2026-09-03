@@ -1,4 +1,5 @@
 import { compatiblePriorResult, resultIdentity } from "./result-identity.mjs";
+import { isTerminalResult } from "./result-contract.mjs";
 
 export const RECOVERABLE_STATUSES = new Set([
   "error", "login_required", "interactive_challenge", "managed_challenge_timeout",
@@ -9,7 +10,7 @@ export const RECOVERABLE_STATUSES = new Set([
 // not transient browser failures. They must not be retried every hour.
 export const ATTENTION_STATUSES = new Set(["needs_attention"]);
 
-export const TERMINAL_STATUSES = new Set(["signed", "already_signed", "not_available"]);
+export const TERMINAL_STATUSES = new Set(["signed", "already_signed"]);
 
 export function terminalResultReenabled(prior, target, config = {}) {
   if (prior?.status !== "not_available") return false;
@@ -31,7 +32,7 @@ export function applyManualConfirmations(results, confirmedOrigins, now = new Da
   return (results ?? []).map((result) => {
     if (!confirmed.has(result?.origin)
       || originCounts.get(result?.origin) !== 1
-      || TERMINAL_STATUSES.has(result?.status)) return result;
+      || isTerminalResult(result)) return result;
     const {
       retryCause: _retryCause,
       nextEligibleAt: _nextEligibleAt,
@@ -60,7 +61,7 @@ export function applyTemporaryUnavailableConfirmations(results, confirmedOrigins
   return (results ?? []).map((result) => {
     if (!confirmed.has(result?.origin)
       || originCounts.get(result?.origin) !== 1
-      || TERMINAL_STATUSES.has(result?.status)) return result;
+      || isTerminalResult(result)) return result;
     const {
       retryCause: _retryCause,
       nextEligibleAt: _nextEligibleAt,
@@ -76,6 +77,12 @@ export function applyTemporaryUnavailableConfirmations(results, confirmedOrigins
       temporarilyUnavailable: true,
       unavailableDate,
       operatorConfirmedUnavailable: true,
+      availabilityKind: "temporary_unavailable",
+      evidence: {
+        source: "operator_confirmation",
+        authoritative: true,
+        confirmedAt: now.toISOString(),
+      },
     };
   });
 }
@@ -423,6 +430,7 @@ export function deferUnresolvedLogin(result, config = {}, now = new Date()) {
 }
 
 export function isRetryEligible(result, now = new Date()) {
+  if (result?.status === "not_available" && !isTerminalResult(result)) return true;
   if (!RECOVERABLE_STATUSES.has(result?.status)) return false;
   if (result.status !== "deferred") return true;
   const next = Date.parse(result.nextEligibleAt ?? "");

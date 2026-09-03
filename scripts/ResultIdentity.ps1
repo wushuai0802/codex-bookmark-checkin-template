@@ -1,4 +1,4 @@
-function ConvertTo-EncodeURIComponent([string]$Value) {
+﻿function ConvertTo-EncodeURIComponent([string]$Value) {
     $builder = [System.Text.StringBuilder]::new()
     foreach ($byte in [System.Text.Encoding]::UTF8.GetBytes($Value)) {
         $unescaped = ($byte -ge 0x41 -and $byte -le 0x5A) `

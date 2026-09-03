@@ -107,7 +107,7 @@ test("LinuxDO 受调试端口拦截时只使用一次无调试端口后台恢复
   assert.match(recoveryScript, /\$verificationRound = Invoke-NativeOAuthRound/);
   assert.doesNotMatch(plainAccessibility, /RemoteDebuggingPort|connectOverCDP|DevToolsActivePort/);
   assert.match(plainAccessibility, /Open-PlainLoginChrome\.ps1'[\s\S]*-Offscreen -EnablePasswordManager/);
-  assert.match(plainAccessibility, /UIAutomationClient/);
+  assert.match(plainAccessibility, /Safe-UIAutomation\.ps1/);
   assert.match(plainAccessibility, /Get-PrivateCurrentUri/);
 });
 

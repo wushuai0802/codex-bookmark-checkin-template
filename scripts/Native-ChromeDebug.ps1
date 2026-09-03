@@ -1,4 +1,4 @@
-function Reset-NativeChromeDebugPort([string]$ProfilePath) {
+﻿function Reset-NativeChromeDebugPort([string]$ProfilePath) {
     $path = Join-Path ([System.IO.Path]::GetFullPath($ProfilePath)) 'DevToolsActivePort'
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     return $path

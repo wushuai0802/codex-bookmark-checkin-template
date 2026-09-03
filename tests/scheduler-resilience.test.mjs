@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const execFileAsync = promisify(execFile);
+const powershell = process.platform === "win32" ? "pwsh.exe" : "pwsh";
 
 async function schedulerSource() {
   return fs.readFile(path.join(root, "scripts", "Start-UserScheduler.ps1"), "utf8");
@@ -93,7 +97,8 @@ test("仅剩凭据拒绝等人工关注时调度器不会每小时空转", async
   assert.match(scheduler, /\$hasDeferredWakeups\s*=\s*@\(\$deferredWakeups\)\.Count -gt 0/);
   assert.match(scheduler, /automaticRetryCount\s*=\s*\$state\.automaticRetryCount/);
   assert.match(scheduler, /\$manualAttentionOnly\s*=\s*\$latestReportState\.Valid/);
-  assert.match(scheduler, /-not \$manualAttentionOnly\s+-and\s+-not \(Test-SchedulerWaiting/);
+  assert.match(scheduler, /function Test-SchedulerShouldRun/);
+  assert.match(scheduler, /\$shouldRun\s*=\s*\[bool\]\(Test-SchedulerShouldRun/);
 });
 
 test("任务级重试不会为空转凭据拒绝站点", async () => {
@@ -117,7 +122,8 @@ test("同一调度故障使用稳定哈希和冷却避免每分钟重复通知",
 test("正常签到的 claim、隐藏启动和状态写回语义保持不变", async () => {
   const scheduler = await schedulerSource();
   assert.match(scheduler, /Write-SchedulerClaim\s+\$runStartedAt/);
-  assert.match(scheduler, /Start-Process[\s\S]*?'-WindowStyle',\s*'Hidden'/);
+  assert.match(scheduler, /\$runArguments\s*=\s*@\([\s\S]*?'-WindowStyle',\s*'Hidden'/);
+  assert.match(scheduler, /Start-Process[\s\S]*?-ArgumentList\s+\$runArguments[\s\S]*?-WindowStyle\s+Hidden/);
   assert.match(scheduler, /while\s*\(-not \$process\.HasExited\)/);
   assert.match(scheduler, /Get-LatestReportState\s+\$finishedAt\s+\$config\s+\$currentPlan\s+\$runStartedAt/);
   assert.match(scheduler, /Write-SchedulerState\s+\$finishedAt\s+\$process\.ExitCode\s+\$reportState\s+\$config/);
@@ -149,7 +155,8 @@ test("延迟站点用身份和时间窗令牌获得有界补跑机会", async ()
   assert.match(scheduler, /deferredWakeDate/);
   assert.match(scheduler, /deferredWakeTokens/);
   assert.match(scheduler, /Write-SchedulerClaim\s+\$runStartedAt\s+\$deferredWakeups/);
-  assert.match(scheduler, /\$attemptedToday\s*-and\s+\[int\]\$state\.attemptsToday\s+-ge\s+\$maxAttempts\s+-and\s+-not \$hasDeferredWakeups/);
+  assert.match(scheduler, /schedulerMaxDailyAttempts is a hard whole-process ceiling/i);
+  assert.match(scheduler, /\$attemptedToday\s*-and\s+\[int\]\$state\.attemptsToday\s+-ge\s+\$maxAttempts\)\s*\{\s*return\s+\$true/);
   assert.match(scheduler, /\$wakeTokens\s*=\s*@\(\s*@\(\s*@\(\$wakeTokens\)\s*@\(\$deferredWakeups/);
   assert.doesNotMatch(scheduler, /\$wakeTokens\s*\+\s*@\(\$deferredWakeups/);
   assert.match(scheduler, /deferredWakeTokens\s*=\s*@\(\$wakeTokens\)/);
@@ -174,7 +181,7 @@ test("外部报告元数据变化时同步调度状态但不重复通知", async
   assert.match(scheduler, /\[int\]\$state\.automaticRetryCount\s+-ne\s+\[int\]\$latestReportState\.AutomaticRetryCount/);
   assert.match(scheduler, /自动重试=\$\(\$latestReportState\.AutomaticRetryCount\)/);
   assert.match(scheduler, /if \(\$hasNewExternalReport\)/);
-  assert.match(scheduler, /\$state\s*=\s*Read-SchedulerState\s*\r?\n\s*\$deferredWakeups\s*=\s*Get-UnclaimedDeferredWakeups/);
+  assert.match(scheduler, /\$state\s*=\s*Read-SchedulerState\s*\r?\n\s*# Run one due identity[\s\S]*?\$deferredWakeups\s*=\s*@\(Get-UnclaimedDeferredWakeups/);
 });
 
 test("调度器拒绝结果身份重复或缺失的伪完整报告", async () => {
@@ -183,6 +190,77 @@ test("调度器拒绝结果身份重复或缺失的伪完整报告", async () =>
   assert.match(scheduler, /\$uniqueResultIdentities\.Count\s+-eq\s+\$resultIdentities\.Count/);
   assert.match(scheduler, /Compare-Object\s+-ReferenceObject\s+@\(\$currentPlan\.identities\)\s+-DifferenceObject\s+\$uniqueResultIdentities/);
   assert.match(scheduler, /-and\s+\$resultIdentitiesMatch/);
+});
+
+test("书签计划指纹变化会清除旧完成状态和重试令牌", async () => {
+  const scheduler = await schedulerSource();
+  assert.match(scheduler, /PlanFingerprint\s*=\s*\$null/);
+  assert.match(scheduler, /latest\.bookmarkSummary\.planFingerprint/);
+  assert.match(scheduler, /currentPlan\.planFingerprint/);
+  assert.match(scheduler, /function Reset-SchedulerForPlanChange/);
+  assert.match(scheduler, /Reset-SchedulerForPlanChange\s+\$state\s+\$currentPlanFingerprint/);
+  assert.match(scheduler, /deferredWakeTokens\s*-NotePropertyValue\s*@\(\)/);
+  assert.match(scheduler, /attemptsToday\s*-NotePropertyValue\s+0/);
+  assert.match(scheduler, /reportComplete\s*-NotePropertyValue\s+\$false/);
+  assert.match(scheduler, /statePlanChanged\s*=\s*\$statePlanFingerprint/);
+  assert.match(scheduler, /reportPlanChanged\s*=\s*\[string\]\$latestReportState\.PlanFingerprint/);
+  assert.match(scheduler, /Reports without a fingerprint predate execution-plan validation/);
+  assert.match(scheduler, /\$planMatchesByFingerprint\s*=\s*if \(\$reportPlanFingerprint\)[\s\S]*?else \{\s*\$false\s*\}/);
+  assert.match(scheduler, /-and\s+\$planMatchesByFingerprint/);
+  assert.match(scheduler, /elseif \(-not \$statePlanFingerprint\)[\s\S]*?Reset-SchedulerForPlanChange/);
+});
+
+test("到期的站点延迟唤醒可以越过全局冷却时间", async () => {
+  const scheduler = await schedulerSource();
+  assert.match(scheduler, /global cooldown is only a fallback/i);
+  assert.match(scheduler, /-gt \[datetimeoffset\]\$now\s+-and\s+-not \$hasDeferredWakeups/);
+  assert.match(scheduler, /attemptedToday[\s\S]*-and -not \$hasDeferredWakeups/);
+  assert.match(scheduler, /Future cooldowns can only be bypassed by a due/i);
+  assert.match(scheduler, /\$state\.nextEligibleAt\s+-and\s+@\(\$deferredWakeups\)\.Count\s+-eq\s+0/);
+  assert.match(scheduler, /Select-Object\s+-First\s+1/);
+  assert.match(scheduler, /\$runArguments\s*\+=\s*@\('-Origins',\s*\$wakeOrigin\.GetLeftPart/);
+  assert.match(scheduler, /\$runArguments\s*\+=\s*@\('-AccountKeys',\s*\$wakeAccountKey\)/);
+});
+
+test("未来冷却且没有到期单站任务时真实 PowerShell 决策拒绝启动", async () => {
+  const command = String.raw`
+$scriptPath = Join-Path $env:CHECKIN_TEST_ROOT 'scripts\Start-UserScheduler.ps1'
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+foreach ($name in @('Test-SchedulerWaiting', 'Test-SchedulerShouldRun')) {
+  $functionAst = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true) | Select-Object -First 1
+  Invoke-Expression $functionAst.Extent.Text
+}
+$now = [datetime]'2026-09-03T18:00:00+08:00'
+$scheduledToday = [datetime]'2026-09-03T08:05:00+08:00'
+$state = [pscustomobject]@{
+  lastRunDate = '2026-09-03'; reportComplete = $false
+  lastAttemptDate = '2026-09-03'; attemptsToday = 24
+  automaticRetryCount = 1; phase = 'finished'
+  nextEligibleAt = '2026-09-04T08:05:00+08:00'
+}
+$config = [pscustomobject]@{ schedulerMaxDailyAttempts = 5; taskTimeoutMinutes = 25 }
+$blocked = Test-SchedulerShouldRun $state $now $config @() $false $scheduledToday
+$due = [pscustomobject]@{ Identity = 'https://example.com'; NextEligibleAt = $now.AddMinutes(-1) }
+$blockedAtGlobalLimit = Test-SchedulerShouldRun $state $now $config @($due) $false $scheduledToday
+$state.attemptsToday = 2
+$allowedBelowGlobalLimit = Test-SchedulerShouldRun $state $now $config @($due) $false $scheduledToday
+[ordered]@{
+  blocked = [bool]$blocked
+  blockedAtGlobalLimit = [bool]$blockedAtGlobalLimit
+  allowedBelowGlobalLimit = [bool]$allowedBelowGlobalLimit
+} | ConvertTo-Json -Compress
+`;
+  const { stdout } = await execFileAsync(powershell, ["-NoProfile", "-NonInteractive", "-Command", command], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, CHECKIN_TEST_ROOT: root },
+  });
+  const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
+  assert.equal(result.blocked, false);
+  assert.equal(result.blockedAtGlobalLimit, false);
+  assert.equal(result.allowedBelowGlobalLimit, true);
 });
 
 test("调度状态分别记录执行完成与业务完成", async () => {

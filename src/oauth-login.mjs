@@ -7,6 +7,12 @@ import { safeLogUrl } from "./security.mjs";
 import { isLoginOrSignInRoute } from "./url-routes.mjs";
 import { configuredNewApiSignInRule, tryNewApiSignIn } from "./new-api-signin.mjs";
 import { extractSafeOAuthCallbackEvidence, isTargetOAuthCallback } from "./oauth-callback.mjs";
+import { tryOAuthApiCheckin } from "./oauth-api-checkin.mjs";
+import {
+  resolveOAuthRecoveryTargetOrigin,
+  trustedLinuxDoAuthorizeRequest,
+  trustedLinuxDoAuthorizeState,
+} from "./oauth-recovery-target.mjs";
 import { configForOAuthRecoveryAccount } from "./oauth-recovery-profile.mjs";
 import {
   configuredIsolatedOAuthSiteProfiles,
@@ -28,13 +34,14 @@ const config = JSON.parse(await fs.readFile(path.join(rootDirectory, "config", "
 const requestedOrigin = process.argv[2];
 const provider = process.argv[3] || "LinuxDO";
 if (!requestedOrigin) throw new Error("用法: node src/oauth-login.mjs <origin> [provider]");
-const origin = new URL(requestedOrigin).origin;
-await findBookmarkTarget(config.bookmarksPath, origin, config);
+const bookmarkOrigin = new URL(requestedOrigin).origin;
+const { target: bookmarkTarget } = await findBookmarkTarget(config.bookmarksPath, bookmarkOrigin, config);
+const origin = resolveOAuthRecoveryTargetOrigin(bookmarkOrigin, config, bookmarkTarget.allowedOrigins);
 const isolatedOAuthSiteProfiles = configuredIsolatedOAuthSiteProfiles(config, rootDirectory);
 const oauthSessionProfiles = configuredOAuthSessionProfiles(config, rootDirectory);
-const isolatedConfig = configForIsolatedOAuthSite(config, isolatedOAuthSiteProfiles, origin);
-const sessionConfig = configForOAuthSession(isolatedConfig, oauthSessionProfiles, origin);
-const runtimeConfig = configForOAuthRecoveryAccount(sessionConfig, rootDirectory, origin, provider);
+const isolatedConfig = configForIsolatedOAuthSite(config, isolatedOAuthSiteProfiles, bookmarkOrigin);
+const sessionConfig = configForOAuthSession(isolatedConfig, oauthSessionProfiles, bookmarkOrigin);
+const runtimeConfig = configForOAuthRecoveryAccount(sessionConfig, rootDirectory, bookmarkOrigin, provider);
 
 function classifyOAuthRecoveryFailure(error) {
   const message = String(error?.message ?? "");
@@ -199,6 +206,7 @@ async function runOAuthFlow(context) {
   let oauthRateLimited = false;
   let navigationFailureCode = null;
   let directOAuthState = "";
+  let directAuthorizeUrl = "";
   let failedCallbackTransfer = null;
   const redirectOverride = String(config.oauthRedirectOverrides?.[origin]?.[provider] ?? "").trim();
   if (redirectOverride) {
@@ -256,8 +264,23 @@ async function runOAuthFlow(context) {
   const loginUrl = new URL(configuredLoginUrl);
   if (loginUrl.origin !== origin || loginUrl.protocol !== "https:") throw new Error("OAuth 登录入口不属于目标站点");
   await page.goto(loginUrl.href, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+  if (new URL(page.url()).origin === origin) {
+    const text = String(await page.locator("body").innerText().catch(() => "")).trim();
+    let loginPayload = null;
+    try { loginPayload = JSON.parse(text); } catch { /* normal HTML login page */ }
+    if (loginPayload?.auth_url) {
+      const authorize = trustedLinuxDoAuthorizeRequest(loginPayload.auth_url, origin);
+      if (!authorize) throw new Error("站点返回了无效的 OAuth 授权地址");
+      directOAuthState = authorize.state;
+      directAuthorizeUrl = authorize.href;
+      await page.goto(authorize.href, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+    }
+  }
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
   let existingDailyCheckin = await tryNewApiSignIn(page, origin, config);
+  if (!["signed", "already_signed"].includes(existingDailyCheckin?.status)) {
+    existingDailyCheckin = await tryOAuthApiCheckin(page, origin, config);
+  }
   if (!["signed", "already_signed"].includes(existingDailyCheckin?.status)
     && (config.newApiCheckinOrigins ?? []).includes(origin)) {
     existingDailyCheckin = await tryNewApiCheckin(page);
@@ -289,15 +312,21 @@ async function runOAuthFlow(context) {
   const providerAltLabels = /linux\s*do/i.test(provider)
     ? ["LINUX DO", "Linux DO", "LinuxDO"]
     : [provider, `${provider}登录`, `${provider}登入`];
-  let providerButton = await findVisibleProviderButton(page, providerLabels, providerAltLabels);
-  if (!providerButton && await revealAlternateLoginOptions(page)) {
+  directOAuthState = trustedLinuxDoAuthorizeState(page.url());
+  if (directOAuthState) directAuthorizeUrl = page.url();
+  let startedDirectOAuth = Boolean(directOAuthState);
+  let providerButton = null;
+  if (!startedDirectOAuth) {
     providerButton = await findVisibleProviderButton(page, providerLabels, providerAltLabels);
+    if (!providerButton && await revealAlternateLoginOptions(page)) {
+      providerButton = await findVisibleProviderButton(page, providerLabels, providerAltLabels);
+    }
+    if (!providerButton) throw new Error(`没有找到唯一的 ${provider} 登录按钮`);
   }
-  if (!providerButton) throw new Error(`没有找到唯一的 ${provider} 登录按钮`);
-  if (redirectOverride && /linux\s*do/i.test(provider)) {
+  if (!startedDirectOAuth && redirectOverride && /linux\s*do/i.test(provider)) {
     directOAuthState = await startDirectLinuxDoOAuth(page, redirectOverride) || "";
+    startedDirectOAuth = Boolean(directOAuthState);
   }
-  const startedDirectOAuth = Boolean(directOAuthState);
   let popup = null;
   if (!startedDirectOAuth) {
     const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
@@ -322,6 +351,12 @@ async function runOAuthFlow(context) {
   await page.waitForTimeout(1500);
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
   await trySavedLinuxDoLogin(page);
+  const afterUpstreamLogin = new URL(page.url());
+  if (directAuthorizeUrl && afterUpstreamLogin.hostname === "linux.do"
+    && !/^\/login(?:[/?#]|$)/i.test(afterUpstreamLogin.pathname)) {
+    await page.goto(directAuthorizeUrl, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+  }
 
   if (redirectOverride && new URL(page.url()).hostname === "connect.linux.do") {
     const override = new URL(redirectOverride);
@@ -438,6 +473,10 @@ async function runOAuthFlow(context) {
       reason: "OAuth 回调确认今日额度已发放",
       evidence: { source: "oauth_callback" },
     };
+  }
+  if (!["signed", "already_signed"].includes(dailyCheckin?.status)
+    && finalLocation.origin === origin) {
+    dailyCheckin = await tryOAuthApiCheckin(page, origin, config);
   }
   if (!["signed", "already_signed"].includes(dailyCheckin?.status)
     && (config.newApiCheckinOrigins ?? []).includes(origin)

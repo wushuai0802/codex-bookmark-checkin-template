@@ -15,6 +15,13 @@ test("登录助手必须明确返回 logged_in 才算成功", () => {
   assert.equal(loginHelperOutcome("browser startup text").succeeded, false);
 });
 
+test("登录助手保留二次验证终态且禁止普通重试", () => {
+  const outcome = loginHelperOutcome('{"status":"needs_attention","failureCode":"two_factor_required"}');
+  assert.equal(outcome.succeeded, false);
+  assert.equal(outcome.failureCode, "two_factor_required");
+  assert.equal(outcome.retryable, false);
+});
+
 test("登录助手区分可自愈超时与确定性身份错误", () => {
   const timeout = loginHelperOutcome('{"status":"needs_attention","failureCode":"oauth_timeout"}');
   assert.equal(timeout.failureCode, "oauth_timeout");

@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
-    [Parameter(Mandatory = $true)][string]$LoginUrl
+    [Parameter(Mandatory = $true)][string]$LoginUrl,
+    [string]$UserDataDirOverride
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,6 +10,32 @@ $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $node = Resolve-CheckinNode $config
+
+function Resolve-ProjectDataProfile([string]$ConfiguredPath) {
+    if ([string]::IsNullOrWhiteSpace($ConfiguredPath)) { throw '机器人 Chrome Profile 路径不能为空。' }
+    $candidate = if ([System.IO.Path]::IsPathRooted($ConfiguredPath)) {
+        $ConfiguredPath
+    } else {
+        Join-Path $root $ConfiguredPath
+    }
+    $resolved = [System.IO.Path]::GetFullPath($candidate)
+    $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
+    $dataPrefix = $dataRoot.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw '机器人 Chrome Profile 必须是项目 data 目录的严格子目录。'
+    }
+    return $resolved
+}
+
+$preferNative = -not [string]::IsNullOrWhiteSpace($UserDataDirOverride)
+$profilePath = Resolve-ProjectDataProfile $(if ($preferNative) {
+    $UserDataDirOverride
+} else {
+    [string]$config.automationUserDataDir
+})
 $uri = [uri]$Origin
 $loginUri = [uri]$LoginUrl
 if ($uri.Scheme -ne 'https' -or $loginUri.GetLeftPart([System.UriPartial]::Authority) -ne $uri.GetLeftPart([System.UriPartial]::Authority)) {
@@ -28,16 +55,6 @@ if ($verificationUri.Scheme -ne 'https' -or $verificationUri.GetLeftPart([System
     exit 2
 }
 $verificationUrl = $verificationUri.AbsoluteUri
-$preferNative = $false
-foreach ($item in @($config.nativeWafPreflightUrls)) {
-    $candidateValue = if ($item -is [string]) { [string]$item } else { [string]$item.url }
-    try {
-        if ([Uri]::new($candidateValue).GetLeftPart([System.UriPartial]::Authority) -eq $originKey) {
-            $preferNative = $true
-            break
-        }
-    } catch { }
-}
 
 $hostKey = ($uri.DnsSafeHost -replace '[^a-z0-9.-]', '_').ToLowerInvariant()
 $credentialPath = Join-Path $root "data\credentials\$hostKey.json"
@@ -100,14 +117,34 @@ $finalResult = $null
 try {
     $usernamePlain = Unprotect-Text ([string]$stored.usernameProtected)
     $passwordPlain = Unprotect-Text ([string]$stored.passwordProtected)
-    if ($preferNative) {
-        . (Join-Path $PSScriptRoot 'Plain-CredentialLoginAccessibility.ps1')
-        $plainResult = Invoke-PlainCredentialLoginAccessibility `
-            -Config $config -Origin $originKey -LoginUrl $loginUri.AbsoluteUri `
-            -VerificationUrl $verificationUrl -Username $usernamePlain -Password $passwordPlain
+    $apiRuleProperty = if ($null -ne $config.protectedCredentialApiLoginRules) {
+        $config.protectedCredentialApiLoginRules.PSObject.Properties[$originKey]
+    } else { $null }
+    if ($apiRuleProperty) {
+        $apiHelper = Join-Path $root 'src\credential-api-login.mjs'
+        if (-not (Test-Path -LiteralPath $apiHelper)) { throw '受保护凭据 API 登录助手不存在。' }
+        $apiResult = Invoke-CredentialProcess `
+            $apiHelper `
+            @($originKey, $loginUri.AbsoluteUri, $verificationUrl) `
+            $usernamePlain $passwordPlain
+        $apiStatus = Get-HelperStatus $apiResult.stdout
+        if ($apiStatus -in @('logged_in', 'invalid_credential', 'needs_attention', 'unsupported')) {
+            $finalResult = $apiResult
+        }
+    }
+    if ($null -eq $finalResult) {
+    . (Join-Path $PSScriptRoot 'Plain-CredentialLoginAccessibility.ps1')
+    $plainResult = Invoke-PlainCredentialLoginAccessibility `
+        -Config $config -Origin $originKey -LoginUrl $loginUri.AbsoluteUri `
+        -VerificationUrl $verificationUrl -Username $usernamePlain -Password $passwordPlain `
+        -AutomationUserDataDirOverride $profilePath
+    $plainStatus = [string]$plainResult.status
+    $plainFailureCode = [string]$plainResult.failureCode
+    if ($plainStatus -eq 'logged_in' -or $plainStatus -eq 'invalid_credential' `
+        -or $plainFailureCode -eq 'two_factor_required' -or $preferNative) {
         $plainJson = $plainResult | ConvertTo-Json -Compress -Depth 6
         $finalResult = [pscustomobject]@{
-            exitCode = if ([string]$plainResult.status -eq 'logged_in') { 0 } else { 2 }
+            exitCode = if ($plainStatus -eq 'logged_in') { 0 } else { 2 }
             stdout = $plainJson
             stderr = ''
         }
@@ -125,7 +162,6 @@ try {
             $finalResult = $primary
         }
         else {
-            $profilePath = [string]$config.automationUserDataDir
             $existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
                 $_.CommandLine -like "*$profilePath*"
             })
@@ -139,7 +175,8 @@ try {
                 [void](Reset-NativeChromeDebugPort $profilePath)
                 $debugPort = Get-NativeChromeDebugPort
                 & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') `
-                    -Offscreen -RemoteDebuggingPort $debugPort -Urls @($loginUri.AbsoluteUri) | Out-Null
+                    -Offscreen -RemoteDebuggingPort $debugPort -Urls @($loginUri.AbsoluteUri) `
+                    -UserDataDirOverride $profilePath | Out-Null
                 $nativeChromeStarted = $true
                 $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
                 $finalResult = Invoke-CredentialProcess $nativeHelper `
@@ -148,11 +185,12 @@ try {
             }
         }
     }
+    }
 }
 finally {
     if ($nativeChromeStarted) {
         $targets = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
-            $_.CommandLine -like "*$([string]$config.automationUserDataDir)*"
+            $_.CommandLine -like "*$profilePath*"
         })
         $targetIds = @($targets.ProcessId)
         foreach ($processInfo in @($targets | Where-Object { $targetIds -notcontains $_.ParentProcessId })) {
@@ -161,7 +199,7 @@ finally {
         }
         Start-Sleep -Seconds 3
         Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
-            $_.CommandLine -like "*$([string]$config.automationUserDataDir)*"
+            $_.CommandLine -like "*$profilePath*"
         } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     }
     $usernamePlain = $null

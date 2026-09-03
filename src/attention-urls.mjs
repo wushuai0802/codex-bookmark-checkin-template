@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBookmarkPlanWithBackup } from "./bookmarks.mjs";
-import { TERMINAL_STATUSES } from "./retry-policy.mjs";
+import { isTerminalResult } from "./result-contract.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -12,7 +12,7 @@ const plan = await readBookmarkPlanWithBackup(config.bookmarksPath, config);
 
 const items = [];
 for (const result of latest.results) {
-  if (TERMINAL_STATUSES.has(result.status)) continue;
+  if (isTerminalResult(result)) continue;
   const target = plan.targets.find((candidate) => candidate.origin === result.origin);
   if (!target?.candidates?.length) continue;
   items.push({ origin: result.origin, url: target.candidates[0], status: result.status });

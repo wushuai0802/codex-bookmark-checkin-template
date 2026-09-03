@@ -1,4 +1,4 @@
-$script:CheckinProjectRoot = Split-Path -Parent $PSScriptRoot
+﻿$script:CheckinProjectRoot = Split-Path -Parent $PSScriptRoot
 
 function Resolve-CheckinExecutable {
     param(

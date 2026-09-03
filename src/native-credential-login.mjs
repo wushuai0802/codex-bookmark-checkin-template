@@ -7,6 +7,7 @@ import {
 } from "./credential-session-verification.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
 import { safeLogUrl } from "./security.mjs";
+import { classifyPageText } from "./detector.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -37,6 +38,7 @@ let status = "failed";
 let diagnostic = null;
 let page;
 let dailyCheckin = null;
+let failureCode = null;
 let stage = "startup";
 let submitAttempted = false;
 try {
@@ -73,7 +75,11 @@ try {
     await page.waitForTimeout(1000).catch(() => {});
   }
   const password = page.locator('input[type="password"]:visible');
-  if (wafVisible || passwordCount < 1) {
+  const initialState = classifyPageText({ url: page.url(), bodyText: initialText, hasPassword: passwordCount > 0 });
+  if (initialState.failureCode === "two_factor_required") {
+    status = "needs_attention";
+    failureCode = initialState.failureCode;
+  } else if (wafVisible || passwordCount < 1) {
     if (wafVisible) {
       status = "needs_attention";
       diagnostic = { wafVisible, passwordVisible: false };
@@ -136,7 +142,15 @@ try {
         await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
         await page.waitForTimeout(1200);
         const text = String(await page.locator("body").innerText().catch(() => ""));
-        if (/(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(text)) {
+        const submittedState = classifyPageText({
+          url: page.url(),
+          bodyText: text,
+          hasPassword: await page.locator('input[type="password"]:visible').count() > 0,
+        });
+        if (submittedState.failureCode === "two_factor_required") {
+          status = "needs_attention";
+          failureCode = submittedState.failureCode;
+        } else if (/(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(text)) {
           status = "invalid_credential";
         } else if (/(验证码错误|驗證碼錯誤|captcha|verify you are human|安全验证)/i.test(text)) {
           status = "needs_attention";
@@ -161,6 +175,7 @@ try {
     origin,
     finalUrl: safeLogUrl(page.url()),
     diagnostic,
+    ...(failureCode ? { failureCode, attentionKind: "trusted_device_initialization" } : {}),
     ...(dailyCheckin ? { dailyCheckin } : {}),
   }));
   if (status !== "logged_in") process.exitCode = 2;

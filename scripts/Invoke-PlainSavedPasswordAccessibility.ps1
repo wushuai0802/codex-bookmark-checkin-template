@@ -1,8 +1,9 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
     [Parameter(Mandatory = $true)][string]$LoginUrl,
-    [ValidateRange(20, 120)][int]$TimeoutSeconds = 60
+    [ValidateRange(20, 120)][int]$TimeoutSeconds = 60,
+    [string]$UserDataDirOverride
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,7 +14,7 @@ $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\
 $originUri = [uri]$Origin
 $loginUri = [uri]$LoginUrl
 $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
-$profilePath = [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir)
+$profilePath = [System.IO.Path]::GetFullPath($(if ($UserDataDirOverride) { $UserDataDirOverride } else { [string]$config.automationUserDataDir }))
 $allowedRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'data'))
 $allowedPrefix = $allowedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 
@@ -26,9 +27,7 @@ if (-not $profilePath.StartsWith($allowedPrefix, [System.StringComparison]::Ordi
     throw "机器人 Chrome 目录必须位于 $allowedRoot"
 }
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Windows.Forms
+. (Join-Path $PSScriptRoot 'Safe-UIAutomation.ps1')
 
 function Get-ProfileChromeProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
@@ -47,6 +46,20 @@ function Get-ChromeAutomationRoots {
             catch { $null }
         } | Where-Object { $null -ne $_ }
     )
+}
+
+function Test-SecondFactorVisible {
+    foreach ($window in @(Get-ChromeAutomationRoots)) {
+        try {
+            $elements = $window.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            )
+            $text = (@($elements | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) -join ' ')
+            if ($text -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b') { return $true }
+        } catch { }
+    }
+    return $false
 }
 
 function Get-AllAutomationElements {
@@ -97,39 +110,8 @@ function Get-LoginEditControls {
     return @($controls)
 }
 
-function Get-UniqueLoginButton {
-    $labels = @('登录', '登入', '用户登录', '用戶登入', 'Log in', 'Sign in')
-    $found = @()
-    foreach ($element in @(Get-AllAutomationElements)) {
-        try {
-            if (-not $element.Current.IsEnabled -or $element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
-            if ([string]$element.Current.Name -in $labels) { $found += $element }
-        }
-        catch { }
-    }
-    if ($found.Count -eq 1) { return $found[0] }
-    return $null
-}
-
 function Invoke-Control([System.Windows.Automation.AutomationElement]$Element) {
-    if ($null -eq $Element) { return $false }
-    try {
-        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $pattern.Invoke()
-        return $true
-    }
-    catch { }
-    try {
-        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
-        $pattern.DoDefaultAction()
-        return $true
-    }
-    catch { return $false }
-}
-
-function Focus-Control([System.Windows.Automation.AutomationElement]$Element) {
-    try { $Element.SetFocus(); return $true }
-    catch { return $false }
+    return Invoke-SafeAutomationControl -Element $Element -AllowedPatterns @('Invoke')
 }
 
 function Dismiss-PasswordProtectionPrompt {
@@ -211,20 +193,24 @@ if ((Get-ProfileChromeProcesses).Count -gt 0) {
     throw '机器人专用 Chrome 正被占用，无法执行后台保存密码恢复。'
 }
 
-$attemptedPasswordSelection = $false
 $submitted = $false
 $loggedIn = $false
+$twoFactorRequired = $false
+$safeInteractionUnavailable = $false
 $passwordPromptDismissed = $false
 $autoLogoutDisabled = $false
 try {
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -Urls @($loginUri.AbsoluteUri) | Out-Null
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -Urls @($loginUri.AbsoluteUri) -UserDataDirOverride $profilePath | Out-Null
     $windowDeadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $windowDeadline -and @(Get-ChromeAutomationRoots).Count -eq 0) { Start-Sleep -Milliseconds 500 }
     if (@(Get-ChromeAutomationRoots).Count -eq 0) { throw '原生 Chrome 没有可用的无障碍窗口。' }
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $selectionAttempts = 0
     while ((Get-Date) -lt $deadline) {
+        if (Test-SecondFactorVisible) {
+            $twoFactorRequired = $true
+            break
+        }
         if (-not $passwordPromptDismissed) {
             $passwordPromptDismissed = Dismiss-PasswordProtectionPrompt
             if ($passwordPromptDismissed) { Start-Sleep -Milliseconds 500 }
@@ -238,32 +224,22 @@ try {
 
         if (-not $autoLogoutDisabled) { $autoLogoutDisabled = Disable-AutoLogoutOption }
         $edits = @(Get-LoginEditControls)
-        if ($edits.Count -ge 2 -and $selectionAttempts -lt 3) {
-            foreach ($control in @($edits[0], $edits[1], $edits[0])) {
-                if (Focus-Control $control) {
-                    [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
-                    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-                    Start-Sleep -Milliseconds 900
-                    $attemptedPasswordSelection = $true
-                }
-            }
-            $selectionAttempts += 1
-        }
-
-        if (-not $submitted -and $attemptedPasswordSelection) {
-            $button = Get-UniqueLoginButton
-            if ($button -and (Invoke-Control $button)) {
-                $submitted = $true
-                Start-Sleep -Seconds 3
-                continue
-            }
+        if ($edits.Count -ge 2) {
+            # Chrome's password suggestion menu cannot be triggered reliably
+            # without foreground keyboard input. Let the bounded retry chain
+            # choose another recovery method instead of stealing user focus.
+            $safeInteractionUnavailable = $true
+            break
         }
         Start-Sleep -Seconds 2
     }
 
     [pscustomobject]@{
-        status = if ($loggedIn) { 'logged_in' } elseif ($attemptedPasswordSelection) { 'needs_attention' } else { 'no_saved_credential' }
-        attemptedPasswordSelection = $attemptedPasswordSelection
+        status = if ($loggedIn) { 'logged_in' } elseif ($twoFactorRequired) { 'needs_attention' } else { 'failed' }
+        failureCode = if ($twoFactorRequired) { 'two_factor_required' } else { $null }
+        attentionKind = if ($twoFactorRequired) { 'trusted_device_initialization' } else { $null }
+        diagnostic = if ($safeInteractionUnavailable) { 'safe_interaction_unavailable' } else { 'session_not_established' }
+        safeInteractionUnavailable = $safeInteractionUnavailable
         submitted = $submitted
         passwordPromptDismissed = $passwordPromptDismissed
         autoLogoutDisabled = $autoLogoutDisabled

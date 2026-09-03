@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +18,7 @@ trap {
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'ResultIdentity.ps1')
 . (Join-Path $PSScriptRoot 'HealthReportClassification.ps1')
+. (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $configPath = Join-Path $root 'config\config.json'
 if (-not (Test-Path -LiteralPath $configPath)) {
     [ordered]@{
@@ -77,7 +78,7 @@ $watchdogHeartbeatFresh = $watchdogHeartbeat -and ((Get-Date) - [datetime]$watch
 $supervisorHeartbeatFresh = $supervisorHeartbeat -and ((Get-Date) - [datetime]$supervisorHeartbeat.updatedAt) -lt [timespan]::FromMinutes(5)
 $siteState = if (Test-Path -LiteralPath $statePath) { try { Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json } catch { $null } } else { $null }
 $currentPlan = if (Test-Path -LiteralPath $currentPlanPath) { try { Get-Content -Raw -Encoding UTF8 -LiteralPath $currentPlanPath | ConvertFrom-Json } catch { $null } } else { $null }
-$problemCount = if ($latest) { @($latest.results | Where-Object { $_.status -notin @('signed', 'already_signed', 'not_available') }).Count } else { $null }
+$problemCount = if ($latest) { @($latest.results | Where-Object { -not (Test-TerminalCheckinResult $_) }).Count } else { $null }
 $pendingExternalCount = if ($latest) { @($latest.results | Where-Object { $_.retryCause -eq 'upstream_unavailable' }).Count } else { $null }
 $minimumTargets = [Math]::Max(1, [int]$config.minimumBookmarkTargetCount)
 $latestRunToday = $latest -and [string]$latest.runId -like "$(Get-Date -Format 'yyyyMMdd')-*"
@@ -111,12 +112,19 @@ $latestPlanIdentityReady = $latest -and $latestPlanIdentities.Count -eq $planned
 $latestResultIdentityReady = $latest `
     -and $latestResultIdentityValues.Count -eq $plannedTotal `
     -and $latestResultIdentities.Count -eq $latestResultIdentityValues.Count
-$latestMatchesCurrentPlan = $currentPlanIdentityReady `
-    -and $latestPlanIdentityReady `
-    -and $latestResultIdentityReady `
-    -and $currentPlannedTotal -eq $plannedTotal `
-    -and @(Compare-Object -ReferenceObject $currentPlanIdentities -DifferenceObject $latestPlanIdentities).Count -eq 0 `
-    -and @(Compare-Object -ReferenceObject $currentPlanIdentities -DifferenceObject $latestResultIdentities).Count -eq 0
+$currentPlanFingerprint = [string]$currentPlan.planFingerprint
+$latestPlanFingerprint = [string]$latest.bookmarkSummary.planFingerprint
+$latestMatchesCurrentPlan = Test-CheckinPlanMatch `
+    -CurrentPlanIdentityReady $currentPlanIdentityReady `
+    -LatestPlanIdentityReady $latestPlanIdentityReady `
+    -LatestResultIdentityReady $latestResultIdentityReady `
+    -CurrentPlanIdentities $currentPlanIdentities `
+    -LatestPlanIdentities $latestPlanIdentities `
+    -LatestResultIdentities $latestResultIdentities `
+    -CurrentPlannedTotal ([int]$currentPlannedTotal) `
+    -PlannedTotal $plannedTotal `
+    -CurrentPlanFingerprint $currentPlanFingerprint `
+    -LatestPlanFingerprint $latestPlanFingerprint
 $latestResultValid = $latestRunToday `
     -and [string]$latest.runState -eq 'final' `
     -and $latest.isComplete -eq $true `
@@ -124,9 +132,10 @@ $latestResultValid = $latestRunToday `
     -and $processedTotal -ge $plannedTotal `
     -and @($latest.results).Count -ge $plannedTotal
 $latestExecutionComplete = $latestResultValid -and ($null -eq $latest.executionComplete -or $latest.executionComplete -eq $true)
-$latestBusinessComplete = if (-not $latestExecutionComplete) { $false }
-elseif ($null -ne $latest.businessComplete) { $latest.businessComplete -eq $true }
-else { [int]$problemCount -eq 0 }
+$latestBusinessComplete = Get-CheckinBusinessComplete -LatestExecutionComplete $latestExecutionComplete -ProblemCount ([int]$problemCount)
+$serializedBusinessCompleteMatches = $null -eq $latest -or (Test-SerializedCheckinBusinessComplete `
+    -SerializedBusinessComplete $latest.businessComplete `
+    -ComputedBusinessComplete $latestBusinessComplete)
 $reportStatus = Get-CheckinReportStatus -LatestResultValid $latestResultValid -ProblemCount ([int]$problemCount)
 $notificationReady = $config.notification.mode -in @($null, '', 'none') -or (
     $config.notification.mode -eq 'command' -and
@@ -240,8 +249,9 @@ function New-OAuthBindingHealth([string]$Origin, [object]$Account, [string]$Kind
     )
     $providerAllowed = $allowedOAuthProviders -contains $provider
     $upstreamAllowed = $allowedOAuthProviders -contains $upstreamProvider
+    $accountKeyValid = [string]$Account.accountKey -match '^[A-Za-z0-9._-]{1,80}$'
     $ready = $originValue -and $loginValid -and $providerAllowed -and $upstreamAllowed `
-        -and -not [string]::IsNullOrWhiteSpace([string]$Account.accountKey) `
+        -and $accountKeyValid `
         -and -not [string]::IsNullOrWhiteSpace([string]$Account.accountId) `
         -and $consistent
     return [pscustomobject]@{
@@ -255,6 +265,7 @@ function New-OAuthBindingHealth([string]$Origin, [object]$Account, [string]$Kind
         providerAllowed = [bool]$providerAllowed
         upstreamProviderAllowed = [bool]$upstreamAllowed
         loginUrlValid = [bool]$loginValid
+        accountKeyValid = [bool]$accountKeyValid
         consistent = [bool]$consistent
         selfContained = [bool]$selfContained
         ready = [bool]$ready
@@ -293,7 +304,7 @@ $oauthRecoveryAccountBindings = @(if ($null -ne $config.oauthRecoveryAccountBind
         $accountKey = ([string]$_.Value).Trim()
         $accountKeyValid = -not [string]::IsNullOrWhiteSpace($accountKey) `
             -and $accountKey.Length -le 80 `
-            -and $accountKey -notmatch '[\r\n]'
+            -and $accountKey -match '^[A-Za-z0-9._-]+$'
         $accountMatches = @($oauthAccountBindings | Where-Object { $_.accountKey -eq $accountKey })
         $targetProvider = if ($origin) { [string](Get-OAuthHealthMapValue $config.automaticOAuthProviders $origin) } else { '' }
         $accountProvider = if ($accountMatches.Count -eq 1) { [string]$accountMatches[0].provider } else { '' }
@@ -323,11 +334,30 @@ $oauthAccountProfiles = @($primaryIdentityProfiles) + @($supplementalProfiles)
 $reservedOAuthProfiles = @($globalProfile) + @($oauthAccountProfiles) + @($isolatedOAuthSiteProfiles) + @($nativeWafProfiles) + @($oauthSessionProfiles)
 $duplicateOAuthProfileGroups = @($reservedOAuthProfiles | Where-Object { $_.valid } | Group-Object { $_.path.ToLowerInvariant() } | Where-Object { $_.Count -gt 1 })
 $configuredOAuthProfilePathKeys = @($reservedOAuthProfiles | Where-Object { $_.valid } | ForEach-Object { $_.path.ToLowerInvariant() } | Sort-Object -Unique)
+$primaryOAuthProfilePathKeys = @($primaryIdentityProfiles | Where-Object { $_.valid } | ForEach-Object { $_.path.ToLowerInvariant() } | Sort-Object -Unique)
+$supplementalOAuthProfilePathKeys = @($supplementalProfiles | Where-Object { $_.valid } | ForEach-Object { $_.path.ToLowerInvariant() } | Sort-Object -Unique)
 $accountsRoot = Join-Path $root 'data\accounts'
-$orphanOAuthProfiles = @(Get-ChildItem -LiteralPath $accountsRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+$accountProfileDirectories = @(Get-ChildItem -LiteralPath $accountsRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
     $candidate = [System.IO.Path]::GetFullPath((Join-Path $_.FullName 'chrome-user-data'))
-    (Test-Path -LiteralPath (Join-Path $candidate 'Local State')) -and $configuredOAuthProfilePathKeys -notcontains $candidate.ToLowerInvariant()
-} | ForEach-Object { $_.Name })
+    if (Test-Path -LiteralPath (Join-Path $candidate 'Local State')) {
+        [pscustomobject]@{
+            name = $_.Name
+            path = $candidate
+            pathKey = $candidate.ToLowerInvariant()
+        }
+    }
+})
+# Keep the historical all-account orphan list for compatibility, while also
+# computing supplemental orphans from their own path set.  The latter must
+# not reuse the primary OAuth result: a future primary profile under
+# data/accounts should never be reported as a supplemental orphan.
+$orphanOAuthProfiles = @($accountProfileDirectories | Where-Object {
+    $configuredOAuthProfilePathKeys -notcontains $_.pathKey
+} | ForEach-Object { $_.name })
+$orphanSupplementalProfiles = @($accountProfileDirectories | Where-Object {
+    $primaryOAuthProfilePathKeys -notcontains $_.pathKey -and
+        $supplementalOAuthProfilePathKeys -notcontains $_.pathKey
+} | ForEach-Object { $_.name })
 $sitesRoot = Join-Path $root 'data\sites'
 $orphanIsolatedOAuthSiteProfiles = @(Get-ChildItem -LiteralPath $sitesRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
     $candidate = [System.IO.Path]::GetFullPath((Join-Path $_.FullName 'chrome-user-data'))
@@ -428,12 +458,13 @@ $checks = [ordered]@{
     schedulerClaimFresh = [bool]$claimFresh
     runtimeAclPrivate = [bool]$runtimeAclPrivate
     noOrphanOAuthProfiles = $orphanOAuthProfiles.Count -eq 0
-    noOrphanSupplementalProfiles = $orphanOAuthProfiles.Count -eq 0
+    noOrphanSupplementalProfiles = $orphanSupplementalProfiles.Count -eq 0
     noOrphanIsolatedOAuthSiteProfiles = $orphanIsolatedOAuthSiteProfiles.Count -eq 0
     stalePrivateTempClean = $staleTempCount -eq 0
     latestResultPresent = [bool]$latest
     latestResultValid = [bool]$latestResultValid
     latestMatchesCurrentPlan = [bool]$latestMatchesCurrentPlan
+    latestBusinessCompleteConsistent = [bool]$serializedBusinessCompleteMatches
     latestResultConfirmed = [bool]$latestResultValid
     latestResultComplete = [bool]$latestResultValid
     siteStatePresent = $null -ne $siteState
@@ -450,7 +481,11 @@ $result = [ordered]@{
     schedulerMode = if ($useUserScheduler) { 'user_scheduler' } elseif ($scheduledTask) { 'windows_task' } else { 'none' }
     schedulerExpectedProbeIntervalMinutes = $probeInterval
     schedulerActualDailyTriggerMinutes = @($actualTriggerMinutes)
-    schedulerTaskTriggerFrequencyValid = [bool]$scheduledTaskTriggerFrequencyValid
+    # This is the effective scheduler result.  Keep the Windows Task
+    # Scheduler-only probe separately so user_scheduler installations do not
+    # appear broken merely because no Windows task is registered.
+    schedulerTaskTriggerFrequencyValid = [bool]$checks.schedulerTaskTriggerFrequencyValid
+    windowsTaskTriggerFrequencyValid = [bool]$scheduledTaskTriggerFrequencyValid
     schedulerRunKeyPresent = [bool]$runValue
     schedulerStartupShortcutPresent = Test-Path -LiteralPath $startupShortcutPath -PathType Leaf
     schedulerProcessCount = $schedulerCount
@@ -463,6 +498,8 @@ $result = [ordered]@{
     currentPlannedTotal = $currentPlannedTotal
     latestPlannedTotal = if ($latest -and $null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { $null }
     currentPlanMatchesLatest = [bool]$latestMatchesCurrentPlan
+    currentPlanFingerprint = if ($currentPlanFingerprint) { $currentPlanFingerprint } else { $null }
+    latestPlanFingerprint = if ($latestPlanFingerprint) { $latestPlanFingerprint } else { $null }
     currentPlanIdentityCount = $currentPlanIdentities.Count
     latestPlanIdentityCount = $latestPlanIdentities.Count
     latestResultIdentityCount = $latestResultIdentities.Count
@@ -485,7 +522,7 @@ $result = [ordered]@{
     notificationQuarantinedCount = $notificationQuarantinedCount
     notificationPendingCount = $notificationPendingCount
     orphanOAuthProfiles = $orphanOAuthProfiles
-    orphanSupplementalProfiles = $orphanOAuthProfiles
+    orphanSupplementalProfiles = $orphanSupplementalProfiles
     orphanIsolatedOAuthSiteProfiles = $orphanIsolatedOAuthSiteProfiles
     stalePrivateTempCount = $staleTempCount
     trackedSiteCount = if ($siteState -and $siteState.sites) { @($siteState.sites.PSObject.Properties).Count } else { 0 }
