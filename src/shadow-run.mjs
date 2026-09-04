@@ -15,6 +15,8 @@ function parseArgs(argv) {
     else if (token === '--ledger') args.ledger = argv[++i];
     else if (token === '--previous') args.previous = argv[++i];
     else if (token === '--generated-at') args.generatedAt = argv[++i];
+    else if (token === '--health-file') args.healthFile = argv[++i];
+    else if (token === '--pt-status-file') args.ptStatusFile = argv[++i];
     else if (token === '--help' || token === '-h') args.help = true;
     else throw new Error(`unknown argument: ${token}`);
   }
@@ -28,16 +30,28 @@ function loadSnapshot(file) {
   catch (error) { throw new Error(`invalid previous snapshot: ${error.message}`); }
 }
 
+function loadJsonReport(file, label) {
+  if (!file) return undefined;
+  if (!fs.existsSync(file)) throw new Error(`${label} is missing: ${file}`);
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { throw new Error(`invalid ${label}: ${error.message}`); }
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
   try {
     const args = parseArgs(process.argv);
     if (args.help) {
-      console.log('Usage: node src/shadow-run.mjs --legacy-root <path> [--out <file>] [--ledger <jsonl>] [--previous <snapshot>]');
+      console.log('Usage: node src/shadow-run.mjs --legacy-root <path> [--out <file>] [--ledger <jsonl>] [--previous <snapshot>] [--health-file <json>] [--pt-status-file <json>]');
       process.exit(0);
     }
     const legacyRoot = args.legacyRoot ?? process.env.CHECKIN_LEGACY_ROOT;
     if (!legacyRoot) throw new Error('provide --legacy-root or CHECKIN_LEGACY_ROOT');
-    const snapshot = buildSnapshot({ legacyRoot, generatedAt: args.generatedAt });
+    const snapshot = buildSnapshot({
+      legacyRoot,
+      generatedAt: args.generatedAt,
+      healthReport: loadJsonReport(args.healthFile, 'health report'),
+      ptStatusReport: loadJsonReport(args.ptStatusFile, 'PT status report')
+    });
     const previous = loadSnapshot(args.previous);
     const record = createLedgerRecord(snapshot, { previousSnapshot: previous, recordedAt: args.generatedAt });
     if (args.out) writeSnapshot(snapshot, args.out, legacyRoot);
@@ -57,4 +71,3 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     process.exitCode = 1;
   }
 }
-

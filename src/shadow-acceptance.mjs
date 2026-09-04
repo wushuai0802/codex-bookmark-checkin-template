@@ -56,6 +56,7 @@ function recordErrors(record) {
   if (record.drift?.hashValid !== true) errors.push('drift_hash_invalid');
   if (Array.isArray(record.drift?.ownerConflicts) && record.drift.ownerConflicts.length > 0) errors.push('owner_conflict');
   if (!record.health || typeof record.health.freshness?.fresh !== 'boolean') errors.push('health_freshness_invalid');
+  if (!record.health || typeof record.health.healthy !== 'boolean') errors.push('health_status_invalid');
   if (!record.counts || !Number.isInteger(record.counts.logicalSites) || record.counts.logicalSites < 0) errors.push('logical_site_count_invalid');
   if (!record.counts || !Number.isInteger(record.counts.executionUnits) || record.counts.executionUnits < 0) errors.push('execution_unit_count_invalid');
   if (hasSensitiveKey(record)) errors.push('sensitive_field_present');
@@ -77,6 +78,7 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) 
   const dates = new Set();
   let freshRecordCount = 0;
   let staleRecordCount = 0;
+  let unhealthyRecordCount = 0;
   let ownerConflictRecords = 0;
 
   list.forEach((record, index) => {
@@ -86,6 +88,7 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) 
     if (errors.includes('owner_conflict')) ownerConflictRecords += 1;
     if (record?.health?.freshness?.fresh === true) freshRecordCount += 1;
     else staleRecordCount += 1;
+    if (record?.health?.healthy !== true) unhealthyRecordCount += 1;
     if (validBusinessDate(record?.businessDate)) dates.add(record.businessDate);
     if (errors.length > 0) invalidRecords.push({ index, recordId: record?.recordId ?? null, errors: [...new Set(errors)] });
   });
@@ -105,6 +108,7 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) 
   if (invalidRecords.length > 0) reasons.push('invalid_records');
   if (ownerConflictRecords > 0) reasons.push('owner_conflict');
   if (staleRecordCount > 0) reasons.push('health_not_fresh');
+  if (unhealthyRecordCount > 0) reasons.push('health_not_healthy');
   return {
     schemaVersion: 1,
     accepted: reasons.length === 0,
@@ -116,6 +120,7 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) 
     longestConsecutiveDays,
     freshRecordCount,
     staleRecordCount,
+    unhealthyRecordCount,
     invalidRecordCount: invalidRecords.length,
     ownerConflictRecords,
     reasons,

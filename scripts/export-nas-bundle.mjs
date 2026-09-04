@@ -41,7 +41,7 @@ copyRequired(path.join(projectRoot, 'secrets', 'README.md'), path.join(output, '
 fs.writeFileSync(path.join(output, 'TRANSFER-MANIFEST.txt'), [
   'codex-checkin-fabric-v2 NAS bundle',
   'Contains only application source and empty data/secret directories.',
-  'Copy redacted shadow-beta-snapshot.json and shadow-ledger.jsonl into nas-data/.',
+  'Copy redacted shadow-beta-snapshot.json (including optional ptStatus) and shadow-ledger.jsonl into nas-data/.',
   'Create secrets/fabric_admin_token.txt on the NAS; never copy credentials or browser profiles.',
   ''
 ].join('\n'), 'utf8');

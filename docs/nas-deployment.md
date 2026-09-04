@@ -23,13 +23,20 @@ contents of `outputs/nas-bundle/`:
 - `public/`
 
 Create `nas-data/` with the latest redacted `shadow-beta-snapshot.json` and
-`shadow-ledger.jsonl`. Do not copy the old project's `data/credentials`, Chrome
+`shadow-ledger.jsonl`. The snapshot may include the optional `ptStatus` catalog
+from a Harvest or other read-only observer. Do not copy the old project's `data/credentials`, Chrome
 profiles, cookies, tokens, screenshots, or full logs. Create
 `secrets/fabric_admin_token.txt` with a random 32+ character value and protect
 it with NAS filesystem permissions. The container runs as the unprivileged
 `node` user (UID 1000 in the image), so ensure the mounted `nas-data/` is
 writable by that user; the application needs write access only for
 `control-state.json`.
+
+The browser submits the administrator token once to create a signed HttpOnly,
+SameSite=Strict session cookie. With `FABRIC_TRUST_PROXY_TLS=1`, the cookie is
+also Secure. The administrator token is not persisted in browser storage or
+copied into the cookie. A normal browser session is internally bounded to 12
+hours; remember-me is bounded to 7 days.
 
 ## Start
 
@@ -57,10 +64,12 @@ the token secret.
 
 ## Refreshing snapshots
 
-Run the existing Windows shadow command, then copy the generated redacted
-snapshot and ledger into NAS `nas-data/` using your approved file-sync path.
-This dashboard does not poll Windows, launch Chrome, or send Telegram
-notifications. A stale snapshot is shown as stale in the UI.
+The Windows operations wrapper should first run V1's read-only health command,
+pass its JSON through `--health-file`, and then copy only the generated
+redacted snapshot and ledger into NAS `nas-data/`. Trigger a refresh when the
+final V1 report changes and keep a fixed daily refresh as a fallback. The
+dashboard does not poll Windows, launch Chrome, or send Telegram notifications.
+A stale snapshot is shown as stale in the UI.
 
 ## Rollback
 

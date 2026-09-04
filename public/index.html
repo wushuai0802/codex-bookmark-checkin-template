@@ -7,6 +7,7 @@
   <title>Check-in Fabric · 控制台</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/controls.css">
+  <link rel="stylesheet" href="/pt-status.css">
 </head>
 <body>
   <div class="app-shell">
@@ -18,6 +19,7 @@
       <nav class="nav" aria-label="主导航">
         <button class="nav-item active" data-view="overview">总览</button>
         <button class="nav-item" data-view="tasks">任务</button>
+        <button class="nav-item" data-view="pt-status">PT 状态</button>
         <button class="nav-item" data-view="sites">站点</button>
         <button class="nav-item" data-view="accounts">账户</button>
         <button class="nav-item" data-view="ledger">运行记录</button>
@@ -28,7 +30,7 @@
     <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭导航"></button>
     <main class="main-content">
       <header class="topbar"><div class="topbar-heading"><button id="menu-toggle" class="icon-button menu-toggle" type="button" aria-label="打开导航" aria-controls="main-sidebar" aria-expanded="false">☰</button><div><p class="eyebrow">CONTROL PLANE / SHADOW MODE</p><h1 id="page-title">签到运行总览</h1></div></div><div class="top-actions"><span class="mode-pill" id="mode-pill">只读影子</span><button id="refresh-btn" class="button primary">刷新数据</button></div></header>
-      <section id="login-panel" class="login-panel hidden" aria-live="polite"><div><h2>需要控制台令牌</h2><p>默认只保存在当前浏览器标签页；勾选后会在此设备本地保存 30 天，可随时清除。</p></div><form id="login-form"><label for="token-input">管理令牌</label><div class="token-row"><input id="token-input" type="password" autocomplete="off" spellcheck="false" required maxlength="256"><button id="token-visibility" class="button secondary" type="button" aria-label="显示令牌">显示</button><button class="button primary" type="submit">连接</button></div><div class="token-options"><label class="remember-token"><input id="remember-token" type="checkbox"> <span>在此设备记住令牌（30 天）</span></label><button id="clear-token" class="link-button clear-token" type="button">清除已保存令牌</button></div><p id="login-error" class="error-text"></p></form></section>
+      <section id="login-panel" class="login-panel hidden" aria-live="polite"><div><h2>需要控制台令牌</h2><p>令牌验证后仅保存在服务端签发的安全会话中，不写入浏览器存储。</p></div><form id="login-form"><label for="token-input">管理令牌</label><div class="token-row"><input id="token-input" type="password" autocomplete="off" spellcheck="false" required maxlength="256"><button id="token-visibility" class="button secondary" type="button" aria-label="显示令牌">显示</button><button class="button primary" type="submit">连接</button></div><div class="token-options"><label class="remember-token"><input id="remember-token" type="checkbox"> <span>在此设备保持登录（7 天）</span></label><button id="clear-token" class="link-button clear-token" type="button">退出安全会话</button></div><p id="login-error" class="error-text"></p></form></section>
       <section id="app-error" class="alert error hidden" role="alert"></section>
       <div id="view-overview" class="view active-view">
         <div id="kpi-grid" class="kpi-grid"></div>
@@ -36,6 +38,7 @@
         <article class="panel"><div class="panel-heading"><div><p class="eyebrow">LATEST PLAN</p><h2>最近计划</h2></div><button class="link-button" data-view-link="tasks">查看全部任务 →</button></div><div id="latest-plan" class="plan-meta"></div></article>
       </div>
       <div id="view-tasks" class="view"><div class="toolbar"><div><p class="eyebrow">TASK LEDGER</p><h2>任务管理</h2></div><div class="filters"><input id="task-search" type="search" placeholder="搜索站点或任务 ID" maxlength="80"><select id="task-status"><option value="">全部状态</option><option value="signed">已签到</option><option value="already_signed">今日已完成</option><option value="not_available">未开放</option><option value="needs_attention">需关注</option><option value="deferred">已延迟</option></select></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>任务</th><th>站点</th><th>账户</th><th>状态</th><th>证据</th><th>执行权</th></tr></thead><tbody id="tasks-body"></tbody></table></div></article></div>
+      <div id="view-pt-status" class="view"><div class="toolbar"><div><p class="eyebrow">PT STATUS OBSERVATION</p><h2>PT 状态</h2></div><span class="muted">只读观察 · v1、Harvest 或其他来源</span></div><div id="pt-kpis" class="kpi-grid"></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>站点</th><th>范围</th><th>当前状态</th><th>来源对照</th><th>观察时间</th><th>补签判断</th></tr></thead><tbody id="pt-status-body"></tbody></table></div></article></div>
       <div id="view-sites" class="view"><div class="toolbar"><div><p class="eyebrow">SITE CATALOG</p><h2>站点管理</h2></div><span class="muted">来源：书签计划 · 只读</span></div><div id="sites-grid" class="cards-grid"></div></div>
       <div id="view-accounts" class="view"><div class="toolbar"><div><p class="eyebrow">ACCOUNT ISOLATION</p><h2>账户管理</h2></div><span class="muted">仅显示脱敏账户引用</span></div><div id="accounts-grid" class="cards-grid"></div></div>
       <div id="view-ledger" class="view"><div class="toolbar"><div><p class="eyebrow">APPEND-ONLY HISTORY</p><h2>运行记录</h2></div><span class="muted">最多显示最近 30 条</span></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>记录时间</th><th>业务日期</th><th>计划哈希</th><th>漂移</th><th>任务数</th><th>健康</th></tr></thead><tbody id="ledger-body"></tbody></table></div></article></div>

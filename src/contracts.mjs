@@ -35,23 +35,33 @@ export function credentialGroup(origin) {
   return SHARED_OAUTH_ORIGINS.has(normalized) ? 'linuxdo-shared' : null;
 }
 
+export function planUnitIdentity({ logicalSiteKey: site, accountKey = 'site-default', actionType = 'checkin', scheduleOccurrence = 'daily' }) {
+  for (const [name, value] of Object.entries({ logicalSiteKey: site, accountKey, actionType, scheduleOccurrence })) {
+    if (typeof value !== 'string' || !value) throw new Error(`${name} is required for plan unit identity`);
+  }
+  const tuple = [site, accountKey, actionType, scheduleOccurrence].join('|');
+  const digest = crypto.createHash('sha256').update(tuple, 'utf8').digest('hex');
+  return { planUnitId: `unit_${digest.slice(0, 24)}`, tuple };
+}
+
 export function taskIdentity({ businessDate, logicalSiteKey: site, accountKey = 'site-default', actionType = 'checkin', scheduleOccurrence = 'daily' }) {
   for (const [name, value] of Object.entries({ businessDate, logicalSiteKey: site, accountKey, actionType, scheduleOccurrence })) {
     if (typeof value !== 'string' || !value) throw new Error(`${name} is required for task identity`);
   }
-  const tuple = [businessDate, site, accountKey, actionType, scheduleOccurrence].join('|');
+  const { planUnitId } = planUnitIdentity({ logicalSiteKey: site, accountKey, actionType, scheduleOccurrence });
+  const tuple = [businessDate, planUnitId].join('|');
   const digest = crypto.createHash('sha256').update(tuple, 'utf8').digest('hex');
-  return { taskId: `task_${digest.slice(0, 24)}`, tuple };
+  return { taskId: `task_${digest.slice(0, 24)}`, planUnitId, tuple };
 }
 
 export function planHash(tasks) {
   const canonical = tasks
     .map((task) => ({
-      taskId: task.taskId, businessDate: task.businessDate,
+      planUnitId: task.planUnitId ?? planUnitIdentity(task).planUnitId,
       logicalSiteKey: task.logicalSiteKey, accountKey: task.accountKey,
       actionType: task.actionType, scheduleOccurrence: task.scheduleOccurrence
     }))
-    .sort((a, b) => a.taskId.localeCompare(b.taskId));
+    .sort((a, b) => a.planUnitId.localeCompare(b.planUnitId));
   return crypto.createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
 }
 

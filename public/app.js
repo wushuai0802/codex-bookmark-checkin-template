@@ -1,37 +1,16 @@
-const TOKEN_SESSION_KEY = 'fabricToken';
-const TOKEN_PERSISTED_KEY = 'fabricTokenRemembered';
-const TOKEN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-
-function readSessionToken() {
-  try { return sessionStorage.getItem(TOKEN_SESSION_KEY)?.trim() ?? ''; } catch { return ''; }
-}
-
-function readPersistedToken() {
+for (const storage of [globalThis.sessionStorage, globalThis.localStorage]) {
   try {
-    const raw = localStorage.getItem(TOKEN_PERSISTED_KEY);
-    if (!raw) return '';
-    const record = JSON.parse(raw);
-    if (typeof record?.token !== 'string' || !record.token.trim() || record.token.length > 256 || !Number.isFinite(record.savedAt)) {
-      localStorage.removeItem(TOKEN_PERSISTED_KEY);
-      return '';
-    }
-    if (Date.now() - record.savedAt > TOKEN_MAX_AGE_MS || record.savedAt > Date.now() + 60_000) {
-      localStorage.removeItem(TOKEN_PERSISTED_KEY);
-      return '';
-    }
-    return record.token.trim();
-  } catch {
-    return '';
-  }
+    storage?.removeItem('fabricToken');
+    storage?.removeItem('fabricTokenRemembered');
+  } catch { /* storage may be disabled by the browser */ }
 }
 
-const sessionToken = readSessionToken();
-const persistedToken = sessionToken ? '' : readPersistedToken();
-const state = { view: 'overview', token: sessionToken || persistedToken, rememberToken: Boolean(persistedToken), data: null, loading: false };
+const state = { view: 'overview', data: null, loading: false };
 
 const STATUS_LABELS = {
   signed: '已签到', already_signed: '今日已完成', not_available: '未开放',
-  needs_attention: '需关注', deferred: '已延迟', login_required: '需登录', failed: '失败', unknown: '未知'
+  not_signed: '未签到（已确认）', needs_attention: '需关注', deferred: '已延迟', login_required: '需登录',
+  unreachable: '不可访问', failed: '失败', unknown: '未知'
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -77,33 +56,12 @@ function showLogin(show) {
   const panel = $('#login-panel');
   if (!panel) return;
   panel.classList.toggle('hidden', !show);
-  if (show) {
-    const remember = $('#remember-token');
-    if (remember) remember.checked = state.rememberToken;
-  }
 }
 
 function showError(message = '') {
   const node = $('#app-error');
   node.textContent = message;
   node.classList.toggle('hidden', !message);
-}
-
-function persistToken(token, remember) {
-  try {
-    if (token) sessionStorage.setItem(TOKEN_SESSION_KEY, token);
-    else sessionStorage.removeItem(TOKEN_SESSION_KEY);
-  } catch { /* storage may be disabled by the browser */ }
-  try {
-    if (remember && token) localStorage.setItem(TOKEN_PERSISTED_KEY, JSON.stringify({ token, savedAt: Date.now() }));
-    else localStorage.removeItem(TOKEN_PERSISTED_KEY);
-  } catch { /* storage may be disabled by the browser */ }
-}
-
-function forgetToken() {
-  state.token = '';
-  state.rememberToken = false;
-  persistToken('', false);
 }
 
 function setSidebarOpen(open) {
@@ -119,7 +77,6 @@ function setSidebarOpen(open) {
 
 async function api(pathname, options = {}) {
   const headers = { Accept: 'application/json', ...(options.headers ?? {}) };
-  if (state.token) headers['X-Fabric-Token'] = state.token;
   const response = await fetch(pathname, { ...options, headers, credentials: 'same-origin' });
   let body = null;
   try { body = await response.json(); } catch { /* error body is optional */ }
@@ -129,6 +86,23 @@ async function api(pathname, options = {}) {
   }
   if (!response.ok) throw new Error(body?.message ?? `请求失败（${response.status}）`);
   return body;
+}
+
+async function createSession(token, remember) {
+  const response = await fetch('/api/session', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ token, remember })
+  });
+  let body = null;
+  try { body = await response.json(); } catch { /* optional error body */ }
+  if (!response.ok) throw new Error(body?.message ?? '令牌验证失败');
+  return body;
+}
+
+async function clearSession() {
+  await fetch('/api/session/logout', { method: 'POST', credentials: 'same-origin' });
 }
 
 function renderKpis(data) {
@@ -210,6 +184,37 @@ function renderTasks(tasks) {
   }
 }
 
+function renderPtStatus(data) {
+  const pt = data ?? {};
+  const counts = pt.counts ?? {};
+  const cards = [
+    ['PT 站点', counts.sites ?? 0, `${counts.inLegacyPlan ?? 0} 个由 v1 管理`],
+    ['外部观察', counts.externalOnly ?? 0, '不改变现有签到计划'],
+    ['状态新鲜', counts.fresh ?? 0, `共 ${counts.sites ?? 0} 个站点`],
+    ['补签候选', counts.supplementCandidates ?? 0, '仅人工复核，v2 未启用执行']
+  ];
+  const kpis = $('#pt-kpis'); kpis.replaceChildren();
+  for (const [label, value, foot] of cards) {
+    const card = el('div', 'kpi'); append(card, el('div', 'kpi-label', label), el('div', 'kpi-value', value), el('div', 'kpi-foot', foot)); kpis.append(card);
+  }
+  const body = $('#pt-status-body'); body.replaceChildren();
+  const sites = Array.isArray(pt.sites) ? pt.sites : [];
+  if (!sites.length) { const row = el('tr'); const cell = el('td'); cell.colSpan = 6; cell.textContent = '暂无 PT 状态观察数据'; row.append(cell); body.append(row); return; }
+  for (const site of sites) {
+    const row = el('tr');
+    const siteCell = el('td'); append(siteCell, el('span', 'origin', site.displayName || site.origin), el('span', 'subtext', site.origin));
+    const scopeCell = el('td'); append(scopeCell, el('span', null, site.inLegacyPlan ? 'v1 计划内' : '外部站点'), el('span', 'subtext', site.managedBy || '—'));
+    const effective = site.effective ?? {};
+    const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown'); if (!effective.fresh) chip.classList.add('stale'); append(statusCell, chip, site.discrepancy ? el('span', 'subtext discrepancy-text', '来源状态不一致') : null);
+    const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', effective.authoritative ? '权威证据' : '非权威观察'));
+    const observedCell = el('td'); append(observedCell, el('span', null, formatTime(effective.observedAt)), el('span', 'subtext', effective.fresh ? '在新鲜度窗口内' : '已过期'));
+    const actionCell = el('td');
+    if (site.supplementCandidate) append(actionCell, statusChip('needs_attention'), el('span', 'subtext', '人工复核候选'));
+    else append(actionCell, el('span', null, site.effective?.status === 'not_signed' ? '证据不足' : '不建议补签'), el('span', 'subtext', 'v2 执行已禁用'));
+    append(row, siteCell, scopeCell, statusCell, sourceCell, observedCell, actionCell); body.append(row);
+  }
+}
+
 function renderSites(sites) {
   const grid = $('#sites-grid'); grid.replaceChildren();
   if (!sites.length) { grid.append(el('p', 'muted', '暂无站点数据')); return; }
@@ -223,16 +228,16 @@ function renderSites(sites) {
     const bar = el('div', 'mini-bar'); const fill = el('i'); fill.style.width = `${total ? Math.round(done / total * 100) : 0}%`; bar.append(fill);
     const controls = el('div', 'site-controls');
     const policy = el('select');
-    for (const [value, label] of [['monitor', '正常观察'], ['review', '标记复核'], ['pause', '计划暂停']]) {
+    for (const [value, label] of [['monitor', '正常观察'], ['review', '标记复核'], ['pause', '仅标记暂停候选']]) {
       const option = el('option', null, label); option.value = value; option.selected = (site.control?.policy ?? 'monitor') === value; policy.append(option);
     }
     const note = el('input'); note.type = 'text'; note.maxLength = 240; note.placeholder = '备注（可选）'; note.value = site.control?.note ?? '';
-    const save = el('button', 'button control-button', '保存策略');
+    const save = el('button', 'button control-button', '保存标记');
     save.addEventListener('click', async () => {
       save.disabled = true; save.textContent = '保存中…';
       try {
         await api('/api/controls/sites', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: site.origin, policy: policy.value, note: note.value }) });
-        save.textContent = '已保存'; setTimeout(() => { save.textContent = '保存策略'; save.disabled = false; }, 900);
+        save.textContent = '已保存'; setTimeout(() => { save.textContent = '保存标记'; save.disabled = false; }, 900);
       } catch (error) { save.textContent = '保存失败'; save.disabled = false; showError(error.message); }
     });
     append(controls, policy, note, save);
@@ -284,6 +289,7 @@ function renderAll() {
   if (!data) return;
   renderOverview(data.snapshot);
   renderTasks(data.tasks ?? []);
+  renderPtStatus(data.ptStatus);
   renderSites(data.sites ?? []);
   renderAccounts(data.accounts ?? []);
   renderLedger(data.ledger ?? []);
@@ -295,8 +301,8 @@ async function loadData() {
   if (state.loading) return;
   state.loading = true; showError(''); $('#refresh-btn').disabled = true; $('#refresh-btn').textContent = '刷新中…';
   try {
-    const [summary, tasks, sites, accounts, ledger, config] = await Promise.all([api('/api/summary'), api('/api/tasks'), api('/api/sites'), api('/api/accounts'), api('/api/ledger'), api('/api/config')]);
-    state.data = { snapshot: summary, tasks: tasks.tasks ?? [], sites: sites.sites ?? [], accounts: accounts.accounts ?? [], ledger: ledger.records ?? [], authConfigured: config.authConfigured };
+    const [summary, tasks, ptStatus, sites, accounts, ledger, config] = await Promise.all([api('/api/summary'), api('/api/tasks'), api('/api/pt-status'), api('/api/sites'), api('/api/accounts'), api('/api/ledger'), api('/api/config')]);
+    state.data = { snapshot: summary, tasks: tasks.tasks ?? [], ptStatus, sites: sites.sites ?? [], accounts: accounts.accounts ?? [], ledger: ledger.records ?? [], authConfigured: config.authConfigured };
     showLogin(false); renderAll();
   } catch (error) {
     $('#service-status').textContent = '连接失败'; $('.status-dot').style.background = '#d76f78'; showError(error.message);
@@ -308,7 +314,7 @@ function switchView(view) {
   setSidebarOpen(false);
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
   document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active-view', item.id === `view-${view}`));
-  const titles = { overview: '签到运行总览', tasks: '任务管理', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '设置与边界' };
+  const titles = { overview: '签到运行总览', tasks: '任务管理', 'pt-status': 'PT 状态', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '设置与边界' };
   $('#page-title').textContent = titles[view] ?? titles.overview;
 }
 
@@ -335,24 +341,26 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#token-visibility').textContent = visible ? '显示' : '隐藏';
     $('#token-visibility').setAttribute('aria-label', visible ? '显示令牌' : '隐藏令牌');
   });
-  $('#clear-token').addEventListener('click', () => {
-    forgetToken();
+  $('#clear-token').addEventListener('click', async () => {
+    await clearSession().catch(() => {});
     $('#token-input').value = '';
     $('#remember-token').checked = false;
-    $('#login-error').textContent = '已清除本地令牌，请重新输入';
+    $('#login-error').textContent = '已清除安全会话，请重新输入';
     showLogin(true);
     $('#token-input').focus();
   });
-  $('#login-form').addEventListener('submit', (event) => {
+  $('#login-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const token = $('#token-input').value.trim();
     if (!token) { $('#login-error').textContent = '请输入管理令牌'; return; }
-    state.token = token;
-    state.rememberToken = $('#remember-token').checked;
-    persistToken(state.token, state.rememberToken);
-    $('#login-error').textContent = '';
-    loadData();
+    try {
+      await createSession(token, $('#remember-token').checked);
+      $('#token-input').value = '';
+      $('#login-error').textContent = '';
+      await loadData();
+    } catch (error) {
+      $('#login-error').textContent = error.message;
+    }
   });
-  $('#remember-token').checked = state.rememberToken;
   loadData();
 });

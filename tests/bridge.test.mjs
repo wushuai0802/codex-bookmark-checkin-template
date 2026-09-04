@@ -36,8 +36,11 @@ function fixtureRoot({ healthCheckedAt = '2026-09-02T01:00:00.000Z' } = {}) {
 test('task identity is stable and includes account to prevent collisions', () => {
   const a = taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-245770' });
   const b = taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-336634' });
+  const tomorrow = taskIdentity({ businessDate: '2026-09-03', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-245770' });
   assert.notEqual(a.taskId, b.taskId);
   assert.equal(a.taskId, taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-245770' }).taskId);
+  assert.notEqual(a.taskId, tomorrow.taskId);
+  assert.equal(a.planUnitId, tomorrow.planUnitId);
   assert.equal(planHash([a, b]), planHash([b, a]));
 });
 
@@ -61,12 +64,52 @@ test('bridge imports 3 execution units and redacts sensitive evidence', () => {
   assert.equal(snapshot.health.freshness.fresh, true);
 });
 
+test('bridge carries redacted PT observations without changing the execution plan', () => {
+  const root = fixtureRoot();
+  const baseline = buildSnapshot({ legacyRoot: root, generatedAt: '2026-09-02T02:00:00.000Z' });
+  const snapshot = buildSnapshot({
+    legacyRoot: root,
+    generatedAt: '2026-09-02T02:00:00.000Z',
+    ptStatusReport: {
+      generatedAt: '2026-09-02T02:00:00.000Z',
+      source: 'harvest',
+      sites: [{ origin: 'https://pt.example', displayName: 'PT example', status: 'not_signed', evidence: { source: 'api', authoritative: true, summary: '未签到' } }]
+    }
+  });
+  assert.equal(snapshot.counts.executionUnits, 3);
+  assert.equal(snapshot.planHash, baseline.planHash);
+  assert.equal(snapshot.ptStatus.counts.externalOnly, 1);
+  assert.equal(snapshot.ptStatus.sites[0].supplementCandidate, true);
+  assert.doesNotMatch(JSON.stringify(snapshot), /password|cookie|authorization/i);
+});
+
+test('PT status does not make an identical source snapshot non-idempotent', () => {
+  const root = fixtureRoot();
+  const options = {
+    legacyRoot: root,
+    generatedAt: '2026-09-02T02:00:00.000Z',
+    ptStatusReport: { generatedAt: '2026-09-02T02:00:00.000Z', source: 'harvest', sites: [{ origin: 'https://pt.example', status: 'signed', observedAt: '2026-09-02T01:30:00.000Z', evidence: { source: 'api', authoritative: true, summary: 'ok' } }] }
+  };
+  assert.equal(buildSnapshot(options).snapshotId, buildSnapshot(options).snapshotId);
+});
+
 test('stale health is surfaced instead of trusted', () => {
   const root = fixtureRoot({ healthCheckedAt: '2026-08-01T01:00:00.000Z' });
   const snapshot = buildSnapshot({ legacyRoot: root, generatedAt: '2026-09-02T02:00:00.000Z' });
   assert.equal(snapshot.health.healthy, true);
   assert.equal(snapshot.health.freshness.fresh, false);
   assert.equal(snapshot.health.reason, 'health source is stale or unavailable');
+});
+
+test('an injected health report overrides the legacy cached health file', () => {
+  const root = fixtureRoot({ healthCheckedAt: '2026-08-01T01:00:00.000Z' });
+  const snapshot = buildSnapshot({
+    legacyRoot: root,
+    generatedAt: '2026-09-02T02:00:00.000Z',
+    healthReport: { healthy: true, reason: 'ok', checkedAt: '2026-09-02T01:59:00.000Z', failedChecks: [] }
+  });
+  assert.equal(snapshot.health.freshness.fresh, true);
+  assert.equal(snapshot.health.sourceCheckedAt, '2026-09-02T01:59:00.000Z');
 });
 
 test('bridge refuses to write into legacy project', () => {

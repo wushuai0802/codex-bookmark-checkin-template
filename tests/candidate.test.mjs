@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
 import {
   acceptIdempotentReceipt, createLease, createNotificationOutboxItem, createReceipt,
@@ -9,7 +9,7 @@ import {
 import { simulateCandidateRun } from '../src/candidate-simulator.mjs';
 import { planHash, taskIdentity } from '../src/contracts.mjs';
 
-const legacyRoot = 'D:\\AIWorkspace\\bots\\chrome-daily-checkin';
+const legacyRoot = fileURLToPath(new URL('./fixtures/legacy/', import.meta.url));
 
 function worker(origin = 'https://agentrouter.org') {
   return {
@@ -31,6 +31,7 @@ function candidateSnapshot({ fresh = true } = {}) {
     return {
       schemaVersion: 1,
       taskId: identity.taskId,
+      planUnitId: identity.planUnitId,
       businessDate,
       logicalSiteKey: origin,
       logicalGroup: null,
@@ -84,7 +85,7 @@ test('worker capability requires isolation, fresh heartbeat, and unique allowlis
   assert.equal(validateWorkerCapability({ ...worker(), allowedOrigins: ['https://agentrouter.org/path'] }, { now: '2026-09-02T12:05:00.000Z' }).valid, false);
 });
 
-test('candidate gate allows dry-run only and blocks execute before cutover', { skip: !fs.existsSync(legacyRoot) }, () => {
+test('candidate gate allows dry-run only and blocks execute before cutover', () => {
   const snapshot = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T12:00:00.000Z' });
   const candidateSnapshot = structuredClone(snapshot);
   candidateSnapshot.health.freshness.fresh = true;

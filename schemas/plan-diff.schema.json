@@ -13,6 +13,9 @@
     "addedTaskIds": {"type": "array", "items": {"type": "string"}},
     "removedTaskIds": {"type": "array", "items": {"type": "string"}},
     "changedTaskIds": {"type": "array", "items": {"type": "string"}},
+    "addedPlanUnitIds": {"type": "array", "items": {"type": "string"}},
+    "removedPlanUnitIds": {"type": "array", "items": {"type": "string"}},
+    "changedPlanUnitIds": {"type": "array", "items": {"type": "string"}},
     "statusChanges": {"type": "array"},
     "ownerConflicts": {"type": "array"},
     "hashValid": {"type": "boolean"}

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { planHash, assertUniqueTaskOwners } from './contracts.mjs';
+import { planHash, planUnitIdentity, assertUniqueTaskOwners } from './contracts.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -23,8 +23,7 @@ function assertRedacted(value, location = '$') {
 
 function taskShape(task) {
   return JSON.stringify({
-    taskId: task.taskId,
-    businessDate: task.businessDate,
+    planUnitId: stablePlanUnitId(task),
     logicalSiteKey: task.logicalSiteKey,
     logicalGroup: task.logicalGroup ?? null,
     origin: task.origin,
@@ -37,11 +36,16 @@ function taskShape(task) {
   });
 }
 
+function stablePlanUnitId(task) {
+  return task.planUnitId ?? planUnitIdentity(task).planUnitId;
+}
+
 function taskMap(snapshot) {
   const map = new Map();
   for (const task of snapshot?.tasks ?? []) {
-    if (map.has(task.taskId)) throw new Error(`duplicate task id: ${task.taskId}`);
-    map.set(task.taskId, task);
+    const planUnitId = stablePlanUnitId(task);
+    if (map.has(planUnitId)) throw new Error(`duplicate plan unit id: ${planUnitId}`);
+    map.set(planUnitId, task);
   }
   return map;
 }
@@ -54,26 +58,38 @@ function validPlanHash(snapshot) {
 export function compareSnapshots(previous, current) {
   const previousTasks = taskMap(previous);
   const currentTasks = taskMap(current);
-  const added = [...currentTasks.keys()].filter((id) => !previousTasks.has(id)).sort();
-  const removed = [...previousTasks.keys()].filter((id) => !currentTasks.has(id)).sort();
-  const changed = [];
+  const addedPlanUnits = [...currentTasks.keys()].filter((id) => !previousTasks.has(id)).sort();
+  const removedPlanUnits = [...previousTasks.keys()].filter((id) => !currentTasks.has(id)).sort();
+  const changedPlanUnits = [];
   const statusChanges = [];
-  for (const [id, task] of currentTasks) {
-    const old = previousTasks.get(id);
+  for (const [planUnitId, task] of currentTasks) {
+    const old = previousTasks.get(planUnitId);
     if (!old) continue;
-    if (taskShape(old) !== taskShape(task)) changed.push(id);
-    if (old.observedStatus !== task.observedStatus) statusChanges.push({ taskId: id, from: old.observedStatus ?? null, to: task.observedStatus ?? null });
+    if (taskShape(old) !== taskShape(task)) changedPlanUnits.push(planUnitId);
+    if (old.observedStatus !== task.observedStatus) {
+      statusChanges.push({
+        planUnitId,
+        taskId: task.taskId,
+        fromTaskId: old.taskId,
+        toTaskId: task.taskId,
+        from: old.observedStatus ?? null,
+        to: task.observedStatus ?? null
+      });
+    }
   }
   const ownerConflicts = [];
-  const ownerByTask = new Map();
+  const ownerByPlanUnit = new Map();
   for (const task of [...(previous?.tasks ?? []), ...(current?.tasks ?? [])]) {
-    const owners = ownerByTask.get(task.taskId) ?? new Set();
+    const planUnitId = stablePlanUnitId(task);
+    const owners = ownerByPlanUnit.get(planUnitId) ?? new Set();
     owners.add(task.executionOwner);
-    ownerByTask.set(task.taskId, owners);
+    ownerByPlanUnit.set(planUnitId, owners);
   }
-  for (const [taskId, owners] of ownerByTask) if (owners.size > 1) ownerConflicts.push({ taskId, owners: [...owners].sort() });
+  for (const [planUnitId, owners] of ownerByPlanUnit) {
+    if (owners.size > 1) ownerConflicts.push({ planUnitId, owners: [...owners].sort() });
+  }
   const hashValid = validPlanHash(previous) && validPlanHash(current);
-  const planChanged = added.length > 0 || removed.length > 0 || changed.length > 0;
+  const planChanged = addedPlanUnits.length > 0 || removedPlanUnits.length > 0 || changedPlanUnits.length > 0;
   const classification = !hashValid || ownerConflicts.length > 0 ? 'invalid' : (planChanged ? 'plan_changed' : 'same_plan');
   return {
     schemaVersion: 1,
@@ -81,10 +97,13 @@ export function compareSnapshots(previous, current) {
     samePlan: classification === 'same_plan',
     fromPlanHash: previous?.planHash ?? null,
     toPlanHash: current?.planHash ?? null,
-    addedTaskIds: added,
-    removedTaskIds: removed,
-    changedTaskIds: changed.sort(),
-    statusChanges: statusChanges.sort((a, b) => a.taskId.localeCompare(b.taskId)),
+    addedTaskIds: addedPlanUnits.map((id) => currentTasks.get(id).taskId).sort(),
+    removedTaskIds: removedPlanUnits.map((id) => previousTasks.get(id).taskId).sort(),
+    changedTaskIds: changedPlanUnits.map((id) => currentTasks.get(id).taskId).sort(),
+    addedPlanUnitIds: addedPlanUnits,
+    removedPlanUnitIds: removedPlanUnits,
+    changedPlanUnitIds: changedPlanUnits.sort(),
+    statusChanges: statusChanges.sort((a, b) => a.planUnitId.localeCompare(b.planUnitId)),
     ownerConflicts,
     hashValid
   };
@@ -97,9 +116,13 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
   const drift = previousSnapshot ? compareSnapshots(previousSnapshot, snapshot) : {
     schemaVersion: 1, classification: 'initial', samePlan: true,
     fromPlanHash: null, toPlanHash: snapshot.planHash,
-    addedTaskIds: snapshot.tasks.map((task) => task.taskId).sort(), removedTaskIds: [], changedTaskIds: [], statusChanges: [], ownerConflicts: [], hashValid: true
+    addedTaskIds: snapshot.tasks.map((task) => task.taskId).sort(),
+    removedTaskIds: [], changedTaskIds: [],
+    addedPlanUnitIds: snapshot.tasks.map((task) => stablePlanUnitId(task)).sort(),
+    removedPlanUnitIds: [], changedPlanUnitIds: [],
+    statusChanges: [], ownerConflicts: [], hashValid: true
   };
-  const recordId = `ledger_${crypto.createHash('sha256').update(`${snapshot.snapshotId}|${recordedAt}`, 'utf8').digest('hex').slice(0, 24)}`;
+  const recordId = `ledger_${crypto.createHash('sha256').update(snapshot.snapshotId, 'utf8').digest('hex').slice(0, 24)}`;
   const record = {
     schemaVersion: 1,
     recordId,

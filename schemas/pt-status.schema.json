@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/pt-status.schema.json",
+  "title": "V2 read-only PT check-in status observation",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "mode", "sources", "counts", "executionEnabled", "sites"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "businessDate": {"type": ["string", "null"], "format": "date"},
+    "mode": {"const": "status_observe_only"},
+    "sources": {"type": "array", "items": {"type": "string"}},
+    "counts": {"$ref": "#/$defs/counts"},
+    "executionEnabled": {"const": false},
+    "sites": {"type": "array", "items": {"$ref": "#/$defs/site"}}
+  },
+  "$defs": {
+    "counts": {"type": "object", "required": ["sites", "inLegacyPlan", "externalOnly", "fresh", "discrepancies", "supplementCandidates", "status"], "properties": {"sites": {"type": "integer", "minimum": 0}, "inLegacyPlan": {"type": "integer", "minimum": 0}, "externalOnly": {"type": "integer", "minimum": 0}, "fresh": {"type": "integer", "minimum": 0}, "discrepancies": {"type": "integer", "minimum": 0}, "supplementCandidates": {"type": "integer", "minimum": 0}, "status": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}}, "additionalProperties": false},
+    "evidence": {"type": "object", "required": ["source", "authoritative", "summary", "redacted", "statusVerified"], "properties": {"source": {"type": "string"}, "authoritative": {"type": "boolean"}, "summary": {"type": "string", "maxLength": 240}, "redacted": {"const": true}, "statusVerified": {"type": "boolean"}}, "additionalProperties": false},
+    "sourceStatus": {"type": "object", "required": ["source", "status", "observedAt", "fresh", "authoritative"], "properties": {"source": {"type": "string"}, "status": {"enum": ["signed", "already_signed", "not_signed", "unknown", "login_required", "unreachable", "needs_attention", "not_available", "failed"]}, "observedAt": {"type": "string", "format": "date-time"}, "fresh": {"type": "boolean"}, "authoritative": {"type": "boolean"}}, "additionalProperties": false},
+    "effective": {"type": ["object", "null"], "required": ["source", "status", "observedAt", "fresh", "authoritative", "evidence"], "properties": {"source": {"type": "string"}, "status": {"enum": ["signed", "already_signed", "not_signed", "unknown", "login_required", "unreachable", "needs_attention", "not_available", "failed"]}, "observedAt": {"type": "string", "format": "date-time"}, "fresh": {"type": "boolean"}, "authoritative": {"type": "boolean"}, "evidence": {"$ref": "#/$defs/evidence"}}, "additionalProperties": false},
+    "site": {"type": "object", "required": ["siteRef", "origin", "displayName", "accountRef", "inLegacyPlan", "managedBy", "effective", "sourceStatuses", "discrepancy", "supplementCandidate", "supplementAction", "observations"], "properties": {"siteRef": {"type": "string", "pattern": "^pt_[a-f0-9]{16}$"}, "origin": {"type": "string", "format": "uri"}, "displayName": {"type": "string", "maxLength": 80}, "accountRef": {"type": ["string", "null"], "pattern": "^acct_[a-f0-9]{16}$"}, "inLegacyPlan": {"type": "boolean"}, "managedBy": {"type": "string", "maxLength": 80}, "effective": {"$ref": "#/$defs/effective"}, "sourceStatuses": {"type": "array", "items": {"$ref": "#/$defs/sourceStatus"}}, "discrepancy": {"type": "boolean"}, "supplementCandidate": {"type": "boolean"}, "supplementAction": {"const": "manual_review_only"}, "observations": {"type": "array", "items": {"type": "object"}}}, "additionalProperties": false}
+  },
+  "additionalProperties": false
+}

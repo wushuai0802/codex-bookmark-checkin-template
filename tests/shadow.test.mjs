@@ -3,21 +3,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
 import { appendLedgerRecord, compareSnapshots, createLedgerRecord, readLedger } from '../src/shadow-ledger.mjs';
 import { evaluateShadowGate } from '../src/schedule-gate.mjs';
-import { planHash } from '../src/contracts.mjs';
+import { planHash, taskIdentity } from '../src/contracts.mjs';
 import { evaluateShadowHistory } from '../src/shadow-acceptance.mjs';
 
-const legacyRoot = 'D:\\AIWorkspace\\bots\\chrome-daily-checkin';
+const legacyRoot = fileURLToPath(new URL('./fixtures/legacy/', import.meta.url));
 
-test('same plan ignores status-only changes but records status delta', { skip: !fs.existsSync(legacyRoot) }, () => {
+test('same plan ignores status-only changes but records status delta', () => {
   const first = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T12:00:00.000Z' });
   const second = structuredClone(first);
   second.generatedAt = '2026-09-02T12:10:00.000Z';
   second.snapshotId = 'snap_000000000000000000000000';
-  second.receipts[0].status = 'already_signed';
-  second.tasks[0].observedStatus = 'already_signed';
+  const nextStatus = first.tasks[0].observedStatus === 'signed' ? 'already_signed' : 'signed';
+  second.receipts[0].status = nextStatus;
+  second.tasks[0].observedStatus = nextStatus;
   const diff = compareSnapshots(first, second);
   assert.equal(diff.classification, 'same_plan');
   assert.equal(diff.samePlan, true);
@@ -25,7 +27,28 @@ test('same plan ignores status-only changes but records status delta', { skip: !
   assert.equal(diff.addedTaskIds.length, 0);
 });
 
-test('plan drift and invalid ownership are detected', { skip: !fs.existsSync(legacyRoot) }, () => {
+test('calendar rollover keeps one stable plan while task instances change', () => {
+  const first = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T12:00:00.000Z' });
+  const second = structuredClone(first);
+  second.businessDate = '2026-09-03';
+  for (const task of second.tasks) {
+    task.businessDate = second.businessDate;
+    const identity = taskIdentity(task);
+    const receipt = second.receipts.find((candidate) => candidate.taskId === task.taskId);
+    if (receipt) receipt.taskId = identity.taskId;
+    task.taskId = identity.taskId;
+    task.planUnitId = identity.planUnitId;
+  }
+  second.planHash = planHash(second.tasks);
+  assert.equal(second.planHash, first.planHash);
+  assert.equal(second.tasks.some((task, index) => task.taskId === first.tasks[index].taskId), false);
+  const diff = compareSnapshots(first, second);
+  assert.equal(diff.classification, 'same_plan');
+  assert.equal(diff.addedTaskIds.length, 0);
+  assert.equal(diff.removedTaskIds.length, 0);
+});
+
+test('plan drift and invalid ownership are detected', () => {
   const first = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T12:00:00.000Z' });
   const changed = structuredClone(first);
   changed.tasks = changed.tasks.slice(1);
@@ -39,10 +62,10 @@ test('plan drift and invalid ownership are detected', { skip: !fs.existsSync(leg
   assert.equal(compareSnapshots(first, ownerChanged).classification, 'invalid');
   const duplicate = structuredClone(first);
   duplicate.tasks.push({ ...duplicate.tasks[0], executionOwner: 'unexpected-worker' });
-  assert.throws(() => compareSnapshots(first, duplicate), /duplicate task id/);
+  assert.throws(() => compareSnapshots(first, duplicate), /duplicate plan unit id/);
 });
 
-test('shadow gate never grants a lease or executable decision', { skip: !fs.existsSync(legacyRoot) }, () => {
+test('shadow gate never grants a lease or executable decision', () => {
   const snapshot = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T12:00:00.000Z' });
   const task = snapshot.tasks.find((candidate) => !['signed', 'already_signed'].includes(candidate.observedStatus));
   const denied = evaluateShadowGate({ snapshot, taskId: task.taskId, requestedMode: 'execute', minHealthFresh: false });
@@ -61,11 +84,11 @@ test('shadow gate never grants a lease or executable decision', { skip: !fs.exis
   assert.equal(observed.leaseGranted, false);
 });
 
-test('ledger is append-only, redacted, and outside legacy root', { skip: !fs.existsSync(legacyRoot) }, () => {
+test('ledger is append-only, redacted, and outside legacy root', () => {
   const snapshot = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T12:00:00.000Z' });
   const record = createLedgerRecord(snapshot, { recordedAt: '2026-09-02T12:01:00.000Z' });
   assert.equal(record.mode, 'shadow_read_only');
-  assert.equal(record.counts.executionUnits, 21);
+  assert.equal(record.counts.executionUnits, 3);
   const ledger = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'checkin-v2-ledger-')), 'ledger.jsonl');
   appendLedgerRecord(ledger, record, { legacyRoot });
   appendLedgerRecord(ledger, { ...record, recordId: 'ledger_111111111111111111111111', recordedAt: '2026-09-02T12:02:00.000Z' }, { legacyRoot });
@@ -87,7 +110,7 @@ function historyRecord(businessDate, { fresh = true, recordId = null, ownerConfl
     mode: 'shadow_read_only',
     counts: { logicalSites: 1, executionUnits: 1, status: { signed: 1 }, bookmarkSourceCounts: {} },
     drift: { classification: 'same_plan', hashValid: true, ownerConflicts, addedTaskIds: [], removedTaskIds: [], changedTaskIds: [], statusChanges: [] },
-    health: { freshness: { fresh } }
+    health: { healthy: true, freshness: { fresh } }
   };
 }
 
@@ -114,6 +137,15 @@ test('shadow history blocks gaps, stale health, conflicts, and duplicate records
   assert.equal(result.staleRecordCount, 1);
   assert.match(result.reasons.join(','), /insufficient_consecutive_days/);
   assert.match(result.reasons.join(','), /health_not_fresh/);
+});
+
+test('shadow history rejects a fresh but unhealthy source report', () => {
+  const record = historyRecord('2026-09-01');
+  record.health.healthy = false;
+  const result = evaluateShadowHistory([record], { minConsecutiveDays: 1 });
+  assert.equal(result.accepted, false);
+  assert.equal(result.unhealthyRecordCount, 1);
+  assert.equal(result.reasons.includes('health_not_healthy'), true);
 });
 
 test('shadow history rejects impossible calendar dates', () => {

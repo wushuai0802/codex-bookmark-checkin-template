@@ -1,0 +1,22 @@
+{
+  "generatedAt": "2026-09-02T01:00:00.000Z",
+  "sources": [
+    {
+      "counts": {
+        "welfare": 2
+      }
+    }
+  ],
+  "targets": [
+    {
+      "origin": "https://agent.example",
+      "title": "Fixture multi-account site",
+      "folderNames": ["welfare"]
+    },
+    {
+      "origin": "https://daily.example",
+      "title": "Fixture daily site",
+      "folderNames": ["welfare"]
+    }
+  ]
+}

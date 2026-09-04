@@ -11,6 +11,13 @@ const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 const MAX_BODY_BYTES = 16 * 1024;
+const SESSION_COOKIE = 'fabric_session';
+const SESSION_SECONDS = 12 * 60 * 60;
+const REMEMBER_SECONDS = 7 * 24 * 60 * 60;
+const PT_STATUS_VALUES = new Set([
+  'signed', 'already_signed', 'not_signed', 'unknown', 'login_required',
+  'unreachable', 'needs_attention', 'not_available', 'failed'
+]);
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
@@ -114,6 +121,7 @@ function latestLedger(dataDir, configuredFile) {
 function publicTask(task, receipt) {
   return {
     taskId: task.taskId,
+    planUnitId: task.planUnitId ?? null,
     businessDate: task.businessDate,
     origin: task.origin,
     logicalSiteKey: task.logicalSiteKey,
@@ -131,6 +139,80 @@ function publicTask(task, receipt) {
       summary: receipt.evidence.summary,
       redacted: receipt.evidence.redacted === true
     } : null
+  };
+}
+
+function publicPtEvidence(evidence) {
+  if (!evidence || typeof evidence !== 'object') return null;
+  return {
+    source: typeof evidence.source === 'string' ? evidence.source.slice(0, 40) : 'none',
+    authoritative: evidence.authoritative === true,
+    summary: typeof evidence.summary === 'string' ? evidence.summary.slice(0, 240) : '',
+    redacted: evidence.redacted === true,
+    statusVerified: evidence.statusVerified === true
+  };
+}
+
+function publicPtStatus(ptStatus) {
+  if (!ptStatus || typeof ptStatus !== 'object' || Array.isArray(ptStatus)) return null;
+  const sites = (Array.isArray(ptStatus.sites) ? ptStatus.sites : []).flatMap((site) => {
+    try {
+      const origin = safeOrigin(site.origin);
+      if (!origin.startsWith('https://')) return [];
+      const effective = site.effective && typeof site.effective === 'object' ? site.effective : null;
+      const sourceStatuses = (Array.isArray(site.sourceStatuses) ? site.sourceStatuses : []).flatMap((item) => {
+        const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
+        if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true, authoritative: item.authoritative === true }];
+      });
+      const observations = (Array.isArray(site.observations) ? site.observations : []).flatMap((item) => {
+        const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
+        if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true, authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence) }];
+      });
+      return [{
+        siteRef: typeof site.siteRef === 'string' && /^pt_[a-f0-9]{16}$/.test(site.siteRef) ? site.siteRef : null,
+        origin,
+        displayName: typeof site.displayName === 'string' ? site.displayName.slice(0, 80) : origin.replace(/^https:\/\//, ''),
+        accountRef: typeof site.accountRef === 'string' && /^acct_[a-f0-9]{16}$/.test(site.accountRef) ? site.accountRef : null,
+        inLegacyPlan: site.inLegacyPlan === true,
+        managedBy: typeof site.managedBy === 'string' ? site.managedBy.slice(0, 80) : 'other',
+        effective: effective && typeof effective.source === 'string' && typeof effective.observedAt === 'string' ? {
+          source: effective.source.slice(0, 40),
+          status: PT_STATUS_VALUES.has(effective.status) ? effective.status : 'unknown',
+          observedAt: effective.observedAt.slice(0, 64),
+          fresh: effective.fresh === true,
+          authoritative: effective.authoritative === true,
+          evidence: publicPtEvidence(effective.evidence)
+        } : null,
+        sourceStatuses,
+        discrepancy: site.discrepancy === true,
+        supplementCandidate: site.supplementCandidate === true,
+        supplementAction: site.supplementAction === 'manual_review_only' ? 'manual_review_only' : 'none',
+        observations
+      }];
+    } catch { return []; }
+  });
+  const counts = ptStatus.counts && typeof ptStatus.counts === 'object' ? ptStatus.counts : {};
+  const safeCount = (value, fallback) => Number.isInteger(value) && value >= 0 ? value : fallback;
+  const status = Object.fromEntries([...PT_STATUS_VALUES].map((key) => [key, safeCount(counts.status?.[key], sites.filter((site) => site.effective?.status === key).length)]));
+  return {
+    schemaVersion: 1,
+    generatedAt: typeof ptStatus.generatedAt === 'string' ? ptStatus.generatedAt.slice(0, 64) : null,
+    businessDate: typeof ptStatus.businessDate === 'string' ? ptStatus.businessDate.slice(0, 32) : null,
+    mode: 'status_observe_only',
+    sources: (Array.isArray(ptStatus.sources) ? ptStatus.sources : []).filter((source) => typeof source === 'string').map((source) => source.slice(0, 40)).slice(0, 20),
+    counts: {
+      sites: safeCount(counts.sites, sites.length),
+      inLegacyPlan: safeCount(counts.inLegacyPlan, sites.filter((site) => site.inLegacyPlan).length),
+      externalOnly: safeCount(counts.externalOnly, sites.filter((site) => !site.inLegacyPlan).length),
+      fresh: safeCount(counts.fresh, sites.filter((site) => site.effective?.fresh).length),
+      discrepancies: safeCount(counts.discrepancies, sites.filter((site) => site.discrepancy).length),
+      supplementCandidates: safeCount(counts.supplementCandidates, sites.filter((site) => site.supplementCandidate).length),
+      status
+    },
+    executionEnabled: false,
+    sites
   };
 }
 
@@ -162,6 +244,7 @@ function publicSnapshot(snapshot) {
     planHash: typeof snapshot.planHash === 'string' && /^[a-f0-9]{64}$/.test(snapshot.planHash) ? snapshot.planHash : null,
     source: safeSource,
     counts: safeCounts,
+    ptStatus: publicPtStatus(snapshot.ptStatus),
     health: snapshot.health && typeof snapshot.health === 'object' ? {
       healthy: snapshot.health.healthy === true,
       sourceCheckedAt: typeof snapshot.health.sourceCheckedAt === 'string' ? snapshot.health.sourceCheckedAt.slice(0, 64) : null,
@@ -204,6 +287,7 @@ function buildView(snapshot, ledger) {
   for (const task of tasks) status[task.observedStatus ?? 'unknown'] = (status[task.observedStatus ?? 'unknown'] ?? 0) + 1;
   return {
     snapshot: publicSnapshot(snapshot),
+    ptStatus: publicPtStatus(snapshot?.ptStatus),
     status,
     tasks,
     sites: [...sites.values()].map(serializeGroup).sort((a, b) => a.origin.localeCompare(b.origin)),
@@ -222,6 +306,49 @@ function tokenMatches(provided, expected) {
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requestCookie(request, name) {
+  const header = String(request.headers.cookie ?? '');
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    try { return decodeURIComponent(part.slice(separator + 1).trim()); }
+    catch { return ''; }
+  }
+  return '';
+}
+
+function createSessionToken(adminToken, { remember = false, now = Date.now() } = {}) {
+  const lifetime = remember ? REMEMBER_SECONDS : SESSION_SECONDS;
+  const expiresAt = Math.floor(now / 1000) + lifetime;
+  const nonce = crypto.randomBytes(16).toString('base64url');
+  const payload = `v1.${expiresAt}.${nonce}`;
+  const signature = crypto.createHmac('sha256', adminToken).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function sessionTokenMatches(provided, adminToken, { now = Date.now() } = {}) {
+  if (!provided || !adminToken) return false;
+  const parts = provided.split('.');
+  if (parts.length !== 4 || parts[0] !== 'v1' || !/^\d{10}$/.test(parts[1]) || !/^[A-Za-z0-9_-]{20,}$/.test(parts[2]) || !/^[A-Za-z0-9_-]{40,}$/.test(parts[3])) return false;
+  const expiresAt = Number(parts[1]);
+  const nowSeconds = Math.floor(now / 1000);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= nowSeconds || expiresAt > nowSeconds + REMEMBER_SECONDS + 60) return false;
+  const payload = parts.slice(0, 3).join('.');
+  const expected = crypto.createHmac('sha256', adminToken).update(payload).digest('base64url');
+  return tokenMatches(parts[3], expected);
+}
+
+function sessionCookie(token, { remember = false, secure = false, clear = false } = {}) {
+  const attributes = [
+    `${SESSION_COOKIE}=${clear ? '' : encodeURIComponent(token)}`,
+    'Path=/', 'HttpOnly', 'SameSite=Strict'
+  ];
+  if (secure) attributes.push('Secure');
+  if (clear) attributes.push('Max-Age=0');
+  else if (remember) attributes.push(`Max-Age=${REMEMBER_SECONDS}`);
+  return attributes.join('; ');
 }
 
 function clientAddress(request) {
@@ -272,8 +399,10 @@ export function createDashboardServer({
 
   function authorized(request, response) {
     if (!authRequired) return true;
-    const supplied = request.headers['x-fabric-token'] ?? (request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : '');
-    if (tokenMatches(supplied, adminToken)) return true;
+    const headerToken = request.headers['x-fabric-token']
+      ?? (request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : '');
+    const cookieToken = requestCookie(request, SESSION_COOKIE);
+    if (tokenMatches(headerToken, adminToken) || sessionTokenMatches(cookieToken, adminToken)) return true;
     response.setHeader('WWW-Authenticate', 'Bearer realm="checkin-fabric"');
     sendError(response, 401, 'unauthorized', 'dashboard authentication required');
     return false;
@@ -311,6 +440,32 @@ export function createDashboardServer({
       sendJson(response, 200, { service: 'ok', mode: 'shadow_read_only' });
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/session') {
+      if (!String(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+        sendError(response, 415, 'unsupported_media_type', 'session creation requires application/json');
+        return;
+      }
+      let body;
+      try { body = await readRequestBody(request); }
+      catch (error) { sendError(response, 400, 'invalid_body', error.message); return; }
+      const supplied = typeof body.token === 'string' ? body.token.trim() : '';
+      if (!tokenMatches(supplied, adminToken)) {
+        sendError(response, 401, 'unauthorized', 'dashboard authentication required');
+        return;
+      }
+      const remember = body.remember === true;
+      const sessionToken = createSessionToken(adminToken, { remember });
+      sendJson(response, 200, { ok: true, remembered: body.remember === true }, {
+        'Set-Cookie': sessionCookie(sessionToken, { remember, secure: trustProxyTls })
+      });
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/session/logout') {
+      sendJson(response, 200, { ok: true }, {
+        'Set-Cookie': sessionCookie('', { secure: trustProxyTls, clear: true })
+      });
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname !== '/api/controls/sites') {
       response.setHeader('Allow', 'GET, HEAD');
       sendError(response, 405, 'method_not_allowed', 'POST is only available for site control state');
@@ -332,6 +487,7 @@ export function createDashboardServer({
         const sites = view.sites.map((site) => ({ ...site, control: view.controls?.[site.origin] ?? { policy: 'monitor', note: '', updatedAt: null } }));
         sendJson(response, 200, { sites, total: sites.length });
       }
+      else if (requestUrl.pathname === '/api/pt-status') sendJson(response, 200, view.ptStatus ?? { schemaVersion: 1, mode: 'status_observe_only', counts: { sites: 0, inLegacyPlan: 0, externalOnly: 0, fresh: 0, discrepancies: 0, supplementCandidates: 0, status: {} }, executionEnabled: false, sites: [] });
       else if (requestUrl.pathname === '/api/accounts') sendJson(response, 200, { accounts: view.accounts, total: view.accounts.length });
       else if (requestUrl.pathname === '/api/ledger') sendJson(response, 200, { records: view.ledger, total: view.ledger.length });
       else if (requestUrl.pathname === '/api/config') sendJson(response, 200, { mode: 'shadow_read_only', mutationDisabled: false, executionEnabled: false, executionOwner: 'legacy-checkin', authConfigured: authRequired, dataDirectoryConfigured: true });

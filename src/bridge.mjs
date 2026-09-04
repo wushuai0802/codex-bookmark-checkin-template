@@ -2,12 +2,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   STATUS_VALUES, accountRef, assertUniqueTaskOwners, classifyEvidence,
   credentialGroup, logicalGroup, logicalSiteKey, planHash, redactText,
   taskIdentity, normalizeOrigin
 } from './contracts.mjs';
+import { buildPtStatus } from './pt-status.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -114,7 +116,7 @@ function healthSnapshot(health, generatedAt, maxAgeHours = 26) {
  * Read and redact the legacy runner's latest state. This function performs no
  * writes and has no browser, network, or notification side effects.
  */
-export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26 } = {}) {
+export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26, healthReport, ptStatusReport, ptStatusMaxAgeHours = 26 } = {}) {
   if (!legacyRoot) throw new Error('legacyRoot is required');
   const root = path.resolve(legacyRoot);
   const scheduler = readJson(path.join(root, 'data', 'scheduler-state.json'));
@@ -122,7 +124,9 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
   const resultFile = latestResultPath(root, scheduler);
   const result = readJson(resultFile);
   const siteState = readJson(path.join(root, 'data', 'site-state.json'), { required: false });
-  const health = readJson(path.join(root, 'health.json'), { required: false });
+  const health = healthReport === undefined
+    ? readJson(path.join(root, 'health.json'), { required: false })
+    : healthReport;
   if (!Array.isArray(result?.results) || result.results.length === 0) throw new Error('legacy result has no results array');
 
   const businessDate = businessDateFrom(scheduler?.lastRunDate ?? result?.finishedAt, new Date(generatedAt));
@@ -145,6 +149,7 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     const task = {
       schemaVersion: 1,
       taskId: identity.taskId,
+      planUnitId: identity.planUnitId,
       businessDate,
       logicalSiteKey: siteKey,
       logicalGroup: logicalGroup(origin),
@@ -186,7 +191,25 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
   };
   const hash = planHash(tasks);
   const runId = typeof result.runId === 'string' ? result.runId : (typeof scheduler.lastRunId === 'string' ? scheduler.lastRunId : null);
-  const snapshotId = `snap_${hash.slice(0, 24)}`;
+  const ptStatus = buildPtStatus({
+    tasks,
+    receipts,
+    planTargets: Array.isArray(plan?.targets) ? plan.targets : [],
+    externalReport: ptStatusReport,
+    generatedAt,
+    businessDate,
+    maxAgeHours: ptStatusMaxAgeHours
+  });
+  const ptStatusDigest = { ...ptStatus, generatedAt: null };
+  const observation = receipts.map((receipt) => ({
+    taskId: receipt.taskId,
+    status: receipt.status,
+    observedAt: receipt.observedAt
+  })).sort((a, b) => a.taskId.localeCompare(b.taskId));
+  const snapshotDigest = crypto.createHash('sha256')
+    .update(JSON.stringify({ businessDate, planHash: hash, runId, observation, ptStatus: ptStatusDigest }), 'utf8')
+    .digest('hex');
+  const snapshotId = `snap_${snapshotDigest.slice(0, 24)}`;
   const stateUpdatedAt = siteState?.updatedAt && !Number.isNaN(new Date(siteState.updatedAt).getTime())
     ? new Date(siteState.updatedAt).toISOString() : null;
   return {
@@ -210,7 +233,8 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     logicalSites: [...logicalSites.values()].sort((a, b) => a.origin.localeCompare(b.origin)),
     tasks: tasks.sort((a, b) => a.taskId.localeCompare(b.taskId)),
     receipts: receipts.sort((a, b) => a.taskId.localeCompare(b.taskId)),
-    health: healthSnapshot(health, generatedAt, maxHealthAgeHours)
+    health: healthSnapshot(health, generatedAt, maxHealthAgeHours),
+    ptStatus
   };
 }
 
@@ -243,6 +267,8 @@ function parseArgs(argv) {
     else if (token === '--out') args.out = argv[++i];
     else if (token === '--generated-at') args.generatedAt = argv[++i];
     else if (token === '--max-health-age-hours') args.maxHealthAgeHours = Number(argv[++i]);
+    else if (token === '--health-file') args.healthFile = argv[++i];
+    else if (token === '--pt-status-file') args.ptStatusFile = argv[++i];
     else if (token === '--help' || token === '-h') args.help = true;
     else throw new Error(`unknown argument: ${token}`);
   }
@@ -253,12 +279,20 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   try {
     const args = parseArgs(process.argv);
     if (args.help) {
-      console.log('Usage: node src/bridge.mjs --legacy-root <path> [--out <file>] [--generated-at <ISO>]');
+      console.log('Usage: node src/bridge.mjs --legacy-root <path> [--out <file>] [--generated-at <ISO>] [--health-file <json>] [--pt-status-file <json>]');
       process.exit(0);
     }
     const legacyRoot = args.legacyRoot ?? process.env.CHECKIN_LEGACY_ROOT;
     if (!legacyRoot) throw new Error('provide --legacy-root or CHECKIN_LEGACY_ROOT');
-    const snapshot = buildSnapshot({ legacyRoot, generatedAt: args.generatedAt, maxHealthAgeHours: args.maxHealthAgeHours ?? 26 });
+    const healthReport = args.healthFile ? readJson(path.resolve(args.healthFile)) : undefined;
+    const ptStatusReport = args.ptStatusFile ? readJson(path.resolve(args.ptStatusFile)) : undefined;
+    const snapshot = buildSnapshot({
+      legacyRoot,
+      generatedAt: args.generatedAt,
+      maxHealthAgeHours: args.maxHealthAgeHours ?? 26,
+      healthReport,
+      ptStatusReport
+    });
     if (args.out) {
       const destination = writeSnapshot(snapshot, args.out, legacyRoot);
       console.log(`snapshot written: ${destination}`);

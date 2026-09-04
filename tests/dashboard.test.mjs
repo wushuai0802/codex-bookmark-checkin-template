@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
 import { createDashboardServer } from '../src/dashboard-server.mjs';
 
-const legacyRoot = 'D:\\AIWorkspace\\bots\\chrome-daily-checkin';
+const legacyRoot = fileURLToPath(new URL('./fixtures/legacy/', import.meta.url));
 
 async function start(options) {
   const instance = createDashboardServer({ ...options, bind: '127.0.0.1', port: 0 });
@@ -19,33 +20,63 @@ function close(instance) {
   return new Promise((resolve) => instance.server.close(resolve));
 }
 
-test('dashboard serves summary, tasks, and static UI from redacted data', { skip: !fs.existsSync(legacyRoot) }, async () => {
+test('dashboard serves summary, tasks, and static UI from redacted data', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-dashboard-'));
-  const snapshot = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T14:00:00.000Z' });
+  const snapshot = buildSnapshot({
+    legacyRoot,
+    generatedAt: '2026-09-02T14:00:00.000Z',
+    ptStatusReport: {
+      generatedAt: '2026-09-02T14:00:00.000Z', source: 'harvest',
+      sites: [{ origin: 'https://external-pt.example', displayName: '外部 PT', status: 'not_signed', evidence: { source: 'api', authoritative: true, summary: '未签到' } }]
+    }
+  });
   fs.writeFileSync(path.join(root, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
   const { instance, base } = await start({ dataDir: root });
   try {
     const page = await fetch(`${base}/`);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /Check-in Fabric/);
+    const pageText = await page.text();
+    assert.match(pageText, /Check-in Fabric/);
     const summary = await fetch(`${base}/api/summary`);
     assert.equal(summary.status, 200);
     const summaryBody = await summary.json();
-    assert.equal(summaryBody.counts.executionUnits, 21);
+    assert.equal(summaryBody.counts.executionUnits, 3);
     const tasks = await fetch(`${base}/api/tasks?status=needs_attention`);
     assert.equal(tasks.status, 200);
     assert.ok((await tasks.json()).total >= 1);
     const sites = await fetch(`${base}/api/sites`);
-    assert.equal((await sites.json()).total, 17);
+    assert.equal((await sites.json()).total, 2);
+    const ptStatus = await fetch(`${base}/api/pt-status`);
+    assert.equal(ptStatus.status, 200);
+    const ptBody = await ptStatus.json();
+    assert.equal(ptBody.counts.externalOnly, 1);
+    assert.equal(ptBody.sites[0].supplementCandidate, true);
+    assert.match(pageText, /PT 状态/);
   } finally { await close(instance); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('non-loopback deployment requires token and exposes only bounded controls', async () => {
+test('non-loopback deployment uses an HttpOnly session and exposes only bounded controls', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-dashboard-auth-'));
-  const { instance, base } = await start({ dataDir: root, adminToken: 'test-token-1234567890' });
+  const { instance, base } = await start({ dataDir: root, adminToken: 'test-token-1234567890', trustProxyTls: true });
   try {
     assert.equal((await fetch(`${base}/healthz`)).status, 200);
     assert.equal((await fetch(`${base}/api/summary`)).status, 401);
+    const session = await fetch(`${base}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'test-token-1234567890', remember: true })
+    });
+    assert.equal(session.status, 200);
+    const setCookie = session.headers.get('set-cookie');
+    assert.match(setCookie, /^fabric_session=/);
+    assert.match(setCookie, /HttpOnly/);
+    assert.match(setCookie, /SameSite=Strict/);
+    assert.match(setCookie, /Secure/);
+    assert.match(setCookie, /Max-Age=604800/);
+    assert.doesNotMatch(setCookie, /test-token-1234567890/);
+    const cookie = setCookie.split(';', 1)[0];
+    assert.equal((await fetch(`${base}/api/config`, { headers: { Cookie: cookie } })).status, 200);
+    assert.equal((await fetch(`${base}/api/config`, { headers: { Cookie: 'fabric_session=test-token-1234567890' } })).status, 401);
     const unauthorized = await fetch(`${base}/api/controls/sites`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: 'https://example.com', policy: 'pause' }) });
     assert.equal(unauthorized.status, 401);
     const authorized = await fetch(`${base}/api/controls/sites`, { method: 'POST', headers: { 'X-Fabric-Token': 'test-token-1234567890', 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: 'https://Example.com/path', policy: 'pause', note: '<b>review</b>' }) });
@@ -60,5 +91,15 @@ test('non-loopback deployment requires token and exposes only bounded controls',
     assert.equal(controlsBody.sites['https://example.com'].note, '<b>review</b>');
     const method = await fetch(`${base}/api/summary`, { method: 'POST', headers: { 'X-Fabric-Token': 'test-token-1234567890' } });
     assert.equal(method.status, 405);
+    const logout = await fetch(`${base}/api/session/logout`, { method: 'POST', headers: { Cookie: cookie } });
+    assert.equal(logout.status, 200);
+    assert.match(logout.headers.get('set-cookie'), /Max-Age=0/);
   } finally { await close(instance); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('dashboard client never persists the administrator token in browser storage', () => {
+  const source = fs.readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+  assert.doesNotMatch(source, /setItem\([^\n]*(fabricToken|token)/i);
+  assert.match(source, /\/api\/session/);
+  assert.match(source, /credentials:\s*'same-origin'/);
 });
