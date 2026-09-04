@@ -39,4 +39,6 @@ jobs:
       - name: Scan tracked files for private data
         shell: pwsh
         run: ./scripts/Scan-PublicSafety.ps1
-      - run: npm audit --omit=dev
+      - name: Audit production dependencies with bounded retry
+        shell: pwsh
+        run: ./scripts/Invoke-NpmAuditWithRetry.ps1

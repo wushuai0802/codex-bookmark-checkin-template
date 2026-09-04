@@ -96,6 +96,10 @@ pwsh -NoProfile -File .\scripts\Sync-PrivateRuntime.ps1 `
 npm run --silent health
 ```
 
+CI 对生产依赖执行 `npm audit` 时，每次请求限制为 30 秒，并只对 npm
+registry 的临时不可用、限流或网络错误进行最多三次退避重试；真实漏洞或
+未知命令错误仍会立即使工作流失败。
+
 该命令只读取本机配置、书签文件是否可访问、主账号及补充账号的独立 Chrome 配置、调度入口与进程、调度心跳、当前已验证签到计划与当天最终结果是否一致、站点状态和通知隔离队列；它不会启动签到、修改配置或发送通知。标准输出始终是一个 JSON 对象，`schemaVersion` 当前为 `1`。`reportStatus` 会明确区分 `complete`、`complete_with_attention` 和 `incomplete`；同时 `latestExecutionComplete` 表示所有计划项均已执行并形成结果，`latestBusinessComplete` 表示所有签到业务都已完成或进入明确终态，外部站点故障数量见 `pendingExternalCount`。完整报告中存在待重试或需关注站点时仍属于完整报告，调用方不应把它误判为执行中断。`healthy=true` 时退出码为 `0`；未初始化或任一基础设施健康检查失败时，`healthy=false`、`failedChecks` 列出失败项，退出码为 `2`；健康检查自身无法执行时退出码为 `3`。
 
 外部调用方应同时判断退出码、`healthy`、`runDueNow` 和 `latestRunId`，不要仅凭进程存在判定签到成功。计划时间前 `runDueNow=false` 时，没有当天结果不会被误报为调度故障；计划时间后仍没有有效结果才属于异常。首次完整签到和调度安装尚未完成前，健康检查返回异常属于预期行为。检查结果可能包含本机路径和站点数量，适合留在本机监控系统，不应原样提交到公开 Issue 或仓库。
