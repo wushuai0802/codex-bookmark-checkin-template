@@ -13,7 +13,12 @@ test("健康检查把主 OAuth 专属 profile 纳入存在、唯一和孤立校�
   assert.match(source, /oauthIdentityProfilesPresent/);
   assert.match(source, /oauthAccountProfilesUnique/);
   assert.match(source, /configuredOAuthProfilePathKeys/);
+  assert.match(source, /primaryOAuthProfilePathKeys/);
+  assert.match(source, /supplementalOAuthProfilePathKeys/);
+  assert.match(source, /accountProfileDirectories/);
   assert.match(source, /noOrphanOAuthProfiles/);
+  assert.match(source, /noOrphanSupplementalProfiles/);
+  assert.match(source, /orphanSupplementalProfiles = \$orphanSupplementalProfiles/);
   assert.match(source, /oauthAccountBindingsReady/);
   assert.match(source, /oauthAccountBindingsConsistent/);
   assert.match(source, /oauthIdentityTuplesUnique/);

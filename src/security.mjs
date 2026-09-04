@@ -24,6 +24,9 @@ export function safeErrorMessage(error) {
   const raw = String(error?.message ?? error ?? "未知错误").slice(0, 1000);
   return raw
     .replace(/(token|secret|password|passwd|cookie|authorization)(\s*[:=]\s*)[^\s,;]+/gi, "$1$2[REDACTED]")
+    .replace(/[A-Z]:\\Users\\[^\\\s'"`]+/gi, "[USER_PATH]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[EMAIL]")
+    .replace(/\b(?:sk-|gh[opusr]_)[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]")
     .replace(/https?:\/\/[^\s)\]]+/gi, (value) => safeLogUrl(value));
 }
 

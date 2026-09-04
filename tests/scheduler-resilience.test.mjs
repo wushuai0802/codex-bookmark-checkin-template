@@ -95,10 +95,15 @@ test("仅剩凭据拒绝等人工关注时调度器不会每小时空转", async
   assert.match(scheduler, /\$reportState\.AutomaticRetryCount -eq 0/);
   assert.match(scheduler, /\$automaticRetryCount\s*=\s*if\s*\(\$null -ne \$state\.automaticRetryCount\)/);
   assert.match(scheduler, /\$hasDeferredWakeups\s*=\s*@\(\$deferredWakeups\)\.Count -gt 0/);
+  assert.match(scheduler, /retryExhaustedForDay\s+-eq\s+\$true/);
   assert.match(scheduler, /automaticRetryCount\s*=\s*\$state\.automaticRetryCount/);
   assert.match(scheduler, /\$manualAttentionOnly\s*=\s*\$latestReportState\.Valid/);
   assert.match(scheduler, /function Test-SchedulerShouldRun/);
   assert.match(scheduler, /\$shouldRun\s*=\s*\[bool\]\(Test-SchedulerShouldRun/);
+  assert.doesNotMatch(scheduler, /managed_challenge_timeout', 'visited', 'clicked'/);
+  assert.doesNotMatch(scheduler, /'unconfirmed', 'deferred'/);
+  assert.match(scheduler, /\.submissionAttempted\s+-ne\s+\$true/);
+  assert.match(scheduler, /\.retryable\s+-ne\s+\$false/);
 });
 
 test("任务级重试不会为空转凭据拒绝站点", async () => {

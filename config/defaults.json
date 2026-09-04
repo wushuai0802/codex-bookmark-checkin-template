@@ -39,6 +39,12 @@
   "manualChallengeOrigins": [],
   "autoClickHcaptchaOrigins": [],
   "autoClickTurnstileOrigins": [],
+  "baiduOcr": {
+    "enabled": false,
+    "allowedOrigins": [],
+    "minimumLocalConfidence": 70,
+    "timeoutMs": 5000
+  },
   "disabledCheckinOrigins": [],
   "loginAsCheckinOrigins": [],
   "newApiCaptchaRules": {},

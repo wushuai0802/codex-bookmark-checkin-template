@@ -18,6 +18,12 @@ test("公开默认配置不启用外部通知", async () => {
   assert.deepEqual(defaults.syncSavedLoginOrigins, []);
   assert.equal(defaults.qaWebSearchEnabled, false);
   assert.equal(defaults.disableOptimizationGuideOnDeviceModel, true);
+  assert.deepEqual(defaults.baiduOcr, {
+    enabled: false,
+    allowedOrigins: [],
+    minimumLocalConfidence: 70,
+    timeoutMs: 5000,
+  });
   assert.deepEqual(defaults.configuredTargets, []);
   assert.deepEqual(defaults.disabledCheckinOrigins, []);
   assert.deepEqual(defaults.loginAsCheckinOrigins, []);
@@ -237,6 +243,8 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(health, /latestPlannedTotal/);
   assert.match(health, /Test-CheckinPlanMatch/);
   assert.match(health, /schedulerStartupShortcutPresent/);
+  assert.match(health, /windowsTaskTriggerFrequencyValid/);
+  assert.match(health, /schedulerTaskTriggerFrequencyValid = \[bool\]\$checks\.schedulerTaskTriggerFrequencyValid/);
   assert.match(health, /schemaVersion\s*=\s*1/);
   assert.match(health, /failedChecks/);
   assert.match(health, /latestExecutionComplete/);
@@ -269,6 +277,59 @@ test("公开健康检查提供稳定的只读调用入口", async () => {
   assert.match(readme, /退出码为 `3`/);
   assert.match(health, /reason = 'health_check_error'/);
   assert.doesNotMatch(health, /Run-Checkin\.ps1|Start-Process/);
+});
+
+test("公开源码提供不触碰私有数据的运行版一致性同步入口", async () => {
+  const source = await fs.readFile(new URL("../scripts/Sync-PrivateRuntime.ps1", import.meta.url), "utf8");
+  assert.match(source, /\$managedRoots\s*=\s*@\('src', 'scripts', 'tests'\)/);
+  assert.match(source, /\[switch\]\$Apply/);
+  assert.match(source, /public-runtime-sync-backups/);
+  assert.match(source, /expectedProjectName\s*=\s*'codex-bookmark-checkin'/);
+  assert.match(source, /StringComparison\]::OrdinalIgnoreCase/);
+  assert.match(source, /FileAttributes\]::ReparsePoint/);
+  assert.match(source, /Test-PathWithin \$resolvedPrivateRoot \$resolvedPublicRoot/);
+  assert.match(source, /File\]::Replace/);
+  assert.doesNotMatch(source, /managedRoots[^\n]*(config|data|logs)/i);
+  assert.doesNotMatch(source, /Remove-Item[^\n]*PrivateRoot/i);
+});
+
+test("公开模板包含可安装的离线 OCR 依赖清单", async () => {
+  const requirements = await fs.readFile(new URL("../requirements-ocr.txt", import.meta.url), "utf8");
+  assert.match(requirements, /^ddddocr==\d+\.\d+\.\d+\s*$/);
+});
+
+test("百度 OCR 是默认关闭且不能单独提交的可选第二意见", async () => {
+  const source = await fs.readFile(new URL("../src/baidu-ocr.mjs", import.meta.url), "utf8");
+  assert.match(source, /CHECKIN_BAIDU_OCR_API_KEY/);
+  assert.match(source, /CHECKIN_BAIDU_OCR_SECRET_KEY/);
+  assert.match(source, /allowedOrigins/);
+  assert.match(source, /supportedByLocalCandidates/);
+  assert.doesNotMatch(source, /console\.(?:log|error|warn)/);
+  assert.doesNotMatch(source, /apiKey\s*[:=]\s*["'][^"']{8}/);
+  assert.doesNotMatch(source, /secretKey\s*[:=]\s*["'][^"']{8}/);
+});
+
+test("OAuth 日志确认在当前会话内有界回读且不会因一次未确认提前退出", async () => {
+  for (const relative of ["../src/oauth-login.mjs", "../src/native-oauth-login.mjs"]) {
+    const source = await fs.readFile(new URL(relative, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /dailyCheckin\?\.status\s*===\s*["']unconfirmed["']/);
+    assert.match(source, /verificationDeadline/);
+    assert.match(source, /page\.waitForTimeout\(1000\)/);
+  }
+});
+
+test("原生签到提交后未知状态是不可重试终态", async () => {
+  const plainWaf = await fs.readFile(new URL("../scripts/Invoke-PlainWafAccessibility.ps1", import.meta.url), "utf8");
+  const mainChrome = await fs.readFile(new URL("../scripts/Invoke-MainChromeCheckinAccessibility.ps1", import.meta.url), "utf8");
+  const preflight = await fs.readFile(new URL("../scripts/Prepare-NativeWafSession.ps1", import.meta.url), "utf8");
+  const inspector = await fs.readFile(new URL("../src/native-browser-inspect.mjs", import.meta.url), "utf8");
+  const runner = await fs.readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
+  for (const source of [plainWaf, mainChrome, preflight, inspector, runner]) {
+    assert.match(source, /submissionAttempted/);
+    assert.match(source, /submission_outcome_unknown/);
+  }
+  assert.match(runner, /preflight\?\.submissionAttempted === true/);
+  assert.match(runner, /retryable:\s*false/);
 });
 
 test("非 Git 安全扫描忽略依赖环境和本地运行数据", async () => {

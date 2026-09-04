@@ -364,6 +364,7 @@ $orphanIsolatedOAuthSiteProfiles = @(Get-ChildItem -LiteralPath $sitesRoot -Dire
     (Test-Path -LiteralPath (Join-Path $candidate 'Local State')) -and $configuredOAuthProfilePathKeys -notcontains $candidate.ToLowerInvariant()
 } | ForEach-Object { $_.Name })
 $scheduleValid = [string]$config.schedule -match '^([01]\d|2[0-3]):[0-5]\d$'
+$runDueNow = Test-CheckinRunDue -Schedule ([string]$config.schedule) -Now (Get-Date)
 $claimFresh = $true
 if ($schedulerState -and [string]$schedulerState.phase -eq 'running') {
     $claimFresh = $false
@@ -461,12 +462,12 @@ $checks = [ordered]@{
     noOrphanSupplementalProfiles = $orphanSupplementalProfiles.Count -eq 0
     noOrphanIsolatedOAuthSiteProfiles = $orphanIsolatedOAuthSiteProfiles.Count -eq 0
     stalePrivateTempClean = $staleTempCount -eq 0
-    latestResultPresent = [bool]$latest
-    latestResultValid = [bool]$latestResultValid
-    latestMatchesCurrentPlan = [bool]$latestMatchesCurrentPlan
+    latestResultPresent = [bool](-not $runDueNow -or $latest)
+    latestResultValid = [bool](-not $runDueNow -or $latestResultValid)
+    latestMatchesCurrentPlan = [bool](-not $runDueNow -or $latestMatchesCurrentPlan)
     latestBusinessCompleteConsistent = [bool]$serializedBusinessCompleteMatches
-    latestResultConfirmed = [bool]$latestResultValid
-    latestResultComplete = [bool]$latestResultValid
+    latestResultConfirmed = [bool](-not $runDueNow -or $latestResultValid)
+    latestResultComplete = [bool](-not $runDueNow -or $latestResultValid)
     siteStatePresent = $null -ne $siteState
 }
 $failedChecks = @($checks.GetEnumerator() | Where-Object { -not [bool]$_.Value } | ForEach-Object { [string]$_.Key })
@@ -480,6 +481,7 @@ $result = [ordered]@{
     schedule = [string]$config.schedule
     schedulerMode = if ($useUserScheduler) { 'user_scheduler' } elseif ($scheduledTask) { 'windows_task' } else { 'none' }
     schedulerExpectedProbeIntervalMinutes = $probeInterval
+    runDueNow = [bool]$runDueNow
     schedulerActualDailyTriggerMinutes = @($actualTriggerMinutes)
     # This is the effective scheduler result.  Keep the Windows Task
     # Scheduler-only probe separately so user_scheduler installations do not

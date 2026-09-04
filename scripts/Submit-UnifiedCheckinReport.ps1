@@ -128,8 +128,12 @@ $disabled = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'ta
 $temporarilyUnavailable = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'temporary_unavailable' }).Count
 $notAvailable = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'feature_disabled' }).Count
 $problems = @($reportingResults | Where-Object { -not (Test-TerminalCheckinResult $_) })
-$automaticRetryStatuses = @('error', 'failed', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred', 'not_available')
-$automaticRetryProblems = @($problems | Where-Object { $_.status -in $automaticRetryStatuses })
+$automaticRetryStatuses = @('error', 'failed', 'managed_challenge_timeout', 'no_action', 'deferred', 'not_available')
+$automaticRetryProblems = @($problems | Where-Object {
+    $_.status -in $automaticRetryStatuses `
+        -and $_.retryable -ne $false `
+        -and $_.submissionAttempted -ne $true
+})
 $attentionProblems = @($problems | Where-Object { $_.status -notin $automaticRetryStatuses })
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }

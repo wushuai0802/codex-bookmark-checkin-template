@@ -22,6 +22,20 @@ test("凭据被拒绝是人工关注终态，不进入自动重试", () => {
   assert.equal(isRetryEligible({ status: "needs_attention", retryCause: "invalid_credential" }), false);
 });
 
+test("已提交但结果未知的动作不会再次进入恢复或调度重试", () => {
+  assert.equal(isRetryEligible({
+    status: "unconfirmed",
+    submissionAttempted: true,
+  }), false);
+  assert.equal(isRetryEligible({
+    status: "error",
+    retryable: false,
+  }), false);
+  for (const status of ["visited", "clicked", "unconfirmed"]) {
+    assert.equal(isRetryEligible({ status }), false);
+  }
+});
+
 test("移出无签到名单后不复用当天的旧缓存终态", () => {
   const target = { origin: "https://newly-enabled.example" };
   const cached = {

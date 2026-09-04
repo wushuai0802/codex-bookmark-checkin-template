@@ -71,3 +71,21 @@ function Test-CheckinPlanMatch {
         -and -not [string]::IsNullOrWhiteSpace($LatestPlanFingerprint) `
         -and $CurrentPlanFingerprint -eq $LatestPlanFingerprint)
 }
+
+function Test-CheckinRunDue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Schedule,
+        [Parameter(Mandatory)]
+        [datetime]$Now
+    )
+
+    if ($Schedule -notmatch '^([01]\d|2[0-3]):[0-5]\d$') { return $true }
+    $scheduledToday = [datetime]::ParseExact(
+        "$($Now.ToString('yyyy-MM-dd')) $Schedule",
+        'yyyy-MM-dd HH:mm',
+        [System.Globalization.CultureInfo]::InvariantCulture
+    )
+    return [bool]($Now -ge $scheduledToday)
+}

@@ -77,6 +77,17 @@ npm test
 pwsh -NoProfile -File .\scripts\Scan-PublicSafety.ps1
 ```
 
+公开仓库作为共享源码时，可用以下命令检查私有部署是否发生代码漂移。
+默认只报告；显式加入 `-Apply` 才同步 `src`、`scripts`、`tests`、
+`config/defaults.json` 和 `requirements-ocr.txt`，并在私有部署的 `tmp`
+中备份被替换文件。该脚本不会复制或删除 `config.json`、
+`config.local.json`、`data`、`logs`、浏览器资料或其他私有扩展：
+
+```powershell
+pwsh -NoProfile -File .\scripts\Sync-PrivateRuntime.ps1 `
+  -PrivateRoot D:\path\to\private-runtime
+```
+
 ## 健康检查与外部调用
 
 部署完成后，用户、Codex 或其他本机监控程序可以运行同一个只读健康检查：
@@ -87,9 +98,15 @@ npm run --silent health
 
 该命令只读取本机配置、书签文件是否可访问、主账号及补充账号的独立 Chrome 配置、调度入口与进程、调度心跳、当前已验证签到计划与当天最终结果是否一致、站点状态和通知隔离队列；它不会启动签到、修改配置或发送通知。标准输出始终是一个 JSON 对象，`schemaVersion` 当前为 `1`。`reportStatus` 会明确区分 `complete`、`complete_with_attention` 和 `incomplete`；同时 `latestExecutionComplete` 表示所有计划项均已执行并形成结果，`latestBusinessComplete` 表示所有签到业务都已完成或进入明确终态，外部站点故障数量见 `pendingExternalCount`。完整报告中存在待重试或需关注站点时仍属于完整报告，调用方不应把它误判为执行中断。`healthy=true` 时退出码为 `0`；未初始化或任一基础设施健康检查失败时，`healthy=false`、`failedChecks` 列出失败项，退出码为 `2`；健康检查自身无法执行时退出码为 `3`。
 
-外部调用方应在每日计划时间和预计任务时长之后执行，并同时判断退出码、`healthy` 和 `latestRunId`，不要仅凭进程存在判定签到成功。首次完整签到和调度安装尚未完成前，健康检查返回异常属于预期行为。检查结果可能包含本机路径和站点数量，适合留在本机监控系统，不应原样提交到公开 Issue 或仓库。
+外部调用方应同时判断退出码、`healthy`、`runDueNow` 和 `latestRunId`，不要仅凭进程存在判定签到成功。计划时间前 `runDueNow=false` 时，没有当天结果不会被误报为调度故障；计划时间后仍没有有效结果才属于异常。首次完整签到和调度安装尚未完成前，健康检查返回异常属于预期行为。检查结果可能包含本机路径和站点数量，适合留在本机监控系统，不应原样提交到公开 Issue 或仓库。
 
 机器人 Chrome 未运行时，可先只读查看可清理缓存；确认后再显式应用。脚本只允许操作项目 `data` 下的独立资料目录，不删除 Cookie、保存密码、站点存储、IndexedDB 或 Service Worker：
+
+百度 OCR 可作为本地 OCR 的可选第二意见，但默认关闭。启用时必须在本地配置
+`baiduOcr.enabled=true`、设置精确的 `allowedOrigins`，并通过进程环境变量
+`CHECKIN_BAIDU_OCR_API_KEY` 与 `CHECKIN_BAIDU_OCR_SECRET_KEY` 注入轮换后的凭据。
+只有百度结果与本地识别或本地候选一致时才会采用；百度不可用时继续使用本地 OCR，
+凭据、访问令牌、验证码图片和原始响应都不会写入结果或日志。
 
 ```powershell
 pwsh -NoProfile -File .\scripts\Clear-AutomationChromeCache.ps1

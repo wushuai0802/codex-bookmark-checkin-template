@@ -1,10 +1,11 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText } from "./detector.mjs";
 import { assertBookmarkNavigation, safeErrorMessage, safeLogUrl } from "./security.mjs";
-import { newApiCaptchaCandidates, recognizeNewApiCaptcha, recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
+import { newApiCaptchaCandidates, recognizeNewApiCaptcha, recognizeNexusCaptcha, recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
 import { solveU2VisualChallenge } from "./u2-vision.mjs";
 import { resolveQaByWebSearch } from "./qa-solver.mjs";
 import { withRetrySchedule } from "./retry-policy.mjs";
@@ -12,6 +13,7 @@ import { tryOAuthReloginCheckinStatus } from "./oauth-relogin-checkin.mjs";
 import { tryOAuthApiCheckin } from "./oauth-api-checkin.mjs";
 import { tryNewApiCaptchaCheckin, tryNewApiSignIn } from "./new-api-signin.mjs";
 import { isTerminalResult } from "./result-contract.mjs";
+import { applyOptionalBaiduSecondOpinion } from "./baidu-ocr.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -298,7 +300,7 @@ async function classifyManualAttention(page, state, activeOrigin, config) {
 // A click is only an attempt.  Keep polling the same page until a stable
 // business-level success signal appears.  This closes the historical gap where
 // a button click or a visited /attendance.php URL was reported as completion.
-export async function waitForAuthoritativeCheckin(page, activeOrigin, config = {}) {
+export async function waitForAuthoritativeCheckin(page, activeOrigin, config = {}, options = {}) {
   const configured = Number(config.checkinConfirmationWaitMs);
   const waitMs = Math.max(3000, Math.min(30000, Number.isFinite(configured) ? configured : 15000));
   const deadline = Date.now() + waitMs;
@@ -312,9 +314,15 @@ export async function waitForAuthoritativeCheckin(page, activeOrigin, config = {
     }
     await sleep(500);
   }
+  const submissionAttempted = options.submissionAttempted !== false;
   return {
-    status: "unconfirmed",
-    reason: "签到动作已提交，但在限定时间内未取得页面或接口的权威成功回读",
+    status: "needs_attention",
+    reason: submissionAttempted
+      ? "签到动作已提交，但在限定时间内未取得页面或接口的权威成功回读"
+      : "签到页未提供可执行动作或权威状态，需补充站点适配器",
+    failureCode: submissionAttempted ? "submission_outcome_unknown" : "authoritative_status_unavailable",
+    submissionAttempted,
+    retryable: false,
     ...(last ? { lastObservedStatus: last.status } : {}),
   };
 }
@@ -484,7 +492,13 @@ async function tryQuotaRequestFlow(page, activeOrigin, config) {
   if (/(额度申请已提交|申请额度成功|额度已发放|额度申请成功|申请成功.*额度|今日已申请|今天已申请|codex\s*(?:权益|權益)\s*已(?:领取|領取)|(?:领取|領取)\s*codex\s*(?:权益|權益)\s*成功)/i.test(bodyText)) return { status: "signed", reason: "额度申请已提交并获得页面确认" };
   const activeBenefit = await detectActiveQuotaBenefit(page, activeOrigin, config, "signed");
   if (activeBenefit) return activeBenefit;
-  return { status: "unconfirmed", reason: "额度申请已提交，但页面未确认结果" };
+  return {
+    status: "needs_attention",
+    reason: "额度申请已提交，但站点未提供可确认的结果",
+    failureCode: "submission_outcome_unknown",
+    submissionAttempted: true,
+    retryable: false,
+  };
 }
 
 async function findCheckinDiscoveryUrls(page, expectedOrigin) {
@@ -806,7 +820,7 @@ export async function tryNewApiCheckin(page) {
   });
 }
 
-async function tryOpenCdCaptcha(page, expectedOrigin) {
+async function tryOpenCdCaptcha(page, expectedOrigin, config) {
   if (expectedOrigin !== "https://open.cd") return null;
   const frame = page.frameLocator("iframe#i_signin");
   const input = frame.locator('input[name="imagestring"]');
@@ -814,7 +828,13 @@ async function tryOpenCdCaptcha(page, expectedOrigin) {
   const images = frame.locator("img");
   if (await input.count() !== 1 || await submit.count() !== 1 || await images.count() !== 1) return null;
   const screenshot = await images.first().screenshot();
-  const recognition = await recognizeOpenCdCaptcha(screenshot);
+  let recognition = await recognizeOpenCdCaptcha(screenshot);
+  recognition = await applyOptionalBaiduSecondOpinion(screenshot, recognition, {
+    config,
+    origin: expectedOrigin,
+    length: 6,
+    alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  });
   if (!/^[A-Z0-9]{6}$/.test(recognition.code) || Number(recognition.confidence) < 45) {
     return { status: "interactive_challenge", reason: "OpenCD 六位验证码本地识别置信度不足，未提交可疑答案" };
   }
@@ -868,34 +888,127 @@ async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config) 
   };
 }
 
-async function tryNexusImageCaptcha(page) {
-  const input = page.locator("#imagestring");
-  const submit = page.locator("#showupbutton");
-  const image = page.locator("#showupimg");
-  if (await input.count() !== 1 || await submit.count() !== 1 || await image.count() !== 1) return null;
-  const screenshot = await image.screenshot();
-  const recognition = await recognizeOpenCdCaptcha(screenshot);
-  if (!/^[A-Z0-9]{6}$/.test(recognition.code)) {
-    return { status: "interactive_challenge", reason: "NexusPHP 六位验证码本地识别结果无效" };
-  }
-  await input.fill(recognition.code);
-  await submit.click();
-  await sleep(3000);
-  const state = await snapshotState(page);
-  if (["signed", "already_signed"].includes(state.status)) {
-    return { ...state, reason: `${state.reason}；图片验证码置信度 ${Math.round(recognition.confidence)}` };
-  }
-  const showup = page.locator("#showup");
-  if (await showup.count() === 1) {
-    const showupText = String(await showup.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-    if (/已签到|已簽到|showed up/i.test(showupText)) {
-      return { status: "signed", reason: `HDSky 图片验证码识别成功（置信度 ${Math.round(recognition.confidence)}）` };
+export function isNexusCaptchaRejectedText(value) {
+  return /图片代码无效|圖片代碼無效|验证码无效|驗證碼無效|invalid\s+(?:image\s+)?code|captcha\s+invalid/i.test(String(value ?? ""));
+}
+
+async function tryNexusImageCaptcha(page, maxAttempts = 3) {
+  const checkinUrl = page.url();
+  const submittedChallenges = new Set();
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const input = page.locator('input[name="imagestring"]:visible, #imagestring:visible');
+    const inputCount = await input.count();
+    const form = inputCount === 1 ? input.locator("xpath=ancestor::form[1]") : null;
+    const scopedForm = form && await form.count() === 1 ? form : page;
+    const submit = scopedForm.locator('#showupbutton, input[type="submit"][value="立即签到"], input[type="submit"][value="立即簽到"]');
+    const image = scopedForm.locator('#showupimg, img[alt="CAPTCHA" i][src*="image.php"], img[src*="/image.php"]');
+    const imageHash = scopedForm.locator('input[type="hidden"][name="imagehash"]');
+    const submitCount = await submit.count();
+    const imageCount = await image.count();
+    if (inputCount === 0 && submitCount === 0 && imageCount === 0) return null;
+    if (inputCount !== 1 || submitCount !== 1 || imageCount !== 1) {
+      return {
+        status: "needs_attention",
+        reason: "检测到 NexusPHP 验证码，但页面控件结构不完整，已阻止空验证码提交",
+        failureCode: "captcha_structure_changed",
+        retryable: false,
+      };
     }
+    const screenshot = await image.screenshot();
+    const imageHashValue = await imageHash.count() === 1
+      ? await imageHash.inputValue().catch(() => "")
+      : "";
+    const challengeKey = `${imageHashValue}:${createHash("sha256").update(screenshot).digest("hex")}`;
+    if (submittedChallenges.has(challengeKey)) {
+      if (attempt === maxAttempts) return {
+        status: "needs_attention",
+        reason: "NexusPHP 验证码刷新后仍返回同一题目，已阻止重复提交",
+        failureCode: "captcha_not_refreshed",
+        retryable: false,
+      };
+      await page.goto(checkinUrl, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+      await sleep(750);
+      continue;
+    }
+    let recognition = await recognizeNexusCaptcha(screenshot);
+    recognition = await applyOptionalBaiduSecondOpinion(screenshot, recognition, {
+      config,
+      origin: new URL(checkinUrl).origin,
+      length: 6,
+      alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    });
+    if (!/^[A-Z0-9]{6}$/.test(recognition.code)) {
+      if (attempt === maxAttempts) return {
+        status: "needs_attention",
+        reason: "NexusPHP 六位验证码连续识别无效，已阻止可疑答案和空验证码提交",
+        failureCode: "captcha_ocr_exhausted",
+        retryable: false,
+      };
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+      await sleep(750);
+      continue;
+    }
+    submittedChallenges.add(challengeKey);
+    await input.fill(recognition.code);
+    await submit.click();
+    await sleep(3000);
+    const state = await snapshotState(page);
+    if (["signed", "already_signed"].includes(state.status)) {
+      return { ...state, reason: `${state.reason}；图片验证码置信度 ${Math.round(recognition.confidence)}，第 ${attempt} 次识别` };
+    }
+    const showup = page.locator("#showup");
+    if (await showup.count() === 1) {
+      const showupText = String(await showup.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+      if (/已签到|已簽到|showed up/i.test(showupText)) {
+        return { status: "signed", reason: `NexusPHP 图片验证码识别成功（置信度 ${Math.round(recognition.confidence)}，第 ${attempt} 次识别）` };
+      }
+    }
+    const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+    if (isNexusCaptchaRejectedText(bodyText)) {
+      if (attempt === maxAttempts) return {
+        status: "needs_attention",
+        reason: "NexusPHP 图片验证码连续被站点拒绝，已停止本轮提交",
+        failureCode: "captcha_ocr_exhausted",
+        submissionAttempted: true,
+        retryable: false,
+      };
+      await page.goto(checkinUrl, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+      await sleep(750);
+      continue;
+    }
+    if (await page.locator('#showupimg, img[alt="CAPTCHA" i][src*="image.php"], img[src*="/image.php"]').count() === 0) {
+      for (let verification = 0; verification < 4; verification += 1) {
+        if (verification > 0) await sleep(750);
+        const verified = await snapshotState(page);
+        if (["signed", "already_signed"].includes(verified.status)) {
+          return { ...verified, reason: `${verified.reason}；NexusPHP 图片验证码第 ${attempt} 次识别完成` };
+        }
+      }
+      await page.goto(checkinUrl, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+      await sleep(750);
+      const verified = await snapshotState(page);
+      if (["signed", "already_signed"].includes(verified.status)) {
+        return { ...verified, reason: `${verified.reason}；NexusPHP 图片验证码第 ${attempt} 次识别完成` };
+      }
+      return {
+        status: "needs_attention",
+        reason: "NexusPHP 验证码已提交，但页面与签到页均未提供权威结果",
+        failureCode: "submission_outcome_unknown",
+        submissionAttempted: true,
+        retryable: false,
+      };
+    }
+    if (attempt === maxAttempts) return {
+      status: "needs_attention",
+      reason: "NexusPHP 图片验证码提交后仍显示验证控件，已停止本轮提交",
+      failureCode: "captcha_ocr_exhausted",
+      submissionAttempted: true,
+      retryable: false,
+    };
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+    await sleep(750);
   }
-  if (await page.locator("#showupimg").count() === 0) {
-    return { status: "clicked", reason: `已提交 NexusPHP 图片验证码（置信度 ${Math.round(recognition.confidence)}）` };
-  }
-  return { status: "interactive_challenge", reason: "NexusPHP 图片验证码提交后仍显示验证弹窗" };
+  return { status: "interactive_challenge", reason: "NexusPHP 图片验证码未能完成" };
 }
 
 async function tryU2Captcha(page, expectedOrigin, config) {
@@ -986,8 +1099,17 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     activeOrigin,
     config,
     async (image) => {
-      const recognition = await recognizeNewApiCaptcha(image);
-      return newApiCaptchaCandidates(recognition);
+      let recognition = await recognizeNewApiCaptcha(image);
+      recognition = await applyOptionalBaiduSecondOpinion(image, recognition, {
+        config,
+        origin: activeOrigin,
+        length: 5,
+        alphabet: "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+      });
+      const candidates = newApiCaptchaCandidates(recognition);
+      return recognition.externalConsensus && recognition.code
+        ? [recognition.code, ...candidates.filter((code) => code !== recognition.code)]
+        : candidates;
     },
   );
   if (newApiCaptchaStatus) return { ...newApiCaptchaStatus, url: safeLogUrl(page.url()) };
@@ -1044,6 +1166,12 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
   const qaResult = await tryQaFlow(page, qaRules, activeOrigin, config);
   if (qaResult) return { ...qaResult, url: safeLogUrl(page.url()) };
 
+  // Some NexusPHP attendance pages render the CAPTCHA and its submit button
+  // immediately. Solve it before generic action discovery so the empty or
+  // stale image code is never submitted as an ordinary "立即签到" action.
+  const initialNexusCaptchaResult = await tryNexusImageCaptcha(page);
+  if (initialNexusCaptchaResult) return { ...initialNexusCaptchaResult, url: safeLogUrl(page.url()) };
+
   let action = await findCheckinAction(page, allowedOrigins);
   if (!action && useExtendedDiscovery) {
     const discoveryUrls = await findCheckinDiscoveryUrls(page, activeOrigin);
@@ -1090,7 +1218,7 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
       if (quotaResult) return { ...quotaResult, action: `${action.text} → 申请理由`, url: safeLogUrl(page.url()) };
     }
 
-    const openCdResult = await tryOpenCdCaptcha(page, activeOrigin);
+    const openCdResult = await tryOpenCdCaptcha(page, activeOrigin, config);
     if (openCdResult) return { ...openCdResult, action: action.text, url: safeLogUrl(page.url()) };
     const nexusCaptchaResult = await tryNexusImageCaptcha(page);
     if (nexusCaptchaResult) return { ...nexusCaptchaResult, action: action.text, url: safeLogUrl(page.url()) };
@@ -1118,14 +1246,8 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     // Some trackers submit the check-in on page load, while others require a
     // hidden form/API call; only page text or an authoritative endpoint may
     // close the target as signed/already_signed.
-    const confirmed = await waitForAuthoritativeCheckin(page, activeOrigin, config);
-    return {
-      ...confirmed,
-      reason: confirmed.status === "unconfirmed"
-        ? "已打开签到页，但未取得页面或接口的权威成功回读"
-        : confirmed.reason,
-      url: safeLogUrl(page.url()),
-    };
+    const confirmed = await waitForAuthoritativeCheckin(page, activeOrigin, config, { submissionAttempted: false });
+    return { ...confirmed, url: safeLogUrl(page.url()) };
   }
 
   if (useNewApiCheckin) {

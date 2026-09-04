@@ -69,6 +69,7 @@ function Resolve-OAuthAccountConfiguration([object]$Config, [string]$Root, [stri
             Origin = $origin
             Provider = if ($identity.provider) { [string]$identity.provider } else { [string](Get-OAuthMapValue $Config.automaticOAuthProviders $origin) }
             UpstreamProvider = if ($identity.upstreamProvider) { [string]$identity.upstreamProvider } else { [string](Get-OAuthMapValue $Config.oauthUpstreamProviders $origin) }
+            UpstreamAccount = if ($identity.upstreamAccount) { [string]$identity.upstreamAccount } else { $null }
             LoginUrl = if ($identity.loginUrl) { [string]$identity.loginUrl } elseif (Get-OAuthMapValue $Config.oauthLoginUrls $origin) { [string](Get-OAuthMapValue $Config.oauthLoginUrls $origin) } else { "$origin/login" }
             AutomationUserDataDir = if ($primaryProfiles.ContainsKey([string]$property.Name)) { [string]$primaryProfiles[[string]$property.Name] } else { $globalProfile }
             Supplemental = $false
@@ -86,6 +87,7 @@ function Resolve-OAuthAccountConfiguration([object]$Config, [string]$Root, [stri
             Origin = $origin
             Provider = [string]$account.provider
             UpstreamProvider = [string]$account.upstreamProvider
+            UpstreamAccount = if ($account.upstreamAccount) { [string]$account.upstreamAccount } else { $null }
             LoginUrl = if ($account.loginUrl) { [string]$account.loginUrl } else { "$origin/login" }
             AutomationUserDataDir = $profile
             Supplemental = $true

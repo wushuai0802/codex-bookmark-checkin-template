@@ -311,13 +311,18 @@ foreach ($item in $items) {
         finally { if ((Get-AutomationChromeProcesses).Count -gt 0) { Close-AutomationChrome } }
         $confirmed = $null -ne $checkinInspection -and [string]$checkinInspection.status -in @('signed', 'already_signed')
         $twoFactorRequired = Test-TwoFactorResult $checkinInspection
+        $submissionAttempted = $null -ne $checkinInspection -and (
+            [bool]$checkinInspection.submissionAttempted -or [bool]$checkinInspection.checkinClicked
+        )
         $preflightResults += [pscustomobject]@{
             origin = $origin
             url = $url
-            status = if ($confirmed) { [string]$checkinInspection.status } elseif ($twoFactorRequired) { 'needs_attention' } else { 'unconfirmed' }
+            status = if ($confirmed) { [string]$checkinInspection.status } elseif ($twoFactorRequired -or $submissionAttempted) { 'needs_attention' } else { 'unconfirmed' }
             reason = if ($confirmed) { [string]$checkinInspection.reason } elseif ($checkinInspection) { [string]$checkinInspection.reason } else { '无调试原生 Chrome 未取得签到终态' }
             inspectionStatus = if ($checkinInspection) { [string]$checkinInspection.status } else { 'unavailable' }
-            failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($checkinInspection) { [string]$checkinInspection.failureCode } else { 'accessibility_unavailable' }
+            failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($submissionAttempted) { 'submission_outcome_unknown' } elseif ($checkinInspection) { [string]$checkinInspection.failureCode } else { 'accessibility_unavailable' }
+            submissionAttempted = $submissionAttempted
+            retryable = if ($submissionAttempted) { $false } else { $null }
             attentionKind = if ($twoFactorRequired) { 'trusted_device_initialization' } else { $null }
             retryableLoginRecovery = if ($twoFactorRequired) { $false } else { $null }
             checkinClickAttempted = if ($checkinInspection) { [bool]$checkinInspection.checkinClickAttempted } else { $false }
@@ -327,19 +332,22 @@ foreach ($item in $items) {
     }
 
     $mainInspection = $null
-    if ($mainFallbackByOrigin.ContainsKey($origin)) {
+    if (-not [bool]$item.passiveOnly -and $mainFallbackByOrigin.ContainsKey($origin)) {
         $fallbackEntry = $mainFallbackByOrigin[$origin]
         $mainInspection = Invoke-MainChromeFallbackResult $origin ([string]$fallbackEntry.url) ([int]$fallbackEntry.waitSeconds)
         $mainConfirmed = $null -ne $mainInspection -and [string]$mainInspection.status -in @('signed', 'already_signed')
         $mainTwoFactorRequired = Test-TwoFactorResult $mainInspection
-        if ($mainConfirmed -or $mainTwoFactorRequired -or [bool]$item.mainChromeFallbackOnly) {
+        $mainSubmissionAttempted = $null -ne $mainInspection -and [bool]$mainInspection.submissionAttempted
+        if ($mainConfirmed -or $mainTwoFactorRequired -or $mainSubmissionAttempted -or [bool]$item.mainChromeFallbackOnly) {
             $preflightResults += [pscustomobject]@{
                 origin = $origin
                 url = [string]$fallbackEntry.url
-                status = if ($mainConfirmed) { 'signed' } elseif ($mainTwoFactorRequired) { 'needs_attention' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
+                status = if ($mainConfirmed) { 'signed' } elseif ($mainTwoFactorRequired -or $mainSubmissionAttempted) { 'needs_attention' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
                 reason = if ($mainInspection) { [string]$mainInspection.reason } else { '主 Chrome 回退未取得明确签到终态' }
                 inspectionStatus = if ($mainInspection) { [string]$mainInspection.status } else { 'unavailable' }
                 failureCode = if ($mainInspection) { [string]$mainInspection.failureCode } else { 'accessibility_unavailable' }
+                submissionAttempted = $mainSubmissionAttempted
+                retryable = if ($mainSubmissionAttempted) { $false } else { $null }
                 attentionKind = if ($mainTwoFactorRequired) { 'trusted_device_initialization' } else { $null }
                 retryableLoginRecovery = if ($mainTwoFactorRequired) { $false } else { $null }
             }
@@ -383,6 +391,66 @@ foreach ($item in $items) {
         }
         finally {
             if ((Get-AutomationChromeProcesses).Count -gt 0) { Close-AutomationChrome }
+        }
+
+        # Windows UI Automation is unavailable while the interactive desktop
+        # is locked. The no-debug launch above still lets Chrome establish the
+        # WAF/session state. Reopen the same isolated profile once with a debug
+        # port only for authoritative readback; never use this path to click.
+        if (-not $passivePrepared -and (
+            $null -eq $passiveInspection -or
+            [string]$passiveInspection.failureCode -eq 'accessibility_unavailable'
+        )) {
+            $readbackStarted = $false
+            try {
+                [void](Reset-NativeChromeDebugPort $profilePath)
+                $readbackPort = Get-NativeChromeDebugPort
+                & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') `
+                    -RemoteDebuggingPort $readbackPort `
+                    -Urls @($url) `
+                    -Offscreen `
+                    -UserDataDirOverride $profilePath | Out-Null
+                $readbackStarted = $true
+                $readbackPort = Wait-NativeChromeDebugPort $profilePath $readbackPort 25
+                $readbackText = & $node $inspector $readbackPort $origin ([int]$item.waitSeconds) 'require-confirmed' 0 2>$null
+                if ($LASTEXITCODE -eq 0 -and $readbackText) {
+                    $readback = $readbackText | ConvertFrom-Json
+                    if ([string]$readback.status -in @('signed', 'already_signed')) {
+                        $passiveInspection = $readback
+                        $passivePrepared = $true
+                    }
+                }
+            }
+            catch { }
+            finally {
+                if ($readbackStarted -and (Get-AutomationChromeProcesses).Count -gt 0) { Close-AutomationChrome }
+            }
+        }
+
+        # Keep the user's normal Chrome as the last resort. A healthy isolated
+        # profile should finish without creating or moving any main-profile
+        # window.
+        if (-not $passivePrepared -and $mainFallbackByOrigin.ContainsKey($origin)) {
+            $fallbackEntry = $mainFallbackByOrigin[$origin]
+            $mainInspection = Invoke-MainChromeFallbackResult $origin ([string]$fallbackEntry.url) ([int]$fallbackEntry.waitSeconds)
+            $mainConfirmed = $null -ne $mainInspection -and [string]$mainInspection.status -in @('signed', 'already_signed')
+            $mainTwoFactorRequired = Test-TwoFactorResult $mainInspection
+            $mainSubmissionAttempted = $null -ne $mainInspection -and [bool]$mainInspection.submissionAttempted
+            if ($mainConfirmed -or $mainTwoFactorRequired -or $mainSubmissionAttempted -or [bool]$item.mainChromeFallbackOnly) {
+                $preflightResults += [pscustomobject]@{
+                    origin = $origin
+                    url = [string]$fallbackEntry.url
+                    status = if ($mainConfirmed) { [string]$mainInspection.status } elseif ($mainTwoFactorRequired -or $mainSubmissionAttempted) { 'needs_attention' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
+                    reason = if ($mainInspection) { [string]$mainInspection.reason } else { '主 Chrome 回退未取得明确签到终态' }
+                    inspectionStatus = if ($mainInspection) { [string]$mainInspection.status } else { 'unavailable' }
+                    failureCode = if ($mainInspection) { [string]$mainInspection.failureCode } else { 'accessibility_unavailable' }
+                    submissionAttempted = $mainSubmissionAttempted
+                    retryable = if ($mainSubmissionAttempted) { $false } else { $null }
+                    attentionKind = if ($mainTwoFactorRequired) { 'trusted_device_initialization' } else { $null }
+                    retryableLoginRecovery = if ($mainTwoFactorRequired) { $false } else { $null }
+                }
+                continue
+            }
         }
 
         if (-not $passivePrepared) {
@@ -455,7 +523,8 @@ foreach ($item in $items) {
                 $attemptPrepared = [string]$item.action -ne 'checkin' -and -not [bool]$item.trustAsSigned -and [bool]$inspection.siteBodyLoaded `
                     -and [string]$inspection.status -notin @('login_required', 'needs_attention', 'interactive_challenge', 'managed_challenge')
                 $attemptAttention = Test-TwoFactorResult $inspection
-                if (-not $attemptExplicit -and -not $attemptEndpoint -and -not $attemptPrepared -and -not $attemptAttention) { $inspection = $null }
+                $attemptSubmitted = [bool]$inspection.submissionAttempted -or [bool]$inspection.checkinClicked
+                if (-not $attemptExplicit -and -not $attemptEndpoint -and -not $attemptPrepared -and -not $attemptAttention -and -not $attemptSubmitted) { $inspection = $null }
             }
         }
         catch { $inspection = $null }
@@ -474,13 +543,16 @@ foreach ($item in $items) {
     $prepared = [string]$item.action -ne 'checkin' -and $null -ne $inspection -and [bool]$inspection.siteBodyLoaded `
         -and [string]$inspection.status -notin @('login_required', 'needs_attention', 'interactive_challenge', 'managed_challenge')
     $twoFactorRequired = Test-TwoFactorResult $inspection
+    $submissionAttempted = $null -ne $inspection -and (
+        [bool]$inspection.submissionAttempted -or [bool]$inspection.checkinClicked
+    )
     if (-not $explicitlyConfirmed -and -not $endpointConfirmed -and -not $prepared) {
         Write-Warning "原生验证未能确认站点正文：$hostName"
     }
     $preflightResults += [pscustomobject]@{
         origin = $origin
         url = $url
-        status = if ($explicitlyConfirmed) { [string]$inspection.status } elseif ($endpointConfirmed) { 'signed' } elseif ($prepared) { 'prepared' } elseif ($twoFactorRequired) { 'needs_attention' } else { 'unconfirmed' }
+        status = if ($explicitlyConfirmed) { [string]$inspection.status } elseif ($endpointConfirmed) { 'signed' } elseif ($prepared) { 'prepared' } elseif ($twoFactorRequired -or $submissionAttempted) { 'needs_attention' } else { 'unconfirmed' }
         reason = if ($explicitlyConfirmed) {
             if ([string]$inspection.status -eq 'not_available') { [string]$inspection.reason }
             else { '原生 Chrome 已通过 WAF，并由页面明确确认今天已签到' }
@@ -490,11 +562,15 @@ foreach ($item in $items) {
             '原生 Chrome 已完成验证预热，等待自动化复查'
         } elseif ($twoFactorRequired) {
             '站点要求完成异地登录 2FA 验证'
+        } elseif ($submissionAttempted) {
+            '原生 Chrome 已提交签到动作，但页面或接口未返回权威结果'
         } else {
             '原生验证页面未能确认签到结果'
         }
         inspectionStatus = if ($null -ne $inspection) { [string]$inspection.status } else { 'unavailable' }
-        failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($inspection) { [string]$inspection.failureCode } else { 'accessibility_unavailable' }
+        failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($submissionAttempted) { 'submission_outcome_unknown' } elseif ($inspection) { [string]$inspection.failureCode } else { 'accessibility_unavailable' }
+        submissionAttempted = $submissionAttempted
+        retryable = if ($submissionAttempted) { $false } else { $null }
         attentionKind = if ($twoFactorRequired) { 'trusted_device_initialization' } else { $null }
         retryableLoginRecovery = if ($twoFactorRequired) { $false } else { $null }
         availabilityKind = if ($explicitlyConfirmed) { [string]$inspection.availabilityKind } else { $null }

@@ -60,3 +60,9 @@ test("身份集合相同但计划指纹变化时判定为不匹配", () => {
   ].join(" ");
   assert.equal(runExpression(expression), "False");
 });
+
+test("计划时间前没有今日结果不应被误报为调度故障", () => {
+  assert.equal(runExpression("Test-CheckinRunDue -Schedule '08:05' -Now ([datetime]'2026-09-04T07:30:00')"), "False");
+  assert.equal(runExpression("Test-CheckinRunDue -Schedule '08:05' -Now ([datetime]'2026-09-04T08:05:00')"), "True");
+  assert.equal(runExpression("Test-CheckinRunDue -Schedule 'invalid' -Now ([datetime]'2026-09-04T07:30:00')"), "True");
+});

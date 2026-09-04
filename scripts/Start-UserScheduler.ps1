@@ -271,7 +271,9 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
             -and $results.Count -ge $plannedTotal
         $problems = @($results | Where-Object { -not (Test-TerminalCheckinResult $_) })
         $automaticRetryProblems = @($problems | Where-Object {
-            $_.status -in @('error', 'login_required', 'interactive_challenge', 'managed_challenge_timeout', 'visited', 'clicked', 'no_action', 'unconfirmed', 'deferred', 'not_available') `
+            $_.status -in @('error', 'login_required', 'interactive_challenge', 'managed_challenge_timeout', 'no_action', 'deferred', 'not_available') `
+                -and $_.retryable -ne $false `
+                -and $_.submissionAttempted -ne $true `
                 -and -not ($_.status -eq 'deferred' -and $_.retryExhaustedForDay -eq $true)
         })
         $missingCount = [Math]::Max(0, $plannedTotal - $processedTotal)

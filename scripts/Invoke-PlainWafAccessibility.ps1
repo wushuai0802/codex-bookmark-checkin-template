@@ -375,8 +375,15 @@ try {
         Start-Sleep -Milliseconds 750
     } while ((Get-Date) -lt $deadline)
     [pscustomobject]@{
-        status = if ($last.waf) { 'managed_challenge' } else { 'unconfirmed' }
-        reason = "无调试原生 Chrome 未取得签到终态（雷池确认点击=$confirmationClicked，Cloudflare 验证点击=$cloudflareChallengeClicked）"
+        status = if ($last.waf) { 'managed_challenge' } elseif ($checkinClicked) { 'needs_attention' } else { 'unconfirmed' }
+        reason = if ($checkinClicked) {
+            '无调试原生 Chrome 已提交签到动作，但页面未返回权威结果'
+        } else {
+            "无调试原生 Chrome 未取得签到终态（雷池确认点击=$confirmationClicked，Cloudflare 验证点击=$cloudflareChallengeClicked）"
+        }
+        failureCode = if ($checkinClicked) { 'submission_outcome_unknown' } else { $null }
+        submissionAttempted = $checkinClicked
+        retryable = if ($checkinClicked) { $false } else { $null }
         confirmationClickAttempted = $confirmationClickAttempted
         confirmationClicked = $confirmationClicked
         cloudflareChallengeClicked = $cloudflareChallengeClicked

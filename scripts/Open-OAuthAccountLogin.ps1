@@ -10,4 +10,5 @@ $binding = Resolve-OAuthAccountConfiguration $config $root $AccountKey
     -Urls @($binding.LoginUrl) `
     -UserDataDirOverride $binding.AutomationUserDataDir `
     -EnablePasswordManager
-Write-Output "已打开账号 $($binding.AccountLabel) 的独立窗口；目标 ID=$($binding.AccountId)，站点登录方式=$($binding.Provider)，上游登录方式=$($binding.UpstreamProvider)。"
+$upstreamHint = if ($binding.UpstreamAccount) { "，上游账号提示=$($binding.UpstreamAccount)" } else { '' }
+Write-Output "已打开账号 $($binding.AccountLabel) 的独立窗口；目标 ID=$($binding.AccountId)，站点登录方式=$($binding.Provider)，上游登录方式=$($binding.UpstreamProvider)$upstreamHint。"

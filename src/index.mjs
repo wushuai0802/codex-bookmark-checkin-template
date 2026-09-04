@@ -484,10 +484,23 @@ try {
             inspectionStatus: "login_required",
           };
         }
+        if (nativeWafOrigins.has(target.origin) && preflight?.submissionAttempted === true) {
+          return {
+            status: "needs_attention",
+            reason: preflight.reason || "签到动作已提交，但无调试原生 Chrome 未取得权威结果",
+            failureCode: "submission_outcome_unknown",
+            submissionAttempted: true,
+            retryable: false,
+            url: preflight.url || target.candidates?.[0] || target.origin,
+            attempt: 1,
+            nativePreflight: true,
+            inspectionStatus: preflight.inspectionStatus || preflight.status,
+          };
+        }
         // A configured native-WAF target must never fall back to the CDP
         // browser and become a weak `visited` result. LeiChi detects debugging
         // sessions, so only the no-debug preflight may authoritatively finish
-        // these targets; an inconclusive preflight remains an automatic retry.
+        // these targets. Only a pre-submission challenge remains retryable.
         if (nativeWafOrigins.has(target.origin)) {
           return withRetrySchedule({
             status: "deferred",

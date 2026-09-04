@@ -11,7 +11,7 @@ import {
   tryOAuthReloginCheckinStatus,
 } from "./oauth-relogin-checkin.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
-import { safeLogUrl } from "./security.mjs";
+import { safeErrorMessage, safeLogUrl } from "./security.mjs";
 import { isLoginOrSignInRoute } from "./url-routes.mjs";
 
 const require = createRequire(import.meta.url);
@@ -326,8 +326,7 @@ function isTargetLogin(url) {
 }
 
 function safeFailureReason(error) {
-  const message = String(error?.message || "原生 OAuth 恢复失败")
-    .replace(/https?:\/\/\S+/gi, "[url]")
+  const message = safeErrorMessage(error || "原生 OAuth 恢复失败")
     .replace(/[\r\n\t]+/g, " ")
     .trim();
   return message.slice(0, 240);
@@ -526,20 +525,24 @@ try {
     let dailyCheckin = null;
     do {
       dailyCheckin = await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "signed");
-      if (["signed", "already_signed"].includes(dailyCheckin?.status) || dailyCheckin?.status === "unconfirmed") break;
+      if (["signed", "already_signed", "deferred", "needs_attention"].includes(dailyCheckin?.status)) break;
       await page.waitForTimeout(1000);
     } while (Date.now() < verificationDeadline);
 
     const completed = ["signed", "already_signed"].includes(dailyCheckin?.status);
+    const dailyFailureCode = dailyCheckin?.status === "deferred"
+      ? (dailyCheckin.retryCause === "rate_limit" ? "oauth_rate_limited" : "oauth_upstream_unavailable")
+      : null;
     console.log(JSON.stringify({
       origin,
       provider,
-      status: completed ? "logged_in" : "needs_attention",
+      status: completed ? "logged_in" : (dailyFailureCode ? "failed" : "needs_attention"),
       finalUrl: safeLogUrl(page.url()),
       accountKey,
       accountId: configuredExpectedAccountId,
       accountLabel,
       upstreamProvider,
+      ...(dailyFailureCode ? { failureCode: dailyFailureCode } : {}),
       reusedExistingDailyEvidence: false,
       dailyCheckin,
     }));

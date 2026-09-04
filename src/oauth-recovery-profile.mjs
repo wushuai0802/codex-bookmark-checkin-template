@@ -6,6 +6,10 @@ function normalizedProvider(value) {
 
 export function configForOAuthRecoveryAccount(config, rootDirectory, requestedOrigin, provider) {
   const origin = new URL(requestedOrigin).origin;
+  // Preserve an explicit shared-session binding so recovery does not switch
+  // back to an account profile and trigger a redundant upstream challenge.
+  const sessionKey = String(config.oauthSiteSessionBindings?.[origin] ?? "").trim();
+  if (sessionKey && config.oauthSessionProfiles?.[sessionKey]) return config;
   const accountKey = String(config.oauthRecoveryAccountBindings?.[origin] ?? "").trim();
   if (!accountKey) return config;
   if (accountKey.length > 80 || /[\r\n]/.test(accountKey)) {

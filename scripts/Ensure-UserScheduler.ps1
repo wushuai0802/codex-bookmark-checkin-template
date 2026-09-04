@@ -23,13 +23,22 @@ function Write-AtomicTextFile([string]$destination, [string]$content) {
     [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
     $nonce = [guid]::NewGuid().ToString('N')
     $temporary = "$destination.$PID.$nonce.tmp"
-    $backup = "$destination.$PID.$nonce.bak"
     try {
         [System.IO.File]::WriteAllText($temporary, $content, [System.Text.UTF8Encoding]::new($false))
         for ($attempt = 0; $attempt -lt 8; $attempt += 1) {
             try {
                 if ([System.IO.File]::Exists($destination)) {
-                    [System.IO.File]::Replace($temporary, $destination, $backup, $true)
+                    try {
+                        # A null backup path keeps the replace atomic without hitting
+                        # the Windows empty-backup-path failure seen in production.
+                        [System.IO.File]::Replace($temporary, $destination, $null, $true)
+                    }
+                    catch {
+                        # Heartbeats are disposable snapshots; forced Move is a safe
+                        # compatibility fallback if Replace is unavailable or locked.
+                        Remove-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+                        [System.IO.File]::Move($temporary, $destination)
+                    }
                 } else {
                     [System.IO.File]::Move($temporary, $destination)
                 }
@@ -43,7 +52,6 @@ function Write-AtomicTextFile([string]$destination, [string]$content) {
     }
     finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
     }
 }
 

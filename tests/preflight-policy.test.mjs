@@ -291,6 +291,12 @@ test("原生预热保留 2FA 终态且专属 Profile 不落入调试恢复", asy
   }
   assert.doesNotMatch(mainChrome, /二級驗證碼\|验证码\|驗證碼/);
   assert.match(preflight, /Test-TwoFactorResult/);
+  assert.match(preflight, /Windows UI Automation is unavailable while the interactive desktop/);
+  assert.match(preflight, /failureCode\s*-eq\s*'accessibility_unavailable'/);
+  assert.match(preflight, /'require-confirmed'/);
+  assert.match(preflight, /-RemoteDebuggingPort\s+\$readbackPort/);
+  assert.match(preflight, /-not \[bool\]\$item\.passiveOnly -and \$mainFallbackByOrigin\.ContainsKey/);
+  assert.match(preflight, /Keep the user's normal Chrome as the last resort/);
   assert.match(preflight, /trusted_device_initialization/);
   assert.match(indexSource, /requiresTrustedDeviceInitialization\(preflight\)/);
   assert.doesNotMatch(indexSource, /preflight\?\.(?:status|inspectionStatus) === "needs_attention"/);

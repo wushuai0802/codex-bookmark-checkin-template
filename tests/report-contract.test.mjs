@@ -231,7 +231,7 @@ test("站点故障在通知中显示为自动重试而不是人工关注", async
   assert.doesNotMatch(report.summary, /需关注/);
 });
 
-test("完整报告中的弱结果和可恢复异常统一显示为自动重试", async () => {
+test("动作结果未知转为关注，只有可恢复异常进入自动重试", async () => {
   const statuses = ["visited", "clicked", "no_action", "unconfirmed", "error", "managed_challenge_timeout"];
   const report = await previewReport({
     runId: "20260723-120005",
@@ -246,9 +246,9 @@ test("完整报告中的弱结果和可恢复异常统一显示为自动重试",
     })),
   });
 
-  assert.equal(report.status, "retrying");
-  assert.match(report.summary, /待自动重试 6 个：/);
-  assert.doesNotMatch(report.summary, /需关注/);
+  assert.equal(report.status, "needs_attention");
+  assert.match(report.summary, /待自动重试 3 个：/);
+  assert.match(report.summary, /需关注 3 个：/);
 });
 
 test("真正需要登录或交互验证时仍明确要求人工处理", async () => {

@@ -420,9 +420,11 @@ try {
                 $null
             }
             $result = [pscustomobject]@{
-                status = if ($last.waf) { 'managed_challenge' } else { 'unconfirmed' }
+                status = if ($last.waf) { 'managed_challenge' } elseif ($clicked) { 'needs_attention' } else { 'unconfirmed' }
                 reason = if ($last.waf) {
                     '主 Chrome 仍停留在安全验证页'
+                } elseif ($clicked) {
+                    '主 Chrome 已提交签到动作，但页面未返回权威结果'
                 } elseif ($failureCode -eq 'accessibility_unavailable') {
                     '主 Chrome 任务窗口无法提供可访问页面状态'
                 } elseif ($failureCode -eq 'target_not_loaded') {
@@ -430,7 +432,9 @@ try {
                 } else {
                     '主 Chrome 未取得明确签到终态'
                 }
-                failureCode = $failureCode
+                failureCode = if ($clicked) { 'submission_outcome_unknown' } else { $failureCode }
+                submissionAttempted = $clicked
+                retryable = if ($clicked) { $false } else { $null }
                 clicked = $clicked
                 inspection = $last
             }

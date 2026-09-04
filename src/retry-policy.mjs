@@ -3,7 +3,7 @@ import { isTerminalResult } from "./result-contract.mjs";
 
 export const RECOVERABLE_STATUSES = new Set([
   "error", "login_required", "interactive_challenge", "managed_challenge_timeout",
-  "visited", "clicked", "no_action", "unconfirmed", "deferred",
+  "no_action", "deferred",
 ]);
 
 // Credentials explicitly rejected by the site are operator-attention states,
@@ -430,6 +430,7 @@ export function deferUnresolvedLogin(result, config = {}, now = new Date()) {
 }
 
 export function isRetryEligible(result, now = new Date()) {
+  if (result?.retryable === false || result?.submissionAttempted === true) return false;
   if (result?.status === "not_available" && !isTerminalResult(result)) return true;
   if (!RECOVERABLE_STATUSES.has(result?.status)) return false;
   if (result.status !== "deferred") return true;

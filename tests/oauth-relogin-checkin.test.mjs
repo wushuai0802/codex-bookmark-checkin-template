@@ -97,6 +97,26 @@ test("缺失奖励日志时要求强制 OAuth 重登录且不误报成功", asyn
   assert.equal(failed.status, "unconfirmed");
 });
 
+test("使用日志接口限频和源站故障使用明确的可恢复分类", async () => {
+  const rateLimited = await tryOAuthReloginCheckinStatus({
+    evaluate: async () => ({ state: "error", reason: "http_429" }),
+  }, origin, config);
+  assert.deepEqual(rateLimited, {
+    status: "deferred",
+    retryCause: "rate_limit",
+    reason: "使用日志接口触发频率限制，已停止本轮查询",
+  });
+
+  const unavailable = await tryOAuthReloginCheckinStatus({
+    evaluate: async () => ({ state: "error", reason: "http_503" }),
+  }, origin, config);
+  assert.deepEqual(unavailable, {
+    status: "deferred",
+    retryCause: "upstream_unavailable",
+    reason: "使用日志接口暂时不可用，已停止本轮查询",
+  });
+});
+
 test("OAuth 登录账号不符时拒绝使用其他账号的奖励记录", async () => {
   let observedRule = null;
   const mismatchConfig = {

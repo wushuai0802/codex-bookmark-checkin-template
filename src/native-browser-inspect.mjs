@@ -342,6 +342,16 @@ try {
     }
     await page.waitForTimeout(1000);
   } while (true);
+  if (output?.checkinClicked === true && !["signed", "already_signed"].includes(output.status)) {
+    output = {
+      ...output,
+      status: "needs_attention",
+      reason: "原生 Chrome 已提交签到动作，但页面或接口未返回权威结果",
+      failureCode: "submission_outcome_unknown",
+      submissionAttempted: true,
+      retryable: false,
+    };
+  }
   console.log(JSON.stringify(output));
 } finally {
   await browser.close().catch(() => {});

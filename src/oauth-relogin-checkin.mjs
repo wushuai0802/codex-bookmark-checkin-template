@@ -206,6 +206,12 @@ export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, co
   if (observed?.state === "missing") {
     return { status: "login_required", reason: "今日使用日志没有登录签到额度记录，需要退出后重新登录", forceOAuthRelogin: true };
   }
+  if (observed?.state === "error" && observed.reason === "http_429") {
+    return { status: "deferred", retryCause: "rate_limit", reason: "使用日志接口触发频率限制，已停止本轮查询" };
+  }
+  if (observed?.state === "error" && /^(?:request_failed|http_5\d\d)$/.test(String(observed.reason ?? ""))) {
+    return { status: "deferred", retryCause: "upstream_unavailable", reason: "使用日志接口暂时不可用，已停止本轮查询" };
+  }
   return { status: "unconfirmed", reason: "无法从使用日志确认今日登录签到结果" };
 }
 

@@ -34,11 +34,18 @@ export function buildSessionPreflightPlan({
     if (!sessionKey || usedSessions.has(sessionKey) || !sharedRules[sessionKey]) continue;
     const profilePath = sessionProfiles.profiles.get(sessionKey);
     const rule = sharedRules[sessionKey];
+    const probeUrl = requiredHttpsUrl(rule.url, `OAuth 会话 ${sessionKey} 体检地址`);
     plan.push({
       kind: "shared_oauth",
       key: sessionKey,
       profilePath,
-      probeUrl: requiredHttpsUrl(rule.url, `OAuth 会话 ${sessionKey} 体检地址`),
+      probeUrl,
+      apiUrl: rule.apiUrl
+        ? requiredHttpsUrl(rule.apiUrl, `OAuth 会话 ${sessionKey} 权威体检接口`, new URL(probeUrl).origin)
+        : null,
+      accountIdPaths: Array.isArray(rule.accountIdPaths) && rule.accountIdPaths.length > 0
+        ? rule.accountIdPaths.map(String)
+        : ["current_user.id", "current_user.username"],
       representativeOrigin: target.origin,
     });
     usedSessions.add(sessionKey);
@@ -79,11 +86,44 @@ export async function probeSessionPage(context, probe, timeoutMs = 15000) {
       timeout: Math.max(3000, Math.min(30000, Number(timeoutMs) || 15000)),
     });
     const statusCode = response?.status() ?? 0;
+    if (statusCode === 429) {
+      return { key: probe.key, kind: probe.kind, status: "rate_limited", checkedUrl: safeLogUrl(page.url()) };
+    }
     if ([401, 403].includes(statusCode)) {
       return { key: probe.key, kind: probe.kind, status: "login_required", checkedUrl: safeLogUrl(page.url()) };
     }
     if (statusCode >= 500) {
       return { key: probe.key, kind: probe.kind, status: "unavailable", checkedUrl: safeLogUrl(page.url()) };
+    }
+    if (probe.kind === "shared_oauth" && probe.apiUrl) {
+      // A reachable preferences page is not proof of an authenticated shared
+      // session. Confirm it through a same-origin session-scoped JSON endpoint.
+      const apiResult = await page.evaluate(async ({ apiUrl }) => {
+        try {
+          const value = await fetch(apiUrl, {
+            cache: "no-store",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+          });
+          const body = await value.json().catch(() => null);
+          return { status: value.status, ok: value.ok, body };
+        } catch {
+          return null;
+        }
+      }, { apiUrl: probe.apiUrl }).catch(() => null);
+      if (apiResult?.status === 429) {
+        return { key: probe.key, kind: probe.kind, status: "rate_limited", checkedUrl: safeLogUrl(probe.apiUrl) };
+      }
+      if (!apiResult || apiResult.status >= 500) {
+        return { key: probe.key, kind: probe.kind, status: "unavailable", checkedUrl: safeLogUrl(probe.apiUrl) };
+      }
+      const authenticated = apiResult.ok && probe.accountIdPaths
+        .map((item) => readPath(apiResult.body, item))
+        .some((item) => item != null && String(item).trim() !== "");
+      if (!authenticated) {
+        return { key: probe.key, kind: probe.kind, status: "login_required", checkedUrl: safeLogUrl(probe.apiUrl) };
+      }
+      return { key: probe.key, kind: probe.kind, status: "authenticated", checkedUrl: safeLogUrl(probe.apiUrl) };
     }
     if (probe.kind === "oauth_account") {
       const snapshot = await page.evaluate(() => ({
@@ -142,6 +182,9 @@ export async function probeSessionPage(context, probe, timeoutMs = 15000) {
           userIdHeader: probe.userIdHeader,
           userId: String(observed),
         }).catch(() => null);
+        if (apiResult?.status === 429) {
+          return { key: probe.key, kind: probe.kind, status: "rate_limited", checkedUrl: safeLogUrl(probe.apiUrl) };
+        }
         if (!apiResult || apiResult.status >= 500) {
           return { key: probe.key, kind: probe.kind, status: "unavailable", checkedUrl: safeLogUrl(probe.apiUrl) };
         }

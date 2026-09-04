@@ -496,21 +496,26 @@ async function runOAuthFlow(context) {
     const verificationDeadline = Date.now() + reloginRule.verificationWaitMs;
     do {
       dailyCheckin = await tryOAuthReloginCheckinStatus(page, origin, config, "signed");
-      if (["signed", "already_signed"].includes(dailyCheckin?.status) || dailyCheckin?.status === "unconfirmed") break;
+      if (["signed", "already_signed", "deferred", "needs_attention"].includes(dailyCheckin?.status)) break;
       await page.waitForTimeout(1000);
     } while (Date.now() < verificationDeadline);
     loggedIn = ["signed", "already_signed"].includes(dailyCheckin?.status);
   }
+  const dailyFailureCode = dailyCheckin?.status === "deferred"
+    ? (dailyCheckin.retryCause === "rate_limit" ? "oauth_rate_limited" : "oauth_upstream_unavailable")
+    : null;
   console.log(JSON.stringify({
     origin,
     provider,
-    status: loggedIn ? "logged_in" : (oauthRateLimited || browserNavigationFailed || transferredCallbackRejected ? "failed" : "needs_attention"),
+    status: loggedIn ? "logged_in" : (oauthRateLimited || browserNavigationFailed || transferredCallbackRejected || dailyFailureCode ? "failed" : "needs_attention"),
     ...(oauthRateLimited
       ? { failureCode: "oauth_rate_limited" }
       : transferredCallbackRejected
         ? { failureCode: "oauth_upstream_unavailable" }
       : browserNavigationFailed
         ? { failureCode: "site_flow_changed", navigationFailureCode: navigationFailureCode ?? "unknown_navigation_failure" }
+        : dailyFailureCode
+          ? { failureCode: dailyFailureCode }
         : {}),
     finalUrl: safeLogUrl(finalUrl),
     title: await page.title(),

@@ -209,6 +209,218 @@ export async function recognizeOpenCdCaptcha(input) {
   }
 }
 
+const NEXUS_CAPTCHA_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const NEXUS_CAPTCHA_SLOTS = 6;
+
+function parseTesseractBoxes(boxText, scale, padding) {
+  return String(boxText || "").split(/\r?\n/).map((line) => {
+    const match = line.match(/^([A-Z0-9])\s+(\d+)\s+\d+\s+(\d+)\s+\d+/i);
+    if (!match) return null;
+    return {
+      character: match[1].toUpperCase(),
+      left: (Number(match[2]) - padding) / scale,
+      right: (Number(match[3]) - padding) / scale,
+    };
+  }).filter(Boolean);
+}
+
+function mapNexusBoxesToSlots(boxes, centers) {
+  return centers.map((center) => boxes.map((box) => ({
+    box,
+    distance: Math.abs((box.left + box.right) / 2 - center),
+    overlap: Math.max(0, Math.min(box.right, center + 8) - Math.max(box.left, center - 8)),
+  }))
+    .filter((candidate) => candidate.distance <= 13 || candidate.overlap >= 3)
+    .sort((left, right) => left.distance - right.distance || right.overlap - left.overlap)[0]?.box.character ?? null);
+}
+
+function nexusGlyphMetrics(data, width, height, center) {
+  const left = Math.max(0, Math.round(center) - 9);
+  const right = Math.min(width - 1, Math.round(center) + 9);
+  const top = Math.max(0, Math.round(height * 0.2));
+  const bottom = Math.min(height - 1, Math.round(height * 0.84));
+  const localWidth = right - left + 1;
+  const localHeight = bottom - top + 1;
+  const binary = new Uint8Array(localWidth * localHeight);
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      const offset = (y * width + x) * 3;
+      binary[(y - top) * localWidth + (x - left)] = Math.max(
+        data[offset], data[offset + 1], data[offset + 2],
+      ) < 110 ? 1 : 0;
+    }
+  }
+
+  const visited = new Uint8Array(binary.length);
+  const components = [];
+  const queue = new Int32Array(binary.length);
+  for (let start = 0; start < binary.length; start += 1) {
+    if (!binary[start] || visited[start]) continue;
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    visited[start] = 1;
+    let size = 0;
+    let minX = localWidth;
+    let maxX = 0;
+    let minY = localHeight;
+    let maxY = 0;
+    while (head < tail) {
+      const point = queue[head++];
+      size += 1;
+      const x = point % localWidth;
+      const y = Math.floor(point / localWidth);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          if (dx === 0 && dy === 0) continue;
+          const nextX = x + dx;
+          const nextY = y + dy;
+          if (nextX < 0 || nextX >= localWidth || nextY < 0 || nextY >= localHeight) continue;
+          const next = nextY * localWidth + nextX;
+          if (!binary[next] || visited[next]) continue;
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+    }
+    components.push({ size, minX, maxX, minY, maxY });
+  }
+  const glyph = components
+    .filter((component) => component.size >= 12 && component.maxY - component.minY + 1 >= 7)
+    .sort((leftComponent, rightComponent) => rightComponent.size - leftComponent.size)[0];
+  if (!glyph) return null;
+  let upperRightInk = 0;
+  let middleCenterInk = 0;
+  const glyphWidth = glyph.maxX - glyph.minX + 1;
+  const glyphHeight = glyph.maxY - glyph.minY + 1;
+  const upperStart = glyph.minY + Math.max(1, Math.floor(glyphHeight * 0.2));
+  const upperEnd = glyph.minY + Math.max(1, Math.floor(glyphHeight * 0.4));
+  const rightStart = glyph.maxX - Math.max(1, Math.floor(glyphWidth * 0.25)) + 1;
+  for (let y = upperStart; y <= upperEnd; y += 1) {
+    for (let x = rightStart; x <= glyph.maxX; x += 1) {
+      upperRightInk += binary[y * localWidth + x];
+    }
+  }
+  const middleStart = glyph.minY + Math.max(1, Math.floor(glyphHeight * 0.35));
+  const middleEnd = glyph.minY + Math.max(1, Math.floor(glyphHeight * 0.65));
+  const centerStart = glyph.minX + Math.max(1, Math.floor(glyphWidth * 0.3));
+  const centerEnd = glyph.minX + Math.max(1, Math.floor(glyphWidth * 0.7));
+  for (let y = middleStart; y <= middleEnd; y += 1) {
+    for (let x = centerStart; x <= centerEnd; x += 1) {
+      middleCenterInk += binary[y * localWidth + x];
+    }
+  }
+  return {
+    width: glyphWidth,
+    height: glyphHeight,
+    size: glyph.size,
+    upperRightInk,
+    middleCenterInk,
+  };
+}
+
+export function correctNexusCaptchaConfusions(code, glyphs) {
+  if (!/^[A-Z0-9]{6}$/.test(String(code || "")) || glyphs.length !== NEXUS_CAPTCHA_SLOTS) return code;
+  const characters = [...code];
+  for (let index = 0; index < characters.length; index += 1) {
+    const glyph = glyphs[index];
+    if (!glyph) continue;
+    // Digit 6 closes its loop through the centre; G keeps that area open and
+    // draws the horizontal stroke at the right. This survives nearby noise
+    // better than relying on the glyph's outer width.
+    if (characters[index] === "6" && glyph.middleCenterInk <= 1) characters[index] = "G";
+    else if (characters[index] === "G" && glyph.middleCenterInk >= 3) characters[index] = "6";
+  }
+  return characters.join("");
+}
+
+/**
+ * NexusPHP's legacy CAPTCHA uses six fixed-width glyphs over coloured noise.
+ * Whole-image OCR is run over several dark-pixel projections, then boxes are
+ * assigned to fixed slots. This avoids treating the decorative lines and
+ * shapes as extra characters while keeping the request count bounded.
+ */
+export async function recognizeNexusCaptcha(input) {
+  const source = sharp(input).removeAlpha();
+  const metadata = await source.metadata();
+  const border = Math.min(2, Math.max(0, Math.floor(Math.min(metadata.width ?? 1, metadata.height ?? 1) / 10)));
+  const width = Math.max(1, (metadata.width ?? 1) - border * 2);
+  const height = Math.max(1, (metadata.height ?? 1) - border * 2);
+  const { data, info } = await source.extract({ left: border, top: border, width, height })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const originalWidth = info.width + border * 2;
+  const centers = Array.from({ length: NEXUS_CAPTCHA_SLOTS }, (_, index) => (
+    originalWidth * (0.2 + index * 0.12) - border
+  ));
+  const votes = centers.map(() => new Map());
+  const scale = 6;
+  const padding = 40;
+  const variants = [
+    ...Array.from({ length: 8 }, (_, index) => ({ kind: "max", threshold: 70 + index * 10 })),
+    ...Array.from({ length: 7 }, (_, index) => ({ kind: "luma", threshold: 60 + index * 10 })),
+  ];
+  const worker = await createWorker("eng", 1, { logger: () => {} });
+  try {
+    await worker.setParameters({
+      tessedit_char_whitelist: NEXUS_CAPTCHA_ALPHABET,
+      tessedit_pageseg_mode: PSM.SINGLE_LINE,
+      user_defined_dpi: "300",
+    });
+    for (const variant of variants) {
+      const raw = Buffer.alloc(info.width * info.height, 255);
+      for (let pixel = 0; pixel < raw.length; pixel += 1) {
+        const offset = pixel * 3;
+        const red = data[offset];
+        const green = data[offset + 1];
+        const blue = data[offset + 2];
+        const value = variant.kind === "max"
+          ? Math.max(red, green, blue)
+          : 0.299 * red + 0.587 * green + 0.114 * blue;
+        if (value < variant.threshold) raw[pixel] = 0;
+      }
+      const image = await sharp(raw, { raw: { width: info.width, height: info.height, channels: 1 } })
+        .resize({ width: info.width * scale, height: info.height * scale, kernel: "nearest" })
+        .extend({ top: padding, bottom: padding, left: padding, right: padding, background: "white" })
+        .png()
+        .toBuffer();
+      const result = await worker.recognize(image, {}, { text: true, box: true });
+      const mapped = mapNexusBoxesToSlots(parseTesseractBoxes(result.data.box, scale, padding), centers);
+      const weight = 1 + Math.max(0, Math.min(80, Number(result.data.confidence) || 0)) / 80;
+      mapped.forEach((character, slot) => {
+        if (!character || !NEXUS_CAPTCHA_ALPHABET.includes(character)) return;
+        votes[slot].set(character, (votes[slot].get(character) || 0) + weight);
+      });
+    }
+  } finally {
+    await worker.terminate();
+  }
+
+  const ranked = votes.map((row) => [...row.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([character, score]) => ({ character, score })));
+  if (ranked.some((row) => row.length === 0)) {
+    return { code: null, confidence: 0, margin: 0, candidates: ranked.map((row) => row.slice(0, 3)) };
+  }
+  const glyphs = centers.map((center) => nexusGlyphMetrics(data, info.width, info.height, center));
+  const rawCode = ranked.map((row) => row[0].character).join("");
+  const code = correctNexusCaptchaConfusions(rawCode, glyphs);
+  const ratios = ranked.map((row) => row[0].score / Math.max(row.reduce((sum, item) => sum + item.score, 0), 0.001));
+  const margins = ranked.map((row) => row[0].score / Math.max(row[1]?.score ?? 0.001, 0.001));
+  return {
+    code,
+    rawCode,
+    confidence: Math.round(Math.min(...ratios) * 100),
+    margin: Math.min(...margins),
+    candidates: ranked.map((row) => row.slice(0, 3)),
+    glyphs,
+  };
+}
+
 const NEW_API_CAPTCHA_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const NEW_API_CAPTCHA_CENTERS = [23, 49, 75, 100, 126];
 

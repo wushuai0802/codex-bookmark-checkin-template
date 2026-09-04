@@ -6,6 +6,7 @@ import {
   configForOAuthSession,
   configuredOAuthSessionProfiles,
 } from "../src/oauth-session-profiles.mjs";
+import { configForOAuthRecoveryAccount } from "../src/oauth-recovery-profile.mjs";
 
 const root = path.resolve("D:/fixture/checkin");
 
@@ -59,6 +60,58 @@ test("共享会话不能覆盖全局或账号专属 Profile", () => {
     },
     oauthSessionProfiles: { shared: "data/accounts/primary" },
   }), root), /不能与 primary 重复/);
+});
+
+test("OAuth 恢复优先保留显式共享会话，不重复切回账号 Profile", () => {
+  const config = baseConfig({
+    oauthSessionProfiles: {
+      "linuxdo-shared": "data/sessions/linuxdo-shared/chrome-user-data",
+    },
+    oauthSiteSessionBindings: {
+      "https://target.example": "linuxdo-shared",
+    },
+    oauthRecoveryAccountBindings: {
+      "https://target.example": "primary",
+    },
+    oauthAccountIdentities: {
+      "https://account.example": {
+        accountKey: "primary",
+        accountId: "1",
+        provider: "LinuxDO",
+        upstreamProvider: "Google",
+        loginUrl: "https://account.example/login",
+        automationUserDataDir: "data/accounts/primary/chrome-user-data",
+      },
+    },
+  });
+  const sessions = configuredOAuthSessionProfiles(config, root);
+  const sessionConfig = configForOAuthSession(config, sessions, "https://target.example");
+  const recovered = configForOAuthRecoveryAccount(sessionConfig, root, "https://target.example", "LinuxDO");
+  assert.equal(
+    recovered.automationUserDataDir,
+    path.resolve(root, "data/sessions/linuxdo-shared/chrome-user-data"),
+  );
+});
+
+test("没有共享会话绑定时 OAuth 恢复仍使用配置的账号 Profile", () => {
+  const config = baseConfig({
+    oauthRecoveryAccountBindings: { "https://target.example": "primary" },
+    oauthAccountIdentities: {
+      "https://account.example": {
+        accountKey: "primary",
+        accountId: "1",
+        provider: "LinuxDO",
+        upstreamProvider: "Google",
+        loginUrl: "https://account.example/login",
+        automationUserDataDir: "data/accounts/primary/chrome-user-data",
+      },
+    },
+  });
+  const recovered = configForOAuthRecoveryAccount(config, root, "https://target.example", "LinuxDO");
+  assert.equal(
+    recovered.automationUserDataDir,
+    path.resolve(root, "data/accounts/primary/chrome-user-data"),
+  );
 });
 
 test("公开示例说明同一 OAuth 会话可被多个站点复用", async () => {

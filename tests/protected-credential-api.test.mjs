@@ -23,10 +23,10 @@ test("受保护凭据 API 规则仅接受同源 HTTPS", () => {
 });
 
 test("受保护凭据 API 登录与身份回读需要明确成功和一致用户 ID", () => {
-  const body = { success: true, data: { id: 245770, username: "redacted" } };
-  assert.deepEqual(credentialApiUserData(body).id, "245770");
+  const body = { success: true, data: { id: 123456, username: "redacted" } };
+  assert.deepEqual(credentialApiUserData(body).id, "123456");
   assert.equal(classifyCredentialApiLoginResponse({ statusCode: 200, body }).status, "ready");
-  assert.equal(classifyCredentialApiSelfResponse({ statusCode: 200, body, expectedUserId: "245770" }).authenticated, true);
+  assert.equal(classifyCredentialApiSelfResponse({ statusCode: 200, body, expectedUserId: "123456" }).authenticated, true);
   assert.equal(classifyCredentialApiSelfResponse({ statusCode: 200, body, expectedUserId: "1" }).diagnostic, "self_identity_mismatch");
   assert.equal(classifyCredentialApiLoginResponse({ statusCode: 401, body: { success: false, message: "密码错误" } }).status, "invalid_credential");
 });

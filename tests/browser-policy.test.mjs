@@ -6,6 +6,7 @@ import {
   configuredLoginCompletion,
   configuredTargetSkip,
   dismissBlockingModal,
+  isNexusCaptchaRejectedText,
   preferCandidateResult,
   resultFromPageFailure,
   shouldTryGenericNewApiCheckin,
@@ -20,6 +21,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+test("NexusPHP 图片验证码拒绝提示会触发同轮换图重试", () => {
+  assert.equal(isNexusCaptchaRejectedText("图片代码无效！不要返回，图片代码已被清除！"), true);
+  assert.equal(isNexusCaptchaRejectedText("Captcha invalid, please retry"), true);
+  assert.equal(isNexusCaptchaRejectedText("签到成功"), false);
+});
+
+test("NexusPHP 验证码按真实表单字段处理且先于通用签到按钮", async () => {
+  const source = await fs.readFile(path.join(root, "src", "browser.mjs"), "utf8");
+  assert.match(source, /input\[name=["']imagestring["']\]/);
+  assert.match(source, /input\[type=["']hidden["']\]\[name=["']imagehash["']\]/);
+  assert.match(source, /img\[alt=["']CAPTCHA["'] i\]\[src\*=["']image\.php["']\]/);
+  assert.match(source, /submittedChallenges\.has\(challengeKey\)/);
+  assert.ok(source.indexOf("const initialNexusCaptchaResult = await tryNexusImageCaptcha(page)")
+    < source.indexOf("let action = await findCheckinAction(page, allowedOrigins)"));
+});
 
 test("瞬时上游失败请求重建共享浏览器上下文", () => {
   assert.equal(shouldRefreshAutomationContext({
