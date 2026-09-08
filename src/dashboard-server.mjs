@@ -11,6 +11,7 @@ import { evaluateShadowHistory } from './shadow-acceptance.mjs';
 import { displayIdentity, shortLabel } from './display-identity.mjs';
 import {createWorkerGateway} from './worker-gateway.mjs';
 import {publicAdapterObservations} from './adapter-observations.mjs';
+import {migrationReadiness} from './adapter-registry.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -453,6 +454,7 @@ export function createDashboardServer({
     const observationsFile=path.join(root,'adapter-observations.json');
     try{view.adapterObservations=fs.statSync(observationsFile).size<=1_000_000?publicAdapterObservations(JSON.parse(fs.readFileSync(observationsFile,'utf8'))):null;}
     catch{view.adapterObservations=null;}
+    view.migrationReadiness=migrationReadiness({snapshot:view.snapshot,acceptance:view.readiness,adapterObservations:view.adapterObservations});
     view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), fresh: timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) };
     view.controls = readControlState(controlFile).sites;
     view.sites = view.sites.map(site => ({ ...site, control: view.controls[site.origin] ?? { policy: 'monitor', note: '', updatedAt: null } }));

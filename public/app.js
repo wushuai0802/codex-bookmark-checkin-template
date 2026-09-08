@@ -515,6 +515,16 @@ function renderSettings(data) {
     }
     content.append(section);
   }
+  const migration=data?.migrationReadiness;
+  if(migration){
+    const section=el('section','migration-readiness');
+    append(section,el('h2',null,'V2 迁移准备度'),el('p','muted',migration.executionEnabled?'已具备 canary 审核条件':'当前仍保持影子模式，真实执行开关已锁定'));
+    const gates=el('div','readiness-gates');
+    for(const [label,value,detail] of [['影子观察',migration.gates.shadowDays>=migration.gates.requiredShadowDays,`${migration.gates.shadowDays} / ${migration.gates.requiredShadowDays} 天`],['计划对账',migration.gates.reconciliationClear,'无遗漏/身份冲突'],['成功证据',migration.gates.evidenceClear,'无待核验成功'],['适配覆盖',migration.gates.adapterCoverageClear,`${migration.coverage.confirmedTasks} / ${migration.coverage.observedTasks} 已确认`]]){
+      const item=el('div',`readiness-gate ${value?'pass':'blocked'}`);append(item,el('strong',null,`${value?'✓':'•'} ${label}`),el('span','subtext',detail));gates.append(item);
+    }
+    append(section,gates,el('p','migration-blockers',migration.blockers.length?`阻断项：${migration.blockers.join(' · ')}`:'没有阻断项'));content.append(section);
+  }
   const note = el('div', 'alert', '管理动作目前仅保留控制面展示，不会修改旧签到项目。进入 V2.0 candidate 前，需要完成 NAS 影子观察和人工批准。'); note.style.marginTop = '18px'; content.append(note);
 }
 

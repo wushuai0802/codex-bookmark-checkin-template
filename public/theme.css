@@ -77,6 +77,15 @@
 .adapter-validation { margin-top:24px; padding-top:20px; border-top:1px solid var(--line); }
 .adapter-validation .setting-row>div { min-width:0; overflow-wrap:anywhere; }
 .adapter-validation .setting-row>div:last-child { text-align:right; max-width:50%; }
+.migration-readiness { margin-top:24px; padding-top:20px; border-top:1px solid var(--line); }
+.migration-readiness h2 { margin:0 0 5px; font-size:15px; }
+.readiness-gates { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:14px; }
+.readiness-gate { min-width:0; padding:11px 10px; border:1px solid var(--line); border-radius:6px; background:var(--surface-2); }
+.readiness-gate strong { display:block; font-size:11px; }
+.readiness-gate.pass { border-color:color-mix(in srgb,var(--green) 45%,var(--line)); background:var(--good-bg); color:var(--green); }
+.readiness-gate.blocked { border-left:3px solid var(--amber); }
+.migration-blockers { color:var(--amber); font-size:11px; line-height:1.7; }
+@media(max-width:700px) { .readiness-gates { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .sidebar { overflow-y: auto; }
 .nav-section-label { display:block; padding:13px 12px 4px; color:#71879a; font-size:9px; font-weight:800; letter-spacing:.09em; }
 .notification-button { position:relative; width:34px; height:34px; padding:0; color:var(--amber); border:1px solid var(--line); background:var(--surface); }
