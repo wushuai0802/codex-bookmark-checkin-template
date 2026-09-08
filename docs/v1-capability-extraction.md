@@ -23,3 +23,10 @@ profile locks, intent and `submission_unknown` reconciliation, canary records,
 first-attempt metrics and outbox integration. V1 remains rollback software until
 all accounts in a family pass these gates; deleting it now would remove the only
 proven executor and is outside this stage.
+
+The clean V2 contract is now represented by `src/adapter-contract.mjs` and
+`src/task-state.mjs`: adapters expose explicit identity/read/submit-once/verify/
+error boundaries, while the coordinator owns transitions and retry policy. A
+submission timeout is `submission_unknown`, never an invitation to POST again.
+The state machine is currently library/test only; no live adapter is wired to the
+worker and `executionEnabled` remains false.
