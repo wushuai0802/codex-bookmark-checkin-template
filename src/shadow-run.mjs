@@ -17,6 +17,9 @@ function parseArgs(argv) {
     else if (token === '--generated-at') args.generatedAt = argv[++i];
     else if (token === '--health-file') args.healthFile = argv[++i];
     else if (token === '--pt-status-file') args.ptStatusFile = argv[++i];
+    else if (token === '--monitor-catalog') args.monitorCatalog = argv[++i];
+    else if (token === '--identity-file') args.identityFile = argv[++i];
+    else if (token === '--desired-plan') args.desiredPlan = argv[++i];
     else if (token === '--help' || token === '-h') args.help = true;
     else throw new Error(`unknown argument: ${token}`);
   }
@@ -50,7 +53,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
       legacyRoot,
       generatedAt: args.generatedAt,
       healthReport: loadJsonReport(args.healthFile, 'health report'),
-      ptStatusReport: loadJsonReport(args.ptStatusFile, 'PT status report')
+      ptStatusReport: loadJsonReport(args.ptStatusFile, 'PT status report'),
+      monitorCatalog: loadJsonReport(args.monitorCatalog, 'PT bookmark catalog'),
+      identityReport: loadJsonReport(args.identityFile, 'display identity observations'),
+      desiredPlan: loadJsonReport(args.desiredPlan,'desired task plan')
     });
     const previous = loadSnapshot(args.previous);
     const record = createLedgerRecord(snapshot, { previousSnapshot: previous, recordedAt: args.generatedAt });

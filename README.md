@@ -1,7 +1,7 @@
 # codex-checkin-fabric-v2
 
 V2 is an independent control-plane project for the daily check-in automation.
-The current release (`2.0.0-beta.2`) is deliberately a **read-only shadow
+The current release (`2.0.0-beta.3`) is deliberately a **read-only shadow
 observer and ledger prototype**. The existing Windows runner remains the only
 system allowed to execute check-ins.
 
@@ -65,3 +65,15 @@ read-only review gate.
 
 The dashboard capability map and NAS reverse-proxy instructions are in
 `docs/dashboard.md` and `docs/nas-deployment.md`.
+
+## Beta.3 stabilization
+
+- Recomputes source-health and snapshot age plus Shanghai business date at dispatch time.
+- Rejects unhealthy, future-dated, outdated and manually blocked tasks.
+- Evaluates the latest recent daily window, retaining earlier failures for audit.
+- Rejects invalid new ledger drift; never backdates or rewrites old failures.
+- 42 account metadata no longer assumes one shared LinuxDO credential group.
+- `npm run worker:dry-run -- --snapshot <file> --worker <file> --state <file> --legacy-root <directory>` runs a Windows-capable one-shot journal harness.
+  It refuses execute, has no browser/network adapter and deduplicates across restarts.
+
+This is not a production executor. See `docs/stabilization-2026-09-06.md`.

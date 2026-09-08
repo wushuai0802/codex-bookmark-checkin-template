@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 
 export const STATUS_VALUES = [
   'signed', 'already_signed', 'not_available', 'needs_attention',
-  'deferred', 'login_required', 'failed'
+  'deferred', 'login_required', 'failed', 'not_started'
 ];
 
 export const LOGICAL_GROUPS = new Map([
@@ -11,7 +11,7 @@ export const LOGICAL_GROUPS = new Map([
 ]);
 
 export const SHARED_OAUTH_ORIGINS = new Set([
-  'https://ai.venlacy.com', 'https://api.42w.shop', 'https://x666.me'
+  'https://ai.venlacy.com', 'https://x666.me'
 ]);
 
 export function normalizeOrigin(value) {
@@ -71,15 +71,16 @@ export function accountRef(accountKey) {
 }
 
 export function classifyEvidence(result) {
-  const source = result?.evidence?.source ?? (
-    result?.status === 'signed' || result?.status === 'already_signed' ? 'legacy_authoritative' : 'none'
-  );
+  const source = result?.evidence?.source ?? 'none';
   const sourceMap = {
     usage_log: 'usage_log', api: 'api', page_text: 'page_text',
     user_confirmation: 'user_confirmation', health_cache: 'health_cache',
     legacy_authoritative: 'legacy_authoritative', none: 'none'
   };
-  return sourceMap[source] ?? 'legacy_authoritative';
+  const apiSources = ['new_api_checkin_calendar', 'new_api_checkin_status', 'new_api_checkin_action', 'new_api_captcha', 'oauth_api_action_status', 'oauth_callback', 'sign_in_response', 'sign_in_already_claimed_contract'];
+  if (source === 'cached_confirmation') return 'health_cache';
+  if (source === 'configuration' || source === 'operator_confirmation') return 'user_confirmation';
+  return sourceMap[source] ?? (apiSources.includes(source) ? 'api' : 'none');
 }
 
 export function redactText(value) {

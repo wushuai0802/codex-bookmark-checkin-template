@@ -1,6 +1,6 @@
 {
   "name": "codex-checkin-fabric-v2",
-  "version": "2.0.0-beta.2",
+  "version": "2.0.0-beta.3",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,9 @@
     "smoke:live": "node scripts/live-smoke.mjs",
     "bridge": "node src/bridge.mjs",
     "simulate:candidate": "node src/candidate-simulator.mjs",
+    "worker:dry-run": "node src/dry-run-worker.mjs",
     "check:shadow-history": "node src/shadow-acceptance.mjs",
+    "check:canary-gate": "node scripts/check-canary-gate.mjs",
     "shadow": "node src/shadow-run.mjs",
     "dashboard": "node src/dashboard-server.mjs",
     "export:nas": "node scripts/export-nas-bundle.mjs",

@@ -78,7 +78,8 @@ test('shadow gate never grants a lease or executable decision', () => {
   assert.equal(missing.executable, false);
   const observeOnly = structuredClone(snapshot);
   observeOnly.health.freshness.fresh = true;
-  const observed = evaluateShadowGate({ snapshot: observeOnly, taskId: task.taskId, minHealthFresh: true });
+  observeOnly.tasks.find(t => t.taskId === task.taskId).observedStatus = 'failed';
+  const observed = evaluateShadowGate({ snapshot: observeOnly, taskId: task.taskId, minHealthFresh: true, now: '2026-09-02T12:05:00Z' });
   assert.equal(observed.decision, 'observe');
   assert.equal(observed.executable, false);
   assert.equal(observed.leaseGranted, false);
@@ -110,13 +111,13 @@ function historyRecord(businessDate, { fresh = true, recordId = null, ownerConfl
     mode: 'shadow_read_only',
     counts: { logicalSites: 1, executionUnits: 1, status: { signed: 1 }, bookmarkSourceCounts: {} },
     drift: { classification: 'same_plan', hashValid: true, ownerConflicts, addedTaskIds: [], removedTaskIds: [], changedTaskIds: [], statusChanges: [] },
-    health: { healthy: true, freshness: { fresh } }
+    health: { healthy: true, sourceCheckedAt: `${businessDate}T12:00:00.000Z`, freshness: { fresh, maxAgeHours: 26 } }
   };
 }
 
 test('shadow history accepts seven consecutive fresh records', () => {
   const records = Array.from({ length: 7 }, (_, index) => historyRecord(`2026-09-${String(index + 1).padStart(2, '0')}`));
-  const result = evaluateShadowHistory(records);
+  const result = evaluateShadowHistory(records, { now: '2026-09-07T14:00:00Z' });
   assert.equal(result.accepted, true);
   assert.equal(result.longestConsecutiveDays, 7);
   assert.equal(result.freshRecordCount, 7);
@@ -129,14 +130,15 @@ test('shadow history blocks gaps, stale health, conflicts, and duplicate records
     historyRecord('2026-09-03', { fresh: false, recordId: 'ledger_222222222222222222222222', ownerConflicts: [{ taskId: 'task_1', owners: ['legacy-checkin', 'v2-worker'] }] }),
     historyRecord('2026-09-03', { recordId: 'ledger_111111111111111111111111' })
   ];
-  const result = evaluateShadowHistory(records);
+  const result = evaluateShadowHistory(records, { now: '2026-09-03T14:00:00Z' });
   assert.equal(result.accepted, false);
   assert.equal(result.longestConsecutiveDays, 1);
   assert.equal(result.invalidRecordCount, 2);
   assert.equal(result.ownerConflictRecords, 1);
   assert.equal(result.staleRecordCount, 1);
   assert.match(result.reasons.join(','), /insufficient_consecutive_days/);
-  assert.match(result.reasons.join(','), /health_not_fresh/);
+  // All history remains diagnostic; the latest duplicate is the selected day.
+  assert.equal(result.staleRecordCount, 1);
 });
 
 test('shadow history rejects a fresh but unhealthy source report', () => {
@@ -153,4 +155,27 @@ test('shadow history rejects impossible calendar dates', () => {
   assert.equal(result.accepted, false);
   assert.equal(result.invalidRecordCount, 1);
   assert.equal(result.reasons.includes('invalid_records'), true);
+});
+
+test('an obsolete successful week is not recent acceptance', () => {
+  const records = Array.from({ length: 7 }, (_, i) => historyRecord(`2020-01-0${i + 1}`));
+  const result = evaluateShadowHistory(records, { now: '2026-09-06T12:00:00Z' });
+  assert.equal(result.accepted, false);
+  assert.ok(result.reasons.includes('history_not_current'));
+});
+
+test('recovered recent days can pass without rewriting earlier failed audit history', () => {
+  const records = [historyRecord('2020-01-01', { fresh: false }), ...Array.from({ length: 7 }, (_, i) => historyRecord(`2026-09-0${i + 1}`))];
+  const result = evaluateShadowHistory(records, { now: '2026-09-07T14:00:00Z' });
+  assert.equal(result.accepted, true);
+  assert.equal(result.staleRecordCount, 1);
+  assert.equal(result.eligibleRecentDays, 7);
+});
+
+test('a fresh boolean cannot substitute for source time and stable plan', () => {
+  const r = historyRecord('2026-09-06');
+  delete r.health.sourceCheckedAt;
+  assert.equal(evaluateShadowHistory([r], { minConsecutiveDays: 1, now: '2026-09-06T14:00:00Z' }).accepted, false);
+  const old = buildSnapshot({ legacyRoot }); old.planHash = 'a'.repeat(64);
+  assert.throws(() => createLedgerRecord(buildSnapshot({ legacyRoot }), { previousSnapshot: old }), /invalid previous/);
 });

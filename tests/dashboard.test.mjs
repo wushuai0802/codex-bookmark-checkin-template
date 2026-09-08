@@ -30,6 +30,7 @@ test('dashboard serves summary, tasks, and static UI from redacted data', async 
       sites: [{ origin: 'https://external-pt.example', displayName: '外部 PT', status: 'not_signed', evidence: { source: 'api', authoritative: true, summary: '未签到' } }]
     }
   });
+  snapshot.tasks[0].identity = { userId: '12345', username: 'example-reader', label: 'Primary', provider: 'GitHub', password: 'must-not-leak' };
   fs.writeFileSync(path.join(root, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
   const { instance, base } = await start({ dataDir: root });
   try {
@@ -50,7 +51,15 @@ test('dashboard serves summary, tasks, and static UI from redacted data', async 
     assert.equal(ptStatus.status, 200);
     const ptBody = await ptStatus.json();
     assert.equal(ptBody.counts.externalOnly, 1);
-    assert.equal(ptBody.sites[0].supplementCandidate, true);
+    assert.equal(ptBody.sites[0].supplementCandidate, false, 'historical snapshot cannot retain fresh supplement eligibility');
+    const overview = await (await fetch(`${base}/api/overview`)).json();
+    assert.equal(overview.snapshot.counts.executionUnits, overview.tasks.length);
+    assert.equal(overview.tasks[0].identity.username, 'example-reader');
+    assert.equal(overview.tasks[0].identity.userId, '12345');
+    assert.doesNotMatch(JSON.stringify(overview), /must-not-leak/);
+    assert.equal(overview.snapshot.health.freshness.fresh, false);
+    assert.equal(overview.snapshot.readiness.accepted, false);
+    assert.equal((await fetch(`${base}/overview-model.mjs`)).headers.get('content-type'), 'text/javascript; charset=utf-8');
     assert.match(pageText, /PT 状态/);
   } finally { await close(instance); fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -89,6 +98,9 @@ test('non-loopback deployment uses an HttpOnly session and exposes only bounded 
     const controlsBody = await controls.json();
     assert.equal(controlsBody.sites['https://example.com'].policy, 'pause');
     assert.equal(controlsBody.sites['https://example.com'].note, '<b>review</b>');
+    const overview = await fetch(`${base}/api/overview`, { headers: { Cookie: cookie } });
+    assert.equal(overview.status, 200);
+    assert.equal((await overview.json()).controls['https://example.com'].policy, 'pause');
     const method = await fetch(`${base}/api/summary`, { method: 'POST', headers: { 'X-Fabric-Token': 'test-token-1234567890' } });
     assert.equal(method.status, 405);
     const logout = await fetch(`${base}/api/session/logout`, { method: 'POST', headers: { Cookie: cookie } });

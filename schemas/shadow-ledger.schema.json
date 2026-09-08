@@ -15,7 +15,9 @@
     "mode": {"const": "shadow_read_only"},
     "counts": {"type": "object"},
     "drift": {"type": "object", "required": ["classification", "samePlan", "fromPlanHash", "toPlanHash", "addedTaskIds", "removedTaskIds", "changedTaskIds", "statusChanges", "ownerConflicts", "hashValid"], "properties": {"classification": {"enum": ["initial", "same_plan", "plan_changed", "invalid"]}, "samePlan": {"type": "boolean"}, "fromPlanHash": {"type": ["string", "null"]}, "toPlanHash": {"type": ["string", "null"]}, "addedTaskIds": {"type": "array", "items": {"type": "string"}}, "removedTaskIds": {"type": "array", "items": {"type": "string"}}, "changedTaskIds": {"type": "array", "items": {"type": "string"}}, "addedPlanUnitIds": {"type": "array", "items": {"type": "string"}}, "removedPlanUnitIds": {"type": "array", "items": {"type": "string"}}, "changedPlanUnitIds": {"type": "array", "items": {"type": "string"}}, "statusChanges": {"type": "array"}, "ownerConflicts": {"type": "array"}, "hashValid": {"type": "boolean"}}, "additionalProperties": false},
-    "health": {"type": "object"}
+    "health": {"type": "object"},
+    "taskSummaries": {"type": "array", "items": {"type": "object"}},
+    "changes": {"type": "array", "items": {"type": "object"}}
   },
   "additionalProperties": false
 }

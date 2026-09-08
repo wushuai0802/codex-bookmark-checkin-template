@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { normalizeOrigin, planHash, STATUS_VALUES } from './contracts.mjs';
+import { snapshotSafetyReasons } from './freshness.mjs';
 
-const TERMINAL_STATUSES = new Set(['signed', 'already_signed']);
+const TERMINAL_STATUSES = new Set(['signed', 'already_signed', 'not_available']);
 const CAPABILITIES = new Set(['browser_checkin', 'page_evidence', 'api_evidence', 'image_challenge']);
 const EXECUTION_MODES = new Set(['dry_run', 'execute']);
 const SENSITIVE_KEYS = new Set([
@@ -66,7 +67,10 @@ export function leaseActive(lease, { now = new Date().toISOString() } = {}) {
   if (!lease || lease.state !== 'active') return false;
   const current = new Date(now).getTime();
   const expires = new Date(lease.expiresAt).getTime();
-  return Number.isFinite(current) && Number.isFinite(expires) && expires > current;
+  const issued = new Date(lease.issuedAt).getTime();
+  return Number.isFinite(current) && Number.isFinite(expires) && Number.isFinite(issued)
+    && issued <= current && expires > current && expires > issued && expires - issued <= 900_000
+    && lease.singleUse === true;
 }
 
 export function validateWorkerCapability(worker, { now = new Date().toISOString(), maxHeartbeatAgeMinutes = 10 } = {}) {
@@ -79,7 +83,7 @@ export function validateWorkerCapability(worker, { now = new Date().toISOString(
   else {
     for (const origin of worker.allowedOrigins) {
       try {
-        if (normalizeOrigin(origin) !== origin) errors.push('allowedOrigins must contain normalized origins');
+        if (normalizeOrigin(origin) !== origin || new URL(origin).protocol !== 'https:') errors.push('allowedOrigins must contain normalized HTTPS origins');
       } catch { errors.push('allowedOrigins contain an invalid origin'); }
     }
   }
@@ -100,8 +104,10 @@ export function evaluateCandidateDispatch({ snapshot, taskId, worker, requestedM
   if (!['dry_run', 'execute'].includes(requestedMode)) reasons.push('unsupported_requested_mode');
   if (snapshot?.mode !== 'shadow_read_only') reasons.push('snapshot_mode_not_shadow');
   if (snapshot?.planHash !== planHash(snapshot?.tasks ?? [])) reasons.push('plan_hash_invalid');
-  if (snapshot?.health?.freshness?.fresh !== true) reasons.push('health_stale');
+  reasons.push(...snapshotSafetyReasons(snapshot, now));
   if (task && TERMINAL_STATUSES.has(task.observedStatus)) reasons.push('legacy_result_terminal');
+  if (task && !['legacy-checkin', 'v2-worker'].includes(task.executionOwner)) reasons.push('unknown_execution_owner');
+  if (task && ['needs_attention', 'login_required'].includes(task.observedStatus)) reasons.push('task_requires_manual_review');
   const workerCheck = validateWorkerCapability(worker, { now });
   if (!workerCheck.valid) reasons.push('worker_invalid');
   if (['dry_run', 'execute'].includes(requestedMode) && worker?.executionModes?.includes(requestedMode) !== true) reasons.push('worker_mode_not_supported');
@@ -155,6 +161,7 @@ export function createReceipt({ taskId, leaseId, workerId, businessDate, status,
   assertString(businessDate, 'businessDate', { pattern: /^\d{4}-\d{2}-\d{2}$/, maxLength: 10 });
   if (!STATUS_VALUES.includes(status)) throw new Error('status is invalid');
   if (!['dry_run', 'execute'].includes(executionMode)) throw new Error('executionMode is invalid');
+  if (executionMode === 'dry_run' && ['signed', 'already_signed'].includes(status)) throw new Error('dry_run cannot claim check-in success');
   if (!Number.isInteger(attempt) || attempt < 1 || attempt > 8) throw new Error('attempt is invalid');
   if (!evidence || typeof evidence !== 'object') throw new Error('evidence is required');
   const authoritative = ['signed', 'already_signed'].includes(status);

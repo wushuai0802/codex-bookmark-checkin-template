@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { planHash, planUnitIdentity, assertUniqueTaskOwners } from './contracts.mjs';
+import { planHash, planUnitIdentity, assertUniqueTaskOwners, redactText } from './contracts.mjs';
+import { displayIdentity, shortLabel } from './display-identity.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -122,7 +123,26 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
     removedPlanUnitIds: [], changedPlanUnitIds: [],
     statusChanges: [], ownerConflicts: [], hashValid: true
   };
-  const recordId = `ledger_${crypto.createHash('sha256').update(snapshot.snapshotId, 'utf8').digest('hex').slice(0, 24)}`;
+  if (drift.classification === 'invalid' || drift.hashValid !== true) {
+    throw new Error('invalid previous snapshot or ownership drift; review a new baseline without rewriting history');
+  }
+  const summarize = (task, source) => {
+    const receipt = source.receipts?.find(item => item.taskId === task.taskId);
+    return { taskId: task.taskId, origin: task.origin, displayName: shortLabel(task.displayName),
+      identity: displayIdentity(task.identity), observedStatus: task.observedStatus,
+      observedAt: receipt?.observedAt ?? null, evidence: receipt?.evidence ? {
+        source: receipt.evidence.source, authoritative: receipt.evidence.authoritative === true,
+        summary: redactText(receipt.evidence.summary), redacted: true,
+        rawSource: shortLabel(receipt.evidence.rawSource,64),originalSource:shortLabel(receipt.evidence.originalSource,64),verification:shortLabel(receipt.evidence.verification,64)
+      } : null };
+  };
+  const taskSummaries = snapshot.tasks.map(task => summarize(task, snapshot));
+  const changes = drift.statusChanges.map(change => ({ kind: 'status', from: change.from, to: change.to,
+    task: taskSummaries.find(task => task.taskId === change.taskId) }));
+  for (const [kind, ids, source] of [['added', drift.addedTaskIds, snapshot], ['removed', drift.removedTaskIds, previousSnapshot], ['changed', drift.changedTaskIds, snapshot]]) {
+    for (const id of ids) { const task = source?.tasks.find(task => task.taskId === id); if (task) changes.push({ kind, task: summarize(task, source) }); }
+  }
+  const recordId = `ledger_${crypto.createHash('sha256').update(`${snapshot.snapshotId}|task-details-v1`, 'utf8').digest('hex').slice(0, 24)}`;
   const record = {
     schemaVersion: 1,
     recordId,
@@ -133,6 +153,8 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
     sourceRunId: snapshot.source?.runId ?? null,
     mode: 'shadow_read_only',
     counts: snapshot.counts,
+    taskSummaries,
+    changes,
     drift,
     health: snapshot.health
   };

@@ -10,6 +10,13 @@
   "targets": [
     {
       "origin": "https://agent.example",
+      "accountKey": "fixture-account-a",
+      "title": "Fixture multi-account site",
+      "folderNames": ["welfare"]
+    },
+    {
+      "origin": "https://agent.example",
+      "accountKey": "fixture-account-b",
       "title": "Fixture multi-account site",
       "folderNames": ["welfare"]
     },

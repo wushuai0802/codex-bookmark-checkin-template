@@ -1,5 +1,12 @@
 # V2 architecture (alpha boundary)
 
+Historical foundation description. For the current execution target and explicit
+implemented/unimplemented boundaries, see [execution-redesign.md](execution-redesign.md).
+The ops deployment now includes a real read-only Harvest connector and allowlisted
+username/ID display metadata. The earlier statement below excluding all account
+labels describes the alpha export, not the present authenticated dashboard.
+Credentials and browser profiles still never enter dashboard snapshots.
+
 ```text
 legacy Windows runner (sole executor)
         | read-only files

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLedger } from './shadow-ledger.mjs';
+import { healthIsFresh, shanghaiDate, timestampFresh } from './freshness.mjs';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const RECORD_ID_PATTERN = /^ledger_[a-f0-9]{24}$/;
@@ -68,7 +69,7 @@ function recordErrors(record) {
  * begin candidate-worker review. This function is read-only and never grants
  * a lease or starts an executor.
  */
-export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) {
+export function evaluateShadowHistory(records, { minConsecutiveDays = 7, now = new Date().toISOString() } = {}) {
   if (!Number.isInteger(minConsecutiveDays) || minConsecutiveDays < 1 || minConsecutiveDays > 366) {
     throw new Error('minConsecutiveDays must be between 1 and 366');
   }
@@ -80,17 +81,27 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) 
   let staleRecordCount = 0;
   let unhealthyRecordCount = 0;
   let ownerConflictRecords = 0;
+  const latestByDay = new Map();
+  const today = dayNumber(shanghaiDate(now));
 
   list.forEach((record, index) => {
     const errors = recordErrors(record);
     if (record?.recordId && seenRecordIds.has(record.recordId)) errors.push('duplicate_record_id');
     if (record?.recordId) seenRecordIds.add(record.recordId);
     if (errors.includes('owner_conflict')) ownerConflictRecords += 1;
-    if (record?.health?.freshness?.fresh === true) freshRecordCount += 1;
+    if (validIso(record?.recordedAt) && Date.parse(record.recordedAt) > Date.parse(now) + 60_000) errors.push('future_record');
+    const fresh = healthIsFresh(record?.health, record?.recordedAt);
+    if (fresh) freshRecordCount += 1;
     else staleRecordCount += 1;
     if (record?.health?.healthy !== true) unhealthyRecordCount += 1;
     if (validBusinessDate(record?.businessDate)) dates.add(record.businessDate);
     if (errors.length > 0) invalidRecords.push({ index, recordId: record?.recordId ?? null, errors: [...new Set(errors)] });
+    if (validBusinessDate(record?.businessDate) && validIso(record?.recordedAt)) {
+      const existing = latestByDay.get(record.businessDate);
+      if (!existing || Date.parse(record.recordedAt) >= Date.parse(existing.record.recordedAt)) {
+        latestByDay.set(record.businessDate, { record, errors, fresh });
+      }
+    }
   });
 
   const sortedDates = [...dates].sort();
@@ -102,13 +113,21 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) 
     longestConsecutiveDays = Math.max(longestConsecutiveDays, currentConsecutiveDays);
   }
 
+  // Historical failures remain in the audit log; acceptance concerns the most
+  // recent daily window, never an unrelated successful week in the past.
+  const endDate = [...latestByDay.keys()].filter(d => dayNumber(d) <= today).sort().at(-1);
+  const endDay = endDate ? dayNumber(endDate) : today;
+  const window = [...latestByDay.entries()].filter(([d]) => dayNumber(d) <= endDay && dayNumber(d) > endDay - minConsecutiveDays).map(([, r]) => r);
+  const latest = endDate ? latestByDay.get(endDate).record : null;
   const reasons = [];
   if (list.length === 0) reasons.push('no_records');
-  if (longestConsecutiveDays < minConsecutiveDays) reasons.push('insufficient_consecutive_days');
-  if (invalidRecords.length > 0) reasons.push('invalid_records');
-  if (ownerConflictRecords > 0) reasons.push('owner_conflict');
-  if (staleRecordCount > 0) reasons.push('health_not_fresh');
-  if (unhealthyRecordCount > 0) reasons.push('health_not_healthy');
+  if (window.length < minConsecutiveDays) reasons.push('insufficient_consecutive_days');
+  if (!latest || today - endDay > 1 || !timestampFresh(latest.recordedAt, now)) reasons.push('history_not_current');
+  if (window.some(r => r.errors.length) || invalidRecords.some(r => r.errors.includes('business_date_invalid')) || list.some(r => Date.parse(r?.recordedAt) > Date.parse(now) + 60_000)) reasons.push('invalid_records');
+  if (window.some(r => r.errors.includes('owner_conflict'))) reasons.push('owner_conflict');
+  if (window.some(r => !r.fresh)) reasons.push('health_not_fresh');
+  if (window.some(r => r.record.health?.healthy !== true)) reasons.push('health_not_healthy');
+  if (new Set(window.map(r => r.record.planHash)).size > 1) reasons.push('plan_changed_in_window');
   return {
     schemaVersion: 1,
     accepted: reasons.length === 0,
@@ -118,6 +137,9 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 7 } = {}) 
     firstBusinessDate: sortedDates[0] ?? null,
     latestBusinessDate: sortedDates.at(-1) ?? null,
     longestConsecutiveDays,
+    evaluationDate: shanghaiDate(now),
+    windowDays: window.length,
+    eligibleRecentDays: window.filter(r => !r.errors.length && r.fresh && r.record.health?.healthy === true).length,
     freshRecordCount,
     staleRecordCount,
     unhealthyRecordCount,

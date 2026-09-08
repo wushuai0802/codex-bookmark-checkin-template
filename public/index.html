@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Codex Check-in Fabric V2 监测与管理控制台">
   <title>Check-in Fabric · 控制台</title>
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/controls.css">
   <link rel="stylesheet" href="/pt-status.css">
+  <link rel="stylesheet" href="/overview.css">
+  <link rel="stylesheet" href="/theme.css">
 </head>
 <body>
   <div class="app-shell">
@@ -17,23 +20,35 @@
         <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="关闭导航" aria-controls="main-sidebar" aria-expanded="false">×</button>
       </div>
       <nav class="nav" aria-label="主导航">
-        <button class="nav-item active" data-view="overview">总览</button>
+        <span class="nav-section-label">监控</span><button class="nav-item active" data-view="overview">总览</button>
         <button class="nav-item" data-view="tasks">任务</button>
         <button class="nav-item" data-view="pt-status">PT 状态</button>
-        <button class="nav-item" data-view="sites">站点</button>
+        <span class="nav-section-label">资源</span><button class="nav-item" data-view="sites">站点</button>
         <button class="nav-item" data-view="accounts">账户</button>
-        <button class="nav-item" data-view="ledger">运行记录</button>
+        <span class="nav-section-label">审计</span><button class="nav-item" data-view="ledger">运行记录</button>
         <button class="nav-item" data-view="settings">设置</button>
       </nav>
+      <div class="theme-control" aria-label="外观主题">
+        <div class="theme-control-heading"><span>外观</span><span class="theme-choice-label" id="theme-choice-label">跟随系统</span></div>
+        <div class="theme-choice-group" role="group" aria-label="选择主题">
+          <button class="theme-choice" type="button" data-theme-choice="system" aria-label="跟随系统" title="跟随系统"><span aria-hidden="true">◐</span><span>系统</span></button>
+          <button class="theme-choice" type="button" data-theme-choice="light" aria-label="明亮主题" title="明亮主题"><span aria-hidden="true">☼</span><span>明亮</span></button>
+          <button class="theme-choice" type="button" data-theme-choice="dark" aria-label="暗夜主题" title="暗夜主题"><span aria-hidden="true">◑</span><span>暗夜</span></button>
+        </div>
+        <select id="theme-select" class="theme-select-compat" aria-hidden="true" tabindex="-1"><option value="system">跟随系统</option><option value="light">明亮</option><option value="dark">暗夜</option></select>
+      </div>
       <div class="sidebar-footer"><span class="status-dot"></span><span id="service-status">正在连接</span></div>
     </aside>
     <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭导航"></button>
     <main class="main-content">
-      <header class="topbar"><div class="topbar-heading"><button id="menu-toggle" class="icon-button menu-toggle" type="button" aria-label="打开导航" aria-controls="main-sidebar" aria-expanded="false">☰</button><div><p class="eyebrow">CONTROL PLANE / SHADOW MODE</p><h1 id="page-title">签到运行总览</h1></div></div><div class="top-actions"><span class="mode-pill" id="mode-pill">只读影子</span><button id="refresh-btn" class="button primary">刷新数据</button></div></header>
+      <header class="topbar"><div class="topbar-heading"><button id="menu-toggle" class="icon-button menu-toggle" type="button" aria-label="打开导航" aria-controls="main-sidebar" aria-expanded="false">☰</button><div><p class="eyebrow">CONTROL PLANE / SHADOW MODE</p><h1 id="page-title">签到运行总览</h1><span id="topbar-context" class="topbar-context">当前计划 · 影子观察</span></div></div><nav class="top-nav" aria-label="快捷导航"><button type="button" data-top-view="overview">总览</button><button type="button" data-top-view="tasks">任务</button><button type="button" data-top-view="pt-status">PT 监控</button><button type="button" data-top-view="accounts">账号</button></nav><div class="top-actions"><button id="attention-jump" class="icon-button notification-button" type="button" aria-label="查看需关注事项" title="查看需关注事项"><span aria-hidden="true">●</span><b id="attention-badge">0</b></button><span class="mode-pill" id="mode-pill">只读影子</span><button id="refresh-btn" class="button primary">刷新数据</button></div></header>
       <section id="login-panel" class="login-panel hidden" aria-live="polite"><div><h2>需要控制台令牌</h2><p>令牌验证后仅保存在服务端签发的安全会话中，不写入浏览器存储。</p></div><form id="login-form"><label for="token-input">管理令牌</label><div class="token-row"><input id="token-input" type="password" autocomplete="off" spellcheck="false" required maxlength="256"><button id="token-visibility" class="button secondary" type="button" aria-label="显示令牌">显示</button><button class="button primary" type="submit">连接</button></div><div class="token-options"><label class="remember-token"><input id="remember-token" type="checkbox"> <span>在此设备保持登录（7 天）</span></label><button id="clear-token" class="link-button clear-token" type="button">退出安全会话</button></div><p id="login-error" class="error-text"></p></form></section>
       <section id="app-error" class="alert error hidden" role="alert"></section>
       <div id="view-overview" class="view active-view">
+        <section id="daily-summary" class="daily-summary" aria-live="polite"></section>
+        <div class="sync-strip"><span id="sync-age">正在读取快照…</span><label><input id="auto-refresh" type="checkbox" checked> 每分钟自动刷新</label></div>
         <div id="kpi-grid" class="kpi-grid"></div>
+        <section class="content-grid two-col operations-grid"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">ATTENTION QUEUE</p><h2>需要关注的事项</h2></div><span id="attention-count" class="badge warn">—</span></div><div id="attention-list" class="attention-list"></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">V2 READINESS</p><h2>七天观察验收</h2></div><span class="badge">只读观察</span></div><div id="readiness-content"></div></article></section>
         <div class="content-grid two-col"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">EXECUTION HEALTH</p><h2>执行健康</h2></div><span id="health-badge" class="badge">—</span></div><div id="health-content" class="health-content"></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">STATUS MIX</p><h2>状态分布</h2></div></div><div id="status-chart" class="status-chart"></div></article></div>
         <article class="panel"><div class="panel-heading"><div><p class="eyebrow">LATEST PLAN</p><h2>最近计划</h2></div><button class="link-button" data-view-link="tasks">查看全部任务 →</button></div><div id="latest-plan" class="plan-meta"></div></article>
       </div>
@@ -45,6 +60,6 @@
       <div id="view-settings" class="view"><div class="toolbar"><div><p class="eyebrow">CONTROL PLANE</p><h2>设置与边界</h2></div></div><article class="panel settings-panel"><div id="settings-content"></div></article></div>
     </main>
   </div>
-  <script src="/app.js" defer></script>
+  <script src="/app.js" type="module"></script>
 </body>
 </html>

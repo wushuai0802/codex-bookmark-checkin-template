@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
+import { snapshotSafetyReasons } from '../src/freshness.mjs';
 
 function parseArgs(argv) {
   const args = {};
@@ -16,13 +17,15 @@ function parseArgs(argv) {
   return args;
 }
 
-export function validateLiveSnapshot(snapshot) {
+export function validateLiveSnapshot(snapshot, { now = new Date().toISOString() } = {}) {
   if (snapshot?.mode !== 'shadow_read_only') throw new Error('live snapshot is not read-only shadow mode');
   if (snapshot.counts.logicalSites < 1 || snapshot.counts.executionUnits < 1) throw new Error('live snapshot is empty');
   if (new Set(snapshot.tasks.map((task) => task.taskId)).size !== snapshot.tasks.length) throw new Error('duplicate daily task id');
   if (new Set(snapshot.tasks.map((task) => task.planUnitId)).size !== snapshot.tasks.length) throw new Error('duplicate stable plan unit id');
   if (snapshot.health?.freshness?.fresh !== true) throw new Error('legacy health report is stale');
   if (snapshot.health?.healthy !== true) throw new Error('legacy health report is unhealthy');
+  const reasons = snapshotSafetyReasons(snapshot, now);
+  if (reasons.length) throw new Error(`live snapshot is stale or invalid: ${reasons.join(',')}`);
   const serialized = JSON.stringify(snapshot);
   if (/"(?:password|passwd|token|cookie|secret|authorization|accountId|accountLabel|userDataDir|profilePath|dpapi|screenshot)"\s*:/i.test(serialized)) {
     throw new Error('sensitive field was present in live snapshot');

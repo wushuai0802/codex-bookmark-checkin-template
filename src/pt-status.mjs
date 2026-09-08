@@ -120,7 +120,7 @@ function normalizeObservation(input, {
   const origin = normalizeOriginForStatus(input.origin);
   const source = normalizeSource(input.source, defaultSource);
   const status = normalizeStatus(input.status);
-  const observedAt = parseIso(input.observedAt, fallbackObservedAt);
+  const observedAt = input.observedAt === null ? null : parseIso(input.observedAt, fallbackObservedAt);
   const freshness = ageFor(observedAt, generatedAt, maxAgeHours);
   const accountRef = normalizeAccountRef(input.accountRef);
   const evidence = evidenceFor(input, status);
@@ -153,7 +153,7 @@ export function normalizePtStatusReport(report, {
   for (const item of sites) {
     const observation = normalizeObservation(item, {
       defaultSource: source,
-      generatedAt: reportGeneratedAt,
+      generatedAt,
       maxAgeHours,
       displayName: displayNameFor(item, normalizeOriginForStatus(item.origin))
     });
@@ -216,7 +216,7 @@ function mergeSiteObservations(observations, target) {
 }
 
 export function buildPtStatus({
-  tasks = [], receipts = [], planTargets = [], externalReport = null,
+  tasks = [], receipts = [], planTargets = [], externalReport = null, monitorCatalog = null,
   generatedAt = new Date().toISOString(), businessDate = null, maxAgeHours = 26
 } = {}) {
   const report = externalReport
@@ -246,7 +246,7 @@ export function buildPtStatus({
       origin: task.origin,
       accountRef: task.accountRef,
       status: task.observedStatus,
-      observedAt: receipt?.observedAt ?? generatedAt,
+      observedAt: task.observedStatus === 'not_started' ? null : receipt?.observedAt ?? generatedAt,
       source: 'legacy-checkin',
       managedBy: 'legacy-checkin',
       inLegacyPlan: true,
@@ -261,7 +261,29 @@ export function buildPtStatus({
       evidence: { source: 'none', authoritative: false, summary: '未出现在最近一次 v1 结果中' }
     }, { generatedAt, maxAgeHours, inLegacyPlan: true, fallbackObservedAt: stableFallbackAt, displayName: displayNameFor(target, origin) }));
   }
-  for (const item of report?.sites ?? []) add(item);
+  const monitorSites = new Map((monitorCatalog?.sites ?? []).map(site => [normalizeOriginForStatus(site.origin), site]));
+  for (const item of report?.sites ?? []) {
+    if (monitorCatalog && !monitorSites.has(item.origin) && !targets.has(item.origin)) continue;
+    const matches = tasks.filter(task => task.origin === item.origin);
+    // An external default-account observation may join only a single known account.
+    if (!item.accountRef && matches.length === 1) item.accountRef = matches[0].accountRef;
+    add(item);
+  }
+  for (const [origin, site] of monitorSites) {
+    if ([...grouped.keys()].some(key => key.startsWith(`${origin}|`))) continue;
+    add(normalizeObservation({ origin, displayName: site.displayName, source: 'v2-observer',
+      status: 'unknown', observedAt: null, evidence: { source: 'none', authoritative: false,
+        summary: '已纳入书签监测，暂无今日签到证据' }
+    }, { generatedAt, maxAgeHours }));
+  }
+  // A catalog is inventory, never evidence. Success must belong to this business day.
+  for (const items of grouped.values()) for (const item of items) {
+    const observedDay = item.observedAt ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(item.observedAt)) : null;
+    if (!item.observedAt || (businessDate && observedDay !== businessDate)) {
+      item.freshness.fresh = false;
+      item.supplementCandidate = false;
+    }
+  }
   const sites = [...grouped.values()].map((items) => mergeSiteObservations(items, targets.get(items[0].origin))).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;

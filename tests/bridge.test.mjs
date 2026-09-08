@@ -18,7 +18,9 @@ function fixtureRoot({ healthCheckedAt = '2026-09-02T01:00:00.000Z' } = {}) {
   fs.writeFileSync(path.join(root, 'data', 'last-valid-bookmark-plan.json'), JSON.stringify({
     generatedAt: '2026-09-02T01:00:00.000Z',
     sources: [{ counts: { '公益站': 2 } }],
-    targets: [{ origin: 'https://agentrouter.org', title: 'Agent Router', folderNames: ['公益站'] }, { origin: 'https://new-api.abrdns.com', title: 'New API', folderNames: ['公益站'] }]
+    targets: [{ origin: 'https://agentrouter.org', accountKey:'agentrouter-245770', title: 'Agent Router', folderNames: ['公益站'] },
+      { origin:'https://agentrouter.org', accountKey:'agentrouter-336634',title:'Agent second',folderNames:['公益站'] },
+      { origin: 'https://new-api.abrdns.com', title: 'New API', folderNames: ['公益站'] }]
   }));
   fs.writeFileSync(path.join(root, 'data', 'site-state.json'), JSON.stringify({ updatedAt: '2026-09-02T01:01:00.000Z' }));
   fs.writeFileSync(path.join(root, 'health.json'), JSON.stringify({ healthy: true, reason: 'ok', checkedAt: healthCheckedAt, failedChecks: [] }));
@@ -48,6 +50,7 @@ test('logical groups and shared OAuth group are metadata only', () => {
   assert.equal(logicalSiteKey('https://checkin.new-api.abrdns.com/checkin'), 'https://checkin.new-api.abrdns.com');
   assert.equal(logicalGroup('https://new-api.abrdns.com'), 'abrdns-welfare');
   assert.equal(credentialGroup('https://ai.venlacy.com/console'), 'linuxdo-shared');
+  assert.equal(credentialGroup('https://api.42w.shop/profile'), null);
 });
 
 test('bridge imports 3 execution units and redacts sensitive evidence', () => {
@@ -110,6 +113,8 @@ test('an injected health report overrides the legacy cached health file', () => 
   });
   assert.equal(snapshot.health.freshness.fresh, true);
   assert.equal(snapshot.health.sourceCheckedAt, '2026-09-02T01:59:00.000Z');
+  const old = buildSnapshot({ legacyRoot: root, generatedAt: '2026-09-02T02:00:00Z' });
+  assert.notEqual(snapshot.snapshotId, old.snapshotId);
 });
 
 test('bridge refuses to write into legacy project', () => {

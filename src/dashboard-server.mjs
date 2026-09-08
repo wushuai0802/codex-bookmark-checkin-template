@@ -6,6 +6,11 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLedger } from './shadow-ledger.mjs';
+import { healthIsFresh, timestampFresh } from './freshness.mjs';
+import { evaluateShadowHistory } from './shadow-acceptance.mjs';
+import { displayIdentity, shortLabel } from './display-identity.mjs';
+import {createWorkerGateway} from './worker-gateway.mjs';
+import {publicAdapterObservations} from './adapter-observations.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -21,7 +26,8 @@ const PT_STATUS_VALUES = new Set([
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml', '.ico': 'image/x-icon'
+  '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.mjs': 'text/javascript; charset=utf-8'
 };
 
 function envNumber(value, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
@@ -127,6 +133,8 @@ function publicTask(task, receipt) {
     logicalSiteKey: task.logicalSiteKey,
     logicalGroup: task.logicalGroup ?? null,
     accountRef: task.accountRef ?? null,
+    displayName: shortLabel(task.displayName),
+    identity: displayIdentity(task.identity),
     actionType: task.actionType,
     scheduleOccurrence: task.scheduleOccurrence,
     executionOwner: task.executionOwner,
@@ -137,7 +145,9 @@ function publicTask(task, receipt) {
       source: receipt.evidence.source,
       authoritative: receipt.evidence.authoritative,
       summary: receipt.evidence.summary,
-      redacted: receipt.evidence.redacted === true
+      redacted: receipt.evidence.redacted === true,
+      rawSource: shortLabel(receipt.evidence.rawSource,64), originalSource: shortLabel(receipt.evidence.originalSource,64),
+      verification: shortLabel(receipt.evidence.verification,64)
     } : null
   };
 }
@@ -155,6 +165,9 @@ function publicPtEvidence(evidence) {
 
 function publicPtStatus(ptStatus) {
   if (!ptStatus || typeof ptStatus !== 'object' || Array.isArray(ptStatus)) return null;
+  const now = new Date().toISOString();
+  const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' });
+  const freshPt = value => timestampFresh(value, now) && dayFormat.format(new Date(value)) === dayFormat.format(new Date(now));
   const sites = (Array.isArray(ptStatus.sites) ? ptStatus.sites : []).flatMap((site) => {
     try {
       const origin = safeOrigin(site.origin);
@@ -163,12 +176,12 @@ function publicPtStatus(ptStatus) {
       const sourceStatuses = (Array.isArray(site.sourceStatuses) ? site.sourceStatuses : []).flatMap((item) => {
         const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
         if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
-        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true, authoritative: item.authoritative === true }];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true }];
       });
       const observations = (Array.isArray(site.observations) ? site.observations : []).flatMap((item) => {
         const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
         if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
-        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true, authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence) }];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence) }];
       });
       return [{
         siteRef: typeof site.siteRef === 'string' && /^pt_[a-f0-9]{16}$/.test(site.siteRef) ? site.siteRef : null,
@@ -177,18 +190,18 @@ function publicPtStatus(ptStatus) {
         accountRef: typeof site.accountRef === 'string' && /^acct_[a-f0-9]{16}$/.test(site.accountRef) ? site.accountRef : null,
         inLegacyPlan: site.inLegacyPlan === true,
         managedBy: typeof site.managedBy === 'string' ? site.managedBy.slice(0, 80) : 'other',
-        effective: effective && typeof effective.source === 'string' && typeof effective.observedAt === 'string' ? {
+        effective: effective && typeof effective.source === 'string' ? {
           source: effective.source.slice(0, 40),
           status: PT_STATUS_VALUES.has(effective.status) ? effective.status : 'unknown',
-          observedAt: effective.observedAt.slice(0, 64),
-          fresh: effective.fresh === true,
+          observedAt: typeof effective.observedAt === 'string' ? effective.observedAt.slice(0, 64) : null,
+          fresh: effective.fresh === true && freshPt(effective.observedAt),
           authoritative: effective.authoritative === true,
           evidence: publicPtEvidence(effective.evidence)
         } : null,
         sourceStatuses,
         discrepancy: site.discrepancy === true,
-        supplementCandidate: site.supplementCandidate === true,
-        supplementAction: site.supplementAction === 'manual_review_only' ? 'manual_review_only' : 'none',
+        supplementCandidate: site.supplementCandidate === true && effective?.fresh === true && freshPt(effective?.observedAt),
+        supplementAction: site.supplementCandidate === true && effective?.fresh === true && freshPt(effective?.observedAt) ? 'manual_review_only' : 'none',
         observations
       }];
     } catch { return []; }
@@ -206,9 +219,9 @@ function publicPtStatus(ptStatus) {
       sites: safeCount(counts.sites, sites.length),
       inLegacyPlan: safeCount(counts.inLegacyPlan, sites.filter((site) => site.inLegacyPlan).length),
       externalOnly: safeCount(counts.externalOnly, sites.filter((site) => !site.inLegacyPlan).length),
-      fresh: safeCount(counts.fresh, sites.filter((site) => site.effective?.fresh).length),
+      fresh: sites.filter((site) => site.effective?.fresh).length,
       discrepancies: safeCount(counts.discrepancies, sites.filter((site) => site.discrepancy).length),
-      supplementCandidates: safeCount(counts.supplementCandidates, sites.filter((site) => site.supplementCandidate).length),
+      supplementCandidates: sites.filter((site) => site.supplementCandidate).length,
       status
     },
     executionEnabled: false,
@@ -216,7 +229,7 @@ function publicPtStatus(ptStatus) {
   };
 }
 
-function publicSnapshot(snapshot) {
+function publicSnapshot(snapshot, now = new Date().toISOString()) {
   if (!snapshot) return null;
   const source = snapshot.source ?? {};
   const safeSource = {
@@ -244,13 +257,18 @@ function publicSnapshot(snapshot) {
     planHash: typeof snapshot.planHash === 'string' && /^[a-f0-9]{64}$/.test(snapshot.planHash) ? snapshot.planHash : null,
     source: safeSource,
     counts: safeCounts,
+    reconciliation: snapshot.reconciliation ? {
+      missingCount:Number(snapshot.reconciliation.missingCount)||0,conflictCount:Number(snapshot.reconciliation.conflictCount)||0,
+      unexpectedCount:Number(snapshot.reconciliation.unexpectedCount)||0,planSource:shortLabel(snapshot.reconciliation.planSource)
+    } : null,
+    evidenceQuality: snapshot.evidenceQuality ? {verifiedSuccess:Number(snapshot.evidenceQuality.verifiedSuccess)||0,unverifiedSuccess:Number(snapshot.evidenceQuality.unverifiedSuccess)||0} : null,
     ptStatus: publicPtStatus(snapshot.ptStatus),
     health: snapshot.health && typeof snapshot.health === 'object' ? {
       healthy: snapshot.health.healthy === true,
       sourceCheckedAt: typeof snapshot.health.sourceCheckedAt === 'string' ? snapshot.health.sourceCheckedAt.slice(0, 64) : null,
       freshness: snapshot.health.freshness && typeof snapshot.health.freshness === 'object' ? {
-        fresh: snapshot.health.freshness.fresh === true,
-        ageHours: typeof snapshot.health.freshness.ageHours === 'number' && snapshot.health.freshness.ageHours >= 0 ? snapshot.health.freshness.ageHours : null,
+        fresh: healthIsFresh(snapshot.health, now),
+        ageHours: Number.isFinite(Date.parse(snapshot.health.sourceCheckedAt)) ? Math.max(0, (Date.parse(now) - Date.parse(snapshot.health.sourceCheckedAt)) / 3_600_000) : null,
         maxAgeHours: typeof snapshot.health.freshness.maxAgeHours === 'number' && snapshot.health.freshness.maxAgeHours > 0 ? snapshot.health.freshness.maxAgeHours : 26
       } : { fresh: false, ageHours: null, maxAgeHours: 26 },
       reason: typeof snapshot.health.reason === 'string' ? snapshot.health.reason.slice(0, 240) : null,
@@ -267,6 +285,7 @@ function buildView(snapshot, ledger) {
   for (const task of tasks) {
     const site = sites.get(task.origin) ?? {
       origin: task.origin, logicalSiteKey: task.logicalSiteKey,
+      displayName: task.displayName,
       logicalGroup: task.logicalGroup, executionUnitCount: 0,
       status: {}, accounts: new Set()
     };
@@ -275,11 +294,13 @@ function buildView(snapshot, ledger) {
     if (task.accountRef) site.accounts.add(task.accountRef);
     sites.set(task.origin, site);
     if (task.accountRef) {
-      const account = accounts.get(task.accountRef) ?? { accountRef: task.accountRef, taskCount: 0, sites: new Set(), status: {} };
+      const accountGroup = `${task.origin}|${task.accountRef}`;
+      const account = accounts.get(accountGroup) ?? { accountRef: task.accountRef, identity: task.identity,
+        displayName: task.displayName, origin: task.origin, taskCount: 0, sites: new Set(), status: {} };
       account.taskCount += 1;
       account.sites.add(task.origin);
       account.status[task.observedStatus ?? 'unknown'] = (account.status[task.observedStatus ?? 'unknown'] ?? 0) + 1;
-      accounts.set(task.accountRef, account);
+      accounts.set(accountGroup, account);
     }
   }
   const serializeGroup = (value) => ({ ...value, accounts: value.accounts ? [...value.accounts].sort() : undefined, sites: value.sites ? [...value.sites].sort() : undefined });
@@ -287,6 +308,7 @@ function buildView(snapshot, ledger) {
   for (const task of tasks) status[task.observedStatus ?? 'unknown'] = (status[task.observedStatus ?? 'unknown'] ?? 0) + 1;
   return {
     snapshot: publicSnapshot(snapshot),
+    readiness: evaluateShadowHistory(ledger),
     ptStatus: publicPtStatus(snapshot?.ptStatus),
     status,
     tasks,
@@ -296,7 +318,12 @@ function buildView(snapshot, ledger) {
       recordId: record.recordId, recordedAt: record.recordedAt,
       snapshotId: record.snapshotId, businessDate: record.businessDate,
       planHash: record.planHash, mode: record.mode,
-      counts: record.counts, drift: record.drift, health: record.health
+      counts: record.counts, drift: record.drift, health: record.health,
+      sourceRunId: shortLabel(record.sourceRunId, 120),
+      taskSummaries: Array.isArray(record.taskSummaries) ? record.taskSummaries.map(task => publicTask(task, task)) : null,
+      changes: Array.isArray(record.changes) ? record.changes.filter(change => ['status','added','removed','changed'].includes(change.kind) && change.task).map(change => ({
+        kind: change.kind, from: shortLabel(change.from, 40), to: shortLabel(change.to, 40), task: publicTask(change.task, change.task)
+      })) : []
     }))
   };
 }
@@ -388,7 +415,8 @@ export function createDashboardServer({
   bind = process.env.FABRIC_BIND ?? '127.0.0.1',
   port = envNumber(process.env.FABRIC_PORT, 8787, { min: 1, max: 65535 }),
   trustProxyTls = process.env.FABRIC_TRUST_PROXY_TLS === '1',
-  rateLimitPerMinute = envNumber(process.env.FABRIC_RATE_LIMIT_PER_MINUTE, 120, { min: 10, max: 10000 })
+  rateLimitPerMinute = envNumber(process.env.FABRIC_RATE_LIMIT_PER_MINUTE, 120, { min: 10, max: 10000 }),
+  workerGateway = null
 } = {}) {
   const root = path.resolve(dataDir);
   const controlFile = safeResolve(root, process.env.FABRIC_CONTROL_FILE ?? 'control-state.json');
@@ -422,13 +450,23 @@ export function createDashboardServer({
     const current = latestSnapshot(root, snapshotFile);
     const ledger = latestLedger(root, ledgerFile);
     const view = buildView(current.snapshot, ledger.records);
+    const observationsFile=path.join(root,'adapter-observations.json');
+    try{view.adapterObservations=fs.statSync(observationsFile).size<=1_000_000?publicAdapterObservations(JSON.parse(fs.readFileSync(observationsFile,'utf8'))):null;}
+    catch{view.adapterObservations=null;}
+    view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), fresh: timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) };
     view.controls = readControlState(controlFile).sites;
+    view.sites = view.sites.map(site => ({ ...site, control: view.controls[site.origin] ?? { policy: 'monitor', note: '', updatedAt: null } }));
     return view;
   }
 
   const server = http.createServer(async (request, response) => {
     for (const [key, value] of Object.entries(headers)) response.setHeader(key, value);
     response.setHeader('X-Request-Id', crypto.randomUUID());
+    if ((request.url??'').startsWith('/v2/dry/')) {
+      if(workerGateway)workerGateway.handle(request,response);
+      else sendError(response,404,'not_found','worker transport disabled');
+      return;
+    }
     if (!SAFE_METHODS.has(request.method) && request.method !== 'POST') {
       response.setHeader('Allow', 'GET, HEAD, POST');
       sendError(response, 405, 'method_not_allowed', 'dashboard accepts GET and bounded control POST requests only');
@@ -476,8 +514,10 @@ export function createDashboardServer({
       let view;
       try { view = loadView(); }
       catch { sendError(response, 500, 'data_error', 'dashboard data could not be read'); return; }
-      if (requestUrl.pathname === '/api/summary') {
-        sendJson(response, 200, { ...view.snapshot, status: view.status, ledgerRecords: view.ledger.length });
+      if (requestUrl.pathname === '/api/overview') {
+        sendJson(response, 200, { ...view, snapshot: { ...view.snapshot, status: view.status, readiness: view.readiness, snapshotMeta: view.snapshotMeta }, authConfigured: authRequired });
+      } else if (requestUrl.pathname === '/api/summary') {
+        sendJson(response, 200, { ...view.snapshot, status: view.status, ledgerRecords: view.ledger.length, readiness: view.readiness, snapshotMeta: view.snapshotMeta });
       } else if (requestUrl.pathname === '/api/tasks') {
         const query = (requestUrl.searchParams.get('q') ?? '').trim().toLowerCase().slice(0, 80);
         const filterStatus = requestUrl.searchParams.get('status');
@@ -533,7 +573,12 @@ export function createDashboardServer({
 }
 
 export function startDashboardServer(options = {}) {
-  const instance = createDashboardServer(options);
+  let workerGateway=null;
+  if(process.env.FABRIC_WORKER_REGISTRY_FILE){
+    workerGateway=createWorkerGateway({registryFile:process.env.FABRIC_WORKER_REGISTRY_FILE,stateFile:process.env.FABRIC_WORKER_STATE_FILE??'/transport-data/server.sqlite',snapshotFile:path.join(process.env.FABRIC_DATA_DIR??'outputs','shadow-beta-snapshot.json')});
+  }
+  const instance = createDashboardServer({...options,workerGateway});
+  if(workerGateway)instance.server.once('close',()=>workerGateway.close());
   instance.server.listen(instance.port, instance.bind, () => {
     const address = instance.server.address();
     const actualPort = typeof address === 'object' && address ? address.port : instance.port;

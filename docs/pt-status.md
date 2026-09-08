@@ -40,9 +40,24 @@ evidence is authoritative, fresh (within 26 hours), and no other source
 disagrees. The dashboard labels it `manual_review_only`; candidate execution
 and automatic supplement remain disabled in beta.
 
-The report is optional. Without it, PT targets identified from the V1 plan are
-still shown using the latest V1 result, while PT sites outside that plan do not
-appear until an observer supplies them.
+The report is optional. `--monitor-catalog` supplies a separate, origin-only
+bookmark inventory. Every inventory site is visible even without evidence;
+missing evidence is `unknown` with a null observation time, not a failed sign-in.
+The inventory never enters `tasks`, retry queues, leases or `planHash`.
+
+The installed shadow-sync wrapper selects the configured bookmark folder by
+exact parent/folder IDs and reads Harvest SQLite with `mode=ro` and `query_only`.
+Only mirror origin, nickname, username, user ID and today's `sign_info` are read.
+No cookies, passkeys, session storage or credentials are selected or uploaded.
+Deleted bookmark-only sites disappear on the next sync. An unavailable Harvest
+source leaves the inventory visible with unknown status; no browser is launched.
+Only an explicit positive daily receipt establishes success. Yesterday's evidence
+is stale at Shanghai midnight even when younger than 26 hours.
+
+Display identity is now an optional allowlisted field separate from execution
+identity. Account IDs come from actual result metadata, never from old key names.
+The authenticated dashboard groups default accounts by origin so unrelated sites
+cannot collapse into a single hashed account. Metadata does not change plan hashes.
 
 ## Bridge and shadow run
 

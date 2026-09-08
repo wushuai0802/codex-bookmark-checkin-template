@@ -58,7 +58,7 @@ function candidateSnapshot({ fresh = true } = {}) {
     mode: 'shadow_read_only',
     planHash: planHash(tasks),
     tasks,
-    health: { freshness: { fresh } }
+    health: { healthy: true, sourceCheckedAt: '2026-09-02T12:00:00.000Z', freshness: { fresh, maxAgeHours: 26 } }
   };
 }
 
@@ -86,17 +86,15 @@ test('worker capability requires isolation, fresh heartbeat, and unique allowlis
 });
 
 test('candidate gate allows dry-run only and blocks execute before cutover', () => {
-  const snapshot = buildSnapshot({ legacyRoot, generatedAt: '2026-09-02T12:00:00.000Z' });
-  const candidateSnapshot = structuredClone(snapshot);
-  candidateSnapshot.health.freshness.fresh = true;
-  const task = candidateSnapshot.tasks.find((candidate) => !['signed', 'already_signed'].includes(candidate.observedStatus));
-  const dryRun = evaluateCandidateDispatch({ snapshot: candidateSnapshot, taskId: task.taskId, worker: worker(task.origin), requestedMode: 'dry_run', now: '2026-09-02T12:05:00.000Z' });
+  const snapshot = candidateSnapshot();
+  const task = snapshot.tasks.find((candidate) => candidate.observedStatus === 'failed');
+  const dryRun = evaluateCandidateDispatch({ snapshot, taskId: task.taskId, worker: worker(task.origin), requestedMode: 'dry_run', now: '2026-09-02T12:05:00.000Z' });
   assert.equal(dryRun.decision, 'dry_run');
   assert.equal(dryRun.executable, false);
-  const unsupported = evaluateCandidateDispatch({ snapshot: candidateSnapshot, taskId: task.taskId, worker: { ...worker(task.origin), executionModes: ['execute'] }, requestedMode: 'dry_run', now: '2026-09-02T12:05:00.000Z' });
+  const unsupported = evaluateCandidateDispatch({ snapshot, taskId: task.taskId, worker: { ...worker(task.origin), executionModes: ['execute'] }, requestedMode: 'dry_run', now: '2026-09-02T12:05:00.000Z' });
   assert.equal(unsupported.decision, 'deny');
   assert.match(unsupported.reasons.join(','), /worker_mode_not_supported/);
-  const execute = evaluateCandidateDispatch({ snapshot: candidateSnapshot, taskId: task.taskId, worker: worker(task.origin), requestedMode: 'execute', now: '2026-09-02T12:05:00.000Z' });
+  const execute = evaluateCandidateDispatch({ snapshot, taskId: task.taskId, worker: worker(task.origin), requestedMode: 'execute', now: '2026-09-02T12:05:00.000Z' });
   assert.equal(execute.decision, 'deny');
   assert.match(execute.reasons.join(','), /candidate_execution_disabled/);
 });
@@ -133,7 +131,7 @@ test('candidate simulator produces only deferred dry-run receipts for allowed ta
 });
 
 test('receipts require redacted evidence and duplicate outcomes are idempotent', () => {
-  const base = { taskId: 'task_0123456789abcdef01234567', leaseId: 'lease_0123456789abcdef01234567', workerId: 'worker_local001', businessDate: '2026-09-02', status: 'signed', observedAt: '2026-09-02T12:01:00.000Z', evidence: { source: 'page_text', authoritative: true, summary: '签到成功', redacted: true }, executionMode: 'dry_run' };
+  const base = { taskId: 'task_0123456789abcdef01234567', leaseId: 'lease_0123456789abcdef01234567', workerId: 'worker_local001', businessDate: '2026-09-02', status: 'signed', observedAt: '2026-09-02T12:01:00.000Z', evidence: { source: 'page_text', authoritative: true, summary: '签到成功', redacted: true }, executionMode: 'execute' };
   const first = createReceipt(base);
   const duplicate = createReceipt({ ...base, observedAt: '2026-09-02T12:02:00.000Z' });
   assert.equal(acceptIdempotentReceipt(null, first).accepted, true);
@@ -143,4 +141,25 @@ test('receipts require redacted evidence and duplicate outcomes are idempotent',
   const notice = createNotificationOutboxItem({ receipt: first, createdAt: '2026-09-02T12:03:00.000Z' });
   assert.match(notice.dedupeKey, /^notice_[a-f0-9]{24}$/);
   assert.equal(notice.state, 'pending');
+  assert.throws(() => createReceipt({ ...base, executionMode: 'dry_run' }), /cannot claim/);
+});
+
+test('old, unhealthy, future and manually blocked snapshots cannot dispatch', () => {
+  const now = '2026-09-02T12:05:00.000Z';
+  for (const mutate of [
+    s => { s.health.healthy = false; },
+    s => { s.health.sourceCheckedAt = '2020-01-01T00:00:00Z'; },
+    s => { s.health.sourceCheckedAt = '2030-01-01T00:00:00Z'; },
+    s => { s.generatedAt = '2020-01-01T00:00:00Z'; },
+    s => { s.businessDate = '2020-01-01'; },
+    s => { s.tasks[0].observedStatus = 'not_available'; },
+    s => { s.tasks[0].observedStatus = 'needs_attention'; }
+  ]) {
+    const snapshot = candidateSnapshot(); mutate(snapshot);
+    const decision = evaluateCandidateDispatch({ snapshot, taskId: snapshot.tasks[0].taskId, worker: worker(), now });
+    assert.equal(decision.decision, 'deny');
+    assert.equal(decision.executable, false);
+  }
+  const lease = createLease({ taskId: 'task_0123456789abcdef01234567', planHash: 'a'.repeat(64), owner: 'worker_local001', issuedAt: now });
+  assert.equal(leaseActive(lease, { now: '2026-09-02T12:00:00Z' }), false);
 });
