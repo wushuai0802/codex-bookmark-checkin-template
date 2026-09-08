@@ -68,3 +68,9 @@ V1 ability extraction is now cataloged separately in `src/v1-adapter-catalog.mjs
 It records adapter family, allowed evidence and forbidden shortcuts from the V1
 effective config; it does not import or run the V1 executor. Each site remains
 observe-only/canary-disabled until its own adapter proof is complete.
+
+The PT read-only parser in `src/pt-readonly-adapter.mjs` accepts only same-origin
+HTTPS GET evidence and never clicks attendance controls. It distinguishes positive,
+negative, maintenance and conflicting page text; a page load or login page cannot
+become a success. The parser is fixture-tested but deliberately not wired to live
+PT pages until each site's safe read endpoint and account association are reviewed.

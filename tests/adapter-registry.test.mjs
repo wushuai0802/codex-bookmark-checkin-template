@@ -6,7 +6,7 @@ test('adapter registry declares read-only capabilities and no mutation verbs',()
 });
 test('coverage keeps unobserved families as blockers',()=>{
  const r=evaluateAdapterCoverage({counts:{total:2,confirmed:1},results:[{adapter:'readonly.new-api.v1'}]},[{taskId:'a'},{taskId:'b'}]);
- assert.equal(r.totalTasks,2);assert.equal(r.observedTasks,2);assert.ok(r.blocked.some(x=>x.id==='pt-native.v1'));
+ assert.equal(r.totalTasks,2);assert.equal(r.observedTasks,2);assert.ok(r.blocked.some(x=>x.id==='pt-native-readonly.v1'));
 });
 test('readiness never enables execution and identifies current blockers',()=>{
  const r=migrationReadiness({snapshot:{mode:'shadow_read_only',tasks:[{}],reconciliation:{missingCount:0,conflictCount:0},evidenceQuality:{unverifiedSuccess:1}},acceptance:{accepted:false,eligibleRecentDays:3,requiredConsecutiveDays:7},adapterObservations:{counts:{total:0,confirmed:0},results:[]}});

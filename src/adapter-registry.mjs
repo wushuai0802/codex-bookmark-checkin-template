@@ -3,7 +3,7 @@ const definitions = [
   { id:'readonly.reward-log.v1', family:'奖励日志', mode:'observe_only', mutations:[], statusEvidence:['当日奖励日志','用户身份'], phase:'M3a', readyForCanary:false },
   { id:'readonly.linuxdo-wheel.v1', family:'LinuxDO 轮盘', mode:'observe_only', mutations:[], statusEvidence:['spin_date','LinuxDO ID'], phase:'M3a', readyForCanary:false },
   { id:'readonly.vibe-entitlement.v1', family:'权益领取站', mode:'observe_only', mutations:[], statusEvidence:['getme','有效权益'], phase:'M3a', readyForCanary:false },
-  { id:'pt-native.v1', family:'PT 原生浏览器', mode:'observe_only', mutations:[], statusEvidence:['站点页面/API','当日账号'], phase:'M3b', readyForCanary:false },
+  { id:'pt-native-readonly.v1', family:'PT 原生浏览器只读', mode:'observe_only', mutations:[], statusEvidence:['站点页面/API','当日账号'], phase:'M3b', readyForCanary:false },
   { id:'anyrouter-route.v1', family:'AnyRouter 动态线路', mode:'observe_only', mutations:[], statusEvidence:['TLS/SNI','self','奖励日志'], phase:'M3b', readyForCanary:false }
 ];
 export function adapterDefinitions() { return definitions.map(definition => ({ ...definition, mutations:[...definition.mutations], statusEvidence:[...definition.statusEvidence] })); }
