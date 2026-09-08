@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [legacyRoot,out]=process.argv.slice(2);
+const {buildV1AdapterCatalog}=await import('../src/v1-adapter-catalog.mjs');
+const config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config/config.json'),'utf8'));
+const plan=JSON.parse(fs.readFileSync(path.join(legacyRoot,'data/last-valid-bookmark-plan.json'),'utf8'));
+const catalog=buildV1AdapterCatalog({plan,config});
+fs.mkdirSync(path.dirname(path.resolve(out)),{recursive:true});fs.writeFileSync(path.resolve(out),JSON.stringify(catalog,null,2));
+console.log(JSON.stringify({sites:catalog.sites.length,adapters:catalog.adapters.length,mode:catalog.mode,execute:false}));

@@ -63,3 +63,8 @@ safe agreed maintenance window, not surprise reboot of the user's PC/NAS.
 Next safe work: offline adapters/fixtures for remaining families, source discovery
 when maintenance ends, bounded route diagnostics, and operator review of protected
 login. Do not turn unknown into failed or automatically submit to 'prove' success.
+
+V1 ability extraction is now cataloged separately in `src/v1-adapter-catalog.mjs`.
+It records adapter family, allowed evidence and forbidden shortcuts from the V1
+effective config; it does not import or run the V1 executor. Each site remains
+observe-only/canary-disabled until its own adapter proof is complete.

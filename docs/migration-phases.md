@@ -1,5 +1,11 @@
 # Migration phases
 
+V1 migration update (2026-09-09): `v1-adapter-catalog.mjs` and
+[v1-capability-extraction.md](v1-capability-extraction.md) extract adapter
+families from the V1 compiled runtime configuration. The catalog is declarative
+and observe-only; it does not copy executor loops or secrets. V2 must reimplement
+and canary each family before V1 can be retired.
+
 M3a update (2026-09-08): [m3-readonly-adapters.md](m3-readonly-adapters.md) records
 four read-only families and real identity/business evidence probes. Their results
 are displayed independently in settings, not merged into execution. Protected PT,
