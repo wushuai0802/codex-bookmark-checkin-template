@@ -7,6 +7,12 @@ config/*.local.json
 work/local/
 outputs/
 logs/
+# Only this reviewed synthetic receipt is source data; all real logs stay ignored.
+!tests/fixtures/legacy/logs/
+tests/fixtures/legacy/logs/*
+!tests/fixtures/legacy/logs/fixture-run-20260902/
+tests/fixtures/legacy/logs/fixture-run-20260902/*
+!tests/fixtures/legacy/logs/fixture-run-20260902/result.json
 tmp/
 *.log
 *.tmp

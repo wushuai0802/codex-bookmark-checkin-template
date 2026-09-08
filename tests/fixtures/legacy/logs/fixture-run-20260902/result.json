@@ -1,0 +1,38 @@
+{
+  "runId": "fixture-run-20260902",
+  "finishedAt": "2026-09-02T01:04:00.000Z",
+  "executionComplete": true,
+  "businessComplete": false,
+  "pendingExternalCount": 0,
+  "results": [
+    {
+      "origin": "https://agent.example/console",
+      "accountKey": "fixture-account-a",
+      "status": "signed",
+      "reason": "authoritative fixture success",
+      "evidence": {
+        "source": "page_text",
+        "createdAt": "2026-09-02T01:04:00.000Z"
+      }
+    },
+    {
+      "origin": "https://agent.example",
+      "accountKey": "fixture-account-b",
+      "status": "already_signed",
+      "reason": "authoritative fixture already complete",
+      "evidence": {
+        "source": "api",
+        "createdAt": "2026-09-02T01:04:01.000Z"
+      }
+    },
+    {
+      "origin": "https://daily.example",
+      "status": "needs_attention",
+      "reason": "fixture review required",
+      "evidence": {
+        "source": "none",
+        "createdAt": "2026-09-02T01:04:02.000Z"
+      }
+    }
+  ]
+}

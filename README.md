@@ -23,6 +23,12 @@ sends notifications.
 
 ## Local usage
 
+Use **Node.js 24.x**, matching `.node-version`, the Docker image and CI. The
+transport journal uses built-in `node:sqlite`; Node.js 20 is not supported.
+CI runs from clean checkouts on both Linux and Windows. The only tracked fixture
+under a `logs` directory is a reviewed synthetic `.example` receipt; actual
+runtime logs, credentials and browser profiles remain excluded.
+
 ```powershell
 npm test
 node src/bridge.mjs --legacy-root D:\AIWorkspace\bots\chrome-daily-checkin `
