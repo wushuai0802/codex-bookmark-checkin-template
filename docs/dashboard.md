@@ -1,5 +1,18 @@
 # Dashboard capability map
 
+The sticky header is now compact by default: 64px on wide screens, 56px on
+mobile without recent pages, or 92px with its shortcut row. Scrolling past 96px
+reduces it to 48px; it expands again within 12px of the page top. A stable flow
+slot and non-intercepting transparent area avoid scroll anchoring or blocked
+content when it shrinks. Touch menu and refresh stay visible. Keyboard-focused
+shortcuts remain reachable; reduced motion disables transitions.
+
+The sidebar is the full directory. The top bar shows only home plus up to five
+recently visited pages, horizontally scrollable on narrow screens. The
+`fabricRecentViews` localStorage value contains allowlisted view names only,
+never searches, task IDs, account IDs or tokens. Unavailable storage falls back
+to memory. No empty shortcut row is displayed on a first visit.
+
 Mobile navigation is limited to 60% of viewport width (192-232px), with scrollable
 contents on short screens. Overview shortcuts use the main content container's
 width to form equal-width 2/2/1, 3/2, or 5-column layouts. Touch targets retain a

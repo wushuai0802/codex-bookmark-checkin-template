@@ -1,10 +1,12 @@
 import { overviewMetrics, statusGradient, statusColors } from './overview-model.mjs';
 import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
+import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
 
-for (const storage of [globalThis.sessionStorage, globalThis.localStorage]) {
+for (const storageName of ['sessionStorage', 'localStorage']) {
   try {
+    const storage = globalThis[storageName];
     storage?.removeItem('fabricToken');
     storage?.removeItem('fabricTokenRemembered');
   } catch { /* storage may be disabled by the browser */ }
@@ -16,6 +18,8 @@ let sidebarExitTimer = null;
 let sidebarCloseWatcher = null;
 let navigation = null;
 let hasRenderedData = false;
+let recentViews = [];
+try { recentViews = JSON.parse(localStorage.getItem('fabricRecentViews') ?? '[]'); } catch { /* Navigation works with blocked storage. */ }
 
 const STATUS_LABELS = {
   signed: '已签到', already_signed: '今日已完成', not_available: '未开放',
@@ -574,8 +578,30 @@ function renderView(view) {
   document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active-view', item.id === `view-${view}`));
   const titles = { overview: '签到运行总览', tasks: '任务管理', 'pt-status': 'PT 状态', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '设置与边界' };
   $('#page-title').textContent = titles[view] ?? titles.overview;
-  document.querySelectorAll('[data-top-view]').forEach(item => item.classList.toggle('active', item.dataset.topView === view));
+  renderRecentPages(view);
   const context=$('#topbar-context');if(context)context.textContent={overview:'今日计划 · 影子观察',tasks:'执行任务 · 结果与证据','pt-status':'全量 PT 监测 · 只读',sites:'书签站点 · 配置视图',accounts:'账号身份 · 隔离视图',ledger:'审计历史 · 追加记录',settings:'控制平面 · 边界与诊断'}[view]??'控制平面';
+}
+
+function renderRecentPages(view) {
+  recentViews = recentPages(recentViews, view);
+  try { localStorage.setItem('fabricRecentViews', JSON.stringify(recentViews)); } catch { /* In-memory recent pages suffice. */ }
+  const nav = $('.top-nav'); nav.replaceChildren();
+  $('.topbar').classList.toggle('no-recents', recentViews.length < 2);
+  $('.topbar-shell').classList.toggle('no-recents', recentViews.length < 2);
+  nav.append(el('span','recent-caption','最近'));
+  for (const page of recentViews) {
+    const button = el('button', page === view ? 'active' : '', recentLabels[page]);
+    button.type='button'; button.dataset.topView=page;
+    if (page === view) button.setAttribute('aria-current','page');
+    button.addEventListener('click', () => switchView(page)); nav.append(button);
+  }
+  // Reveal horizontally only: scrollIntoView would move the page on every route.
+  const selected=nav.querySelector('[aria-current="page"]');
+  if (selected) {
+    const itemRect=selected.getBoundingClientRect(), navRect=nav.getBoundingClientRect();
+    if (itemRect.right > navRect.right) nav.scrollLeft += itemRect.right - navRect.right + 6;
+    else if (itemRect.left < navRect.left + 36) nav.scrollLeft += itemRect.left - navRect.left - 36;
+  }
 }
 
 function applyRoute(route, { restoreScroll = true } = {}) {
@@ -614,9 +640,8 @@ function applyTaskFilter() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const topbar=document.querySelector('.topbar');
-  const updateTopbar=()=>topbar?.classList.toggle('scrolled',window.scrollY>8);
-  window.addEventListener('scroll',updateTopbar,{passive:true});updateTopbar();
+  renderRecentPages(state.view);
+  installCompactTopbar({topbar:document.querySelector('.topbar')});
   const accountFilter = el('select'); accountFilter.id = 'task-account'; accountFilter.setAttribute('aria-label', '筛选账号');
   $('#task-status').after(accountFilter); accountFilter.addEventListener('change', applyTaskFilter);
   $('#task-search').placeholder = '搜索站点、用户名或 ID';
@@ -633,7 +658,6 @@ document.addEventListener('DOMContentLoaded', () => {
     else renderSidebar(mobile && menuOpen);
   });
   document.querySelectorAll('.nav-item').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.view)));
-  document.querySelectorAll('[data-top-view]').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.topView)));
   document.querySelectorAll('[data-view-link]').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.viewLink)));
   $('#menu-toggle').addEventListener('click', () => setSidebarOpen(!document.body.classList.contains('sidebar-open')));
   $('#sidebar-close').addEventListener('click', () => setSidebarOpen(false));
