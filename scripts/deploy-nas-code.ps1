@@ -59,9 +59,7 @@ function Send-TarArchiveOverSsh {
     $stdoutTask=$process.StandardOutput.ReadToEndAsync()
     $stderrTask=$process.StandardError.ReadToEndAsync()
     $archiveStream=[IO.File]::OpenRead($ArchivePath)
-    $copyTask=$archiveStream.CopyToAsync($process.StandardInput.BaseStream)
-    if(-not $copyTask.Wait(300000)){throw 'NAS archive upload timed out while sending bytes'}
-    $copyTask.GetAwaiter().GetResult()
+    $archiveStream.CopyTo($process.StandardInput.BaseStream)
     $process.StandardInput.Close()
     if(-not $process.WaitForExit(300000)){throw 'NAS archive upload timed out while waiting for remote extraction'}
     $stdout=$stdoutTask.GetAwaiter().GetResult()
@@ -132,7 +130,12 @@ try {
 
   & $tar -czf $archive -C $bundle @items
   if($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archive -PathType Leaf)){throw 'NAS bundle archive creation failed'}
-  Send-TarArchiveOverSsh -SshPath $ssh -Target $SshTarget -RemoteCommand "tar -xzf - -C '$stage'" -ArchivePath $archive
+  # Windows PowerShell 5.1 prepends UTF-8's BOM when a redirected process
+  # stdin writer is created. Stage the bytes first, then strip the BOM only
+  # when the remote magic bytes prove it is present; PowerShell 7 archives are
+  # extracted unchanged.
+  $remoteExtract = 'set -eu; archive=' + $stage + '/.bundle.tar.gz; cat > $archive; magic=$(od -An -tx1 -N3 $archive | tr -d '' \n''); case $magic in efbbbf) tail -c +4 $archive | tar -xzf - -C ' + $stage + ';; 1f8b08) tar -xzf $archive -C ' + $stage + ';; *) exit 2;; esac; rm -f $archive'
+  Send-TarArchiveOverSsh -SshPath $ssh -Target $SshTarget -RemoteCommand $remoteExtract -ArchivePath $archive
 
   if($PSCmdlet.ShouldProcess($RemoteRoot,'Backup and deploy V2 code')){
     $backupItems=@('src','public','package.json','package-lock.json','Dockerfile','compose.nas.yaml','.dockerignore');if($UseWorkerTransport){$backupItems+='compose.worker.yaml'}
