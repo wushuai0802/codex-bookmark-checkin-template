@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {runObservedTask} from './task-coordinator.mjs';
+import {validateProfileHandoff} from './profile-handoff.mjs';
 
 function safeProfilePath(profileDir, dedicatedRoot) {
   const profile = path.resolve(String(profileDir ?? ''));
@@ -20,9 +21,11 @@ function browserArgs(windowMode) {
 // Executes one V2 task inside a dedicated persistent browser context. The
 // launcher is injected so tests and NAS workers can use their own Playwright
 // runtime; this module never touches the user's normal Chrome profile.
-export async function runIsolatedBrowserTask({task, adapterDefinition, profileDir, dedicatedRoot, executablePath, windowMode = 'offscreen', launchPersistentContext, clock = () => new Date().toISOString()} = {}) {
+export async function runIsolatedBrowserTask({task, adapterDefinition, profileDir, dedicatedRoot, profileMode = 'isolated', profileHandoff = null, executablePath, windowMode = 'offscreen', launchPersistentContext, clock = () => new Date().toISOString()} = {}) {
   if (!task || typeof task !== 'object') throw Error('task is required');
-  const profile = safeProfilePath(profileDir, dedicatedRoot);
+  const profile = profileMode === 'v1_handoff'
+    ? (validateProfileHandoff(profileHandoff, {accountKey:task.accountKey, origin:task.origin, profileDir:profileDir ?? profileHandoff?.profileDir}), path.resolve(profileHandoff.profileDir))
+    : safeProfilePath(profileDir, dedicatedRoot);
   if (typeof executablePath !== 'string' || !executablePath.trim()) throw Error('browser executable is required');
   if (typeof launchPersistentContext !== 'function') throw Error('browser launcher is required');
   let context;
