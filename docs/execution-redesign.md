@@ -1,7 +1,8 @@
 # V2 execution redesign — implementation contract (2026-09-08)
 
-Status: DESIGN / implementation backlog, not an execution release. V1 retains
-all check-in ownership. No permission to execute is implied by this document.
+Status: staged implementation. V1 retains ownership for non-migrated tasks;
+the account-scoped New API Canary path is implemented with explicit execution
+gates. This document does not authorize a full ownership cutover.
 The private operational inventory and per-account cutover sheet are external
 deliverables, never public repository fixtures.
 

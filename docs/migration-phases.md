@@ -6,6 +6,13 @@ families from the V1 compiled runtime configuration. The catalog is declarative
 and observe-only; it does not copy executor loops or secrets. V2 must reimplement
 and canary each family before V1 can be retired.
 
+Staged execution update (2026-09-09): the first account-scoped V2 execution
+path is now implemented for standard New API tasks. It uses a clean V2 profile,
+durable execution intent, a V1 account handoff marker, one-submit verification,
+and independent notification delivery. The daily hook is temporary and keeps
+all non-migrated V1 tasks unchanged. This is a Canary capability, not a
+full-family ownership cutover.
+
 Clean-core update (2026-09-09): [v2-clean-core.md](v2-clean-core.md) adds the
 small adapter contract, coordinator state machine and explicit
 `submission_unknown` boundary. It is library/test-only and cannot receive a

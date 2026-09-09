@@ -1,9 +1,9 @@
 # codex-checkin-fabric-v2
 
-V2 is an independent control-plane project for the daily check-in automation.
-The current release (`2.0.0-beta.3`) is deliberately a **read-only shadow
-observer and ledger prototype**. The existing Windows runner remains the only
-system allowed to execute check-ins.
+V2 is an independent control-plane and staged executor for the daily check-in
+automation. The current release (`2.0.0-beta.3`) is shadow-by-default. The
+existing Windows runner remains the owner for ordinary tasks; only an account
+recorded in the V2 migration registry can run the guarded Canary path.
 
 ## What the current shadow release does
 
@@ -18,8 +18,9 @@ system allowed to execute check-ins.
 - Projects the snapshot into an append-only shadow ledger and reports plan
   drift without granting a lease.
 
-It never launches Chrome, invokes a browser API, writes the legacy project, or
-sends notifications.
+Shadow operations never launch Chrome or send notifications. The separate
+Canary runner may launch only its registered V2 profile and writes only the
+account-level handoff marker used to prevent V1 from claiming that account.
 
 ## Local usage
 
