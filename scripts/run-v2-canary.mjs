@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import {spawn} from 'node:child_process';
 import {runCanary} from '../src/canary-runner.mjs';
 import {assertPlanHash} from '../src/contracts.mjs';
 import {loadRuntimeConfig} from '../src/runtime-config.mjs';
@@ -16,6 +17,11 @@ try {
   }
   const report=await runCanary({task,execute:process.argv.includes('--execute')});
   console.log(JSON.stringify(report,null,2));
+  if(report.output){
+    const child=spawn(process.execPath,[path.join(path.resolve('.'),'scripts','notify-canary-result.mjs'),report.output],{windowsHide:true,stdio:'ignore'});
+    const code=await new Promise((resolve,reject)=>{child.once('exit',resolve);child.once('error',reject);});
+    if(code!==0)process.exitCode=2;
+  }
 } catch(error) {
   console.error(`V2 canary error: ${error.message}`);
   process.exitCode=1;
