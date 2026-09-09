@@ -8,7 +8,9 @@ test('V1 family catalog maps to one explicit V2 adapter without enabling canary'
     {origin:'https://api.example',familyId:'new-api-calendar.v1',requiredEvidence:['calendar']},
     {origin:'https://pt.example',familyId:'native-pt.v1',requiredEvidence:['page']}
   ]}});
-  assert.equal(plan.sites[0].adapterId,'readonly.new-api.v1');
+ assert.equal(plan.sites[0].adapterId,'readonly.new-api.v1');
+ assert.equal(plan.sites[0].executionAdapterId,'new-api.execute.v1');
+ assert.equal(plan.sites[0].executionStatus,'implemented');
   assert.equal(plan.sites[1].adapterId,'pt-native-readonly.v1');
   assert.ok(plan.sites.every(site => site.canaryReady === false));
 });
