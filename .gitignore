@@ -14,6 +14,8 @@ tests/fixtures/legacy/logs/*
 tests/fixtures/legacy/logs/fixture-run-20260902/*
 !tests/fixtures/legacy/logs/fixture-run-20260902/result.json
 tmp/
+data/v2-profiles/
+data/v2-sessions/
 *.log
 *.tmp
 *.bak
