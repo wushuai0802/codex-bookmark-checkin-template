@@ -538,10 +538,33 @@ function renderSettings(data) {
   const note = el('div', 'alert', '管理动作目前仅保留控制面展示，不会修改旧签到项目。进入 V2.0 candidate 前，需要完成 NAS 影子观察和人工批准。'); note.style.marginTop = '18px'; content.append(note);
 }
 
+function renderV2ExecutionSummary(data) {
+  const anchor=$('#daily-summary');if(!anchor)return;
+  let section=$('#v2-execution-summary');
+  if(!section){section=el('section','panel v2-execution-summary');section.id='v2-execution-summary';anchor.after(section);}
+  const snapshot=data?.snapshot??{},readiness=data?.migrationReadiness??{},today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const observedDate=snapshot.businessDate??(snapshot.generatedAt?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(snapshot.generatedAt)):'—');
+  const latest=(data?.canaryResults??[])[0]??null;
+  const beforeSchedule=observedDate===today&&latest?.mode==='canary_read_only'&&latest?.stage==='not_signed';
+  const status=beforeSchedule?'只读预检：尚未到计划执行时间':snapshot.executionEnabled?'Canary 执行已启用':'影子模式：V2 执行保持关闭';
+  const gates=readiness.gates??{};
+  section.replaceChildren();
+  const heading=el('div','panel-heading');append(heading,el('h2',null,'V2 迁移与今日观察'),el('span',`badge ${snapshot.executionEnabled?'warn':'good'}`,snapshot.executionEnabled?'执行候选':'影子观察'));section.append(heading);
+  const grid=el('div','health-content');
+  for(const [label,value] of [['当前业务日',today],['最近观察日',observedDate],['最近 Canary',latest?`${latest.stage} · ${latest.mutationCount??0} 次`:'暂无'],['影子验收',`${gates.shadowDays??0} / ${gates.requiredShadowDays??7} 天`]]){
+    const stat=el('div','health-stat');append(stat,el('span',null,label),el('b',null,value));grid.append(stat);
+  }
+  section.append(grid,el('p','subtext',status));
+  const blockers=Array.isArray(readiness.blockers)?readiness.blockers:[];
+  if(blockers.length)append(section,el('p','migration-blockers',`当前阻断：${blockers.slice(0,6).join(' · ')}`));
+  else if(latest?.persistenceError)append(section,el('p','migration-blockers',`最近结果需复核：${latest.persistenceError}`));
+}
+
 function renderAll() {
   const data = state.data;
   if (!data) return;
   renderOverview(data.snapshot);
+  renderV2ExecutionSummary(data);
   let integrity = $('#integrity-note');
   if (!integrity) { integrity=el('div','scope-banner');integrity.id='integrity-note';$('#daily-summary').after(integrity); }
   const reconciliation=data.snapshot?.reconciliation;
