@@ -11,7 +11,7 @@ const adapter={id:'new-api.execute.v1',origin:task.origin,capabilities:['identit
 
 test('isolated browser worker binds only dedicated offscreen profile', async()=>{
   let launched=null,closed=false;
-  const result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'D:/worker-data/account-7/chrome-user-data',dedicatedRoot:'D:/worker-data',executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async(profile,options)=>{launched={profile,options};return {pages:()=>[{url:'about:blank'}],close:async()=>{closed=true}};}});
+  const result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'D:/worker-data/account-7/chrome-user-data',dedicatedRoot:'D:/worker-data',executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async(profile,options)=>{launched={profile,options};return {pages:()=>[{url:'about:blank',goto:async()=>{}}],close:async()=>{closed=true}};}});
   assert.equal(result.task.phase,'status_read'); assert.equal(result.stage,'already_done'); assert.equal(result.worker.windowMode,'offscreen');
   assert.equal(launched.options.headless,false); assert.ok(launched.options.args.includes('--window-position=-32000,-32000')); assert.equal(closed,true);
 });
@@ -25,6 +25,6 @@ test('worker accepts an explicitly drained V1 profile handoff', async()=>{
   fs.mkdirSync(profile,{recursive:true});
   const handoff=prepareV1ProfileHandoff({v1Root:root,profileDir:profile,accountKey:'acct7',origin:task.origin});
   let selected;
-  const result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:profile,profileMode:'v1_handoff',profileHandoff:handoff,executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async(p)=>{selected=p;return {pages:()=>[{url:'about:blank'}],close(){}};}});
+  const result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:profile,profileMode:'v1_handoff',profileHandoff:handoff,executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async(p)=>{selected=p;return {pages:()=>[{url:'about:blank',goto:async()=>{}}],close(){}};}});
   assert.equal(result.stage,'already_done'); assert.equal(selected,profile);
 });

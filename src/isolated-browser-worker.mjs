@@ -33,6 +33,8 @@ export async function runIsolatedBrowserTask({task, adapterDefinition, profileDi
     context = await launchPersistentContext(profile, {headless:false, executablePath, args:browserArgs(windowMode)});
     const pages = typeof context.pages === 'function' ? context.pages() : [];
     const page = pages[0] ?? await context.newPage();
+    if (typeof page.goto !== 'function') throw Error('isolated page navigation is required');
+    await page.goto(task.origin, {waitUntil:'domcontentloaded', timeout:20_000});
     const result = await runObservedTask({adapterDefinition, origin:task.origin, accountKey:task.accountKey,
       businessDate:task.businessDate, planHash:task.planHash, expectedIdentity:task.accountId, context:{page}});
     return {...result, worker:{windowMode, profileBound:true, browserActions:result.mutationCount ?? 0, completedAt:clock()}};

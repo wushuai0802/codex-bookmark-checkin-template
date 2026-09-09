@@ -2,7 +2,7 @@ import {defineAdapter} from './adapter-contract.mjs';
 import {createTaskInstance,prepareSubmission,successfulVerification,transitionTask} from './task-state.mjs';
 
 export async function runObservedTask({adapterDefinition,origin,accountKey,businessDate,planHash,expectedIdentity,context={}}={}){
- const adapter=defineAdapter(adapterDefinition),task=createTaskInstance({origin,accountKey,businessDate,planHash,adapterId:adapter.id});
+ const adapter=adapterDefinition?.methods ? adapterDefinition : defineAdapter(adapterDefinition),task=createTaskInstance({origin,accountKey,businessDate,planHash,adapterId:adapter.id});
  const identity=await adapter.methods.identity({origin,accountKey,expectedIdentity,context});
  if(!identity?.userId)return {task:transitionTask(task,'blocked',{reason:'identity_missing'}),mutationCount:0,stage:'identity'};
  let current=transitionTask(task,'identity_verified',{evidence:{authoritative:true,source:'identity'},reason:'identity_verified'});
