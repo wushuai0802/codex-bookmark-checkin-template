@@ -12,7 +12,7 @@ const adapter={id:'new-api.execute.v1',origin:task.origin,capabilities:['identit
 test('isolated browser worker binds only dedicated offscreen profile', async()=>{
   let launched=null,closed=false;
   const result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'D:/worker-data/account-7/chrome-user-data',dedicatedRoot:'D:/worker-data',executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async(profile,options)=>{launched={profile,options};return {pages:()=>[{url:'about:blank',goto:async()=>{}}],close:async()=>{closed=true}};}});
-  assert.equal(result.task.phase,'status_read'); assert.equal(result.stage,'already_done'); assert.equal(result.worker.windowMode,'offscreen');
+  assert.equal(result.task.phase,'already_done'); assert.equal(result.stage,'already_done'); assert.equal(result.worker.windowMode,'offscreen');
   assert.equal(launched.options.headless,false); assert.ok(launched.options.args.includes('--window-position=-32000,-32000')); assert.equal(closed,true);
 });
 

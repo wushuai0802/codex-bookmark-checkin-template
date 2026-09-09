@@ -16,6 +16,7 @@ tests/fixtures/legacy/logs/fixture-run-20260902/*
 tmp/
 data/v2-profiles/
 data/v2-sessions/
+data/v2-execution.sqlite*
 *.log
 *.tmp
 *.bak

@@ -20,7 +20,7 @@ test('New API execution adapter submits once and verifies dated status', async (
   const submitted=await adapter.methods.submit_once({identity,context:fake});
   const after=await adapter.methods.verify({identity,businessDate:'2026-09-09',context:fake});
   assert.equal(identity.userId,'7'); assert.equal(before.state,'not_signed'); assert.equal(submitted.state,'accepted');
-  assert.equal(after.state,'confirmed'); assert.equal(adapter.mutating,true); assert.equal(fake.calls.length,4);
+  assert.equal(after.state,'confirmed'); assert.equal(adapter.mutating,true); assert.equal(fake.calls.length,4); assert.equal(fake.calls[2].path,'/api/user/checkin');
 });
 
 test('New API execution adapter rejects a mismatched identity before submit', async () => {
@@ -28,4 +28,11 @@ test('New API execution adapter rejects a mismatched identity before submit', as
   const adapter=createNewApiExecutionAdapter({origin:'https://fixture.example'});
   assert.equal(await adapter.methods.identity({expectedIdentity:'7',context:fake}),null);
   assert.equal(fake.calls.length,1);
+});
+
+test('New API adapter marks a transport failure unknown instead of safe to replay',async()=>{
+  const page={evaluate:async()=>{throw Error('network timeout')}};
+  const adapter=createNewApiExecutionAdapter({origin:'https://fixture.example'});
+  const result=await adapter.methods.submit_once({identity:{userId:'7'},context:{page}});
+  assert.equal(result.state,'unknown'); assert.equal(result.actionMayHaveHappened,true);
 });

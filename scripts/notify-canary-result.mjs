@@ -5,12 +5,14 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {idempotencyKey} from '../src/candidate-protocol.mjs';
 import {createDelivery,deliverNotification} from '../src/notification-delivery.mjs';
+import {loadRuntimeConfig} from '../src/runtime-config.mjs';
 
 const run=promisify(execFile);
 const resultFile=process.argv[2];
 if(!resultFile) throw Error('provide canary result file');
 const result=JSON.parse(fs.readFileSync(path.resolve(resultFile),'utf8'));
-const legacyRoot=process.env.CHECKIN_LEGACY_ROOT??'D:/AIWorkspace/bots/chrome-daily-checkin';
+const legacyRoot=loadRuntimeConfig(path.resolve('.')).legacyRoot;
+if(!legacyRoot)throw Error('legacyRoot is required');
 const config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config','config.json'),'utf8')).notification;
 if(config?.mode!=='command'||!config.executable) throw Error('notification command unavailable');
 const readonly=result.mode==='canary_read_only',completed=result.stage==='already_done'||result.stage==='succeeded';

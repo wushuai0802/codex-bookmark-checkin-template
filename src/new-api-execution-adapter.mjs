@@ -20,7 +20,7 @@ function ruleFor(origin, rule = {}) {
   return {
     selfPath:resolve(rule.selfPath, 'self'),
     statusPath:resolve(rule.statusPath, 'checkin'),
-    signInPath:resolve(rule.signInPath, 'sign_in'),
+    signInPath:resolve(rule.signInPath, 'checkin'),
     rewardAmount:Number.isFinite(Number(rule.rewardAmount)) ? Number(rule.rewardAmount) : null
   };
 }
@@ -64,13 +64,18 @@ export function createNewApiExecutionAdapter({origin, rule} = {}) {
       return {state:'unknown', reason:'invalid_response'};
     },
     async submit_once({identity, context = {}} = {}) {
-      const response = await pageFor(context).evaluate(async ({path,userId}) => {
-        const res = await fetch(path, {method:'POST', credentials:'include', headers:{Accept:'application/json','New-Api-User':userId}});
-        return {status:res.status, body:await res.json().catch(() => null)};
-      }, {path:paths.signInPath, userId:String(identity?.userId ?? '')});
-      if (response?.status !== 200 && response?.status !== 201) return {state:'rejected', reason:responseCause(response), response};
+      let response;
+      try { response = await pageFor(context).evaluate(async ({path,userId}) => {
+          try {
+            const res = await fetch(path, {method:'POST', credentials:'include', headers:{Accept:'application/json','New-Api-User':userId}});
+            return {status:res.status, body:await res.json().catch(() => null)};
+          } catch { return {status:0,body:null,networkError:true}; }
+        }, {path:paths.signInPath, userId:String(identity?.userId ?? '')});
+      } catch { return {state:'unknown', reason:'submit_transport_unknown', actionMayHaveHappened:true}; }
+      if (response?.networkError) return {state:'unknown', reason:'submit_transport_unknown', actionMayHaveHappened:true, response};
+      if (response?.status !== 200 && response?.status !== 201) return {state:'rejected', reason:responseCause(response), actionMayHaveHappened:false, response};
       if (response.body?.success === true || /已签到|已簽到|already/i.test(String(response.body?.message ?? ''))) return {state:'accepted', response};
-      return {state:'rejected', reason:/验证码|captcha|turnstile|hcaptcha/i.test(String(response.body?.message ?? '')) ? 'challenge_required' : 'invalid_response', response};
+      return {state:'rejected', reason:/验证码|captcha|turnstile|hcaptcha/i.test(String(response.body?.message ?? '')) ? 'challenge_required' : 'invalid_response', actionMayHaveHappened:false, response};
     },
     async verify({identity, businessDate, context = {}} = {}) {
       const status = await this.read_status({identity, businessDate, context});
