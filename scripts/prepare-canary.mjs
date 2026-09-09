@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {buildCanaryTask} from '../src/canary-task.mjs';
+import {assertPlanHash} from '../src/contracts.mjs';
 import {loadRuntimeConfig} from '../src/runtime-config.mjs';
 
 const root=path.resolve('.');
@@ -15,11 +16,13 @@ if(identity!==String(profile.expectedIdentity)) throw Error('profile identity mi
 const legacyRoot=loadRuntimeConfig(root).legacyRoot;
 if(!legacyRoot)throw Error('legacyRoot is required');
 const legacyPlanFile=path.join(legacyRoot,'data','last-valid-bookmark-plan.json');
-const legacyPlan=fs.existsSync(legacyPlanFile)?JSON.parse(fs.readFileSync(legacyPlanFile,'utf8')):null;
+if(!fs.existsSync(legacyPlanFile)) throw Error('execution plan is missing; canary is refused');
+let legacyPlan;
+try { legacyPlan=JSON.parse(fs.readFileSync(legacyPlanFile,'utf8')); }
+catch(error) { throw Error(`execution plan is invalid: ${error.message}`); }
 const legacyConfigFile=path.join(legacyRoot,'config','config.json');
 const legacyConfig=fs.existsSync(legacyConfigFile)?JSON.parse(fs.readFileSync(legacyConfigFile,'utf8')):{};
-const planHash=/^[a-f0-9]{64}$/.test(String(legacyPlan?.planFingerprint??''))?legacyPlan.planFingerprint
-  :'0'.repeat(64);
+const planHash=assertPlanHash(legacyPlan?.planFingerprint,'execution plan planFingerprint');
 const configuredRule=legacyConfig.newApiSignInRules?.[profile.origin]??{};
 const adapterRule={selfPath:configuredRule.selfPath??'/api/user/self',statusPath:configuredRule.statusPath??'/api/user/checkin',signInPath:configuredRule.signInPath??'/api/user/checkin',rewardAmount:configuredRule.rewardAmount??null};
 const output=buildCanaryTask({profile,businessDate,planHash,adapterRule});

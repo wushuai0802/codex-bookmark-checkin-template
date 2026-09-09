@@ -1,9 +1,10 @@
 import path from 'node:path';
-import {taskIdentity} from './contracts.mjs';
+import {assertPlanHash,taskIdentity} from './contracts.mjs';
 import {runIsolatedBrowserTask} from './isolated-browser-worker.mjs';
 import {createNewApiExecutionAdapter} from './new-api-execution-adapter.mjs';
 
-export async function verifyProfile({profile,root=path.resolve('.'),planHash='0'.repeat(64),adapterRule={},executablePath,launchPersistentContext,now=new Date().toISOString()}={}) {
+export async function verifyProfile({profile,root=path.resolve('.'),planHash,adapterRule={},executablePath,launchPersistentContext,now=new Date().toISOString()}={}) {
+  assertPlanHash(planHash,'profile verification planHash');
   if(!profile?.accountKey||!profile?.origin||!/^\d{1,20}$/.test(String(profile.expectedIdentity??'')))throw Error('profile metadata is invalid');
   const businessDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(now)),identity=taskIdentity({businessDate,logicalSiteKey:profile.origin,accountKey:profile.accountKey});
   const task={...identity,origin:profile.origin,accountKey:profile.accountKey,accountId:String(profile.expectedIdentity),businessDate,planHash};

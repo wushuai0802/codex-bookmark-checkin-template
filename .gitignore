@@ -17,6 +17,7 @@ tmp/
 data/v2-profiles/
 data/v2-sessions/
 data/v2-execution.sqlite*
+data/v2-run.lock*
 *.log
 *.tmp
 *.bak

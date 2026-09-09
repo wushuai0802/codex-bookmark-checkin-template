@@ -32,7 +32,7 @@ if (output === projectRoot || output.startsWith(`${projectRoot}${path.sep}src${p
 }
 fs.rmSync(output, { recursive: true, force: true });
 fs.mkdirSync(output, { recursive: true });
-for (const name of ['Dockerfile', 'compose.nas.yaml', '.dockerignore', 'package.json', 'package-lock.json']) copyRequired(path.join(projectRoot, name), path.join(output, name));
+for (const name of ['Dockerfile', 'compose.nas.yaml', 'compose.worker.yaml', '.dockerignore', 'package.json', 'package-lock.json']) copyRequired(path.join(projectRoot, name), path.join(output, name));
 for (const directory of ['src', 'public']) copyRequired(path.join(projectRoot, directory), path.join(output, directory));
 fs.mkdirSync(path.join(output, 'nas-data'), { recursive: true });
 fs.writeFileSync(path.join(output, 'nas-data', '.gitkeep'), '', 'utf8');
@@ -41,6 +41,7 @@ copyRequired(path.join(projectRoot, 'secrets', 'README.md'), path.join(output, '
 fs.writeFileSync(path.join(output, 'TRANSFER-MANIFEST.txt'), [
   'codex-checkin-fabric-v2 NAS bundle',
   'Contains only application source and empty data/secret directories.',
+  'compose.worker.yaml is included as an opt-in transport overlay; it does not enable execution by itself.',
   'Copy redacted shadow-beta-snapshot.json (including optional ptStatus) and shadow-ledger.jsonl into nas-data/.',
   'Create secrets/fabric_admin_token.txt on the NAS; never copy credentials or browser profiles.',
   ''

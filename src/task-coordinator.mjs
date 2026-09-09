@@ -6,17 +6,19 @@ export async function runObservedTask({adapterDefinition,origin,accountKey,busin
  let identity;
  try { identity=await adapter.methods.identity({origin,accountKey,expectedIdentity,context}); } catch { identity=null; }
  if(!identity?.userId)return {task:transitionTask(task,'blocked',{reason:'identity_missing'}),identity:null,mutationCount:0,stage:'identity'};
- if(expectedIdentity!=null&&String(identity.userId)!==String(expectedIdentity))return {task:transitionTask(task,'blocked',{reason:'identity_mismatch'}),identity,mutationCount:0,stage:'identity'};
+ if(identity.origin!==adapter.origin||expectedIdentity!=null&&String(identity.userId)!==String(expectedIdentity))return {task:transitionTask(task,'blocked',{reason:'identity_mismatch'}),identity,mutationCount:0,stage:'identity'};
  let current=transitionTask(task,'identity_verified',{at:now,evidence:{authoritative:true,source:'identity'},reason:'identity_verified'});
  let status;
  try { status=await adapter.methods.read_status({origin,accountKey,businessDate,identity,context}); } catch { status={state:'unknown',reason:'status_read_error'}; }
+ const statusAuthoritative=status?.evidence?.authoritative===true;
  if(status?.state==='already_done'||status?.state==='not_available'){
    current=transitionTask(current,'status_read',{at:now,evidence:status.evidence});
-  current=transitionTask(current,status.state,{at:now,evidence:status.evidence,reason:status.reason??null});
+   if(!statusAuthoritative)return {task:transitionTask(current,'blocked',{at:now,reason:'status_evidence_not_authoritative'}),identity,mutationCount:0,stage:'status'};
+   current=transitionTask(current,status.state,{at:now,evidence:status.evidence,reason:status.reason??null});
    return {task:current,identity,mutationCount:0,stage:status.state};
  }
  current=transitionTask(current,'status_read',{evidence:status?.evidence??null});
- if(status?.state!=='not_signed')return {task:transitionTask(current,'blocked',{reason:status?.reason??'status_unknown'}),identity,mutationCount:0,stage:'status'};
+ if(status?.state!=='not_signed'||!statusAuthoritative)return {task:transitionTask(current,'blocked',{reason:status?.state==='not_signed'?'status_evidence_not_authoritative':status?.reason??'status_unknown'}),identity,mutationCount:0,stage:'status'};
  if(!allowMutation)return {task:current,identity,mutationCount:0,stage:'not_signed',dryRun:true};
  if(!adapter.mutating)return {task:transitionTask(current,'blocked',{reason:'adapter_read_only'}),identity,mutationCount:0,stage:'read_only'};
  current=prepareSubmission(current,{at:now});

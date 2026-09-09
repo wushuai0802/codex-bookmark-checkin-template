@@ -17,6 +17,8 @@ contents of `outputs/nas-bundle/`:
 
 - `Dockerfile`
 - `compose.nas.yaml`
+- `compose.worker.yaml` (optional transport overlay; execution remains disabled
+  unless separately configured and authorized)
 - `package.json`
 - `package-lock.json`
 - `src/`
@@ -37,6 +39,17 @@ SameSite=Strict session cookie. With `FABRIC_TRUST_PROXY_TLS=1`, the cookie is
 also Secure. The administrator token is not persisted in browser storage or
 copied into the cookie. A normal browser session is internally bounded to 12
 hours; remember-me is bounded to 7 days.
+
+For the configured NAS host, use `scripts/deploy-nas-code.ps1` after reviewing
+the generated bundle. It uploads a tar stream over SSH because the NAS SCP
+subsystem is unavailable, creates a dated code backup, rebuilds the dashboard,
+and waits for a healthy container. It never replaces `nas-data/`, `secrets/`,
+or transport state.
+
+The script keeps the existing dry transport overlay enabled by default and
+preflights `transport-config/worker-registry.json` plus `transport-data/`.
+For a dashboard-only deployment, pass `-UseWorkerTransport:$false`; this does
+not delete an existing overlay or transport data.
 
 ## Start
 

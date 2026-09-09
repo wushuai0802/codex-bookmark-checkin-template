@@ -5,6 +5,22 @@ export const STATUS_VALUES = [
   'deferred', 'login_required', 'failed', 'not_started'
 ];
 
+// The all-zero value is reserved as a missing-plan sentinel and must never
+// cross an execution boundary as if it were a real fingerprint.
+export const PLAN_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const ZERO_PLAN_HASH_PATTERN = /^0{64}$/;
+
+export function isPlanHash(value) {
+  return typeof value === 'string'
+    && PLAN_HASH_PATTERN.test(value)
+    && !ZERO_PLAN_HASH_PATTERN.test(value);
+}
+
+export function assertPlanHash(value, name = 'planHash') {
+  if (!isPlanHash(value)) throw new Error(`${name} must be a non-zero SHA-256 hash`);
+  return value;
+}
+
 export const LOGICAL_GROUPS = new Map([
   ['https://checkin.new-api.abrdns.com', 'abrdns-welfare'],
   ['https://new-api.abrdns.com', 'abrdns-welfare']

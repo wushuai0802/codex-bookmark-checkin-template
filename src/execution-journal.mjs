@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
+import {assertPlanHash} from './contracts.mjs';
 
 function openDb(file, legacyRoot) {
   const destination=path.resolve(file), legacy=path.resolve(legacyRoot);
@@ -23,9 +24,14 @@ function tx(db, fn) { db.exec('BEGIN IMMEDIATE'); try { const value=fn(); db.exe
 export function openExecutionJournal(file, legacyRoot) { return openDb(file, legacyRoot); }
 
 export function reserveExecution(db, {idempotencyKey,taskId,planHash,accountKey,origin,businessDate,now=new Date().toISOString()}={}) {
+  assertPlanHash(planHash);
   return tx(db,()=>{
     const old=db.prepare('SELECT * FROM execution_intents WHERE idempotency_key=?').get(idempotencyKey);
-    if(old) return {state:old.phase,duplicate:true,record:old};
+    if(old){
+      const same=old.task_id===taskId&&old.plan_hash===planHash&&old.account_key===accountKey&&old.origin===origin&&old.business_date===businessDate;
+      if(!same)throw Error('execution intent binding conflict');
+      return {state:old.phase,duplicate:true,record:old};
+    }
     db.prepare('INSERT INTO execution_intents VALUES(?,?,?,?,?,?,?,?,?,?)').run(idempotencyKey,taskId,planHash,accountKey,origin,businessDate,'reserved',JSON.stringify({idempotencyKey,taskId,planHash,accountKey,origin,businessDate}),null,now);
     return {state:'reserved',duplicate:false};
   });
@@ -40,13 +46,30 @@ export function recordPrepared(db, intent, now=new Date().toISOString()) {
   });
 }
 
+export function cancelReservation(db, idempotencyKey) {
+  return tx(db,()=>{
+    const old=db.prepare('SELECT phase FROM execution_intents WHERE idempotency_key=?').get(idempotencyKey);
+    if(!old) return false;
+    if(old.phase!=='reserved') throw Error('only a reserved execution can be cancelled');
+    db.prepare('DELETE FROM execution_intents WHERE idempotency_key=?').run(idempotencyKey);
+    return true;
+  });
+}
+
 export function recordOutcome(db, {idempotencyKey,phase,outcome,now=new Date().toISOString()}={}) {
   const allowed=new Set(['succeeded','submission_unknown','blocked','submit_rejected','already_done','not_available']);
   if(!allowed.has(phase)) throw Error('execution outcome phase invalid');
   return tx(db,()=>{
     const old=db.prepare('SELECT * FROM execution_intents WHERE idempotency_key=?').get(idempotencyKey);
     if(!old) throw Error('execution intent missing');
-    if(['succeeded','submission_unknown'].includes(old.phase)&&old.phase!==phase) throw Error('terminal execution intent conflict');
+    const transitions={reserved:new Set(['blocked','already_done','not_available']),prepared:new Set(['blocked','submit_rejected','submission_unknown','succeeded'])};
+    if(old.phase===phase)return {state:phase,duplicate:true};
+    if(!transitions[old.phase]?.has(phase))throw Error('execution intent phase conflict');
+    const mutationCount=Number(outcome?.mutationCount??0);
+    if(phase==='succeeded'&&(mutationCount!==1||outcome?.evidence?.authoritative!==true))throw Error('successful execution outcome is not authoritative');
+    if(['already_done','not_available'].includes(phase)&&(mutationCount!==0||outcome?.evidence?.authoritative!==true))throw Error('terminal no-mutation outcome is not authoritative');
+    if(phase==='submission_unknown'&&mutationCount<1)throw Error('unknown submission must retain a possible mutation');
+    if(['blocked','submit_rejected'].includes(phase)&&mutationCount!==0)throw Error('non-mutating outcome cannot contain a mutation');
     db.prepare('UPDATE execution_intents SET phase=?,outcome_json=?,updated_at=? WHERE idempotency_key=?').run(phase,JSON.stringify(outcome??{}),now,idempotencyKey);
     return {state:phase};
   });

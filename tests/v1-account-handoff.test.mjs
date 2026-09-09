@@ -15,3 +15,10 @@ test('active V1 lock refuses handoff',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'v1-account-handoff-'));fs.mkdirSync(path.join(root,'tmp'),{recursive:true});fs.writeFileSync(path.join(root,'tmp','run.lock'),'active');
   assert.throws(()=>beginV2AccountHandoff({v1Root:root,accountKey:'acct7',origin:'https://fixture.example'}),/lock is active/);
 });
+
+test('dead V1 lock owner does not permanently block a handoff',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'v1-account-handoff-'));fs.mkdirSync(path.join(root,'tmp'),{recursive:true});
+  fs.writeFileSync(path.join(root,'tmp','run.lock'),JSON.stringify({version:1,pid:2147483647,nonce:'stale'}));
+  const result=beginV2AccountHandoff({v1Root:root,accountKey:'acct7',origin:'https://fixture.example'});
+  assert.equal(result.state,'pending_v2');
+});
