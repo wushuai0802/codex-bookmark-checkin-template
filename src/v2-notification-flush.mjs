@@ -28,7 +28,7 @@ export async function flushV2Notifications({root=path.resolve('.'),legacyRoot,no
     const full=path.join(outputDir,name);let item;
     try { item=JSON.parse(fs.readFileSync(full,'utf8')); }
     catch { invalid++;continue; }
-    entries.push({file:name,full,item});
+    if(item?.state==='pending')entries.push({file:name,full,item});
   }
   entries.sort((a,b)=>{
     const at=Date.parse(String(a.item?.nextAttemptAt??'')),bt=Date.parse(String(b.item?.nextAttemptAt??''));
@@ -43,7 +43,8 @@ export async function flushV2Notifications({root=path.resolve('.'),legacyRoot,no
     processed++;
     const result=await deliverNotification(item,{now:now.toISOString(),send:async(payload)=>{
       if(config?.mode!=='command'||!config.executable)throw Error('sender_unavailable');
-      await sendCommand(config.executable,['checkin-report','--task-id','fabric_v2_canary','--name','V2 Canary 验收','--source','browser-fabric-v2','--status',payload.status,'--event-key',item.dedupeKey,'--summary',payload.summary,'--occurred-at',payload.observedAt],{windowsHide:true,timeout:60000,maxBuffer:65536});
+      const status=payload.status==='signed'?'success':payload.status==='already_signed'?'already_done':'needs_attention';
+      await sendCommand(config.executable,['checkin-report','--task-id','fabric_v2_canary','--name','V2 Canary 验收','--source','browser-fabric-v2','--status',status,'--event-key',item.dedupeKey,'--summary',payload.summary,'--occurred-at',payload.observedAt],{windowsHide:true,timeout:60000,maxBuffer:65536});
     }});
     writeJsonAtomic(full,result);
     if(result.state==='delivered')delivered++;else pending++;

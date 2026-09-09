@@ -17,7 +17,7 @@ try {
   }
   const report=await runCanary({task,execute:process.argv.includes('--execute')});
   console.log(JSON.stringify(report,null,2));
-  if(report.output){
+  if(process.argv.includes('--execute')&&report.output){
     const child=spawn(process.execPath,[path.join(path.resolve('.'),'scripts','notify-canary-result.mjs'),report.output],{windowsHide:true,stdio:'ignore'});
     const code=await new Promise((resolve,reject)=>{child.once('exit',resolve);child.once('error',reject);});
     if(code!==0)process.exitCode=2;
