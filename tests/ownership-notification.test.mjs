@@ -9,6 +9,8 @@ test('ownership changes only after V1 drain and authoritative V2 success',()=>{
   assert.equal(blocked.changed,false);
   const switched=evaluateOwnershipTransition({v1:{runLockActive:false,owner:'legacy-checkin'},v2:{owner:'v2-worker',phase:'succeeded'},receipt:{authoritative:true},now});
   assert.equal(switched.state,'v2-worker'); assert.equal(switched.changed,true);
+  const observed=evaluateOwnershipTransition({v1:{runLockActive:false,owner:'legacy-checkin'},v2:{owner:'v2-worker',phase:'already_done'},receipt:{authoritative:true},now});
+  assert.equal(observed.state,'legacy-checkin'); assert.equal(observed.changed,false);
   assert.equal(rollbackOwnership({v2:{owner:'v2-worker'},reason:'verification_failed',now}).state,'legacy-checkin');
 });
 

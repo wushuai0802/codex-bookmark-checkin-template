@@ -19,7 +19,7 @@
     "check:shadow-history": "node src/shadow-acceptance.mjs",
     "check:canary-gate": "node scripts/check-canary-gate.mjs",
     "check:structure": "node scripts/check-structure.mjs",
-    "lint:domain": "node --check src/ownership-transition.mjs && node --check src/notification-delivery.mjs && node --check src/scheduler.mjs",
+    "lint:domain": "node --check src/ownership-transition.mjs && node --check src/notification-delivery.mjs && node --check src/scheduler.mjs && node --check src/canary-report-view.mjs",
     "shadow": "node src/shadow-run.mjs",
     "dashboard": "node src/dashboard-server.mjs",
     "export:nas": "node scripts/export-nas-bundle.mjs",

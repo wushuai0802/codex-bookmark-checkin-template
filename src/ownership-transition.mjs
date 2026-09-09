@@ -1,4 +1,6 @@
-const terminalSuccess=new Set(['succeeded','already_done']);
+// Only a V2 mutation can prove that ownership is safe to transfer. An
+// already_done observation may come from V1 or another actor and stays legacy.
+const terminalSuccess=new Set(['succeeded']);
 
 export function evaluateOwnershipTransition({v1={runLockActive:false,owner:'legacy-checkin'},v2={},receipt={},now=new Date().toISOString()}={}) {
   const reasons=[];

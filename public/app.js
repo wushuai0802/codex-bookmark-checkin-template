@@ -525,6 +525,16 @@ function renderSettings(data) {
     }
     append(section,gates,el('p','migration-blockers',migration.blockers.length?`阻断项：${migration.blockers.join(' · ')}`:'没有阻断项'));content.append(section);
   }
+  if(Array.isArray(data?.canaryResults) && data.canaryResults.length){
+    const section=el('section','canary-results');
+    append(section,el('h2',null,'V2 Canary 执行记录'),el('p','muted','显示真实 Worker 回执；通知投递与签到执行分开统计。'));
+    for(const result of data.canaryResults){
+      const row=el('div','setting-row');
+      append(row,el('div',null,el('strong',null,`${result.accountKey??'账号'} · ${result.businessDate??'日期'}`),el('span','subtext',`${result.mode} · ${result.phase}`)),el('div',null,el('strong',null,result.stage??'unknown'),el('span','subtext',`提交 ${result.mutationCount??'—'} 次 · 通知 ${result.notification?.state??'未记录'}`)));
+      section.append(row);
+    }
+    content.append(section);
+  }
   const note = el('div', 'alert', '管理动作目前仅保留控制面展示，不会修改旧签到项目。进入 V2.0 candidate 前，需要完成 NAS 影子观察和人工批准。'); note.style.marginTop = '18px'; content.append(note);
 }
 

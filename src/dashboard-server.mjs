@@ -12,6 +12,7 @@ import { displayIdentity, shortLabel } from './display-identity.mjs';
 import {createWorkerGateway} from './worker-gateway.mjs';
 import {publicAdapterObservations} from './adapter-observations.mjs';
 import {migrationReadiness} from './adapter-registry.mjs';
+import {publicCanaryResults} from './canary-report-view.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -457,6 +458,7 @@ export function createDashboardServer({
     view.migrationReadiness=migrationReadiness({snapshot:view.snapshot,acceptance:view.readiness,adapterObservations:view.adapterObservations});
     view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), fresh: timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) };
     view.controls = readControlState(controlFile).sites;
+    view.canaryResults = publicCanaryResults(root);
     view.sites = view.sites.map(site => ({ ...site, control: view.controls[site.origin] ?? { policy: 'monitor', note: '', updatedAt: null } }));
     return view;
   }
@@ -531,6 +533,7 @@ export function createDashboardServer({
       }
       else if (requestUrl.pathname === '/api/pt-status') sendJson(response, 200, view.ptStatus ?? { schemaVersion: 1, mode: 'status_observe_only', counts: { sites: 0, inLegacyPlan: 0, externalOnly: 0, fresh: 0, discrepancies: 0, supplementCandidates: 0, status: {} }, executionEnabled: false, sites: [] });
       else if (requestUrl.pathname === '/api/accounts') sendJson(response, 200, { accounts: view.accounts, total: view.accounts.length });
+      else if (requestUrl.pathname === '/api/canary-results') sendJson(response, 200, { results:view.canaryResults });
       else if (requestUrl.pathname === '/api/ledger') sendJson(response, 200, { records: view.ledger, total: view.ledger.length });
       else if (requestUrl.pathname === '/api/config') sendJson(response, 200, { mode: 'shadow_read_only', mutationDisabled: false, executionEnabled: false, executionOwner: 'legacy-checkin', authConfigured: authRequired, dataDirectoryConfigured: true });
       else if (requestUrl.pathname === '/api/controls') {
