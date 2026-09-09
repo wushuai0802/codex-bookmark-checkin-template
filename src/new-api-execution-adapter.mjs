@@ -37,18 +37,23 @@ export function createNewApiExecutionAdapter({origin, rule} = {}) {
     async identity({expectedIdentity, context = {}} = {}) {
       if (!/^\d{1,20}$/.test(String(expectedIdentity ?? ''))) return null;
       const response = await pageFor(context).evaluate(async ({path}) => {
-        const res = await fetch(path, {credentials:'include', headers:{Accept:'application/json'}});
-        return {status:res.status, body:await res.json().catch(() => null)};
+        const ids=[];
+        const extract=value=>value?.id??value?.user?.id??value?.data?.id??value?.data?.user?.id??null;
+        const uid=localStorage.getItem('uid'); if(/^\d{1,20}$/.test(String(uid??''))) ids.push(String(uid));
+        for(const storage of [localStorage,sessionStorage]) for(let i=0;i<storage.length;i++) try { const id=extract(JSON.parse(storage.getItem(storage.key(i))||'null')); if(id!=null) ids.push(String(id)); } catch { /* unrelated storage */ }
+        const unique=[...new Set(ids)]; if(unique.length!==1) return {status:200,body:{success:false,storageIds:unique}};
+        const res=await fetch(path, {credentials:'include', headers:{Accept:'application/json','New-Api-User':unique[0]}});
+        return {status:res.status, body:await res.json().catch(() => null), storageIds:unique};
       }, {path:paths.selfPath});
       const user = response?.body?.success === true ? (response.body.data?.user ?? response.body.data) : null;
-      if (response?.status !== 200 || user?.id == null || String(user.id) !== String(expectedIdentity)) return null;
+      if (response?.status !== 200 || !response.storageIds?.includes(String(expectedIdentity)) || user?.id == null || String(user.id) !== String(expectedIdentity)) return null;
       return {userId:String(user.id), username:typeof user.username === 'string' ? user.username.slice(0,80) : null, origin:siteOrigin};
     },
     async read_status({identity, businessDate, context = {}} = {}) {
-      const response = await pageFor(context).evaluate(async ({path,month}) => {
-        const res = await fetch(`${path}?month=${encodeURIComponent(month)}`, {credentials:'include', headers:{Accept:'application/json'}});
+      const response = await pageFor(context).evaluate(async ({path,month,userId}) => {
+        const res = await fetch(`${path}?month=${encodeURIComponent(month)}`, {credentials:'include', headers:{Accept:'application/json','New-Api-User':userId}});
         return {status:res.status, body:await res.json().catch(() => null)};
-      }, {path:paths.statusPath, month:String(businessDate).slice(0,7)});
+      }, {path:paths.statusPath, month:String(businessDate).slice(0,7), userId:String(identity?.userId??'')});
       if (response?.status !== 200) return {state:'unknown', reason:responseCause(response)};
       const stats = response.body?.data?.stats, records = stats?.records;
       if (!Array.isArray(records)) return {state:'unknown', reason:'invalid_response'};

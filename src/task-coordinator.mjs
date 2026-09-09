@@ -6,7 +6,7 @@ export async function runObservedTask({adapterDefinition,origin,accountKey,busin
  const identity=await adapter.methods.identity({origin,accountKey,expectedIdentity,context});
  if(!identity?.userId)return {task:transitionTask(task,'blocked',{reason:'identity_missing'}),mutationCount:0,stage:'identity'};
  let current=transitionTask(task,'identity_verified',{evidence:{authoritative:true,source:'identity'},reason:'identity_verified'});
- const status=await adapter.methods.read_status({origin,accountKey,identity,context});
+ const status=await adapter.methods.read_status({origin,accountKey,businessDate,identity,context});
  if(status?.state==='already_done'||status?.state==='not_available')return {task:transitionTask(current,'status_read',{evidence:status.evidence}),mutationCount:0,stage:status.state};
  current=transitionTask(current,'status_read',{evidence:status?.evidence??null});
  if(status?.state!=='not_signed')return {task:transitionTask(current,'blocked',{reason:status?.reason??'status_unknown'}),mutationCount:0,stage:'status'};

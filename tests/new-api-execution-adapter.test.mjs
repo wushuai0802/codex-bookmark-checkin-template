@@ -9,7 +9,7 @@ function fakePage(responses) {
 
 test('New API execution adapter submits once and verifies dated status', async () => {
   const fake=fakePage([
-    {status:200,body:{success:true,data:{id:7,username:'reader'}}},
+    {status:200,storageIds:['7'],body:{success:true,data:{id:7,username:'reader'}}},
     {status:200,body:{success:true,data:{stats:{checked_in_today:false,records:[]}}}},
     {status:200,body:{success:true,message:'签到成功，获得 $25'}},
     {status:200,body:{success:true,data:{stats:{checked_in_today:true,records:[{checkin_date:'2026-09-09',user_id:7,quota_awarded:25}]}}}}
