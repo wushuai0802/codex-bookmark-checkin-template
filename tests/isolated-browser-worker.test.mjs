@@ -11,13 +11,17 @@ const adapter={id:'new-api.execute.v1',origin:task.origin,capabilities:['identit
 
 test('isolated browser worker binds only dedicated offscreen profile', async()=>{
   let launched=null,closed=false;
-  const result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'D:/worker-data/account-7/chrome-user-data',dedicatedRoot:'D:/worker-data',executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async(profile,options)=>{launched={profile,options};return {pages:()=>[{url:'about:blank',goto:async()=>{}}],close:async()=>{closed=true}};}});
+  const root='D:/worker-data', result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'D:/worker-data/data/v2-profiles/acct7/chrome-user-data',dedicatedRoot:root,executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async(profile,options)=>{launched={profile,options};return {pages:()=>[{url:'about:blank',goto:async()=>{}}],close:async()=>{closed=true}};}});
   assert.equal(result.task.phase,'already_done'); assert.equal(result.stage,'already_done'); assert.equal(result.worker.windowMode,'offscreen');
   assert.equal(launched.options.headless,false); assert.ok(launched.options.args.includes('--window-position=-32000,-32000')); assert.equal(closed,true);
 });
 
 test('worker rejects normal Chrome profile paths', async()=>{
   await assert.rejects(()=>runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'C:/Users/test/AppData/Local/Google/Chrome/User Data/Default',dedicatedRoot:'C:/Users/test',executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async()=>({close(){}})}),/forbidden/);
+});
+
+test('worker rejects a profile bound to another V2 account', async()=>{
+  await assert.rejects(()=>runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'D:/worker-data/data/v2-profiles/acct8/chrome-user-data',dedicatedRoot:'D:/worker-data',executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async()=>({close(){}})}),/not bound to its V2 account/);
 });
 
 test('worker accepts an explicitly drained V1 profile handoff', async()=>{

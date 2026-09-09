@@ -28,5 +28,5 @@ export function markProfileReady(record, {identity, username = null, observedAt 
   if (!identity || String(identity) !== record.expectedIdentity) throw Error('verified identity mismatch');
   if (!Number.isFinite(Date.parse(observedAt))) throw Error('identity timestamp invalid');
   return {...record, state:'ready', identity:String(identity), username:typeof username === 'string' ? username.slice(0,80) : null,
-    identityVerifiedAt:new Date(observedAt).toISOString(), v1TaskStopEligible:true};
+    identityVerifiedAt:new Date(observedAt).toISOString(), v1TaskStopEligible:false};
 }

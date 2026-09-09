@@ -7,7 +7,7 @@ import {loadRuntimeConfig} from '../src/runtime-config.mjs';
 
 const root=path.resolve('.');
 const accountKey=process.argv[2]??'api42-20603';
-const businessDate=process.argv[3]??new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(Date.now()+86_400_000));
+const businessDate=process.argv[3]??new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
 const registry=JSON.parse(fs.readFileSync(path.join(root,'outputs','v2-profile-registry.json'),'utf8'));
 const profile=registry.profiles.find(item=>item.accountKey===accountKey);
 if(!profile||profile.state!=='ready') throw Error('profile is not V2-ready');

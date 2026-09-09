@@ -27,9 +27,8 @@ if (args.help) {
   process.exit(0);
 }
 const output = path.resolve(args.out);
-if (output === projectRoot || output.startsWith(`${projectRoot}${path.sep}src${path.sep}`) || output.startsWith(`${projectRoot}${path.sep}public${path.sep}`)) {
-  throw new Error('refusing to export over project source');
-}
+const outputsRoot=path.join(projectRoot,'outputs');
+if (output === outputsRoot || !output.startsWith(`${outputsRoot}${path.sep}`)) throw new Error('NAS bundle output must be a dedicated subdirectory of outputs');
 fs.rmSync(output, { recursive: true, force: true });
 fs.mkdirSync(output, { recursive: true });
 for (const name of ['Dockerfile', 'compose.nas.yaml', 'compose.worker.yaml', '.dockerignore', 'package.json', 'package-lock.json']) copyRequired(path.join(projectRoot, name), path.join(output, name));

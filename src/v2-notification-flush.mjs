@@ -22,12 +22,22 @@ export async function flushV2Notifications({root=path.resolve('.'),legacyRoot,no
   const config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config','config.json'),'utf8')).notification;
   const outputDir=path.join(path.resolve(root),'outputs');
   if(!fs.existsSync(outputDir))return {processed:0,delivered:0,pending:0,invalid:0};
-  const files=fs.readdirSync(outputDir).filter(name=>/^notification-notice_[a-f0-9]+\.json$/.test(name)).slice(-100);
   let processed=0,delivered=0,pending=0,invalid=0;
-  for(const file of files){
-    const full=path.join(outputDir,file);let item;
+  const entries=[];
+  for(const name of fs.readdirSync(outputDir).filter(name=>/^notification-notice_[a-f0-9]+\.json$/.test(name))){
+    const full=path.join(outputDir,name);let item;
     try { item=JSON.parse(fs.readFileSync(full,'utf8')); }
     catch { invalid++;continue; }
+    entries.push({file:name,full,item});
+  }
+  entries.sort((a,b)=>{
+    const at=Date.parse(String(a.item?.nextAttemptAt??'')),bt=Date.parse(String(b.item?.nextAttemptAt??''));
+    return (Number.isFinite(at)?at:Number.MAX_SAFE_INTEGER)-(Number.isFinite(bt)?bt:Number.MAX_SAFE_INTEGER);
+  });
+  const files=entries.slice(0,100);
+  pending=entries.slice(100).filter(entry=>entry.item?.state==='pending').length;
+  for(const entry of files){
+    const {file,full,item}=entry;
     if(item?.state!=='pending')continue;
     if(!due(item,now.getTime())){pending++;continue;}
     processed++;

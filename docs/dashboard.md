@@ -90,7 +90,10 @@ outside the web process.
   history. These policies are V2 metadata only and do not pause the legacy
   runner yet.
 - **Accounts:** isolated account references and per-account task/status
-  summaries; account IDs and labels are deliberately not exposed.
+  summaries. Verified site usernames and site user IDs may be shown to
+  distinguish accounts; passwords, cookies, tokens, upstream login secrets and
+  raw credential values are never shown. Site user IDs and upstream provider
+  IDs (for example LinuxDO IDs) are separate identities.
 - **Run history:** append-only shadow-ledger records, plan drift, status
   changes, task counts, and health state.
 - **Settings:** explicit display of execution ownership, read-only mode, and

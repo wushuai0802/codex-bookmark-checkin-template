@@ -2,13 +2,16 @@ import path from 'node:path';
 import {runObservedTask} from './task-coordinator.mjs';
 import {validateProfileHandoff} from './profile-handoff.mjs';
 
-function safeProfilePath(profileDir, dedicatedRoot) {
+function safeProfilePath(profileDir, dedicatedRoot, accountKey) {
   const profile = path.resolve(String(profileDir ?? ''));
   const root = path.resolve(String(dedicatedRoot ?? ''));
   if (!profile || !root || profile === root) throw Error('dedicated browser profile is required');
   const relative = path.relative(root, profile);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw Error('browser profile is outside dedicated root');
   if (/chrome[\\/](user data|default)|\\Google\\Chrome\\User Data[\\/]/i.test(profile)) throw Error('user Chrome profile is forbidden');
+  const accountRoot=path.resolve(root,'data','v2-profiles',String(accountKey??''));
+  const accountRelative=path.relative(accountRoot,profile);
+  if(!accountKey||!accountRelative||accountRelative.startsWith('..')||path.isAbsolute(accountRelative))throw Error('browser profile is not bound to its V2 account');
   return profile;
 }
 
@@ -25,7 +28,7 @@ export async function runIsolatedBrowserTask({task, adapterDefinition, profileDi
   if (!task || typeof task !== 'object') throw Error('task is required');
   const profile = profileMode === 'v1_handoff'
     ? (validateProfileHandoff(profileHandoff, {accountKey:task.accountKey, origin:task.origin, profileDir:profileDir ?? profileHandoff?.profileDir}), path.resolve(profileHandoff.profileDir))
-    : safeProfilePath(profileDir, dedicatedRoot);
+    : safeProfilePath(profileDir, dedicatedRoot, task.accountKey);
   if (typeof executablePath !== 'string' || !executablePath.trim()) throw Error('browser executable is required');
   if (typeof launchPersistentContext !== 'function') throw Error('browser launcher is required');
   let context;

@@ -24,7 +24,7 @@ test('canary runner source enforces explicit execute and V1 drain gates',()=>{
 function fixture(root,day,responses){
   const page={goto:async()=>({status:()=>200}),evaluate:async()=>responses.shift()};
   const identity=taskIdentity({businessDate:day,logicalSiteKey:'https://fixture.example',accountKey:'acct7'});
-  return {task:{executionEnabled:false,preconditions:{profileReady:true,identityVerified:true,v1MustBeStoppedBeforeMutation:true},taskId:identity.taskId,planUnitId:identity.planUnitId,planHash:'a'.repeat(64),businessDate:day,origin:'https://fixture.example',accountKey:'acct7',accountId:'7',profileDir:path.join(root,'profiles','acct7'),adapterId:'new-api.execute.v1',executionOwner:'legacy-checkin',adapterRule:{signInPath:'/api/user/checkin'}},executablePath:path.join(root,'chrome.exe'),launchPersistentContext:async()=>({pages:()=>[page],close:async()=>{}})};
+  return {task:{executionEnabled:false,preconditions:{profileReady:true,identityVerified:true,v1MustBeStoppedBeforeMutation:true},taskId:identity.taskId,planUnitId:identity.planUnitId,planHash:'a'.repeat(64),businessDate:day,origin:'https://fixture.example',accountKey:'acct7',accountId:'7',profileDir:path.join(root,'data','v2-profiles','acct7','chrome-user-data'),adapterId:'new-api.execute.v1',executionOwner:'legacy-checkin',adapterRule:{signInPath:'/api/user/checkin'}},executablePath:path.join(root,'chrome.exe'),launchPersistentContext:async()=>({pages:()=>[page],close:async()=>{}})};
 }
 
 test('read-only canary stops at not_signed without a submit',async()=>{
