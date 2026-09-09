@@ -31,5 +31,9 @@ jobs:
         run: npm test
       - name: Run syntax checks
         run: npm run lint
+      - name: Run all module checks
+        run: npm run lint:all
+      - name: Check module boundaries
+        run: npm run check:structure
       - name: Audit dependencies
         run: npm audit --omit=dev
