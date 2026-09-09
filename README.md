@@ -69,6 +69,11 @@ Contracts live in `schemas/`. Architecture and the staged migration are in
 is intentionally not an alpha capability; it is planned for V2.1 after a
 read-only review gate.
 
+The module boundaries and dependency rules are documented in
+`docs/project-structure.md`. New site support must enter through an adapter;
+site logic must not import the scheduler, dashboard, V1 executor or
+notification sender.
+
 The dashboard capability map and NAS reverse-proxy instructions are in
 `docs/dashboard.md` and `docs/nas-deployment.md`.
 
