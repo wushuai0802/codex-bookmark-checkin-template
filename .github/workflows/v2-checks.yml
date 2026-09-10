@@ -33,6 +33,9 @@ jobs:
         run: npm run lint
       - name: Run all module checks
         run: npm run lint:all
+      - name: Verify dashboard browser interactions
+        if: runner.os == 'Linux'
+        run: node scripts/check-ui-navigation.mjs
       - name: Check module boundaries
         run: npm run check:structure
       - name: Audit dependencies

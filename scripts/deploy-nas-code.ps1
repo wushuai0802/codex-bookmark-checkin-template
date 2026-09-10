@@ -83,6 +83,10 @@ function Send-TarArchiveOverSsh {
 }
 
 $root=Split-Path -Parent $PSScriptRoot
+& node --check (Join-Path $root 'public/app.js')
+if($LASTEXITCODE -ne 0){throw 'Dashboard syntax check failed; deployment stopped'}
+& node (Join-Path $root 'scripts/check-ui-navigation.mjs')
+if($LASTEXITCODE -ne 0){throw 'Dashboard browser interaction check failed; deployment stopped'}
 if(-not $PSCmdlet.ShouldProcess($RemoteRoot,'Deploy V2 dashboard code')){
   Write-Output 'WhatIf: no NAS files or containers changed.'
   return

@@ -254,7 +254,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
   .attention-foot { flex-wrap: wrap; }
   .theme-control { padding-top: 20px; }
   .nav-section-label { display:none; }
-  .notification-button { display:none; }
+  .notification-button { display:inline-grid; place-items:center; flex:0 0 34px; }
   .scope-divider { display:none; }
 }
 :root { --motion-fast:140ms; --motion-panel:240ms; --motion-ease:cubic-bezier(.22,1,.36,1); }

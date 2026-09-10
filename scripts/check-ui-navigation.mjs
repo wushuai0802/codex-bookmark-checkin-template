@@ -54,8 +54,36 @@ try {
       await page.waitForFunction(() => document.querySelector('.calendar-day')
         && document.querySelector('#view-calendar').classList.contains('active-view'));
       assert.equal(new URL(page.url()).hash, '#calendar');
+      // Repeated attention clicks must not hide every view or restart scrolling.
+      await page.locator('#attention-jump').click();
+      await page.waitForFunction(() => location.hash === '#overview');
+      await page.waitForTimeout(1000);
+      const scrollBefore = await page.evaluate(() => scrollY);
+      for (let i = 0; i < 5; i++) {
+        // Click the visible sticky button as a user would; locator.click can
+        // scroll its original flow position into view on narrow layouts.
+        const box = await page.locator('#attention-jump').boundingBox();
+        assert.ok(box && box.y >= 0 && box.y + box.height <= viewport.height);
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      }
+      await page.waitForTimeout(900);
+      const scrollAfter = await page.evaluate(() => scrollY);
+      assert.ok(Math.abs(scrollAfter - scrollBefore) <= 2, `repeated attention scroll: ${scrollBefore} -> ${scrollAfter}`);
+      assert.equal(await page.locator('#attention-badge').isVisible(), false);
+      assert.equal(await page.locator('.active-view').count(), 1);
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector('#service-status').textContent.includes('已连接'));
+      assert.equal(await page.locator('#attention-badge').isVisible(), false);
+      for (const view of ['tasks', 'accounts', 'pt-status', 'sites', 'ledger', 'settings']) {
+        if (mobile) await page.locator('#menu-toggle').click();
+        await page.locator(`.nav-item[data-view="${view}"]`).click();
+        await page.waitForFunction(view => document.querySelector(`#view-${view}`).classList.contains('active-view') && !document.querySelector('.main-content').inert, view);
+      }
+      await page.locator('#refresh-btn').click();
+      await page.waitForFunction(() => !document.querySelector('#refresh-btn').disabled);
+      assert.equal(await page.locator('#app-error').isVisible(), false);
       assert.deepEqual(errors, []);
-      console.log(`PASS ${viewport.width}x${viewport.height}: sidebar, day detail, back, reload, layout`);
+      console.log(`PASS ${viewport.width}x${viewport.height}: all navigation, calendar, back, refresh, layout, attention read/reload/repeated-click stability; zero JS errors`);
     } finally { await context.close(); }
   }
   console.log(`Synthetic UI screenshots: ${artifacts}`);
