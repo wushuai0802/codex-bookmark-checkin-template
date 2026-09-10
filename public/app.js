@@ -492,6 +492,18 @@ function renderLedgerDetails(record) {
   dialog.append(technical); mountDialog(dialog, previousFocus);
 }
 
+function renderCalendar(data) {
+  const view=$('#checkin-calendar'),summary=$('#calendar-summary'),detail=$('#calendar-detail');if(!view||!summary||!detail)return;
+  const results=Array.isArray(data?.canaryResults)?data.canaryResults:[],byDate=new Map();
+  for(const item of results){const date=String(item.businessDate??'');if(!/^\d{4}-\d{2}-\d{2}$/.test(date))continue;const list=byDate.get(date)??[];list.push(item);byDate.set(date,list);}
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date()),month=today.slice(0,7),first=new Date(`${month}-01T00:00:00+08:00`),last=new Date(first);last.setMonth(last.getMonth()+1);last.setDate(0);
+  const offset=(first.getDay()+6)%7,days=last.getDate(),labels=['一','二','三','四','五','六','日'];view.replaceChildren();summary.textContent=`${month.replace('-','年')}月 · ${results.length} 条最近 Canary 回执`;
+  for(const label of labels)view.append(el('span','calendar-weekday',label));
+  for(let i=0;i<offset;i++)view.append(el('span','calendar-empty',''));
+  const stateOf=list=>{if(!list?.length)return 'none';if(list.some(x=>x.stage==='succeeded'))return 'success';if(list.some(x=>x.stage==='already_done'))return 'done';if(list.some(x=>['submission_unknown','blocked','failed'].includes(x.stage)))return 'warn';return 'observe';};
+  for(let day=1;day<=days;day++){const date=`${month}-${String(day).padStart(2,'0')}`,list=byDate.get(date)??[],button=el('button',`calendar-day ${stateOf(list)}${date===today?' today':''}`,String(day));button.type='button';button.setAttribute('aria-label',`${date} ${list.length?stateOf(list):'无回执'}`);button.addEventListener('click',()=>{detail.textContent=list.length?`${date}：${list.map(x=>`${x.accountKey} · ${x.stage} · 提交 ${x.mutationCount??0} 次`).join('；')}`:`${date}：没有 Canary 回执`;});view.append(button);}
+}
+
 function renderSettings(data) {
   const snapshot = data?.snapshot ?? {};
   const content = $('#settings-content'); content.replaceChildren();
@@ -564,6 +576,7 @@ function renderAll() {
   const data = state.data;
   if (!data) return;
   renderOverview(data.snapshot);
+  renderCalendar(data);
   renderV2ExecutionSummary(data);
   let integrity = $('#integrity-note');
   if (!integrity) { integrity=el('div','scope-banner');integrity.id='integrity-note';$('#daily-summary').after(integrity); }
@@ -619,7 +632,7 @@ function renderView(view) {
   state.view = view;
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
   document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active-view', item.id === `view-${view}`));
-  const titles = { overview: '签到运行总览', tasks: '任务管理', 'pt-status': 'PT 状态', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '设置与边界' };
+  const titles = { overview: '签到运行总览', calendar: '签到日历', tasks: '任务管理', 'pt-status': 'PT 状态', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '设置与边界' };
   $('#page-title').textContent = titles[view] ?? titles.overview;
   renderRecentPages(view);
   const context=$('#topbar-context');if(context)context.textContent={overview:'今日计划 · 影子观察',tasks:'执行任务 · 结果与证据','pt-status':'全量 PT 监测 · 只读',sites:'书签站点 · 配置视图',accounts:'账号身份 · 隔离视图',ledger:'审计历史 · 追加记录',settings:'控制平面 · 边界与诊断'}[view]??'控制平面';
