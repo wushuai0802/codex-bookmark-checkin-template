@@ -8,7 +8,8 @@ const app=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
 test('sticky management bar is a compact recent-pages shortcut, not duplicate full navigation',()=>{
  assert.match(html,/aria-label="最近访问页面"/);
  assert.match(css,/\.topbar-shell\s*\{[^}]*position:sticky/);assert.match(css,/pointer-events:none/);assert.match(app,/topbar-context/);assert.match(app,/renderRecentPages/);
- assert.equal(Object.keys(recentLabels).length,7);
+ assert.equal(Object.keys(recentLabels).length,8);
+ assert.ok(recentPages([], 'calendar').includes('calendar'));
 });
 test('header hysteresis shrinks only after scrolling and expands near the top',()=>{
  assert.equal(compactAt(95,false),false);assert.equal(compactAt(96,false),true);

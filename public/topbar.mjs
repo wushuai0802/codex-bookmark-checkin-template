@@ -5,7 +5,7 @@ export function compactAt(scrollY, wasCompact) {
   return wasCompact ? y > 12 : y >= 96;
 }
 
-export const recentLabels = {overview:'总览',tasks:'任务', 'pt-status':'PT 监测',sites:'站点',accounts:'账号',ledger:'运行记录',settings:'设置'};
+export const recentLabels = {overview:'总览',calendar:'签到日历',tasks:'任务', 'pt-status':'PT 监测',sites:'站点',accounts:'账号',ledger:'运行记录',settings:'设置'};
 export function recentPages(previous, current) {
   const known = Array.isArray(previous) ? previous.filter(view => Object.hasOwn(recentLabels, view)) : [];
   const ordered = [...new Set(known)].filter(view => view !== 'overview' && view !== current);

@@ -1,4 +1,4 @@
-const views = new Set(['overview', 'tasks', 'pt-status', 'sites', 'accounts', 'ledger', 'settings']);
+const views = new Set(['overview', 'calendar', 'tasks', 'pt-status', 'sites', 'accounts', 'ledger', 'settings']);
 
 export function normalizeRoute(value = {}) {
   return { fabricNav: 1, view: views.has(value.view) ? value.view : 'overview',

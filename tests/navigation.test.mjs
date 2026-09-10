@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createNavigation, routeFromHash, routeHash } from '../public/navigation.mjs';
+import { recentLabels } from '../public/topbar.mjs';
 
 function harness(hash = '') {
   const stack = [{ state: null, url: hash }]; let index = 0, scroll = 0, changes = [];
@@ -41,6 +43,32 @@ test('initial deep link and route filters survive reload', () => {
   assert.equal(route.view,'tasks'); assert.equal(route.query,'example reader');
   assert.equal(routeHash(route),'#tasks?q=example+reader&status=success');
   assert.equal(routeFromHash('#invalid').view,'overview');
+});
+
+test('every sidebar destination has a route, view, and recent-page label', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const destinations = [...html.matchAll(/data-view="([^"]+)"/g)].map(match => match[1]);
+  assert.ok(destinations.includes('calendar'));
+  for (const view of destinations) {
+    assert.equal(routeFromHash(`#${view}`).view, view);
+    assert.equal(routeHash(routeFromHash(`#${view}`)), `#${view}`);
+    assert.ok(html.includes(`id="view-${view}"`), `missing view: ${view}`);
+    assert.ok(recentLabels[view], `missing recent-page label: ${view}`);
+  }
+});
+
+test('calendar menu navigation survives reload and back returns to the source page', () => {
+  const h = harness();
+  h.nav.openOverlay('menu');
+  h.nav.navigate({ view: 'calendar' });
+  assert.equal(h.nav.current.view, 'calendar');
+  assert.equal(h.nav.current.overlay, null);
+  assert.equal(h.stack.length, 2);
+  assert.equal(h.changes.at(-1).view, 'calendar');
+  assert.equal(harness('#calendar').nav.current.view, 'calendar');
+  h.back();
+  assert.equal(h.nav.current.view, 'overview');
+  assert.equal(h.nav.current.overlay, null);
 });
 
 test('selecting current page from menu consumes menu instead of duplicating the page', () => {
