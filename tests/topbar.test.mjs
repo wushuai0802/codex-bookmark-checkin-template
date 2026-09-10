@@ -25,3 +25,8 @@ test('recent pages pin home, deduplicate and bound history without storing priva
 test('topbar remains responsive and does not replace full mobile navigation',()=>{
  assert.match(css,/@media\(max-width:700px\)/);assert.match(html,/id="menu-toggle"/);assert.match(html,/id="main-sidebar"/);
 });
+
+test('desktop workspace uses the full area beside the sidebar',()=>{
+  const css=fs.readFileSync(new URL('../public/theme.css',import.meta.url),'utf8');
+  assert.match(css,/\.main-content \{ min-width: 0; width: auto; max-width: none; flex: 1 1 auto; \}/);
+});

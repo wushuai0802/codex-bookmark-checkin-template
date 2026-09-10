@@ -149,7 +149,7 @@
 .filters { flex-wrap:wrap; min-width:0; }
 #task-account { width:210px; max-width:100%; }
 @media(max-width:700px) { #task-account { width:100%; } .filters input { flex-basis:100%; width:100%; } .kpi-link { padding:16px 12px; } }
-.main-content { min-width: 0; }
+.main-content { min-width: 0; width: auto; max-width: none; flex: 1 1 auto; }
 .topbar-shell { position:sticky; top:0; z-index:20; height:64px; margin:-26px calc(-1 * clamp(22px,3.6vw,56px)) 18px; pointer-events:none; }
 .topbar { position:relative; display:grid; grid-template-columns:minmax(140px,1fr) minmax(0,380px) auto; align-items:center; gap:12px; height:64px; min-height:0; margin:0; padding:8px clamp(22px,3.6vw,56px); pointer-events:auto; background:var(--bg); border-bottom:1px solid transparent; transition:height 180ms var(--motion-ease),padding 180ms var(--motion-ease),box-shadow var(--motion-fast),border-color var(--motion-fast); }
 .topbar.no-recents { grid-template-columns:minmax(0,1fr) auto; }
