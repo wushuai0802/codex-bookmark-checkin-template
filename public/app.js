@@ -27,6 +27,46 @@ const STATUS_LABELS = {
   unreachable: '不可访问', failed: '失败', unknown: '未知', not_started:'未执行（缺少回执）'
 };
 
+// ============ 已读状态管理 ============
+let readNoticeIds = new Set();
+
+async function loadReadNotices() {
+  try {
+    const response = await fetch('/api/notices/read');
+    if (!response.ok) throw new Error('加载已读状态失败');
+    const data = await response.json();
+    readNoticeIds = new Set(data.ids || []);
+  } catch (error) {
+    console.error('加载已读状态失败:', error);
+  }
+}
+
+async function markNoticeAsRead(id) {
+  try {
+    await fetch('/api/notices/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [id] })
+    });
+    readNoticeIds.add(id);
+  } catch (error) {
+    console.error('标记已读失败:', error);
+  }
+}
+
+async function markAllNoticesAsRead(ids) {
+  try {
+    await fetch('/api/notices/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    ids.forEach(id => readNoticeIds.add(id));
+  } catch (error) {
+    console.error('批量标记已读失败:', error);
+  }
+}
+
 const $ = (selector) => document.querySelector(selector);
 
 function text(value, fallback = '—') {
@@ -185,10 +225,16 @@ function renderKpis(data) {
   const counts = data?.counts ?? {};
   const status = data?.status ?? {};
   const metrics = overviewMetrics(data);
+  
+  // 计算未读需关注数量
+  const unreadManual = (data?.tasks ?? []).filter(t => 
+    !['signed', 'already_signed', 'not_available'].includes(t.observedStatus) &&
+    !readNoticeIds.has(t.taskId)
+  ).length;
   const cards = [
     ['签到成功', metrics.success, data?.evidenceQuality ? `V1 报告 · 证据确认 ${data.evidenceQuality.verifiedSuccess} / 待核验 ${data.evidenceQuality.unverifiedSuccess}` : `共 ${metrics.eligible} 个开放签到项`, 'success'],
     ['未开放签到', metrics.unavailable, '单独统计，不算签到成功', 'not_available'],
-    ['尚未完成', metrics.pending, `${metrics.manual} 项需关注 · ${metrics.deferred} 项延后`, 'pending'],
+    ['尚未完成', metrics.pending, `${unreadManual} 项需关注 · ${metrics.deferred} 项延后`, 'pending'],
     ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, '同站多账号分别核验', '']
   ];
   const grid = $('#kpi-grid'); grid.replaceChildren();
@@ -311,22 +357,70 @@ function renderReadiness(gate) {
 }
 
 function renderAttention(tasks) {
+function renderAttention(tasks) {
   const pending = tasks.filter(t => !['signed', 'already_signed', 'not_available'].includes(t.observedStatus));
   const priority = { needs_attention: 0, login_required: 1, failed: 2, deferred: 3 };
   pending.sort((a, b) => (priority[a.observedStatus] ?? 4) - (priority[b.observedStatus] ?? 4));
-  $('#attention-count').textContent = `${pending.length} 项`;
-  $('#attention-badge')?.replaceChildren(document.createTextNode(String(pending.length)));
+  
+  const unreadPending = pending.filter(t => !readNoticeIds.has(t.taskId));
+  
+  $('#attention-count').textContent = `${unreadPending.length} 项`;
+  const badge = $('#attention-badge');
+  if (badge) {
+    badge.textContent = String(unreadPending.length);
+    badge.style.display = unreadPending.length > 0 ? '' : 'none';
+  }
+  
   const node = $('#attention-list'); node.replaceChildren();
-  if (!pending.length) { node.append(el('div', 'empty-state', '当前没有未解决的签到项。未开放的站点已单独统计。')); return; }
+  
+  if (!pending.length) { 
+    node.append(el('div', 'empty-state', '当前没有未解决的签到项。未开放的站点已单独统计。')); 
+    return; 
+  }
+  
+  const toolbar = el('div', 'attention-toolbar');
+  const markAllBtn = el('button', 'mark-all-read-btn', '全部标记为已读');
+  markAllBtn.addEventListener('click', async () => {
+    await markAllNoticesAsRead(pending.map(t => t.taskId));
+    renderView();
+  });
+  toolbar.append(markAllBtn);
+  node.append(toolbar);
+  
   for (const task of pending) {
+    const isRead = readNoticeIds.has(task.taskId);
     const row = el('article', 'attention-item');
+    if (isRead) row.classList.add('is-read');
+    
     const top = el('div', 'attention-top');
     let host; try { host = new URL(task.origin).host; } catch { host = task.origin; }
     append(top, el('strong', null, host), statusChip(task.observedStatus));
+    
+    if (!isRead) {
+      const unreadDot = el('span', 'unread-dot');
+      unreadDot.setAttribute('aria-label', '未读');
+      top.prepend(unreadDot);
+    }
+    
     const reason = el('p', 'attention-reason', task.evidence?.summary || '本次尚未取得明确结果。');
+    
     const foot = el('div', 'attention-foot');
     append(foot, el('span', null, task.observedStatus === 'deferred' ? '等待既有重试策略 · 面板不执行补签' : '需要复核身份或流程 · 不自动重复提交'));
+    
     const view = el('button', 'link-button', '查看任务 →');
+    view.addEventListener('click', async () => {
+      if (!isRead) {
+        await markNoticeAsRead(task.taskId);
+        renderView();
+      }
+      openTasks({ query: task.origin });
+    });
+    foot.append(view);
+    
+    append(row, top, reason, foot);
+    node.append(row);
+  }
+}
     view.addEventListener('click', () => openTasks({ query: task.origin })); foot.append(view);
     append(row, top, reason, foot); node.append(row);
   }
@@ -695,7 +789,8 @@ function applyTaskFilter() {
   renderTasks(tasks);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+
+  await loadReadNotices();
   renderRecentPages(state.view);
   installCompactTopbar({topbar:document.querySelector('.topbar')});
   const accountFilter = el('select'); accountFilter.id = 'task-account'; accountFilter.setAttribute('aria-label', '筛选账号');
@@ -728,7 +823,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   $('#refresh-btn').addEventListener('click', loadData);
-  $('#attention-jump')?.addEventListener('click', () => { switchView('overview'); $('#attention-list')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+  $('#attention-jump')?.addEventListener('click', () => { 
+    if(navigation.current.view !== 'overview') switchView('overview');
+    requestAnimationFrame(()=>{ $('#attention-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  });
   const saveFilters = () => { applyTaskFilter(); navigation.updateFilters({ query: $('#task-search').value, status: $('#task-status').value, account: $('#task-account').value }); };
   $('#task-search').addEventListener('input', saveFilters); $('#task-status').addEventListener('change', saveFilters); $('#task-account').addEventListener('change', saveFilters);
   $('#token-visibility').addEventListener('click', () => {

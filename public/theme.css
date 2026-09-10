@@ -312,3 +312,44 @@ body,.sidebar,.kpi,.site-card,.account-card,.ledger-entry { transition:backgroun
   body.sidebar-exiting .sidebar-backdrop { pointer-events:auto; }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none !important; animation:none !important; scroll-behavior:auto !important; } }
+
+/* 已读状态样式 */
+.task-item.read {
+  opacity: 0.6;
+}
+
+.task-item.read .task-title {
+  text-decoration: line-through;
+  color: #999;
+}
+
+.read-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 12px;
+  background: #e8e8e8;
+  color: #666;
+  border-radius: 3px;
+  margin-left: 8px;
+}
+
+.mark-all-read-btn {
+  margin: 12px 0;
+  padding: 8px 16px;
+  background: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.mark-all-read-btn:hover {
+  background: #45a049;
+}
+
+.mark-all-read-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
