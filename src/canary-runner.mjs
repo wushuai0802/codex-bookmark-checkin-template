@@ -28,7 +28,8 @@ function safeStoredEvidence(evidence) {
 
 function writeReport(root,task,report,enabled) {
   if(!enabled)return report;
-  const output=path.join(root,'outputs',`canary-result-${task.accountKey}-${task.businessDate}.json`);
+  const prefix=report.mode==='canary_read_only'?'canary-observation':'canary-result';
+  const output=path.join(root,'outputs',`${prefix}-${task.accountKey}-${task.businessDate}.json`);
   try { fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,JSON.stringify(report,null,2),'utf8');return {...report,output}; }
   catch { return {...report,persistenceError:report.persistenceError??'report_persist_failed',output:null}; }
 }
@@ -37,6 +38,8 @@ function parseOutcome(record) {
   if(typeof record?.outcome_json!=='string')return null;
   try { const value=JSON.parse(record.outcome_json); return value&&typeof value==='object'?value:null; } catch { return null; }
 }
+
+function parseIntent(record){if(typeof record?.intent_json!=='string')return null;try{const value=JSON.parse(record.intent_json);return value&&typeof value==='object'?value:null;}catch{return null;}}
 
 export async function runCanary({task,execute=false,root=path.resolve('.'),legacyRoot=null,executablePath=null,launchPersistentContext=null,writeOutput=true,recordOutcomeFn=recordOutcome,executionLock=null,captchaSolver=null}={}) {
   const runtime=loadRuntimeConfig(root);legacyRoot=legacyRoot??runtime.legacyRoot;executablePath=executablePath??runtime.chromeExecutable;
@@ -63,7 +66,7 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
   let launcher=launchPersistentContext;
   if(!launcher){const req=createRequire(path.join(root,'package.json'));let chromium;try{({chromium}=req('playwright-core'));}catch{throw Error('playwright-core dependency is required');}launcher=(profile,options)=>chromium.launchPersistentContext(profile,options);}
   const adapter=createExecutionAdapter({adapterId:task.adapterId,origin:task.origin,rule:task.adapterRule??{}}),executionKey=idempotencyKey({taskId:task.taskId,businessDate:task.businessDate});
-  let journal=null,ownedExecutionLock=false,handoffStarted=false,intentPrepared=false;
+  let journal=null,ownedExecutionLock=false,handoffStarted=false,intentPrepared=false,recoveryProof=null;
   if(execute) {
     if(!executionLock){executionLock=acquireExecutionLock(root);ownedExecutionLock=true;}
     try { journal=openExecutionJournal(process.env.CHECKIN_EXECUTION_JOURNAL??path.join(root,'data','v2-execution.sqlite'),legacyRoot); }
@@ -71,6 +74,7 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
     let reservation;
     try { reservation=reserveExecution(journal,{idempotencyKey:executionKey,taskId:task.taskId,planHash:task.planHash,accountKey:task.accountKey,origin:task.origin,businessDate:task.businessDate}); }
     catch(error) { try { journal.close(); } finally { if(ownedExecutionLock)releaseExecutionLock(executionLock); } throw error; }
+    if(reservation.recovered)recoveryProof=parseIntent(reservation.record)?.recoveryProof??null;
     if(reservation.duplicate){
       const phase=String(reservation.record?.phase??reservation.state),outcome=parseOutcome(reservation.record),completedAt=Number.isFinite(Date.parse(reservation.record?.updated_at))?new Date(reservation.record.updated_at).toISOString():null;
       let handoffPending=phase==='prepared'||phase==='submission_unknown';
@@ -100,7 +104,7 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
   }
   let result;
   try {
-    result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:task.profileDir,dedicatedRoot:root,executablePath,windowMode:'offscreen',allowMutation:execute,persistIntent:execute?async(intent)=>{recordPrepared(journal,intent);intentPrepared=true;quarantineV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey,reason:'prepared'});}:null,captchaSolver,launchPersistentContext:launcher});
+    result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:task.profileDir,dedicatedRoot:root,executablePath,windowMode:'offscreen',allowMutation:execute,persistIntent:execute?async(intent)=>{recordPrepared(journal,intent);intentPrepared=true;quarantineV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey,reason:'prepared'});}:null,recoveryProof,captchaSolver,launchPersistentContext:launcher});
     if(ownershipState==='active'&&['succeeded','already_done','not_available'].includes(result.stage)){
       try { const handoff=readV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey});if(!handoff||handoff.state!=='v2_owned'||handoff.origin!==task.origin||handoff.expiresAt!==null)result={...result,task:{...result.task,phase:'blocked'},stage:'blocked',reportPhase:'blocked',persistenceError:'active_handoff_missing',handoffPending:true}; }
       catch { result={...result,task:{...result.task,phase:'blocked'},stage:'blocked',reportPhase:'blocked',persistenceError:'active_handoff_unreadable',handoffPending:true}; }

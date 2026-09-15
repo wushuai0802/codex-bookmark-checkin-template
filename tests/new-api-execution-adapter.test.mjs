@@ -48,6 +48,16 @@ test('New API adapter marks a transport failure unknown instead of safe to repla
   assert.equal(result.state,'unknown'); assert.equal(result.actionMayHaveHappened,true);
 });
 
+test('New API POST passes an explicit body value into the browser request closure',async()=>{
+  const originalFetch=globalThis.fetch;let postedBody='unset';
+  globalThis.fetch=async(_path,options={})=>{postedBody=options.body;return {status:200,url:'https://fixture.example/api/user/checkin',text:async()=>JSON.stringify({success:true,message:'签到成功'})};};
+  try{
+    const page={evaluate:async(fn,args)=>fn(args)},adapter=createNewApiExecutionAdapter({origin:'https://fixture.example'});
+    const result=await adapter.methods.submit_once({identity:{userId:'7'},context:{page}});
+    assert.equal(result.state,'accepted');assert.equal(postedBody,undefined);
+  }finally{globalThis.fetch=originalFetch;}
+});
+
 test('New API adapter only accepts a real non-negative quota award',async()=>{
   const invalid=[false,'',[],{},' 25','01','1e2',-1,'-1'];
   for(const quota_awarded of invalid){

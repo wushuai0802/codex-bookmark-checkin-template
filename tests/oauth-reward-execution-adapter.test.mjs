@@ -31,6 +31,29 @@ test('Agent adapter uses the OAuth relogin flow instead of a guessed check-in en
   assert.ok(clicks.length>=1);
 });
 
+test('Agent adapter waits for a provider button rendered after the login page load',async()=>{
+  let rendered=false;const clicks=[];
+  const delayed={count:async()=>rendered?1:0,isVisible:async()=>rendered,waitFor:async()=>{rendered=true;},click:async()=>{clicks.push('provider');}};
+  const page={
+    current:'https://agentrouter.org/console',url(){return this.current;},goto:async url=>{page.current=String(url);},
+    evaluate:async(_fn,args)=>args?.expected?{status:200,storageIds:[String(args.expected)],body:{success:true,data:{id:Number(args.expected)}}}:{status:200,url:`https://agentrouter.org${args?.path??''}`,body:{success:true},text:''},
+    getByRole:()=>delayed,getByText:()=>delayed,waitForEvent:async()=>null,waitForLoadState:async()=>{},waitForURL:async()=>{},waitForTimeout:async()=>{}
+  };
+  const adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{provider:'GitHub'}});
+  const result=await adapter.methods.submit_once({identity:{userId:'336634'},context:{page}});
+  assert.equal(result.state,'accepted');assert.equal(clicks[0],'provider');assert.ok(clicks.length>=1);
+});
+
+test('GitHub provider accepts only its reviewed OAuth host family',async()=>{
+  const page={
+    current:'https://agentrouter.org/login',url(){return this.current;},goto:async url=>{page.current=String(url);},
+    evaluate:async(_fn,args)=>args?.expected?{status:200,storageIds:[String(args.expected)],body:{success:true,data:{id:Number(args.expected)}}}:{status:200,url:`https://agentrouter.org${args?.path??''}`,body:{success:true},text:''},
+    getByRole:()=>locator([]),getByText:()=>locator([]),waitForEvent:async()=>({url:()=> 'https://github.com/login/oauth/authorize',waitForLoadState:async()=>{},waitForURL:async()=>{},getByRole:()=>({count:async()=>0,isVisible:async()=>false})}),waitForTimeout:async()=>{}
+  };
+  const adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{provider:'GitHub'}});
+  assert.equal((await adapter.methods.submit_once({identity:{userId:'336634'},context:{page}})).state,'accepted');
+});
+
 test('OAuth reward status requires the current day, account, type, and amount',async()=>{
   const day='2026-09-15',calls=[];
   const page={

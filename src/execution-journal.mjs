@@ -16,6 +16,19 @@ function openDb(file, legacyRoot) {
     phase TEXT NOT NULL, intent_json TEXT NOT NULL, outcome_json TEXT,
     updated_at TEXT NOT NULL
   );`);
+  db.exec(`CREATE TABLE IF NOT EXISTS execution_recovery_audit(
+    idempotency_key TEXT PRIMARY KEY, previous_phase TEXT NOT NULL,
+    previous_outcome_json TEXT NOT NULL, proof_json TEXT NOT NULL,
+    recovered_at TEXT NOT NULL
+  );`);
+  db.exec(`CREATE TABLE IF NOT EXISTS execution_reconciliation_audit(
+    idempotency_key TEXT PRIMARY KEY, previous_outcome_json TEXT NOT NULL,
+    proof_json TEXT NOT NULL, reconciled_at TEXT NOT NULL
+  );`);
+  db.exec(`CREATE TABLE IF NOT EXISTS execution_adoption_audit(
+    idempotency_key TEXT PRIMARY KEY, previous_outcome_json TEXT NOT NULL,
+    proof_json TEXT NOT NULL, adopted_at TEXT NOT NULL
+  );`);
   return db;
 }
 
@@ -30,6 +43,11 @@ export function reserveExecution(db, {idempotencyKey,taskId,planHash,accountKey,
     if(old){
       const same=old.task_id===taskId&&old.plan_hash===planHash&&old.account_key===accountKey&&old.origin===origin&&old.business_date===businessDate;
       if(!same)throw Error('execution intent binding conflict');
+      let recovered=false;
+      if(old.phase==='reserved'){
+        try { recovered=JSON.parse(old.intent_json)?.recoveryApproved===true; } catch {}
+      }
+      if(recovered)return {state:'reserved',duplicate:false,recovered:true,record:old};
       return {state:old.phase,duplicate:true,record:old};
     }
     db.prepare('INSERT INTO execution_intents VALUES(?,?,?,?,?,?,?,?,?,?)').run(idempotencyKey,taskId,planHash,accountKey,origin,businessDate,'reserved',JSON.stringify({idempotencyKey,taskId,planHash,accountKey,origin,businessDate}),null,now);
@@ -76,3 +94,79 @@ export function recordOutcome(db, {idempotencyKey,phase,outcome,now=new Date().t
 }
 
 export function getExecution(db, idempotencyKey) { return db.prepare('SELECT * FROM execution_intents WHERE idempotency_key=?').get(idempotencyKey)??null; }
+
+export function recoverExecutionForRetry(db,{idempotencyKey,taskId,accountKey,origin,businessDate,proof,now=new Date().toISOString()}={}){
+  if(!proof||proof.authoritative!==true||proof.stage!=='not_signed')throw Error('authoritative not-signed proof is required');
+  if(!Number.isFinite(Date.parse(now))||!Number.isFinite(Date.parse(proof.observedAt)))throw Error('recovery timestamp is invalid');
+  return tx(db,()=>{
+    const old=db.prepare('SELECT * FROM execution_intents WHERE idempotency_key=?').get(idempotencyKey);
+    if(!old)throw Error('execution intent missing');
+    if(old.task_id!==taskId||old.account_key!==accountKey||old.origin!==origin||old.business_date!==businessDate)throw Error('execution recovery binding conflict');
+    if(!['blocked','submit_rejected','submission_unknown'].includes(old.phase))throw Error('execution phase is not recoverable');
+    let outcome;try{outcome=JSON.parse(old.outcome_json??'{}');}catch{throw Error('execution outcome is unreadable');}
+    const durableNonMutation=['blocked','submit_rejected'].includes(old.phase)&&Number(outcome?.mutationCount??0)===0&&proof.kind==='durable_non_mutating_failure';
+    const reconciledUnknown=old.phase==='submission_unknown'&&proof.kind==='authoritative_not_signed';
+    if(!durableNonMutation&&!reconciledUnknown)throw Error('execution recovery proof is invalid for its phase');
+    if(proof.taskId!==taskId||proof.accountKey!==accountKey||proof.origin!==origin||proof.businessDate!==businessDate)throw Error('execution recovery proof mismatch');
+    if(Date.parse(proof.observedAt)<Date.parse(old.updated_at))throw Error('execution recovery proof is stale');
+    const existingAudit=db.prepare('SELECT * FROM execution_recovery_audit WHERE idempotency_key=?').get(idempotencyKey);
+    let attempt=1;
+    if(existingAudit){
+      let priorProof={};try{priorProof=JSON.parse(existingAudit.proof_json??'{}');}catch{}
+      attempt=Number(priorProof.attempt??1)+1;if(attempt>2)throw Error('execution recovery limit reached');
+    }
+    const safeProof={authoritative:true,stage:'not_signed',kind:proof.kind,attempt,previousPhase:old.phase,source:String(proof.source??'none').slice(0,64),taskId,accountKey,origin,businessDate,observedAt:new Date(proof.observedAt).toISOString(),reason:String(proof.reason??'operator_recovery').slice(0,120)};
+    const previousOutcome=JSON.stringify(outcome??{});
+    if(existingAudit)db.prepare('UPDATE execution_recovery_audit SET previous_phase=?,previous_outcome_json=?,proof_json=?,recovered_at=? WHERE idempotency_key=?').run(old.phase,previousOutcome,JSON.stringify(safeProof),new Date(now).toISOString(),idempotencyKey);
+    else db.prepare('INSERT INTO execution_recovery_audit VALUES(?,?,?,?,?)').run(idempotencyKey,old.phase,previousOutcome,JSON.stringify(safeProof),new Date(now).toISOString());
+    const recoveredIntent={idempotencyKey,taskId,planHash:old.plan_hash,accountKey,origin,businessDate,recoveryApproved:true,recoveryProof:safeProof};
+    db.prepare('UPDATE execution_intents SET phase=?,intent_json=?,outcome_json=NULL,updated_at=? WHERE idempotency_key=?').run('reserved',JSON.stringify(recoveredIntent),new Date(now).toISOString(),idempotencyKey);
+    return {state:'reserved',recovered:true,previousPhase:old.phase};
+  });
+}
+
+export function getExecutionRecovery(db,idempotencyKey){return db.prepare('SELECT * FROM execution_recovery_audit WHERE idempotency_key=?').get(idempotencyKey)??null;}
+
+export function reconcileUnknownExecution(db,{idempotencyKey,taskId,accountKey,origin,businessDate,proof,now=new Date().toISOString()}={}){
+  if(!proof||proof.authoritative!==true||proof.stage!=='already_done'||!proof.evidence?.authoritative)throw Error('authoritative completed proof is required');
+  if(!Number.isFinite(Date.parse(now))||!Number.isFinite(Date.parse(proof.observedAt)))throw Error('reconciliation timestamp is invalid');
+  return tx(db,()=>{
+    const old=db.prepare('SELECT * FROM execution_intents WHERE idempotency_key=?').get(idempotencyKey);if(!old)throw Error('execution intent missing');
+    if(old.task_id!==taskId||old.account_key!==accountKey||old.origin!==origin||old.business_date!==businessDate)throw Error('execution reconciliation binding conflict');
+    if(old.phase!=='submission_unknown')throw Error('execution phase is not reconcilable');
+    let outcome;try{outcome=JSON.parse(old.outcome_json??'{}');}catch{throw Error('execution outcome is unreadable');}
+    if(Number(outcome?.mutationCount??0)<1)throw Error('unknown execution has no possible mutation');
+    if(proof.taskId!==taskId||proof.accountKey!==accountKey||proof.origin!==origin||proof.businessDate!==businessDate)throw Error('execution reconciliation proof mismatch');
+    if(Date.parse(proof.observedAt)<Date.parse(old.updated_at))throw Error('execution reconciliation proof is stale');
+    const evidence={source:String(proof.evidence.source??'none').slice(0,64),authoritative:true,summary:String(proof.evidence.summary??'').slice(0,240)};
+    const safeProof={authoritative:true,stage:'already_done',taskId,accountKey,origin,businessDate,observedAt:new Date(proof.observedAt).toISOString(),evidence};
+    db.prepare('INSERT INTO execution_reconciliation_audit VALUES(?,?,?,?)').run(idempotencyKey,JSON.stringify(outcome),JSON.stringify(safeProof),new Date(now).toISOString());
+    const completed={stage:'succeeded',mutationCount:1,reason:'reconciled_after_submission_unknown',evidence,completedAt:safeProof.observedAt,reconciled:true};
+    db.prepare('UPDATE execution_intents SET phase=?,outcome_json=?,updated_at=? WHERE idempotency_key=?').run('succeeded',JSON.stringify(completed),new Date(now).toISOString(),idempotencyKey);
+    return {state:'succeeded',reconciled:true,completedAt:safeProof.observedAt,evidence};
+  });
+}
+
+export function getExecutionReconciliation(db,idempotencyKey){return db.prepare('SELECT * FROM execution_reconciliation_audit WHERE idempotency_key=?').get(idempotencyKey)??null;}
+
+export function adoptOperatorConfirmedCheckin(db,{idempotencyKey,taskId,accountKey,origin,businessDate,proof,operatorConfirmed=false,now=new Date().toISOString()}={}){
+  if(operatorConfirmed!==true||!proof||proof.authoritative!==true||proof.stage!=='already_done')throw Error('operator-confirmed completed proof is required');
+  if(!Number.isFinite(Date.parse(now))||!Number.isFinite(Date.parse(proof.observedAt)))throw Error('adoption timestamp is invalid');
+  return tx(db,()=>{
+    const old=db.prepare('SELECT * FROM execution_intents WHERE idempotency_key=?').get(idempotencyKey);if(!old)throw Error('execution intent missing');
+    if(old.task_id!==taskId||old.account_key!==accountKey||old.origin!==origin||old.business_date!==businessDate)throw Error('execution adoption binding conflict');
+    if(old.phase!=='already_done')throw Error('execution phase is not adoptable');
+    let outcome;try{outcome=JSON.parse(old.outcome_json??'{}');}catch{throw Error('execution outcome is unreadable');}
+    if(Number(outcome?.mutationCount??0)!==0)throw Error('already-done outcome is not adoptable');
+    if(proof.taskId!==taskId||proof.accountKey!==accountKey||proof.origin!==origin||proof.businessDate!==businessDate)throw Error('execution adoption proof mismatch');
+    if(Date.parse(proof.observedAt)<Date.parse(old.updated_at))throw Error('execution adoption proof is stale');
+    const evidence={source:String(proof.evidence?.source??'none').slice(0,64),authoritative:true,summary:String(proof.evidence?.summary??'').slice(0,240)};
+    const safeProof={authoritative:true,stage:'already_done',taskId,accountKey,origin,businessDate,observedAt:new Date(proof.observedAt).toISOString(),evidence,operatorConfirmed:true};
+    db.prepare('INSERT INTO execution_adoption_audit VALUES(?,?,?,?)').run(idempotencyKey,JSON.stringify(outcome),JSON.stringify(safeProof),new Date(now).toISOString());
+    const adopted={stage:'succeeded',mutationCount:1,reason:'operator_confirmed_v2_login',evidence,completedAt:new Date(now).toISOString(),operatorConfirmed:true};
+    db.prepare('UPDATE execution_intents SET phase=?,outcome_json=?,updated_at=? WHERE idempotency_key=?').run('succeeded',JSON.stringify(adopted),new Date(now).toISOString(),idempotencyKey);
+    return {state:'succeeded',adopted:true,completedAt:safeProof.observedAt,evidence};
+  });
+}
+
+export function getExecutionAdoption(db,idempotencyKey){return db.prepare('SELECT * FROM execution_adoption_audit WHERE idempotency_key=?').get(idempotencyKey)??null;}

@@ -42,6 +42,19 @@ test('read-only canary stops at not_signed without a submit',async()=>{
   const result=await runCanary({...input,root,legacyRoot:path.join(root,'legacy'),execute:false,writeOutput:false});assert.equal(result.stage,'not_signed');assert.equal(result.mutationCount,0);
 });
 
+test('read-only observation never overwrites an execute report for the same task',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'canary-report-separation-')),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const legacyRoot=path.join(root,'legacy');
+  const executeInput=fixture(root,day,[{status:200,storageIds:['7'],body:{success:true,data:{id:7}}},{status:200,body:{success:true,data:{stats:{checked_in_today:false,records:[]}}}},{status:200,body:{success:true,message:'签到成功'}},{status:200,body:{success:true,data:{stats:{checked_in_today:true,records:[{checkin_date:day,user_id:7,quota_awarded:1}]}}}},{status:200,storageIds:['7'],body:{success:true,data:{id:7}}}]);
+  const executed=await runCanary({...executeInput,root,legacyRoot,execute:true,writeOutput:true});
+  assert.equal(executed.stage,'succeeded');
+  const readInput=fixture(root,day,[{status:200,storageIds:['7'],body:{success:true,data:{id:7}}},{status:200,body:{success:true,data:{stats:{checked_in_today:true,records:[{checkin_date:day,user_id:7,quota_awarded:1}]}}}}]);
+  const observed=await runCanary({...readInput,root,legacyRoot,execute:false,writeOutput:true});
+  assert.equal(observed.stage,'already_done');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root,'outputs',`canary-result-acct7-${day}.json`),'utf8')).mode,'canary_execute');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root,'outputs',`canary-observation-acct7-${day}.json`),'utf8')).mode,'canary_read_only');
+});
+
 test('canary persists the bounded business reason in its durable outcome',async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'canary-reason-')),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
   const input=fixture(root,day,[

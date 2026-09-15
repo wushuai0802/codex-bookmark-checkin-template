@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {cancelReservation,getExecution,openExecutionJournal,recordOutcome,recordPrepared,reserveExecution} from '../src/execution-journal.mjs';
+import {adoptOperatorConfirmedCheckin,cancelReservation,getExecution,getExecutionAdoption,getExecutionReconciliation,getExecutionRecovery,openExecutionJournal,reconcileUnknownExecution,recordOutcome,recordPrepared,recoverExecutionForRetry,reserveExecution} from '../src/execution-journal.mjs';
 
 test('execution journal reserves once and refuses a second owner',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'execution-journal-')),db=openExecutionJournal(path.join(root,'state.sqlite'),path.join(root,'legacy'));
@@ -43,4 +43,40 @@ test('reserved execution can be cancelled before any browser mutation',()=>{
 test('execution journal refuses a sentinel plan hash',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'execution-journal-')),db=openExecutionJournal(path.join(root,'state.sqlite'),path.join(root,'legacy'));
   assert.throws(()=>reserveExecution(db,{idempotencyKey:'idem_zero',taskId:'task_zero',planHash:'0'.repeat(64),accountKey:'acct',origin:'https://fixture.example',businessDate:'2026-09-09'}),/non-zero SHA-256 hash/);db.close();
+});
+
+test('one authoritative not-signed proof can reopen a failed execution without deleting its audit',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'execution-recovery-')),db=openExecutionJournal(path.join(root,'state.sqlite'),path.join(root,'legacy'));
+  const args={idempotencyKey:'idem_recover',taskId:'task_recover',planHash:'d'.repeat(64),accountKey:'acct7',origin:'https://fixture.example',businessDate:'2026-09-16',now:'2026-09-16T00:00:00Z'};
+  reserveExecution(db,args);recordPrepared(db,{idempotencyKey:args.idempotencyKey,taskId:args.taskId},'2026-09-16T00:00:01Z');recordOutcome(db,{idempotencyKey:args.idempotencyKey,phase:'submit_rejected',outcome:{reason:'client_defect',mutationCount:0},now:'2026-09-16T00:00:02Z'});
+  const proof={authoritative:true,stage:'not_signed',kind:'durable_non_mutating_failure',source:'execution_journal',taskId:args.taskId,accountKey:args.accountKey,origin:args.origin,businessDate:args.businessDate,observedAt:'2026-09-16T00:01:00Z'};
+  assert.equal(recoverExecutionForRetry(db,{...args,proof,now:'2026-09-16T00:01:01Z'}).recovered,true);
+  assert.equal(reserveExecution(db,args).recovered,true);assert.equal(getExecutionRecovery(db,args.idempotencyKey).previous_phase,'submit_rejected');
+  assert.throws(()=>recoverExecutionForRetry(db,{...args,proof,now:'2026-09-16T00:01:02Z'}),/not recoverable|already used/);db.close();
+});
+
+test('uncertain execution cannot reopen without fresh matching authoritative proof',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'execution-recovery-proof-')),db=openExecutionJournal(path.join(root,'state.sqlite'),path.join(root,'legacy'));
+  const args={idempotencyKey:'idem_unknown',taskId:'task_unknown',planHash:'e'.repeat(64),accountKey:'acct7',origin:'https://fixture.example',businessDate:'2026-09-16',now:'2026-09-16T00:00:00Z'};
+  reserveExecution(db,args);recordPrepared(db,{idempotencyKey:args.idempotencyKey,taskId:args.taskId},'2026-09-16T00:00:01Z');recordOutcome(db,{idempotencyKey:args.idempotencyKey,phase:'submission_unknown',outcome:{reason:'transport',mutationCount:1},now:'2026-09-16T00:00:02Z'});
+  const proof={authoritative:true,stage:'not_signed',kind:'authoritative_not_signed',source:'new_api_checkin_calendar',taskId:args.taskId,accountKey:args.accountKey,origin:args.origin,businessDate:args.businessDate,observedAt:'2026-09-16T00:01:00Z'};
+  assert.throws(()=>recoverExecutionForRetry(db,{...args,proof:{...proof,accountKey:'other'}}),/proof mismatch/);
+  assert.equal(recoverExecutionForRetry(db,{...args,proof,now:'2026-09-16T00:01:01Z'}).previousPhase,'submission_unknown');db.close();
+});
+
+test('unknown submission reconciles to success only from a fresh account-bound completion',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'execution-reconcile-')),db=openExecutionJournal(path.join(root,'state.sqlite'),path.join(root,'legacy'));
+  const args={idempotencyKey:'idem_reconcile',taskId:'task_reconcile',planHash:'f'.repeat(64),accountKey:'acct7',origin:'https://fixture.example',businessDate:'2026-09-16',now:'2026-09-16T00:00:00Z'};
+  reserveExecution(db,args);recordPrepared(db,{idempotencyKey:args.idempotencyKey,taskId:args.taskId},'2026-09-16T00:00:01Z');recordOutcome(db,{idempotencyKey:args.idempotencyKey,phase:'submission_unknown',outcome:{reason:'verification_blocked',mutationCount:1},now:'2026-09-16T00:00:02Z'});
+  const proof={authoritative:true,stage:'already_done',taskId:args.taskId,accountKey:args.accountKey,origin:args.origin,businessDate:args.businessDate,observedAt:'2026-09-16T00:01:00Z',evidence:{source:'oauth_reward_log',authoritative:true}};
+  assert.throws(()=>reconcileUnknownExecution(db,{...args,proof:{...proof,accountKey:'other'}}),/proof mismatch/);
+  assert.equal(reconcileUnknownExecution(db,{...args,proof,now:'2026-09-16T00:01:01Z'}).state,'succeeded');assert.equal(getExecution(db,args.idempotencyKey).phase,'succeeded');assert.ok(getExecutionReconciliation(db,args.idempotencyKey));db.close();
+});
+
+test('operator-confirmed V2 login can adopt an authoritative already-done result with audit',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'execution-adoption-')),db=openExecutionJournal(path.join(root,'state.sqlite'),path.join(root,'legacy'));
+  const args={idempotencyKey:'idem_adopt',taskId:'task_adopt',planHash:'1'.repeat(64),accountKey:'acct7',origin:'https://fixture.example',businessDate:'2026-09-16',now:'2026-09-16T00:00:00Z'};
+  reserveExecution(db,args);recordOutcome(db,{idempotencyKey:args.idempotencyKey,phase:'already_done',outcome:{mutationCount:0,evidence:{authoritative:true,source:'oauth_reward_log'}},now:'2026-09-16T00:00:02Z'});
+  const proof={authoritative:true,stage:'already_done',taskId:args.taskId,accountKey:args.accountKey,origin:args.origin,businessDate:args.businessDate,observedAt:'2026-09-16T00:01:00Z',evidence:{authoritative:true,source:'oauth_reward_log'}};
+  assert.equal(adoptOperatorConfirmedCheckin(db,{...args,proof,operatorConfirmed:true,now:'2026-09-16T00:01:01Z'}).adopted,true);assert.equal(getExecution(db,args.idempotencyKey).phase,'succeeded');assert.ok(getExecutionAdoption(db,args.idempotencyKey));db.close();
 });

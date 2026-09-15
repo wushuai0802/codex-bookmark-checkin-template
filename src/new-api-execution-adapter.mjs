@@ -137,16 +137,16 @@ async function refreshToken(context,{path,userId,origin}={}){
   }catch(error){cache.promise=null;return {response:{status:0,url:'',networkError:true,error:safeShort(error?.message,80)}};}
 }
 
-async function requestInPage(context,{path,method='GET',userId,origin,authRefreshPath=null,allowRefresh=true}={}){
+async function requestInPage(context,{path,method='GET',userId,origin,authRefreshPath=null,allowRefresh=true,body=null}={}){
   const page=pageFor(context);
   let activeToken='';
   if(authRefreshPath){const refreshed=await refreshToken(context,{path:authRefreshPath,userId,origin});if(!refreshed?.token)return refreshed?.response??{status:0,url:'',body:null,networkError:true,authRefreshFailed:true};activeToken=refreshed.token;}
-  const call=async bearer=>page.evaluate(async({path,method,userId,token})=>{
+  const call=async bearer=>page.evaluate(async({path,method,userId,token,body})=>{
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15_000);
     try{const headers={Accept:'application/json','New-Api-User':String(userId??'')};if(token)headers.Authorization=`Bearer ${token}`;if(method!=='GET'&&body!=null)headers['Content-Type']='application/json';const response=await fetch(path,{method,credentials:'include',redirect:'error',headers,body:method==='GET'?undefined:(body==null?undefined:JSON.stringify(body)),signal:controller.signal});const text=await response.text();let parsedBody=null;try{parsedBody=JSON.parse(text);}catch{}return {status:response.status,url:response.url,body:parsedBody,text:text.slice(0,400)};}
     catch(error){return {status:0,url:'',body:null,text:'',networkError:true,timedOut:error?.name==='AbortError'};}
     finally{clearTimeout(timer);}
-  },{path,method,userId:String(userId??''),token:bearer});
+  },{path,method,userId:String(userId??''),token:bearer,body});
   let response=await call(activeToken);
   if(allowRefresh&&authRefreshPath&&method==='GET'&&response?.status===401){invalidateAuthCache(page);const retry=await refreshToken(context,{path:authRefreshPath,userId,origin});if(retry?.token)response=await call(retry.token);}
   return response;

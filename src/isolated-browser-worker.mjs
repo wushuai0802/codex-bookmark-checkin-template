@@ -44,7 +44,7 @@ export async function dismissKnownAnnouncements(page) {
 // Executes one V2 task inside a dedicated persistent browser context. The
 // launcher is injected so tests and NAS workers can use their own Playwright
 // runtime; this module never touches the user's normal Chrome profile.
-export async function runIsolatedBrowserTask({task, adapterDefinition, profileDir, dedicatedRoot, profileMode = 'isolated', profileHandoff = null, executablePath, windowMode = 'offscreen', launchPersistentContext, allowMutation = false, persistIntent = null, captchaSolver = null, clock = () => new Date().toISOString()} = {}) {
+export async function runIsolatedBrowserTask({task, adapterDefinition, profileDir, dedicatedRoot, profileMode = 'isolated', profileHandoff = null, executablePath, windowMode = 'offscreen', launchPersistentContext, allowMutation = false, persistIntent = null, recoveryProof = null, captchaSolver = null, clock = () => new Date().toISOString()} = {}) {
   if (!task || typeof task !== 'object') throw Error('task is required');
   const profile = profileMode === 'v1_handoff'
     ? (validateProfileHandoff(profileHandoff, {accountKey:task.accountKey, origin:task.origin, profileDir:profileDir ?? profileHandoff?.profileDir}), path.resolve(profileHandoff.profileDir))
@@ -64,7 +64,7 @@ export async function runIsolatedBrowserTask({task, adapterDefinition, profileDi
     const adapterContext={page,dismissedAnnouncements};
     if(typeof captchaSolver==='function')adapterContext.solveCaptcha=captchaSolver;
     const result = await runObservedTask({adapterDefinition, origin:task.origin, accountKey:task.accountKey,
-      businessDate:task.businessDate, planHash:task.planHash, expectedIdentity:task.accountId, context:adapterContext,allowMutation,persistIntent});
+      businessDate:task.businessDate, planHash:task.planHash, expectedIdentity:task.accountId, context:adapterContext,allowMutation,persistIntent,recoveryProof});
     return {...result, worker:{windowMode, profileBound:true, browserActions:result.mutationCount ?? 0, captchaSolverConfigured:typeof captchaSolver==='function', dismissedAnnouncements, completedAt:clock()}};
   } finally {
     if (context && typeof context.close === 'function') await context.close();

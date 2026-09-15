@@ -7,7 +7,7 @@ import {runDaily} from '../src/daily-runner.mjs';
 
 test('daily V2 entry enforces a narrow execution window and uses migration candidates',()=>{
   const source=fs.readFileSync(new URL('../src/daily-runner.mjs',import.meta.url),'utf8');
-  assert.match(source,/V2 daily execute window is closed/);assert.match(source,/migration-/);assert.match(source,/progress/);assert.match(source,/runCanary/);assert.match(source,/current:'v2-worker'/);assert.match(source,/acquireExecutionLock/);assert.match(source,/executionAdapterDefinitions/);assert.match(source,/adapterId:migration\.adapterId/);
+  assert.match(source,/V2 daily execute window is closed/);assert.match(source,/migration-/);assert.match(source,/progress/);assert.match(source,/runCanary/);assert.match(source,/promoteMigrationAfterVerifiedSubmission/);assert.match(source,/acquireExecutionLock/);assert.match(source,/executionAdapterDefinitions/);assert.match(source,/adapterId:migration\.adapterId/);
   assert.match(fs.readFileSync(new URL('../scripts/run-v2-daily.mjs',import.meta.url),'utf8'),/createConfiguredCaptchaSolver/);
 });
 

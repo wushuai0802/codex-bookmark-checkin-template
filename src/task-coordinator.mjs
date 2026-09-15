@@ -6,15 +6,18 @@ function classify(adapter,error,fallback){
  return fallback;
 }
 
-export async function runObservedTask({adapterDefinition,origin,accountKey,businessDate,planHash,expectedIdentity,context={},allowMutation=false,persistIntent=null,now=new Date().toISOString()}={}){
+export async function runObservedTask({adapterDefinition,origin,accountKey,businessDate,planHash,expectedIdentity,context={},allowMutation=false,persistIntent=null,recoveryProof=null,now=new Date().toISOString()}={}){
  const adapter=adapterDefinition?.methods ? adapterDefinition : defineAdapter(adapterDefinition),task=createTaskInstance({origin,accountKey,businessDate,planHash,adapterId:adapter.id});
  let identity;
  try { identity=await adapter.methods.identity({origin,accountKey,expectedIdentity,context}); } catch(error) { identity={blockedReason:classify(adapter,error,'identity_error')}; }
+ const recoveredOAuthIdentity=!identity?.userId&&allowMutation&&adapter.id==='oauth-reward.execute.v1'&&recoveryProof?.authoritative===true&&recoveryProof.kind==='durable_non_mutating_failure'&&recoveryProof.previousPhase==='submit_rejected'&&recoveryProof.stage==='not_signed'&&recoveryProof.taskId===task.taskId&&recoveryProof.accountKey===accountKey&&recoveryProof.origin===origin&&recoveryProof.businessDate===businessDate&&String(expectedIdentity??'')!=='';
+ if(recoveredOAuthIdentity)identity={userId:String(expectedIdentity),origin:adapter.origin,recovery:'durable_non_mutating_failure'};
  if(!identity?.userId)return {task:transitionTask(task,'blocked',{reason:identity?.blockedReason??'identity_missing'}),identity:null,identityDiagnostic:identity?.blockedReason??null,mutationCount:0,stage:'identity'};
  if(identity.origin!==adapter.origin||expectedIdentity!=null&&String(identity.userId)!==String(expectedIdentity))return {task:transitionTask(task,'blocked',{reason:'identity_mismatch'}),identity,mutationCount:0,stage:'identity'};
  let current=transitionTask(task,'identity_verified',{at:now,evidence:{authoritative:true,source:'identity'},reason:'identity_verified'});
  let status;
- try { status=await adapter.methods.read_status({origin,accountKey,businessDate,identity,context}); } catch(error) { status={state:'unknown',reason:classify(adapter,error,'status_read_error')}; }
+ if(recoveredOAuthIdentity)status={state:'not_signed',evidence:{authoritative:true,source:'execution_recovery_audit',businessDate,accountId:String(expectedIdentity)}};
+ else try { status=await adapter.methods.read_status({origin,accountKey,businessDate,identity,context}); } catch(error) { status={state:'unknown',reason:classify(adapter,error,'status_read_error')}; }
  const statusAuthoritative=status?.evidence?.authoritative===true;
  if(status?.state==='already_done'||status?.state==='not_available'){
    current=transitionTask(current,'status_read',{at:now,evidence:status.evidence});

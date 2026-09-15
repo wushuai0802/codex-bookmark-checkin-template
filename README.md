@@ -99,3 +99,7 @@ for the boundaries and site mapping. Constructible adapters are still
 canary-disabled until live identity, same-day evidence, mutation, and rollback
 gates pass. Unknown generic sites remain blocked instead of being handled by a
 guessing adapter.
+
+Operational recovery and same-day reconciliation rules are documented in
+`docs/execution-recovery.md`. Read-only observations use a separate output file
+so a diagnostic run cannot overwrite a real execution receipt.

@@ -1,6 +1,7 @@
 import {defineAdapter} from './adapter-contract.mjs';
 
 const REQUEST_TIMEOUT_MS=15_000;
+const PROVIDER_BUTTON_WAIT_MS=5_000;
 
 function pageFor(context){if(!context?.page||typeof context.page.evaluate!=='function')throw Error('isolated page is required');return context.page;}
 function boundedInteger(value,fallback,min,max){const number=Number(value);return Number.isInteger(number)?Math.max(min,Math.min(max,number)):fallback;}
@@ -59,12 +60,18 @@ export function createOAuthRewardExecutionAdapter({origin,rule={}}={}){
 
   async function clickProvider(context){
     const page=pageFor(context),labels=[`使用 ${provider} 继续`,`使用 ${provider} 登录`,`使用 ${provider} 登入`,provider];let button=null;
-    for(const label of labels){const candidate=page.getByRole?.('button',{name:label,exact:true});if(candidate&&await candidate.count().catch(()=>0)===1&&await candidate.isVisible().catch(()=>false)){button=candidate;break;}const text=page.getByText?.(label,{exact:true});if(!button&&text&&await text.count().catch(()=>0)===1&&await text.isVisible().catch(()=>false)){button=text;break;}}
+    async function visible(locator){
+      if(!locator)return false;
+      if(typeof locator.waitFor==='function')await locator.waitFor({state:'visible',timeout:PROVIDER_BUTTON_WAIT_MS}).catch(()=>{});
+      return await locator.count().catch(()=>0)===1&&await locator.isVisible().catch(()=>false);
+    }
+    for(const label of labels){const candidate=page.getByRole?.('button',{name:label,exact:true});if(await visible(candidate)){button=candidate;break;}const text=page.getByText?.(label,{exact:true});if(await visible(text)){button=text;break;}}
     if(!button)return {state:'unknown',reason:'oauth_provider_button_missing'};
     let popup=null,popupWait=null;try{popupWait=page.waitForEvent?.('popup',{timeout:5000});await button.click({timeout:10_000});}catch{return {state:'unknown',reason:'oauth_provider_click_failed'};}if(popupWait)popup=await popupWait.catch(()=>null);
     const authPage=popup||page;await authPage.waitForLoadState?.('domcontentloaded',{timeout:15_000}).catch(()=>{});
     let host='';try{host=new URL(authPage.url()).hostname;}catch{}
-    const allowedHosts=Array.isArray(rule.providerHosts)&&rule.providerHosts.length?rule.providerHosts.map(value=>String(value).toLowerCase()):['connect.linux.do','linux.do',new URL(site).hostname];
+    const providerDefaults=/github/i.test(provider)?['github.com']:['connect.linux.do','linux.do'];
+    const allowedHosts=Array.isArray(rule.providerHosts)&&rule.providerHosts.length?rule.providerHosts.map(value=>String(value).toLowerCase()):[...providerDefaults,new URL(site).hostname];
     if(host&& !allowedHosts.some(value=>host===value||host.endsWith(`.${value}`)))return {state:'unknown',reason:'oauth_provider_origin_untrusted'};
     if(host){for(const label of ['授权','允许','Authorize','Allow']){const candidate=authPage.getByRole?.('button',{name:label,exact:true})||authPage.getByText?.(label,{exact:true});if(candidate&&await candidate.count().catch(()=>0)===1&&await candidate.isVisible().catch(()=>false)){await candidate.click({timeout:10_000}).catch(()=>{});break;}}}
     await authPage.waitForURL?.(url=>{try{return new URL(url).origin===site;}catch{return false;}},{timeout:60_000}).catch(()=>{});

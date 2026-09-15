@@ -5,6 +5,7 @@ import {runCanary} from './canary-runner.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {assertPlanHash,normalizeOrigin,taskIdentity} from './contracts.mjs';
 import {executionAdapterDefinitions} from './execution-adapter-registry.mjs';
+import {promoteMigrationAfterVerifiedSubmission} from './migration-state.mjs';
 
 function executionWindow(now,schedule) {
   const [hour,minute]=String(schedule).split(':').map(Number),parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now),current=Number(parts.slice(0,2))*60+Number(parts.slice(3,5));
@@ -113,9 +114,7 @@ async function runDailyOnce({root=path.resolve('.'),legacyRoot,execute=false,acc
       if(execute&&row.stage==='succeeded'&&row.mutationCount===1&&result.handoffPending!==true){
         try {
           if(!isValidTimestamp(result.completedAt))throw Error('successful result has no valid completion time');
-          const completedAt=new Date(result.completedAt).toISOString();
-          const updated={...migration,state:'active',ownership:{...(migration.ownership??{}),current:'v2-worker',switchedAt:completedAt},lastSuccessAt:completedAt};
-          writeJsonAtomic(path.join(outputDir,file),updated);
+          promoteMigrationAfterVerifiedSubmission({root,accountKey:migration.accountKey,origin:migration.origin,completedAt:result.completedAt,stage:result.stage,mutationCount:result.mutationCount,handoffPending:result.handoffPending===true});
         } catch(error) { row.persistence={state:'failed',reason:boundedReason(error,'migration_persist_failed')}; }
       } else if(execute&&row.stage==='succeeded'&&result.handoffPending===true) {
         row.persistence={state:'failed',reason:'handoff_pending'};
