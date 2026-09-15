@@ -16,6 +16,12 @@ test('active canary task carries V2 ownership and disables legacy fallback',()=>
   assert.equal(task.ownershipState,'active');assert.equal(task.executionOwner,'v2-worker');assert.equal(task.v1Fallback.enabled,false);assert.equal(task.preconditions.firstMutationNotPerformed,false);
 });
 
+test('canary task preserves the selected concrete adapter',()=>{
+  const profile={accountKey:'agentrouter-245770',origin:'https://agentrouter.org',state:'ready',identity:'245770',expectedIdentity:'245770',profileDir:'profiles/agentrouter-245770'};
+  const task=buildCanaryTask({profile,businessDate:'2026-09-09',planHash:'a'.repeat(64),adapterId:'oauth-reward.execute.v1'});
+  assert.equal(task.adapterId,'oauth-reward.execute.v1');
+});
+
 test('prepare-canary defaults to the current Shanghai business date',()=>{
   const source=fs.readFileSync(new URL('../scripts/prepare-canary.mjs',import.meta.url),'utf8');
   assert.doesNotMatch(source,/Date\.now\(\)\+86_400_000/);assert.match(source,/timeZone:'Asia\/Shanghai'/);

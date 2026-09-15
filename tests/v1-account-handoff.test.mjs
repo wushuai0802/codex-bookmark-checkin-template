@@ -7,7 +7,11 @@ import {beginV2AccountHandoff,completeV2AccountHandoff,rollbackV2AccountHandoff}
 
 test('V2 handoff controls one V1 account and supports rollback',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'v1-account-handoff-')),pending=beginV2AccountHandoff({v1Root:root,accountKey:'acct7',origin:'https://fixture.example',now:'2026-09-09T00:00:00Z'});
-  assert.equal(pending.state,'pending_v2'); assert.equal(completeV2AccountHandoff({v1Root:root,accountKey:'acct7',now:'2026-09-09T00:01:00Z'}).state,'v2_owned');
+  assert.equal(pending.state,'pending_v2');
+  const file=path.join(root,'data','v2-account-handoff.json');
+  const staged=JSON.parse(fs.readFileSync(file,'utf8'));staged.accounts[0].quarantine={state:'submission_unknown',reason:'prepared'};fs.writeFileSync(file,JSON.stringify(staged));
+  assert.equal(completeV2AccountHandoff({v1Root:root,accountKey:'acct7',now:'2026-09-09T00:01:00Z'}).state,'v2_owned');
+  const completed=JSON.parse(fs.readFileSync(file,'utf8')).accounts[0];assert.equal(completed.state,'v2_owned');assert.equal('quarantine' in completed,false);
   assert.equal(rollbackV2AccountHandoff({v1Root:root,accountKey:'acct7'}).state,'legacy-checkin');
 });
 

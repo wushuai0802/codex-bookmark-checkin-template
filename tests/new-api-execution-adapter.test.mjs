@@ -32,6 +32,15 @@ test('New API execution adapter rejects a mismatched identity before submit', as
   assert.equal(fake.calls.length,1);
 });
 
+test('New API identity can rely on an exact self response when storage is empty',async()=>{
+  const fake=fakePage([
+    {status:200,body:{success:true,data:{id:7,username:'reader'}}}
+  ]);
+  const adapter=createNewApiExecutionAdapter({origin:'https://fixture.example'});
+  const identity=await adapter.methods.identity({expectedIdentity:'7',context:fake});
+  assert.equal(identity.userId,'7');
+});
+
 test('New API adapter marks a transport failure unknown instead of safe to replay',async()=>{
   const page={evaluate:async()=>{throw Error('network timeout')}};
   const adapter=createNewApiExecutionAdapter({origin:'https://fixture.example'});
@@ -55,6 +64,17 @@ test('New API adapter only accepts a real non-negative quota award',async()=>{
   }
 });
 
+test('New API adapter preserves an explicit disabled check-in feature',async()=>{
+  const fake=fakePage([
+    {status:200,storageIds:['7'],body:{success:true,data:{id:7}}},
+    {status:200,body:{success:true,data:{enabled:false}}}
+  ]);
+  const adapter=createNewApiExecutionAdapter({origin:'https://fixture.example'});
+  const identity=await adapter.methods.identity({expectedIdentity:'7',context:fake});
+  const status=await adapter.methods.read_status({identity,businessDate:'2026-09-09',context:fake});
+  assert.equal(status.state,'not_available');assert.equal(status.evidence.source,'new_api_checkin_status');
+});
+
 test('New API adapter bounds requests and rejects cross-origin responses',async()=>{
   const source=fs.readFileSync(new URL('../src/new-api-execution-adapter.mjs',import.meta.url),'utf8');
   assert.match(source,/AbortController/);assert.match(source,/REQUEST_TIMEOUT_MS=15_000/);assert.match(source,/redirect:'error'/);
@@ -62,6 +82,15 @@ test('New API adapter bounds requests and rejects cross-origin responses',async(
   const status=await adapter.methods.read_status({identity:{userId:'7'},businessDate:'2026-09-09',context:fakePage([{status:200,url:'https://other.example/api/user/checkin',body:{success:true,data:{stats:{checked_in_today:false,records:[]}}}}])});
   const submit=await adapter.methods.submit_once({identity:{userId:'7'},context:fakePage([{status:200,url:'https://other.example/api/user/checkin',body:{success:true}}])});
   assert.equal(status.reason,'cross_origin_redirect');assert.equal(submit.state,'rejected');assert.equal(submit.actionMayHaveHappened,false);
+});
+
+test('New API adapter supports an explicit same-origin auth refresh path',async()=>{
+  const fake=fakePage([{status:200,storageIds:['7'],body:{success:true,data:{id:7}}}]);
+  const adapter=createNewApiExecutionAdapter({origin:'https://fixture.example',rule:{authRefreshPath:'/api/user/auth/refresh'}});
+  const identity=await adapter.methods.identity({expectedIdentity:'7',context:fake});
+  assert.equal(identity.userId,'7');
+  assert.equal(fake.calls[0].authRefreshPath,'/api/user/auth/refresh');
+  assert.throws(()=>createNewApiExecutionAdapter({origin:'https://fixture.example',rule:{authRefreshPath:'https://other.example/refresh'}}),/invalid auth_refresh endpoint/);
 });
 
 test('ambiguous 2xx and 5xx submit responses are quarantined as possibly applied',async()=>{

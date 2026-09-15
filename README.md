@@ -89,3 +89,13 @@ The dashboard capability map and NAS reverse-proxy instructions are in
   It refuses execute, has no browser/network adapter and deduplicates across restarts.
 
 This is not a production executor. See `docs/stabilization-2026-09-06.md`.
+
+## Execution adapter beta
+
+The independent adapter layer is now present for the reviewed New API,
+image-CAPTCHA New API, OAuth reward, OAuth status, PT, AnyRouter, and Vibe
+families. See docs/execution-adapters.md and docs/v1-v2-adapter-mapping.md
+for the boundaries and site mapping. Constructible adapters are still
+canary-disabled until live identity, same-day evidence, mutation, and rollback
+gates pass. Unknown generic sites remain blocked instead of being handled by a
+guessing adapter.

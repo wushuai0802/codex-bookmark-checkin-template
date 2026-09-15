@@ -7,7 +7,8 @@ import {runDaily} from '../src/daily-runner.mjs';
 
 test('daily V2 entry enforces a narrow execution window and uses migration candidates',()=>{
   const source=fs.readFileSync(new URL('../src/daily-runner.mjs',import.meta.url),'utf8');
-  assert.match(source,/V2 daily execute window is closed/);assert.match(source,/migration-\[A-Za-z0-9/);assert.match(source,/runCanary/);assert.match(source,/current:'v2-worker'/);assert.match(source,/acquireExecutionLock/);
+  assert.match(source,/V2 daily execute window is closed/);assert.match(source,/migration-/);assert.match(source,/progress/);assert.match(source,/runCanary/);assert.match(source,/current:'v2-worker'/);assert.match(source,/acquireExecutionLock/);assert.match(source,/executionAdapterDefinitions/);assert.match(source,/adapterId:migration\.adapterId/);
+  assert.match(fs.readFileSync(new URL('../scripts/run-v2-daily.mjs',import.meta.url),'utf8'),/createConfiguredCaptchaSolver/);
 });
 
 test('daily runner filters to the selected migration and keeps read-only mode',async()=>{
@@ -81,6 +82,24 @@ test('daily runner blocks migrations whose adapter is not implemented',async()=>
   fs.writeFileSync(path.join(outputDir,'migration-acct7.json'),JSON.stringify({state:'candidate',accountKey:'acct7',origin:'https://fixture.example',adapterId:'native-pt.execute.v1'}));let calls=0;
   const report=await runDaily({root,legacyRoot:legacy,execute:false,now:new Date('2026-09-09T01:00:00Z'),runAccount:async()=>{calls++;return {stage:'already_done',phase:'already_done',mutationCount:0};}});
   assert.equal(calls,0);assert.equal(report.results[0].reason,'adapter_not_implemented');
+});
+
+test('daily runner dispatches an implemented non-New-API adapter',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'daily-agent-adapter-')),legacy=path.join(root,'legacy'),outputDir=path.join(root,'outputs');fs.mkdirSync(path.join(legacy,'config'),{recursive:true});fs.mkdirSync(path.join(legacy,'data'),{recursive:true});fs.mkdirSync(outputDir,{recursive:true});
+  fs.writeFileSync(path.join(legacy,'config','config.json'),JSON.stringify({schedule:'08:05'}));fs.writeFileSync(path.join(legacy,'data','last-valid-bookmark-plan.json'),JSON.stringify({planFingerprint:'a'.repeat(64)}));
+  fs.writeFileSync(path.join(outputDir,'v2-profile-registry.json'),JSON.stringify({profiles:[{accountKey:'agentrouter-245770',origin:'https://agentrouter.org',state:'ready',identity:'245770',expectedIdentity:'245770',profileDir:path.join(root,'data','v2-profiles','agentrouter-245770','profile')}]}));
+  fs.writeFileSync(path.join(outputDir,'migration-agentrouter-245770.json'),JSON.stringify({state:'candidate',accountKey:'agentrouter-245770',origin:'https://agentrouter.org',accountId:'245770',adapterId:'oauth-reward.execute.v1'}));
+  let seen=null;const report=await runDaily({root,legacyRoot:legacy,execute:false,now:new Date('2026-09-09T01:00:00Z'),runAccount:async({task})=>{seen=task;return {stage:'already_done',phase:'already_done',mutationCount:0};}});
+  assert.equal(report.results[0].stage,'already_done');assert.equal(seen.adapterId,'oauth-reward.execute.v1');
+});
+
+test('daily runner ignores historical migration progress files',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'daily-progress-file-')),legacy=path.join(root,'legacy'),outputDir=path.join(root,'outputs');fs.mkdirSync(path.join(legacy,'config'),{recursive:true});fs.mkdirSync(path.join(legacy,'data'),{recursive:true});fs.mkdirSync(outputDir,{recursive:true});
+  fs.writeFileSync(path.join(legacy,'config','config.json'),JSON.stringify({schedule:'08:05'}));fs.writeFileSync(path.join(legacy,'data','last-valid-bookmark-plan.json'),JSON.stringify({planFingerprint:'a'.repeat(64)}));
+  fs.writeFileSync(path.join(outputDir,'v2-profile-registry.json'),JSON.stringify({profiles:[]}));
+  fs.writeFileSync(path.join(outputDir,'migration-progress-20260911.json'),JSON.stringify({accountKey:'old',state:'candidate'}));
+  const report=await runDaily({root,legacyRoot:legacy,execute:false,now:new Date('2026-09-09T01:00:00Z'),runAccount:async()=>{throw Error('should not dispatch');}});
+  assert.equal(report.results.length,0);assert.equal(report.hasFailures,false);
 });
 
 test('daily execution lock covers the entire multi-account orchestration',async()=>{

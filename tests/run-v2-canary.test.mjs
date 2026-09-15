@@ -19,6 +19,10 @@ test('canary runner source enforces explicit execute and V1 drain gates',()=>{
   assert.match(source,/allowMutation:execute/);
   assert.match(source,/v2-execution\.sqlite/);
   assert.match(source,/assertPlanHash\(task\.planHash/);
+  assert.match(source,/createExecutionAdapter/);
+  assert.match(fs.readFileSync(new URL('../scripts/run-v2-canary.mjs',import.meta.url),'utf8'),/createConfiguredCaptchaSolver/);
+  assert.match(source,/safeReason/);
+  assert.doesNotMatch(source,/task\.adapterId!==['"]new-api\.execute\.v1/);
 });
 
 test('manual canary entrypoint invokes the shared notification outbox',()=>{
@@ -36,6 +40,21 @@ test('read-only canary stops at not_signed without a submit',async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'canary-read-')),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
   const input=fixture(root,day,[{status:200,storageIds:['7'],body:{success:true,data:{id:7}}},{status:200,body:{success:true,data:{stats:{checked_in_today:false,records:[]}}}}]);
   const result=await runCanary({...input,root,legacyRoot:path.join(root,'legacy'),execute:false,writeOutput:false});assert.equal(result.stage,'not_signed');assert.equal(result.mutationCount,0);
+});
+
+test('canary persists the bounded business reason in its durable outcome',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'canary-reason-')),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const input=fixture(root,day,[
+    {status:200,storageIds:['7'],body:{success:true,data:{id:7}}},
+    {status:200,body:{success:true,data:{stats:{checked_in_today:false,records:[]}}}},
+    {status:403,body:{success:false,message:'challenge required'}}
+  ]);
+  const legacyRoot=path.join(root,'legacy'),result=await runCanary({...input,root,legacyRoot,execute:true,writeOutput:false});
+  assert.equal(result.stage,'submit_rejected');
+  const db=openExecutionJournal(path.join(root,'data','v2-execution.sqlite'),legacyRoot);
+  const row=getExecution(db,idempotencyKey({taskId:input.task.taskId,businessDate:day}));
+  assert.equal(JSON.parse(row.outcome_json).reason,'challenge_required');
+  db.close();
 });
 
 test('canary refuses a missing or all-zero plan hash before opening a browser',async()=>{

@@ -1,0 +1,2 @@
+ddddocr==1.6.1
+opencv-python-headless>=4.10,<5

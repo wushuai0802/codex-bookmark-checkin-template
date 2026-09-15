@@ -85,7 +85,11 @@ export function completeV2AccountHandoff({v1Root,accountKey,now=new Date().toISO
     if(!row) throw Error('pending V2 handoff is missing');
     if(row.state==='v2_owned') return {file,state:'v2_owned',accountKey:key,alreadyComplete:true};
     if(row.state!=='pending_v2') throw Error('pending V2 handoff is missing');
-    const accounts=current.accounts.map(item=>item.accountKey===key?{...item,state:'v2_owned',completedAt:new Date(now).toISOString(),expiresAt:null}:item);
+    const accounts=current.accounts.map(item=>{
+      if(item.accountKey!==key)return item;
+      const {quarantine: _quarantine, ...clean}=item;
+      return {...clean,state:'v2_owned',completedAt:new Date(now).toISOString(),expiresAt:null};
+    });
     write(file,{schemaVersion:1,accounts}); return {file,state:'v2_owned',accountKey:key}; });
 }
 

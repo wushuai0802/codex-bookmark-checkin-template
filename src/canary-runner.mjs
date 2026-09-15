@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {runIsolatedBrowserTask} from './isolated-browser-worker.mjs';
-import {createNewApiExecutionAdapter} from './new-api-execution-adapter.mjs';
+import {createExecutionAdapter,executionAdapterDefinitions} from './execution-adapter-registry.mjs';
 import {idempotencyKey} from './candidate-protocol.mjs';
 import {cancelReservation,openExecutionJournal,recordOutcome,recordPrepared,reserveExecution} from './execution-journal.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
@@ -13,6 +13,10 @@ import {loadRuntimeConfig} from './runtime-config.mjs';
 function safeEvidence(result) {
   const evidence=result?.task?.lastEvent?.evidence;
   return evidence ? {source:String(evidence.source??'none').slice(0,64),authoritative:evidence.authoritative===true,summary:String(evidence.summary||result.task.lastEvent?.reason||'').slice(0,240)} : null;
+}
+
+function safeReason(result) {
+  return String(result?.task?.lastEvent?.reason ?? result?.reason ?? '').replace(/[\r\n\t]+/g,' ').slice(0,240) || null;
 }
 
 function hasMutation(result) { return Number(result?.mutationCount??0)>0; }
@@ -34,7 +38,7 @@ function parseOutcome(record) {
   try { const value=JSON.parse(record.outcome_json); return value&&typeof value==='object'?value:null; } catch { return null; }
 }
 
-export async function runCanary({task,execute=false,root=path.resolve('.'),legacyRoot=null,executablePath=null,launchPersistentContext=null,writeOutput=true,recordOutcomeFn=recordOutcome,executionLock=null}={}) {
+export async function runCanary({task,execute=false,root=path.resolve('.'),legacyRoot=null,executablePath=null,launchPersistentContext=null,writeOutput=true,recordOutcomeFn=recordOutcome,executionLock=null,captchaSolver=null}={}) {
   const runtime=loadRuntimeConfig(root);legacyRoot=legacyRoot??runtime.legacyRoot;executablePath=executablePath??runtime.chromeExecutable;
   if(!task||typeof task!=='object') throw Error('canary task is required');
   if(task.executionEnabled!==false) throw Error('canary task must start disabled');
@@ -50,14 +54,15 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
   if(!executablePath)throw Error('chromeExecutable is required');
   const ownershipState=task.ownershipState??'candidate';
   if(!['candidate','active'].includes(ownershipState))throw Error('canary ownership state is invalid');
-  if(task.adapterId!=='new-api.execute.v1')throw Error('canary adapter is not implemented');
+  const adapterManifest=executionAdapterDefinitions().find(definition=>definition.id===task.adapterId);
+  if(!adapterManifest||adapterManifest.status!=='implemented')throw Error('canary adapter is not implemented');
   if(ownershipState==='active'&&(task.executionOwner!=='v2-worker'||task.preconditions.v1MustBeStoppedBeforeMutation!==false))throw Error('active canary ownership metadata is invalid');
   if(ownershipState==='candidate'&&(task.executionOwner!=='legacy-checkin'||task.preconditions.v1MustBeStoppedBeforeMutation!==true))throw Error('candidate canary ownership metadata is invalid');
   if(execute&&executionLock&&(!executionLock.file||!executionLock.owner?.nonce||path.resolve(executionLock.file)!==path.resolve(root,'data','v2-run.lock')))throw Error('invalid V2 execution lock lease');
   if(execute) assertV1Idle(legacyRoot);
   let launcher=launchPersistentContext;
   if(!launcher){const req=createRequire(path.join(root,'package.json'));let chromium;try{({chromium}=req('playwright-core'));}catch{throw Error('playwright-core dependency is required');}launcher=(profile,options)=>chromium.launchPersistentContext(profile,options);}
-  const adapter=createNewApiExecutionAdapter({origin:task.origin,rule:task.adapterRule??{}}),executionKey=idempotencyKey({taskId:task.taskId,businessDate:task.businessDate});
+  const adapter=createExecutionAdapter({adapterId:task.adapterId,origin:task.origin,rule:task.adapterRule??{}}),executionKey=idempotencyKey({taskId:task.taskId,businessDate:task.businessDate});
   let journal=null,ownedExecutionLock=false,handoffStarted=false,intentPrepared=false;
   if(execute) {
     if(!executionLock){executionLock=acquireExecutionLock(root);ownedExecutionLock=true;}
@@ -80,7 +85,7 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
       }
       const mutationCount=['succeeded','submission_unknown'].includes(phase)?1:0;
       const reportStage=handoffPending&&ownershipState==='active'?(mutationCount?'submission_unknown':'blocked'):phase;
-      const report={schemaVersion:1,mode:'canary_execute',taskId:task.taskId,businessDate:task.businessDate,origin:task.origin,accountKey:task.accountKey,stage:reportStage,phase:reportStage,mutationCount,duplicate:true,evidence:safeStoredEvidence(outcome?.evidence),completedAt,persistenceError:handoffPending?'handoff_pending':null,handoffPending};
+      const report={schemaVersion:1,mode:'canary_execute',taskId:task.taskId,businessDate:task.businessDate,origin:task.origin,accountKey:task.accountKey,stage:reportStage,phase:reportStage,mutationCount,duplicate:true,reason:String(outcome?.reason??'').slice(0,240)||null,evidence:safeStoredEvidence(outcome?.evidence),completedAt,persistenceError:handoffPending?'handoff_pending':null,handoffPending};
       try { journal.close(); } finally { if(ownedExecutionLock)releaseExecutionLock(executionLock); }
       return writeReport(root,task,report,writeOutput);
     }
@@ -95,14 +100,14 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
   }
   let result;
   try {
-    result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:task.profileDir,dedicatedRoot:root,executablePath,windowMode:'offscreen',allowMutation:execute,persistIntent:execute?async(intent)=>{recordPrepared(journal,intent);intentPrepared=true;quarantineV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey,reason:'prepared'});}:null,launchPersistentContext:launcher});
+    result=await runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:task.profileDir,dedicatedRoot:root,executablePath,windowMode:'offscreen',allowMutation:execute,persistIntent:execute?async(intent)=>{recordPrepared(journal,intent);intentPrepared=true;quarantineV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey,reason:'prepared'});}:null,captchaSolver,launchPersistentContext:launcher});
     if(ownershipState==='active'&&['succeeded','already_done','not_available'].includes(result.stage)){
       try { const handoff=readV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey});if(!handoff||handoff.state!=='v2_owned'||handoff.origin!==task.origin||handoff.expiresAt!==null)result={...result,task:{...result.task,phase:'blocked'},stage:'blocked',reportPhase:'blocked',persistenceError:'active_handoff_missing',handoffPending:true}; }
       catch { result={...result,task:{...result.task,phase:'blocked'},stage:'blocked',reportPhase:'blocked',persistenceError:'active_handoff_unreadable',handoffPending:true}; }
     }
     const phase=result.task.phase==='succeeded'?'succeeded':result.task.phase==='already_done'?'already_done':result.task.phase==='not_available'?'not_available':result.task.phase==='submission_unknown'?'submission_unknown':result.stage==='submit_rejected'?'submit_rejected':'blocked';
     if(journal){
-      try { recordOutcomeFn(journal,{idempotencyKey:executionKey,phase,outcome:{stage:result.stage,mutationCount:result.mutationCount,evidence:safeEvidence(result),completedAt:result.worker?.completedAt??null}}); }
+      try { recordOutcomeFn(journal,{idempotencyKey:executionKey,phase,outcome:{stage:result.stage,mutationCount:result.mutationCount,reason:safeReason(result),evidence:safeEvidence(result),completedAt:result.worker?.completedAt??null}}); }
       catch(error) {
         if(!hasMutation(result))throw error;
         try { recordOutcomeFn(journal,{idempotencyKey:executionKey,phase:'submission_unknown',outcome:{stage:'submission_unknown',reason:'outcome_persist_failed',originalStage:result.stage,mutationCount:result.mutationCount}}); } catch {}
@@ -116,7 +121,7 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
     } else if(handoffStarted&&!hasMutation(result)&&result.stage!=='submission_unknown')rollbackV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey});
   } catch(error) {
     const mutationPossible=hasMutation(result)||(!result&&intentPrepared);
-    if(journal){try{recordOutcomeFn(journal,{idempotencyKey:executionKey,phase:mutationPossible?'submission_unknown':'blocked',outcome:{reason:mutationPossible?'post_intent_worker_error':'worker_error',mutationCount:mutationPossible?1:0}});}catch{}}
+    if(journal){try{recordOutcomeFn(journal,{idempotencyKey:executionKey,phase:mutationPossible?'submission_unknown':'blocked',outcome:{stage:mutationPossible?'submission_unknown':'blocked',reason:mutationPossible?'post_intent_worker_error':'worker_error',mutationCount:mutationPossible?1:0}});}catch{}}
     if(handoffStarted&&!mutationPossible){try{rollbackV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey});}catch{}}
     if(mutationPossible){
       if(ownershipState==='candidate'&&handoffStarted){try{quarantineV2AccountHandoff({v1Root:legacyRoot,accountKey:task.accountKey,reason:'post_intent_worker_error'});}catch{} }
@@ -125,6 +130,6 @@ export async function runCanary({task,execute=false,root=path.resolve('.'),legac
     } else throw error;
   } finally { try { if(journal)journal.close(); } finally { if(ownedExecutionLock)releaseExecutionLock(executionLock); } }
   if(!execute&&result.mutationCount!==0)throw Error('read-only canary performed a mutation');
-  const report={schemaVersion:1,mode:execute?'canary_execute':'canary_read_only',taskId:task.taskId,businessDate:task.businessDate,origin:task.origin,accountKey:task.accountKey,stage:result.stage,phase:result.reportPhase??result.task.phase,mutationCount:result.mutationCount,windowMode:result.worker.windowMode,profileBound:result.worker.profileBound,evidence:safeEvidence(result),completedAt:result.worker.completedAt,persistenceError:result.persistenceError??null,handoffPending:result.handoffPending===true};
+  const report={schemaVersion:1,mode:execute?'canary_execute':'canary_read_only',taskId:task.taskId,businessDate:task.businessDate,origin:task.origin,accountKey:task.accountKey,stage:result.stage,phase:result.reportPhase??result.task.phase,mutationCount:result.mutationCount,windowMode:result.worker.windowMode,profileBound:result.worker.profileBound,captchaSolverConfigured:result.worker.captchaSolverConfigured===true,reason:safeReason(result),evidence:safeEvidence(result),completedAt:result.worker.completedAt,persistenceError:result.persistenceError??null,handoffPending:result.handoffPending===true};
   return writeReport(root,task,report,writeOutput);
 }

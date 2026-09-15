@@ -28,5 +28,26 @@ export function markProfileReady(record, {identity, username = null, observedAt 
   if (!identity || String(identity) !== record.expectedIdentity) throw Error('verified identity mismatch');
   if (!Number.isFinite(Date.parse(observedAt))) throw Error('identity timestamp invalid');
   return {...record, state:'ready', identity:String(identity), username:typeof username === 'string' ? username.slice(0,80) : null,
-    identityVerifiedAt:new Date(observedAt).toISOString(), v1TaskStopEligible:false};
+    identityVerifiedAt:new Date(observedAt).toISOString(), verificationReason:null, v1TaskStopEligible:false};
+}
+
+export function appendFreshProfile(registry, options = {}) {
+  if (!registry || registry.schemaVersion !== 1 || !Array.isArray(registry.profiles)) {
+    throw Error('profile registry is invalid');
+  }
+  const accountKey=String(options.accountKey??'');
+  const origin=new URL(String(options.origin)).origin;
+  const expectedIdentity=String(options.expectedIdentity??'');
+  const sameKey=registry.profiles.find(profile=>profile.accountKey===accountKey);
+  if (sameKey) {
+    if (sameKey.origin===origin&&String(sameKey.expectedIdentity)===expectedIdentity) {
+      return {registry,reused:true,profile:sameKey};
+    }
+    throw Error('accountKey is already bound to another profile');
+  }
+  if (registry.profiles.some(profile=>profile.origin===origin&&String(profile.expectedIdentity)===expectedIdentity)) {
+    throw Error('site identity is already registered');
+  }
+  const profile=enrollFreshProfile(options);
+  return {registry:{...registry,profiles:[...registry.profiles,profile]},reused:false,profile};
 }

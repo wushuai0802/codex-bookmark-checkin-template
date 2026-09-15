@@ -88,3 +88,15 @@ test('wrong date, future timestamp, and account mismatch cannot establish succes
  for(const evidence of [{source:'api',createdAt:'2026-09-01T01:00:00Z'},{source:'api',createdAt:'2026-09-03T01:00:00Z'},{source:'api',accountId:'2'}])
  assert.equal(normalizeEvidence({status:'signed',evidence},context).authoritative,false);
 });
+
+test('new execution evidence sources require their account/day signal',()=>{
+ const context={businessDate:'2026-09-02',referenceAt:now,expectedId:'7'};
+ const calendar=normalizeEvidence({status:'signed',evidence:{source:'new_api_checkin_calendar',authoritative:true,businessDate:'2026-09-02',accountId:'7',quotaAwarded:25,statusSignal:'checked_in_today'}},context);
+ assert.equal(calendar.verification,'verified');
+ const pt=normalizeEvidence({status:'signed',evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-02',accountId:'7',statusSignal:'signed_text'}},context);
+ assert.equal(pt.source,'api');assert.equal(pt.authoritative,true);assert.equal(pt.verification,'verified');
+ const weak=normalizeEvidence({status:'signed',evidence:{source:'anyrouter_log',authoritative:true,rewardAmount:25}},context);
+ assert.equal(weak.authoritative,false);assert.equal(weak.verification,'unverified_source');
+ const unavailable=normalizeEvidence({status:'not_available',evidence:{source:'vibe_entitlement_status',authoritative:true,businessDate:'2026-09-02',accountId:'7',outcome:'entitlement_active'}},context);
+ assert.equal(unavailable.verification,'feature_unavailable');
+});

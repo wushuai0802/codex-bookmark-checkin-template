@@ -4,6 +4,7 @@ import {buildCanaryTask} from './canary-task.mjs';
 import {runCanary} from './canary-runner.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {assertPlanHash,normalizeOrigin,taskIdentity} from './contracts.mjs';
+import {executionAdapterDefinitions} from './execution-adapter-registry.mjs';
 
 function executionWindow(now,schedule) {
   const [hour,minute]=String(schedule).split(':').map(Number),parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now),current=Number(parts.slice(0,2))*60+Number(parts.slice(3,5));
@@ -15,7 +16,7 @@ function boundedReason(error,fallback='runner_error') {
 }
 
 function migrationKeyFromFile(file) {
-  const match=/^migration-([A-Za-z0-9._-]+)\.json$/.exec(file);
+  const match=/^migration-(?!progress(?:-|$))([A-Za-z0-9._-]+)\.json$/.exec(file);
   return match?.[1]??null;
 }
 
@@ -46,7 +47,7 @@ async function attemptNotification(notifyAccount,output,row) {
   catch(error) { row.delivery={state:'failed',reason:boundedReason(error,'notification_failed')}; }
 }
 
-async function runDailyOnce({root=path.resolve('.'),legacyRoot,execute=false,accountKey=null,now=new Date(),runAccount=runCanary,notifyAccount=null,executionLock=null}={}) {
+async function runDailyOnce({root=path.resolve('.'),legacyRoot,execute=false,accountKey=null,now=new Date(),runAccount=runCanary,notifyAccount=null,executionLock=null,captchaSolver=null}={}) {
   if(!legacyRoot)throw Error('legacyRoot is required'); if(!Number.isFinite(now.getTime()))throw Error('now is invalid');
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config','config.json'),'utf8'));
   const schedule=String(config.schedule??'08:05'),window=executionWindow(now,schedule);
@@ -59,7 +60,7 @@ async function runDailyOnce({root=path.resolve('.'),legacyRoot,execute=false,acc
   catch(error) { throw Error(`execution plan is invalid: ${error.message}`); }
   const planHash=assertPlanHash(plan?.planFingerprint,'execution plan planFingerprint');
   const registry=JSON.parse(fs.readFileSync(path.join(root,'outputs','v2-profile-registry.json'),'utf8'));
-  const outputDir=path.join(root,'outputs'),files=fs.readdirSync(outputDir).filter(name=>/^migration-[A-Za-z0-9._-]+\.json$/.test(name)),results=[];
+  const outputDir=path.join(root,'outputs'),files=fs.readdirSync(outputDir).filter(name=>/^migration-(?!progress(?:-|$))[A-Za-z0-9._-]+\.json$/.test(name)),results=[];
   for(const file of files){
     const fileAccountKey=migrationKeyFromFile(file);
     let migration;
@@ -81,7 +82,8 @@ async function runDailyOnce({root=path.resolve('.'),legacyRoot,execute=false,acc
       row.output=execute?writeFailureOutput({outputDir,migration,businessDate:day,reason:row.reason}):null;results.push(row);await attemptNotification(notifyAccount,row.output,row);continue;
     }
     if(!['candidate','active'].includes(migration.state))continue;
-    if(migration.adapterId!=='new-api.execute.v1'){
+    const adapterManifest=executionAdapterDefinitions().find(definition=>definition.id===migration.adapterId);
+    if(!adapterManifest||adapterManifest.status!=='implemented'){
       const row={accountKey:migration.accountKey??fileAccountKey,origin:migration.origin,stage:'blocked',phase:'blocked',mutationCount:0,reason:'adapter_not_implemented'};
       row.output=execute?writeFailureOutput({outputDir,migration,businessDate:day,reason:row.reason}):null;results.push(row);await attemptNotification(notifyAccount,row.output,row);continue;
     }
@@ -103,9 +105,9 @@ async function runDailyOnce({root=path.resolve('.'),legacyRoot,execute=false,acc
       row.output=execute?writeFailureOutput({outputDir,migration,businessDate:day,reason:row.reason}):null;results.push(row);await attemptNotification(notifyAccount,row.output,row);continue;
     }
     try {
-      const task=buildCanaryTask({profile,businessDate:day,planHash,adapterRule:migration.adapterRule??{},ownershipState:migration.state}),result=await runAccount({task,execute,root,legacyRoot,executionLock});
+      const task=buildCanaryTask({profile,businessDate:day,planHash,adapterId:migration.adapterId,adapterRule:migration.adapterRule??{},ownershipState:migration.state}),result=await runAccount({task,execute,root,legacyRoot,executionLock,captchaSolver});
       if(!execute&&result.mutationCount!==0)throw Error(`read-only daily runner received a mutation for ${migration.accountKey}`);
-      const row={accountKey:migration.accountKey,origin:migration.origin,stage:result.stage,phase:result.phase??result.stage,mutationCount:result.mutationCount,duplicate:result.duplicate===true,output:result.output??null};
+      const row={accountKey:migration.accountKey,origin:migration.origin,stage:result.stage,phase:result.phase??result.stage,mutationCount:result.mutationCount,duplicate:result.duplicate===true,reason:typeof result.reason==='string'?result.reason.slice(0,240):null,output:result.output??null};
       if(result.persistenceError)row.persistence={state:'failed',reason:boundedReason({message:result.persistenceError},'result_persist_failed')};
       results.push(row);
       if(execute&&row.stage==='succeeded'&&row.mutationCount===1&&result.handoffPending!==true){

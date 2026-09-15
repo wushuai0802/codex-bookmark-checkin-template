@@ -74,3 +74,12 @@ HTTPS GET evidence and never clicks attendance controls. It distinguishes positi
 negative, maintenance and conflicting page text; a page load or login page cannot
 become a success. The parser is fixture-tested but deliberately not wired to live
 PT pages until each site's safe read endpoint and account association are reviewed.
+
+## Execution adapter follow-up
+
+The later V2 beta work now contains separate, guarded execution adapters under
+src/*-execution-adapter.mjs. They are not enabled by this read-only report:
+the registry keeps every family at canaryReady=false until a live identity
+probe, mutation proof, and rollback exercise are recorded. The execution
+adapters share the same account/date evidence rules, but do not reuse V1
+profiles or the read-only observer's result as permission to submit.

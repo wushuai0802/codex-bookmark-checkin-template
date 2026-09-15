@@ -88,3 +88,12 @@ new execution adapters and evidence production in those adapters remain pending.
 V2 uses the existing public repository's independent `v2` branch and checkout.
 Publishing is an explicit step after local acceptance; production ownership
 does not change merely because a commit or branch exists.
+
+Adapter implementation update (2026-09-15): the reviewed execution families
+now have isolated factories and offline fixtures for identity, dated status,
+single submission, verification, error classification, and rollback-boundary
+behavior. The catalog also distinguishes x666's allowlisted service origin,
+configured PT attendance URLs, and known no-check-in sites. This update does
+not enable Canary ownership: every execution adapter remains canary-disabled
+until a live identity probe, one real mutation, authoritative readback, and
+rollback/failure-injection evidence have been recorded.

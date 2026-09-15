@@ -5,6 +5,7 @@ import {spawn} from 'node:child_process';
 import {runCanary} from '../src/canary-runner.mjs';
 import {assertPlanHash} from '../src/contracts.mjs';
 import {loadRuntimeConfig} from '../src/runtime-config.mjs';
+import {createConfiguredCaptchaSolver} from '../src/captcha-solver.mjs';
 
 try {
   const taskFile=process.argv.find((value,index)=>process.argv[index-1]==='--task');
@@ -15,7 +16,7 @@ try {
     const planFile=path.join(runtime.legacyRoot,'data','last-valid-bookmark-plan.json');if(!fs.existsSync(planFile))throw Error('execution plan is missing; canary is refused');
     const plan=JSON.parse(fs.readFileSync(planFile,'utf8'));if(assertPlanHash(plan?.planFingerprint,'execution plan planFingerprint')!==task.planHash)throw Error('canary task plan does not match the current execution plan');
   }
-  const report=await runCanary({task,execute:process.argv.includes('--execute')});
+   const report=await runCanary({task,execute:process.argv.includes('--execute'),captchaSolver:createConfiguredCaptchaSolver()});
   console.log(JSON.stringify(report,null,2));
   if(process.argv.includes('--execute')&&report.output){
     const child=spawn(process.execPath,[path.join(path.resolve('.'),'scripts','notify-canary-result.mjs'),report.output],{windowsHide:true,stdio:'ignore'});
