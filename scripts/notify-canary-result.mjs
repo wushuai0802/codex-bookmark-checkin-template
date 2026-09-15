@@ -12,7 +12,17 @@ const resultFile=process.argv[2];
 if(!resultFile) throw Error('provide canary result file');
 const result=JSON.parse(fs.readFileSync(path.resolve(resultFile),'utf8'));
 const readonly=result.mode==='canary_read_only',signed=result.stage==='succeeded',completed=signed||result.stage==='already_done';
-const summary=`V2 ${readonly?'只读验收':'Canary执行'}：${result.accountKey}；状态 ${result.stage}；提交次数 ${result.mutationCount}；${readonly?'保留 V1 执行权':'执行结果等待迁移验收'}。`;
+const summary=readonly
+  ? `V2只读验收：${result.accountKey}；状态 ${result.stage}；未执行提交，V1仍负责签到。`
+  : signed
+    ? result.reason==='operator_confirmed_v2_login'
+      ? `V2接管成功：${result.accountKey}；用户已在V2专用profile完成登录，权威日志确认今日签到，未重复提交。`
+      : result.reason==='reconciled_after_submission_unknown'
+        ? `V2接管成功：${result.accountKey}；此前提交结果未知，后续权威回读确认今日签到，未重复提交。`
+        : `V2签到成功并完成接管：${result.accountKey}；提交次数 ${result.mutationCount}，权威回读已确认。`
+    : result.stage==='already_done'
+      ? `V2已确认今日签到：${result.accountKey}；未重复提交。`
+      : `V2签到未完成：${result.accountKey}；状态 ${result.stage}；原因 ${String(result.reason??'unknown').slice(0,120)}。`;
 const receipt={taskId:result.taskId,businessDate:result.businessDate,idempotencyKey:idempotencyKey(result),status:signed?'signed':result.stage==='already_done'?'already_signed':'needs_attention',observedAt:result.completedAt,evidence:{source:'v2_canary',summary,redacted:true}};
 const item=createDelivery(receipt),file=path.join('outputs',`notification-${item.dedupeKey}.json`);
 fs.mkdirSync(path.dirname(file),{recursive:true});

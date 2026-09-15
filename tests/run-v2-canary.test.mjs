@@ -28,6 +28,8 @@ test('canary runner source enforces explicit execute and V1 drain gates',()=>{
 test('manual canary entrypoint invokes the shared notification outbox',()=>{
   const source=fs.readFileSync(new URL('../scripts/run-v2-canary.mjs',import.meta.url),'utf8');
   assert.match(source,/notify-canary-result\.mjs/);assert.match(source,/process\.argv\.includes\('--execute'\)&&report\.output/);
+  const notify=fs.readFileSync(new URL('../scripts/notify-canary-result.mjs',import.meta.url),'utf8');
+  assert.doesNotMatch(notify,/执行结果等待迁移验收/);assert.match(notify,/V2签到成功并完成接管/);
 });
 
 function fixture(root,day,responses){
