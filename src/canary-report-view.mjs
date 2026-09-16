@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {shortLabel} from './display-identity.mjs';
 
+function safeOrigin(value){try{const url=new URL(String(value));if(url.protocol!=='https:'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)return null;return url.origin;}catch{return null;}}
+
 export function publicCanaryResults(directory) {
   if(!fs.existsSync(directory)) return [];
   const names=fs.readdirSync(directory), deliveries=new Map();
@@ -13,8 +15,9 @@ export function publicCanaryResults(directory) {
   return names.filter(name=>/^(?:canary-result|canary-observation)-[a-zA-Z0-9._-]+\.json$/.test(name)).slice(-100).flatMap(name=>{
     try { const file=path.join(directory,name); if(fs.statSync(file).size>65536)return []; const result=JSON.parse(fs.readFileSync(file,'utf8'));
       if(!/^task_[a-f0-9]{24}$/.test(result.taskId)||!['canary_read_only','canary_execute'].includes(result.mode))return [];
-      return [{taskId:result.taskId,accountKey:shortLabel(result.accountKey),businessDate:shortLabel(result.businessDate),mode:result.mode,
+      return [{taskId:result.taskId,accountKey:shortLabel(result.accountKey),businessDate:shortLabel(result.businessDate),origin:safeOrigin(result.origin),mode:result.mode,
         stage:shortLabel(result.stage),phase:shortLabel(result.phase),mutationCount:Number.isInteger(result.mutationCount)?result.mutationCount:null,
+        reason:shortLabel(result.reason,240),evidence:result.evidence&&typeof result.evidence==='object'?{source:shortLabel(result.evidence.source,64),authoritative:result.evidence.authoritative===true,summary:shortLabel(result.evidence.summary,240)}:null,
         completedAt:shortLabel(result.completedAt),notification:deliveries.get(result.taskId)??null}];
     } catch { return []; }
   }).sort((a,b)=>String(b.completedAt).localeCompare(String(a.completedAt))).slice(0,30);

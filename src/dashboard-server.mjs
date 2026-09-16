@@ -279,9 +279,30 @@ function publicSnapshot(snapshot, now = new Date().toISOString()) {
   };
 }
 
-function buildView(snapshot, ledger) {
+function chooseCanaryResult(current, candidate){
+  if(!current)return candidate;
+  const terminal=new Set(['succeeded','already_done']);
+  const currentScore=current.mode==='canary_execute'&&terminal.has(current.stage)?4:current.mode==='canary_execute'?3:terminal.has(current.stage)?2:1;
+  const candidateScore=candidate.mode==='canary_execute'&&terminal.has(candidate.stage)?4:candidate.mode==='canary_execute'?3:terminal.has(candidate.stage)?2:1;
+  if(candidateScore!==currentScore)return candidateScore>currentScore?candidate:current;
+  return String(candidate.completedAt??'').localeCompare(String(current.completedAt??''))>0?candidate:current;
+}
+
+function mergeCanaryTask(task, receipt, canary){
+  const base=publicTask(task,receipt);if(!canary||canary.mode!=='canary_execute')return base;
+  const terminal=canary.stage==='succeeded'||canary.stage==='already_done';
+  const observedStatus=terminal?'signed':canary.stage==='not_available'?'not_available':canary.stage==='not_signed'?'not_started':'needs_attention';
+  const source=canary.evidence?.source??'v2_canary';
+  return {...base,executionOwner:terminal?'v2-worker':base.executionOwner,executionMode:'execute',observedStatus,observedAt:canary.completedAt??base.observedAt,
+    evidence:{source:'v2_canary',authoritative:canary.evidence?.authoritative===true,summary:canary.reason??(terminal?'V2 权威回执已确认今日签到':'V2 执行未完成'),redacted:true,rawSource:source,originalSource:source,verification:canary.evidence?.authoritative===true?'verified':'unverified_source'}};
+}
+
+function liveCanaryByTask(canaryResults){const map=new Map();for(const item of canaryResults??[])if(item?.taskId)map.set(item.taskId,chooseCanaryResult(map.get(item.taskId),item));return map;}
+
+function buildView(snapshot, ledger, canaryResults = []) {
   const receiptByTask = new Map((snapshot?.receipts ?? []).map((receipt) => [receipt.taskId, receipt]));
-  const tasks = (snapshot?.tasks ?? []).map((task) => publicTask(task, receiptByTask.get(task.taskId)));
+  const canaryByTask=liveCanaryByTask(canaryResults);
+  const tasks = (snapshot?.tasks ?? []).map((task) => mergeCanaryTask(task, receiptByTask.get(task.taskId), canaryByTask.get(task.taskId)));
   const sites = new Map();
   const accounts = new Map();
   for (const task of tasks) {
@@ -451,14 +472,15 @@ export function createDashboardServer({
   function loadView() {
     const current = latestSnapshot(root, snapshotFile);
     const ledger = latestLedger(root, ledgerFile);
-    const view = buildView(current.snapshot, ledger.records);
+    const canaryResults=publicCanaryResults(root);
+    const view = buildView(current.snapshot, ledger.records, canaryResults);
     const observationsFile=path.join(root,'adapter-observations.json');
     try{view.adapterObservations=fs.statSync(observationsFile).size<=1_000_000?publicAdapterObservations(JSON.parse(fs.readFileSync(observationsFile,'utf8'))):null;}
     catch{view.adapterObservations=null;}
     view.migrationReadiness=migrationReadiness({snapshot:view.snapshot,acceptance:view.readiness,adapterObservations:view.adapterObservations});
     view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), fresh: timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) };
     view.controls = readControlState(controlFile).sites;
-    view.canaryResults = publicCanaryResults(root);
+    view.canaryResults = canaryResults;
     view.sites = view.sites.map(site => ({ ...site, control: view.controls[site.origin] ?? { policy: 'monitor', note: '', updatedAt: null } }));
     return view;
   }

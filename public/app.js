@@ -592,7 +592,8 @@ function renderV2ExecutionSummary(data) {
 function renderAll() {
   const data = state.data;
   if (!data) return;
-  renderOverview(data.snapshot);
+  const liveSnapshot={...(data.snapshot??{}),status:data.status??data.snapshot?.counts?.status??{},counts:{...(data.snapshot?.counts??{}),status:data.status??data.snapshot?.counts?.status??{}}};
+  renderOverview(liveSnapshot);
   renderCalendar(data);
   renderV2ExecutionSummary(data);
   let integrity = $('#integrity-note');
