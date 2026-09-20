@@ -170,6 +170,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   const preflightScript = await fs.readFile(path.join(root, "scripts", "Prepare-NativeWafSession.ps1"), "utf8");
   const inspector = await fs.readFile(path.join(root, "src", "native-browser-inspect.mjs"), "utf8");
   const plainWaf = await fs.readFile(path.join(root, "scripts", "Invoke-PlainWafAccessibility.ps1"), "utf8");
+  const mainChrome = await fs.readFile(path.join(root, "scripts", "Invoke-MainChromeCheckinAccessibility.ps1"), "utf8");
   const safeAutomation = await fs.readFile(path.join(root, "scripts", "Safe-UIAutomation.ps1"), "utf8");
   const openChrome = await fs.readFile(path.join(root, "scripts", "Open-PlainLoginChrome.ps1"), "utf8");
   const browser = await fs.readFile(path.join(root, "src", "browser.mjs"), "utf8");
@@ -224,7 +225,8 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(plainWaf, /正在进行安全检测/);
   assert.match(plainWaf, /正在进行安全验证/);
   assert.match(plainWaf, /本网站使用安全服务防护恶意自动程序/);
-  assert.match(plainWaf, /签到已得\\s\*\\d\+/);
+  assert.doesNotMatch(plainWaf, /签到已得\\s\*\\d\+/);
+  assert.doesNotMatch(mainChrome, /签到已得\\s\*\\d\+/);
   assert.match(plainWaf, /function Test-EquivalentWafOrigin/);
   assert.match(plainWaf, /-replace '\^www\\\.', ''/);
   assert.match(plainWaf, /Test-EquivalentWafOrigin \$originUri \$currentUri/);
