@@ -6,6 +6,11 @@ authoritative results. The observation package leases a run, imports redacted
 results, watches Harvest and serves the dashboard. Standalone adapter/canary
 experiments cannot take over a site while this integration is selected.
 
+The current observation history indicator requires three consecutive healthy,
+fresh days on the same plan. A shorter display threshold does not override an
+unhealthy day or the separate seven-day historical Canary gate, and it never
+grants an execution lease in unified mode.
+
 After Harvest's daily task completes, a missing, failed or unknown PT status
 can queue one recheck for a unique daily-plan task or for an exact-scope PT
 bookmark with the private monitoring-only fallback enabled. A catalog site

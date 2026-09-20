@@ -70,7 +70,7 @@ npm run shadow -- --legacy-root $ExecutionRoot `
   --pt-status-file tmp\harvest-pt-status.json `
   --previous outputs\previous-shadow-snapshot.json
 
-npm run check:shadow-history -- --ledger outputs\shadow-ledger.jsonl --min-days 7
+npm run check:shadow-history -- --ledger outputs\shadow-ledger.jsonl --min-days 3
 
 npm run smoke:live -- --legacy-root $ExecutionRoot `
   --health-file tmp\current-health.json
