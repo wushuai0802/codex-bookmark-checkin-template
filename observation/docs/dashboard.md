@@ -123,7 +123,9 @@ keeping browser control and check-in execution in the execution layer.
   or another observer. It distinguishes regular PT tasks from sites in the
   separate PT-only fallback scope, with source-by-source status, freshness and
   discrepancies. After Harvest completion, unresolved in-scope sites may enter
-  one execution-layer recheck; the panel itself never opens a browser.
+  one execution-layer recheck; the panel itself never opens a browser. On phones,
+  each site exposes its source and next action in a stacked row without
+  horizontal table scrolling.
 - **Sites:** per-site execution-unit progress, logical groups, and a bounded
   policy control (`monitor`, `review`, `pause`) with a short note and audit
   history. Pause suppresses immediate attention for 24 hours, 3 days, or 7

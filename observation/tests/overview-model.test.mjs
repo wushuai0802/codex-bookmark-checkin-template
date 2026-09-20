@@ -8,6 +8,7 @@ test('success, disabled and outstanding counts do not overlap', () => {
   data.evidenceQuality={verifiedSuccess:17,verifiedUnavailable:4};
   const m = overviewMetrics(data,now);
   assert.equal(m.success,17); assert.equal(m.unavailable,4); assert.equal(m.pending,2); assert.equal(m.rate,89);
+  assert.equal(m.executionRate,74);
   assert.equal(m.allResolved,false); assert.equal(m.healthy,true);
   data.health.healthy = false; assert.equal(overviewMetrics(data,now).healthy,false);
   data.health.healthy = true; assert.equal(overviewMetrics(data,now+27*3_600_000).healthy,false);
@@ -23,6 +24,7 @@ test('unverified successes and unavailability cannot inflate verified completion
   const data={counts:{executionUnits:22},status:{signed:11,already_signed:1,not_available:8,deferred:2},evidenceQuality:{verifiedSuccess:1,verifiedUnavailable:1}};
   const result=overviewMetrics(data);
   assert.equal(result.success,12);assert.equal(result.verifiedSuccess,1);assert.equal(result.unverifiedSuccess,11);
+  assert.equal(result.executionRate,55);
   assert.equal(result.unverifiedUnavailable,7);assert.equal(result.eligible,21);assert.equal(result.rate,5);
   assert.equal(overviewMetrics({counts:{executionUnits:1},status:{signed:1}}).allResolved,false);
 });

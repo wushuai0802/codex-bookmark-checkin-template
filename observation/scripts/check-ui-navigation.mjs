@@ -13,10 +13,19 @@ const dataDir = path.join(artifacts, 'synthetic-data');
 fs.mkdirSync(dataDir);
 const snapshot = buildSnapshot({
   legacyRoot: fileURLToPath(new URL('../tests/fixtures/legacy/', import.meta.url)),
-  generatedAt: new Date().toISOString(),
-  monitorCatalog:{sites:[{origin:'https://pt-monitor.example',entryUrl:'https://pt-monitor.example/attendance'}]},
-  ptFallbackOnlyEnabled:true
+  generatedAt: new Date().toISOString()
 });
+const ptSite = (host, status, authoritative) => ({
+  origin: `https://${host}.example`, displayName: host, fallbackEnabled: true,
+  effective: { source: authoritative ? 'harvest' : 'execution-supplement', status,
+    observedAt: snapshot.generatedAt, fresh: true, authoritative,
+    evidence: { source: authoritative ? 'harvest' : 'page_text', authoritative,
+      summary: authoritative ? '今日已完成' : '执行回执待补证' } },
+  sourceStatuses: [], observations: []
+});
+snapshot.ptStatus.sites = [ptSite('confirmed','signed',true),ptSite('reported','signed',false),ptSite('unknown','unknown',false)];
+snapshot.ptStatus.counts = { ...snapshot.ptStatus.counts, sites: 3, externalOnly: 3, fallbackOnly: 3,
+  status: { ...snapshot.ptStatus.counts.status, signed: 2, unknown: 1 } };
 fs.writeFileSync(path.join(dataDir, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
 fs.writeFileSync(path.join(dataDir, 'shadow-ledger.jsonl'), `${JSON.stringify(createLedgerRecord(snapshot))}\n`);
 const { server } = createDashboardServer({ dataDir, adminToken: '', bind: '127.0.0.1', port: 0 });
@@ -101,12 +110,26 @@ try {
         if (mobile) await page.locator('#menu-toggle').click();
         await page.locator(`.nav-item[data-view="${view}"]`).click();
         await page.waitForFunction(view => document.querySelector(`#view-${view}`).classList.contains('active-view') && !document.querySelector('.main-content').inert, view);
-        if (view === 'pt-status' && mobile) assert.ok(await page.evaluate(() => {
-          const table = document.querySelector('#view-pt-status .table-wrap');
-          return table.scrollWidth <= table.clientWidth + 1;
-        }), 'PT status must not need sideways scrolling on mobile');
-        if (view === 'pt-status') assert.match(await page.locator('#view-pt-status').textContent(),/仅补签/);
       }
+      if (mobile) await page.locator('#menu-toggle').click();
+      await page.locator('.nav-item[data-view="pt-status"]').click();
+      assert.match(await page.locator('#pt-kpis').textContent(), /权威完成\s*1/);
+      assert.match(await page.locator('#pt-kpis').textContent(), /执行成功待补证\s*1/);
+      assert.match(await page.locator('#pt-kpis').textContent(), /状态未知\s*1/);
+      await page.locator('#pt-kpis .kpi').filter({hasText:'执行成功待补证'}).click();
+      assert.equal(await page.locator('#pt-status-body tr').count(),1);
+      assert.match(await page.locator('#pt-status-body').textContent(),/reported\.example/);
+      await page.locator('#pt-kpis .kpi').filter({hasText:'状态未知'}).click();
+      assert.equal(await page.locator('#pt-status-body tr').count(),1);
+      assert.match(await page.locator('#pt-status-body').textContent(),/unknown\.example/);
+      await page.locator('#pt-kpis .kpi').filter({hasText:'PT 站点'}).click();
+      if(mobile)assert.ok(await page.evaluate(()=>{
+        const wrap=document.querySelector('#view-pt-status .table-wrap');
+        return wrap.querySelector('table').scrollWidth<=wrap.clientWidth+1;
+      }), 'PT rows should fit the phone width without a horizontal table scroll');
+      await page.screenshot({ path: path.join(artifacts, `pt-status-${viewport.width}.png`), fullPage: true });
+      if (mobile) await page.locator('#menu-toggle').click();
+      await page.locator('.nav-item[data-view="settings"]').click();
       await page.screenshot({ path: path.join(artifacts, `settings-${viewport.width}.png`), fullPage: true });
       if (mobile) await page.locator('#menu-toggle').click();
       await page.locator('.nav-item[data-view="ledger"]').click();

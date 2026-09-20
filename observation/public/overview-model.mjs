@@ -19,6 +19,7 @@ export function overviewMetrics(data = {}, now = Date.now()) {
     && healthAge >= -60_000 && healthAge <= 26 * 3_600_000;
   return {
     total, success, unavailable, pending, manual, verifiedSuccess, unverifiedSuccess, verifiedUnavailable, unverifiedUnavailable,
+    executionRate: total ? Math.round(success / total * 100) : null,
     deferred: count(status.deferred),
     eligible: Math.max(0, total - verifiedUnavailable),
     rate: total > verifiedUnavailable ? Math.round(verifiedSuccess / (total - verifiedUnavailable) * 100) : null,
@@ -37,7 +38,7 @@ export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0
   if (metrics.pending) return pausedCount
     ? `${metrics.pending} 项未完成 · ${Math.min(pausedCount, metrics.pending)} 项暂缓关注`
     : `还有 ${metrics.pending} 个签到项待处理`;
-  return '执行回执已收齐，仍有证据待核验';
+  return '执行回执已收齐，成功证据待补录';
 }
 
 export const statusColors = { signed: '#36c99b', already_signed: '#57b9f3', not_available: '#bbc6d4', needs_attention: '#ffc65c', deferred: '#b69cf6', login_required: '#ffac70', failed: '#ff7f93', unknown: '#91a4b7',not_started:'#91a4b7' };

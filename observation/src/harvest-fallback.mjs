@@ -39,6 +39,9 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
     const origin=originOf(target.origin);
     if(origin&&!observations.has(origin))observations.set(origin,{origin,status:'unknown',missingFromHarvest:true});
   }
+  for(const origin of catalogOrigins){
+    if(!observations.has(origin))observations.set(origin,{origin,status:'unknown',missingFromHarvest:true});
+  }
   for(const [origin,site] of observations){
     const confirmedAt=Date.parse(site.observedAt);
     const confirmed=terminal.has(site.status)&&site.evidence?.authoritative===true&&Number.isFinite(confirmedAt)&&dayAt(new Date(confirmedAt))===businessDate;
@@ -78,7 +81,8 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
       block(origin,'submission_outcome_unknown');continue;
     }
     eligible.push({origin,accountKey,kind:target?'registered':'fallback_only',...(entryUrl?{entryUrl}:{}),observedAt:new Date(at).toISOString(),
-      trigger:site.missingFromHarvest?'registered_pt_status_unobserved':status==='unknown'?'harvest_task_done_status_unknown':'harvest_explicit_failure'});
+      trigger:site.missingFromHarvest?(target?'registered_pt_status_unobserved':'monitored_pt_status_unobserved'):
+        status==='unknown'?'harvest_task_done_status_unknown':'harvest_explicit_failure'});
     assessments.push({origin,state:'executor_recheck_queued'});
   }
   return {schemaVersion:1,businessDate,source:'harvest',observedSuccess,registeredCount:registered.length,
@@ -87,6 +91,22 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
 }
 
 function writeAtomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const temporary=`${file}.${process.pid}.tmp`;fs.writeFileSync(temporary,JSON.stringify(value,null,2),{encoding:'utf8',mode:0o600});fs.renameSync(temporary,file);}
+
+function readAttemptState(root,businessDate){
+  const file=path.join(root,'outputs',`harvest-fallback-attempts-${businessDate}.json`);
+  const state=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):
+    {schemaVersion:1,businessDate,attempts:[]};
+  if(state.businessDate!==businessDate||!Array.isArray(state.attempts))throw Error('Harvest fallback audit is invalid');
+  return {file,state};
+}
+
+const alreadyAttempted=(state,candidate)=>state.attempts.some(item=>item.origin===candidate.origin&&
+  !['deferred_busy','deferred_preflight'].includes(item.state));
+
+export function pendingHarvestFallbackAttempts(root,preview){
+  const {state}=readAttemptState(root,preview.businessDate);
+  return preview.eligible.filter(candidate=>!alreadyAttempted(state,candidate));
+}
 
 function claimWorker(root) {
   const file=path.join(root,'data/harvest-fallback.lock');fs.mkdirSync(path.dirname(file),{recursive:true});
@@ -114,16 +134,11 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   if(!preview.eligible.length)return {...preview,mode:'executed',outcomes:[]};
   const workerLock=claimWorker(root);
   try{
-  const stateFile=path.join(root,'outputs',`harvest-fallback-attempts-${preview.businessDate}.json`);
-  let state={schemaVersion:1,businessDate:preview.businessDate,attempts:[]};
-  if(fs.existsSync(stateFile)){
-    state=JSON.parse(fs.readFileSync(stateFile,'utf8'));
-    if(state.businessDate!==preview.businessDate||!Array.isArray(state.attempts))throw Error('Harvest fallback audit is invalid');
-  }
+  const {file:stateFile,state}=readAttemptState(root,preview.businessDate);
   const outcomes=[];
   const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
   for(const candidate of preview.eligible){
-    if(state.attempts.some(item=>item.origin===candidate.origin&&!['deferred_busy','deferred_preflight'].includes(item.state))){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    if(alreadyAttempted(state,candidate)){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
     // Persist before executing. An interrupted or uncertain attempt is not replayed.
     const attempt={origin:candidate.origin,accountKey:candidate.accountKey,observedAt:candidate.observedAt,startedAt:new Date().toISOString(),state:'in_progress'};
     state.attempts.push(attempt);writeAtomic(stateFile,state);

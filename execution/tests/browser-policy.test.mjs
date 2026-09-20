@@ -136,6 +136,20 @@ test("打开即签到地址也必须取得权威回读", async () => {
   assert.doesNotMatch(source, /return \{ status: "visited", reason: "已访问打开即签到的网址"/);
 });
 
+test('daily page success attempts same-day evidence capture without PT-only mode',async()=>{
+  const source=await fs.readFile(path.join(root,'src','browser.mjs'),'utf8');
+  assert.match(source,/capturePtEvidence===true\|\|\['页面显示签到成功','今天已经签到'\]/);
+  assert.match(source,/ptPageEvidence\(\{origin:target\.origin,url:page\.url\(\),bodyText,status:completed\.status\}\)/);
+});
+
+test('native status and post-submit captcha evidence require current-day signals',async()=>{
+  const native=await fs.readFile(path.join(root,'src','native-browser-inspect.mjs'),'utf8');
+  const browser=await fs.readFile(path.join(root,'src','browser.mjs'),'utf8');
+  assert.match(native,/ptPageEvidence\(\{origin:expectedOrigin,url:page\.url\(\),bodyText:snapshot\.bodyText/);
+  assert.match(native,/allowUndatedActionText:false/);
+  assert.match(browser,/statusSignal:'submitted_success_response'/);
+});
+
 test("跳转登录页时执行上下文销毁会恢复为登录失效", async () => {
   let snapshots = 0;
   const page = {
