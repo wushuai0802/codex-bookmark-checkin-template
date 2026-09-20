@@ -123,7 +123,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   const outcomes=[];
   const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
   for(const candidate of preview.eligible){
-    if(state.attempts.some(item=>item.origin===candidate.origin&&item.state!=='deferred_busy')){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    if(state.attempts.some(item=>item.origin===candidate.origin&&!['deferred_busy','deferred_preflight'].includes(item.state))){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
     // Persist before executing. An interrupted or uncertain attempt is not replayed.
     const attempt={origin:candidate.origin,accountKey:candidate.accountKey,observedAt:candidate.observedAt,startedAt:new Date().toISOString(),state:'in_progress'};
     state.attempts.push(attempt);writeAtomic(stateFile,state);
@@ -147,7 +147,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
       }
       attempt.state='completed';
     }catch(error){
-      attempt.state=error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
+      attempt.state=error.code==='PT_PREFLIGHT'?'deferred_preflight':error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
       attempt.reason=String(error.message).slice(0,120);
     }
     writeAtomic(stateFile,state);

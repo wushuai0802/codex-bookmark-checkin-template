@@ -130,6 +130,18 @@ test('fallback-only execution refuses an unbound catalog before persisting an at
   await assert.rejects(()=>runHarvestFallback({...f,root,execute:true,runSite:async()=>{throw Error('must not launch');}}),/bound bookmark catalog/);
   assert.equal(fs.existsSync(path.join(root,'outputs')),false);
 });
+test('a proven pre-browser catalog failure may retry after a corrected input',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-preflight-retry-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.latest.results[0].status='already_signed';
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  const catalogHash=(await import('node:crypto')).createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
+  const args={...f,root,execute:true,catalogFile,catalogHash};
+  const failedAttempt=await runHarvestFallback({...args,runSite:async()=>{const error=Error('preflight');error.code='PT_PREFLIGHT';throw error;}});
+  assert.equal(failedAttempt.outcomes[0].state,'deferred_preflight');
+  const retried=await runHarvestFallback({...args,runSite:async()=>({origin:'https://external.example',status:'login_required',observedAt:f.now.toISOString(),evidence:{source:'none',authoritative:false}})});
+  assert.equal(retried.outcomes[0].state,'completed');assert.equal(retried.outcomes[0].v1Status,'login_required');
+});
 test('a V2 lock collision is not counted as an actual attempt',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-busy-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);

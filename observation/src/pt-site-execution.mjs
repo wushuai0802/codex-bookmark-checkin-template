@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {loadRuntimeConfig} from './runtime-config.mjs';
@@ -42,13 +43,18 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
 
 export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catalogHash,
   acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  const absoluteCatalog=path.resolve(root,catalogFile??'');
+  const actualHash=fs.existsSync(absoluteCatalog)?crypto.createHash('sha256').update(fs.readFileSync(absoluteCatalog)).digest('hex'):null;
+  if(!/^[a-f0-9]{64}$/i.test(catalogHash??'')||actualHash!==catalogHash.toLowerCase()){
+    const error=Error('PT catalog missing or changed before execution');error.code='PT_PREFLIGHT';throw error;
+  }
   const runtime=loadRuntimeConfig(root);
   if(runtime.executionEngine!=='v1'||!runtime.legacyRoot)throw Error('PT site fallback requires the execution layer');
   const integration=JSON.parse(fs.readFileSync(path.join(runtime.legacyRoot,'data/v2-integration.json'),'utf8'));
   if(integration.executionEngine!=='v1'||path.resolve(integration.v2ProjectRoot).toLowerCase()!==path.resolve(root).toLowerCase())throw Error('PT site gateway binding mismatch');
   const lease=acquire(root);
   try {
-    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile,catalogHash,root,lease});
+    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease});
     return projectPtSiteResult(value,origin);
   } finally {release(lease);}
 }
