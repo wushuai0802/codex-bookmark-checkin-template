@@ -51,6 +51,9 @@ after Harvest's daily task has completed can trigger one targeted execution-laye
 recheck. Daily-plan PT sites use the normal gateway. Monitoring-only sites use
 one exact same-origin bookmark URL, only after `ptFallbackOnlyEnabled: true` is
 set in ignored `config/runtime.local.json`; it defaults to false.
+An explicit same-day page result or an increase in the site's own "签到已得"
+counter within the same browser session can establish a verified supplement;
+the counter's unchanged cumulative value alone cannot.
 It also waits for V1's complete final report for the same Shanghai business
 day; an older completed V1 result cannot suppress today's Harvest failure.
 V1 then checks its own site account and authoritative result before any

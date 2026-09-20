@@ -45,8 +45,26 @@ export function publicSupplementResult(origin,result,now=new Date()){
     ...(result?.failureCode==='submission_outcome_unknown'?{submissionOutcomeUnknown:true}:{})};
 }
 
+export function ptRewardCounter(bodyText){
+  const values=[...String(bodyText??'').matchAll(/(?:签到已得|簽到已得)\s*([0-9][0-9,]*(?:\.[0-9]+)?)/g)]
+    .map(match=>Number(match[1].replaceAll(',','')));
+  return values.length>0&&values.every(value=>Number.isFinite(value)&&value===values[0])?values[0]:null;
+}
+
+export async function readPtRewardCounter(context,origin,config){
+  let page;
+  try{
+    page=await context.newPage();
+    await page.goto(`${origin}/`,{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)});
+    if(new URL(page.url()).origin!==origin)return null;
+    return ptRewardCounter(await page.locator('body').innerText({timeout:5000}));
+  }catch{return null;}
+  finally{await page?.close().catch(()=>{});}
+}
+
 export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=new Date(),
-  launch=launchAutomationContext,runTarget=processTarget,acquire=acquireRunLock,release=releaseRunLock}={}){
+  launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
+  acquire=acquireRunLock,release=releaseRunLock}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
   const bytes=fs.readFileSync(catalogFile);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase())throw Error('PT catalog changed');
@@ -66,7 +84,15 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=n
   let context;
   try {
     context=await launch(safeConfig);
-    const result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+    const before=await readReward(context,target.origin,safeConfig);
+    let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+    if(terminal.has(result?.status)&&result?.evidence?.authoritative!==true&&before!==null){
+      const after=await readReward(context,target.origin,safeConfig);
+      if(after!==null&&after>before){
+        result={...result,evidence:{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),
+          businessDate:dayAt(now),statusSignal:'reward_increment'}};
+      }
+    }
     return publicSupplementResult(target.origin,result,now);
   } finally {
     try{await context?.close();}finally{await release(lock);}

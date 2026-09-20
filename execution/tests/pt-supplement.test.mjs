@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {ptSupplementTarget,publicSupplementResult,runPtSupplement} from '../src/pt-supplement.mjs';
+import {ptSupplementTarget,publicSupplementResult,runPtSupplement,ptRewardCounter} from '../src/pt-supplement.mjs';
 import {ptPageEvidence} from '../src/browser.mjs';
 
 function fixture(t){
@@ -36,6 +36,20 @@ test('PT page evidence needs explicit same-day completion, not cumulative reward
   assert.equal(ptPageEvidence({...base,url:'https://other.example/',bodyText:'今日已签到'}),null);
   assert.equal(ptPageEvidence({...base,bodyText:'今日已签到'}).businessDate,'2026-09-20');
   assert.equal(ptPageEvidence({...base,bodyText:'2026-09-20 签到成功'}).source,'page_text');
+});
+
+test('only a same-session increase in the PT reward counter verifies a supplement',async t=>{
+  assert.equal(ptRewardCounter('鲸币 [使用]: 154,464.0 (签到已得350)'),350);
+  assert.equal(ptRewardCounter('签到已得350 签到已得351'),null);
+  const args=fixture(t),seen=[];
+  const result=await runPtSupplement({...args,readReward:async()=>{const value=seen.length?360:350;seen.push(value);return value;},
+    acquire:async()=>({owner:{nonce:'fixture'}}),release:async()=>{},
+    launch:async()=>({close:async()=>{}}),runTarget:async()=>({status:'signed'})});
+  assert.deepEqual(seen,[350,360]);assert.equal(result.status,'signed');assert.equal(result.evidence.authoritative,true);
+  const noChange=await runPtSupplement({...args,readReward:async()=>350,
+    acquire:async()=>({owner:{nonce:'fixture'}}),release:async()=>{},
+    launch:async()=>({close:async()=>{}}),runTarget:async()=>({status:'already_signed'})});
+  assert.equal(noChange.status,'unknown');
 });
 
 test('supplement holds the V1 lock and uses its browser flow once without altering daily plan',async t=>{
