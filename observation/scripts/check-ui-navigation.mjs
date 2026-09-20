@@ -13,7 +13,9 @@ const dataDir = path.join(artifacts, 'synthetic-data');
 fs.mkdirSync(dataDir);
 const snapshot = buildSnapshot({
   legacyRoot: fileURLToPath(new URL('../tests/fixtures/legacy/', import.meta.url)),
-  generatedAt: new Date().toISOString()
+  generatedAt: new Date().toISOString(),
+  monitorCatalog:{sites:[{origin:'https://pt-monitor.example',entryUrl:'https://pt-monitor.example/attendance'}]},
+  ptFallbackOnlyEnabled:true
 });
 fs.writeFileSync(path.join(dataDir, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
 fs.writeFileSync(path.join(dataDir, 'shadow-ledger.jsonl'), `${JSON.stringify(createLedgerRecord(snapshot))}\n`);
@@ -103,6 +105,7 @@ try {
           const table = document.querySelector('#view-pt-status .table-wrap');
           return table.scrollWidth <= table.clientWidth + 1;
         }), 'PT status must not need sideways scrolling on mobile');
+        if (view === 'pt-status') assert.match(await page.locator('#view-pt-status').textContent(),/仅补签/);
       }
       await page.screenshot({ path: path.join(artifacts, `settings-${viewport.width}.png`), fullPage: true });
       if (mobile) await page.locator('#menu-toggle').click();

@@ -12,7 +12,8 @@ export function loadRuntimeConfig(root=path.resolve('.')) {
   if(chromeExecutable&&!path.isAbsolute(chromeExecutable))throw Error('chromeExecutable must be absolute');
   if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(canaryTime))throw Error('canaryTime must be HH:mm');
   const executionEngine=local.executionEngine??'v1';if(!['v1','v2'].includes(executionEngine))throw Error('executionEngine must be v1 or v2');
-  return {file,legacyRoot:legacyRoot?path.resolve(legacyRoot):null,chromeExecutable:chromeExecutable?path.resolve(chromeExecutable):null,canaryTime,executionEngine,powershellExecutable:local.powershellExecutable??null};
+  return {file,legacyRoot:legacyRoot?path.resolve(legacyRoot):null,chromeExecutable:chromeExecutable?path.resolve(chromeExecutable):null,canaryTime,executionEngine,
+    ptFallbackOnlyEnabled:local.ptFallbackOnlyEnabled===true,powershellExecutable:local.powershellExecutable??null};
 }
 
 export function assertStandaloneV2Enabled(root=path.resolve('.')) {

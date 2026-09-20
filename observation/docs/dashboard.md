@@ -120,10 +120,10 @@ keeping browser control and check-in execution in the execution layer.
 - **Tasks:** searchable/filterable task ledger with account references,
   evidence source, authoritative flag, and execution owner.
 - **PT status:** status catalog for PT sites from the execution layer, Harvest,
-  or another observer. It includes unregistered sites, source-by-source status,
-  freshness, discrepancies, and bounded recheck candidates. Registered PT
-  candidates are handed to the execution layer after Harvest completion; the
-  panel itself never opens a browser or submits a check-in.
+  or another observer. It distinguishes regular PT tasks from sites in the
+  separate PT-only fallback scope, with source-by-source status, freshness and
+  discrepancies. After Harvest completion, unresolved in-scope sites may enter
+  one execution-layer recheck; the panel itself never opens a browser.
 - **Sites:** per-site execution-unit progress, logical groups, and a bounded
   policy control (`monitor`, `review`, `pause`) with a short note and audit
   history. Pause suppresses immediate attention for 24 hours, 3 days, or 7

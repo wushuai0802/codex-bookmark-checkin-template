@@ -9,11 +9,12 @@ production execution path. No second set of site credentials or profiles is
 needed.
 
 Harvest supplies read-only PT status. After its daily task completes, every
-registered PT site is reconciled once against the execution-layer result. A
-missing, explicit failed, or still-unconfirmed status may queue one bounded
-execution-layer recheck; confirmed success is status-only, and an uncertain
-previous submission is never replayed. Harvest-only sites remain visible until
-deliberately registered. See [PT status and fallback](docs/pt-status.md)
+site in the exact PT monitoring bookmarks is reconciled by origin. An explicit
+failure or still-unconfirmed status may queue one bounded execution-layer
+recheck when private `ptFallbackOnlyEnabled` is enabled. Confirmed Harvest
+success is status-only, and an uncertain previous submission is never replayed.
+Monitoring-only sites write a separate PT report without changing the daily
+execution plan. See [PT status and fallback](docs/pt-status.md)
 and [repository ownership](docs/repository-ownership.md).
 
 The existing Windows task calls the observation gateway through `scripts/run-v1-engine.mjs` and

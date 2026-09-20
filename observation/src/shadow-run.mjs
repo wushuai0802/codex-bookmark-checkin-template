@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSnapshot, writeSnapshot } from './bridge.mjs';
 import { appendLedgerRecord, createLedgerRecord } from './shadow-ledger.mjs';
+import {loadRuntimeConfig} from './runtime-config.mjs';
 
 function parseArgs(argv) {
   const args = {};
@@ -17,6 +18,7 @@ function parseArgs(argv) {
     else if (token === '--generated-at') args.generatedAt = argv[++i];
     else if (token === '--health-file') args.healthFile = argv[++i];
     else if (token === '--pt-status-file') args.ptStatusFile = argv[++i];
+    else if (token === '--pt-fallback-file') args.ptFallbackFile = argv[++i];
     else if (token === '--monitor-catalog') args.monitorCatalog = argv[++i];
     else if (token === '--identity-file') args.identityFile = argv[++i];
     else if (token === '--desired-plan') args.desiredPlan = argv[++i];
@@ -49,11 +51,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     }
     const legacyRoot = args.legacyRoot ?? process.env.CHECKIN_LEGACY_ROOT;
     if (!legacyRoot) throw new Error('provide --legacy-root or CHECKIN_LEGACY_ROOT');
+    const projectRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+    const businessDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(args.generatedAt??Date.now()));
+    const automaticFallbackFile=path.join(projectRoot,'outputs',`pt-fallback-results-${businessDate}.json`);
     const snapshot = buildSnapshot({
       legacyRoot,
       generatedAt: args.generatedAt,
       healthReport: loadJsonReport(args.healthFile, 'health report'),
       ptStatusReport: loadJsonReport(args.ptStatusFile, 'PT status report'),
+      ptFallbackReport: loadJsonReport(args.ptFallbackFile??(fs.existsSync(automaticFallbackFile)?automaticFallbackFile:null), 'PT fallback report'),
+      ptFallbackOnlyEnabled:loadRuntimeConfig(projectRoot).ptFallbackOnlyEnabled,
       monitorCatalog: loadJsonReport(args.monitorCatalog, 'PT bookmark catalog'),
       identityReport: loadJsonReport(args.identityFile, 'display identity observations'),
       desiredPlan: loadJsonReport(args.desiredPlan,'desired task plan')

@@ -193,6 +193,7 @@ function publicPtStatus(ptStatus) {
         displayName: typeof site.displayName === 'string' ? site.displayName.slice(0, 80) : origin.replace(/^https:\/\//, ''),
         accountRef: typeof site.accountRef === 'string' && /^acct_[a-f0-9]{16}$/.test(site.accountRef) ? site.accountRef : null,
         inLegacyPlan: site.inLegacyPlan === true,
+        fallbackEnabled: site.fallbackEnabled === true,
         managedBy: typeof site.managedBy === 'string' ? site.managedBy.slice(0, 80) : 'other',
         effective: effective && typeof effective.source === 'string' ? {
           source: effective.source.slice(0, 40),
@@ -223,6 +224,7 @@ function publicPtStatus(ptStatus) {
       sites: safeCount(counts.sites, sites.length),
       inLegacyPlan: safeCount(counts.inLegacyPlan, sites.filter((site) => site.inLegacyPlan).length),
       externalOnly: safeCount(counts.externalOnly, sites.filter((site) => !site.inLegacyPlan).length),
+      fallbackOnly: safeCount(counts.fallbackOnly, sites.filter((site) => site.fallbackEnabled && !site.inLegacyPlan).length),
       fresh: sites.filter((site) => site.effective?.fresh).length,
       discrepancies: safeCount(counts.discrepancies, sites.filter((site) => site.discrepancy).length),
       supplementCandidates: sites.filter((site) => site.supplementCandidate).length,

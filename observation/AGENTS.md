@@ -5,9 +5,11 @@
 This is one check-in project with an execution layer and an observation layer.
 Production dispatches the established browser runner through
 `scripts/run-v1-engine.mjs`, reusing its configuration and profiles in place.
-The observation layer monitors Harvest, reconciles registered PT sites and
-publishes redacted dashboard data. Historical standalone Canary execution is
-fenced off. Do not copy browser state or run an unregistered task.
+The observation layer monitors Harvest, reconciles the exact PT bookmark scope
+and publishes redacted dashboard data. Monitoring-only sites may use the
+execution layer's bounded single-site fallback only after private opt-in.
+Historical standalone Canary execution is fenced off. Do not copy browser
+state or run an origin outside the selected bookmark scope.
 
 ## Safety rules
 

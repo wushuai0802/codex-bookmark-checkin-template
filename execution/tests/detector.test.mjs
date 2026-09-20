@@ -8,7 +8,9 @@ test("识别已签到状态", () => {
   assert.equal(classifyPageText({ bodyText: "[查看签到记录] [21点]" }).status, "already_signed");
   assert.equal(classifyPageText({ bodyText: "[查看簽到記錄] [21點]" }).status, "already_signed");
   assert.equal(classifyPageText({ bodyText: "抱歉 您今天已经签到过了，请勿重复刷新。" }).status, "already_signed");
-  assert.equal(classifyPageText({ bodyText: "鲸币 [使用]: 154,464.0 (签到已得350)" }).status, "already_signed");
+  assert.equal(classifyPageText({ bodyText: "鲸币 [使用]: 154,464.0 (签到已得350)" }).status, "ready");
+  assert.equal(classifyPageText({ bodyText: "鲸币 [使用]: 154,464.0 (簽到已得350)" }).status, "ready");
+  assert.equal(classifyPageText({ bodyText: "今日已签到，鲸币 [使用]: 154,464.0 (签到已得350)" }).status, "already_signed");
   assert.equal(classifyPageText({ bodyText: "每日签到 今日已签到，明天再来吧", challengeSelectors: true }).status, "already_signed");
 });
 

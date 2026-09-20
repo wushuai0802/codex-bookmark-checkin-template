@@ -6,8 +6,8 @@ export const PT_STATUS_VALUES = [
   'unreachable', 'needs_attention', 'not_available', 'failed'
 ];
 
-const SOURCE_VALUES = new Set(['harvest', 'legacy-checkin', 'manual', 'v2-observer', 'other']);
-const EVIDENCE_VALUES = new Set(['api', 'page_text', 'usage_log', 'user_confirmation', 'manual', 'health_cache', 'harvest', 'none']);
+const SOURCE_VALUES = new Set(['harvest', 'legacy-checkin', 'execution-supplement', 'manual', 'v2-observer', 'other']);
+const EVIDENCE_VALUES = new Set(['api', 'page_text', 'pt_page', 'usage_log', 'user_confirmation', 'manual', 'health_cache', 'harvest', 'none']);
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
   'credential', 'credentials', 'profilepath', 'userdatadir', 'dpapi',
@@ -19,7 +19,7 @@ const STATUS_ALIASES = new Map([
   ['pending', 'unknown'], ['timeout', 'unreachable']
 ]);
 const SOURCE_PRIORITY = new Map([
-  ['harvest', 4], ['v2-observer', 3], ['legacy-checkin', 2], ['manual', 1], ['other', 0]
+  ['execution-supplement', 5], ['harvest', 4], ['v2-observer', 3], ['legacy-checkin', 2], ['manual', 1], ['other', 0]
 ]);
 
 function sensitiveKey(key) {
@@ -220,12 +220,17 @@ function mergeSiteObservations(observations, target) {
 }
 
 export function buildPtStatus({
-  tasks = [], receipts = [], planTargets = [], externalReport = null, monitorCatalog = null,
+  tasks = [], receipts = [], planTargets = [], externalReport = null, fallbackReport = null, monitorCatalog = null,
+  fallbackOnlyEnabled = false,
   generatedAt = new Date().toISOString(), businessDate = null, maxAgeHours = 26
 } = {}) {
   const report = externalReport
     ? normalizePtStatusReport(externalReport, { generatedAt, businessDate, maxAgeHours })
     : null;
+  const supplemental = fallbackReport
+    ? normalizePtStatusReport(fallbackReport, { generatedAt, businessDate, maxAgeHours })
+    : null;
+  if(supplemental && (supplemental.source!=='execution-supplement'||supplemental.businessDate!==businessDate))throw Error('PT fallback report has the wrong source or date');
   const targets = new Map();
   const stableFallbackAt = businessDate ? `${businessDate}T00:00:00.000Z` : generatedAt;
   for (const target of planTargets) {
@@ -273,6 +278,12 @@ export function buildPtStatus({
     if (!item.accountRef && matches.length === 1) item.accountRef = matches[0].accountRef;
     add(item);
   }
+  for(const item of supplemental?.sites??[]){
+    if(!monitorSites.has(item.origin) && !targets.has(item.origin))continue;
+    const matches=tasks.filter(task=>task.origin===item.origin);
+    if(!item.accountRef&&matches.length===1)item.accountRef=matches[0].accountRef;
+    add(item);
+  }
   for (const [origin, site] of monitorSites) {
     if ([...grouped.keys()].some(key => key.startsWith(`${origin}|`))) continue;
     add(normalizeObservation({ origin, displayName: site.displayName, source: 'v2-observer',
@@ -288,7 +299,8 @@ export function buildPtStatus({
       item.supplementCandidate = false;
     }
   }
-  const sites = [...grouped.values()].map((items) => mergeSiteObservations(items, targets.get(items[0].origin))).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
+  const sites = [...grouped.values()].map((items) => ({...mergeSiteObservations(items, targets.get(items[0].origin)),
+    fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)})).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;
   return {
@@ -301,6 +313,7 @@ export function buildPtStatus({
       sites: sites.length,
       inLegacyPlan: sites.filter((site) => site.inLegacyPlan).length,
       externalOnly: sites.filter((site) => !site.inLegacyPlan).length,
+      fallbackOnly: sites.filter((site) => site.fallbackEnabled && !site.inLegacyPlan).length,
       fresh: sites.filter((site) => site.effective?.fresh).length,
       discrepancies: sites.filter((site) => site.discrepancy).length,
       supplementCandidates: sites.filter((site) => site.supplementCandidate).length,

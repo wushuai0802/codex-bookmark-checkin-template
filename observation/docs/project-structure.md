@@ -13,11 +13,12 @@ observation layer calls that runner as a child and never owns browser state.
 | V1 runtime `src/`, `scripts/Run-Checkin.ps1` | Sole browser/check-in implementation |
 
 After Harvest's daily task reports completion, `src/harvest-fallback.mjs`
-compares its observations with the current registered PT plan and same-day
-execution results. Completed sites remain status-only. A unique registered PT
-task with an unresolved result may receive one bounded execution-layer recheck;
-an uncertain prior submission is never replayed. Results enter the normal
-redacted snapshot and appear on the next dashboard sync.
+compares its observations with the exact PT monitoring bookmarks and same-day
+execution results. Completed sites remain status-only. Daily-plan PT tasks use
+the existing gateway; the other monitored sites use `execution/src/pt-supplement.mjs`
+only after private opt-in, with one URL, no automatic retry and both execution
+locks. Their redacted results remain separate from the daily plan and appear on
+the next dashboard sync. An uncertain prior submission is never replayed.
 
 The dashboard can change a site's reminder policy and note. It cannot submit a
 browser check-in, change a login or register a Harvest-only site. Those actions

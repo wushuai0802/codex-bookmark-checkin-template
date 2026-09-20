@@ -323,7 +323,7 @@ function renderReadiness(data) {
   for(const [label,value,caption] of [
     ['计划回执', `${data?.counts?.executionUnits??0} 项`, `${reconciliation.missingCount??0} 项缺少回执`],
     ['账号对账', (reconciliation.conflictCount??0)===0?'无冲突':`${reconciliation.conflictCount} 项冲突`, '以执行层账号为准'],
-    ['PT 监测', `${pt.sites??0} 站`, `${pt.inLegacyPlan??0} 站已登记补签`]
+    ['PT 监测', `${pt.sites??0} 站`, `${pt.inLegacyPlan??0} 日常 · ${pt.fallbackOnly??0} 仅补签`]
   ]){
     const item=el('div','health-stat');append(item,el('span',null,label),el('b',null,value),el('span',null,caption));node.append(item);
   }
@@ -397,11 +397,11 @@ function renderPtStatus(data) {
     view.querySelector('.toolbar')?.before(banner);
   }
   const counts = pt.counts ?? {};
-  const reviewCount=(pt.sites??[]).filter(site=>site.inLegacyPlan&&
+  const reviewCount=(pt.sites??[]).filter(site=>(site.inLegacyPlan||site.fallbackEnabled)&&
     !['signed','already_signed','not_available'].includes(site.effective?.status)).length;
   const cards = [
     ['PT 站点', counts.sites ?? 0, `${counts.inLegacyPlan ?? 0} 个在签到计划内`, ''],
-    ['未登记 PT', counts.externalOnly ?? 0, '仅展示，需先登记执行任务', 'monitor'],
+    ['仅补签 PT', counts.fallbackOnly ?? 0, 'Harvest 未完成才交执行层复核', 'monitor'],
     ['状态新鲜', counts.fresh ?? 0, `共 ${counts.sites ?? 0} 个站点`, 'fresh'],
     ['待核验', reviewCount, '执行层按原站点流程复核', 'review']
   ];
@@ -417,17 +417,17 @@ function renderPtStatus(data) {
   for (const site of sites) {
     const row = el('tr');
     const siteCell = el('td'); append(siteCell, el('span', 'origin', site.displayName || site.origin), el('span', 'subtext', site.origin));
-    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '已登记执行' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : '需先登记站点'));
+    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? 'Harvest 未完成后复核' : '不在补签范围'));
     const effective = site.effective ?? {};
     const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown');
     if (!effective.fresh) { chip.className = 'status-chip unknown stale'; chip.textContent = effective.observedAt ? `历史：${STATUS_LABELS[effective.status] ?? '未知'}` : '暂无今日记录'; }
     append(statusCell, chip, site.discrepancy ? el('span', 'subtext discrepancy-text', '来源状态不一致') : null);
-    const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', effective.authoritative ? '权威证据' : '状态待核验'));
+    const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', effective.authoritative ? '权威证据' : '状态待核验'));
     const observedCell = el('td'); append(observedCell, el('span', null, formatTime(effective.observedAt)), el('span', 'subtext', effective.fresh ? '当日回执' : effective.observedAt ? '历史记录 · 非今日确认' : '暂无今日记录'));
     const actionCell = el('td');
-    if (!site.inLegacyPlan) append(actionCell,el('span',null,'仅观测'),el('span','subtext','需要补签时先登记执行任务'));
+    if (!site.inLegacyPlan&&!site.fallbackEnabled) append(actionCell,el('span',null,'仅观测'),el('span','subtext','不在当前书签补签范围'));
     else if (['signed','already_signed'].includes(effective.status) && effective.authoritative) append(actionCell,
-      el('span',null,effective.source==='harvest'?'Harvest 今日成功':'执行账号今日完成'),
+      el('span',null,effective.source==='harvest'?'Harvest 今日成功':effective.source==='execution-supplement'?'补签已确认':'执行账号今日完成'),
       effective.source==='harvest'?el('span','subtext','执行账号以自身回执为准'):null);
     else if (effective.status==='not_available' && effective.authoritative) append(actionCell,el('span',null,'功能未开放'));
     else append(actionCell,statusChip('needs_attention'),el('span','subtext','待执行层核验'));

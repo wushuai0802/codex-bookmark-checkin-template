@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {runLegacyEngine} from './legacy-engine.mjs';
+import {runPtSite,projectPtSiteResult} from './pt-site-execution.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
 const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:null;}catch{return null;}};
 const terminal=new Set(['signed','already_signed']);
 const failures=new Set(['failed','not_signed']);
 
-export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=new Date()}={}) {
+export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=new Date(),fallbackOnlyEnabled=false}={}) {
   const businessDate=dayAt(now),eligible=[],blocked=[];let observedSuccess=0;
   if(harvest?.source!=='harvest'||harvest.businessDate!==businessDate||!Array.isArray(harvest.sites)||
      !Number.isFinite(Date.parse(harvest.generatedAt))||Date.parse(harvest.generatedAt)>now.getTime()+60_000||
@@ -19,7 +20,13 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
   const harvestCompleted=harvest.taskCompletion?.status==='completed'&&Number.isInteger(harvest.taskCompletion.resultId)&&
     Number.isFinite(startedAt)&&Number.isFinite(doneAt)&&startedAt<=doneAt&&doneAt<=now.getTime()+60_000&&
     dayAt(new Date(startedAt))===businessDate&&dayAt(new Date(doneAt))===businessDate;
-  const catalogOrigins=new Set(catalog.sites.map(s=>originOf(s.origin)).filter(Boolean));
+  const catalogByOrigin=new Map();
+  for(const site of catalog.sites){
+    const origin=originOf(site?.origin);
+    if(!origin||catalogByOrigin.has(origin))throw Error('PT catalog has an invalid or duplicate origin');
+    catalogByOrigin.set(origin,site);
+  }
+  const catalogOrigins=new Set(catalogByOrigin.keys());
   const registered=plan.targets.filter(target=>(target.folderNames??[]).some(folder=>typeof folder==='string'&&/pt/i.test(folder)));
   const observations=new Map(),assessments=[];
   const block=(origin,reason)=>{blocked.push({origin,reason});assessments.push({origin,state:'blocked',reason});};
@@ -47,16 +54,20 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
     }
     if(!currentV1){block(origin,'v1_day_not_ready');continue;}
     const targets=registered.filter(t=>originOf(t.origin)===origin);
-    if(targets.length!==1){block(origin,targets.length?'ambiguous_legacy_account':'requires_v1_registration');continue;}
-    const target=targets[0],accountKey=target.accountKey??'site-default';
+    if(targets.length>1){block(origin,'ambiguous_legacy_account');continue;}
+    const target=targets[0],accountKey=target?.accountKey??'site-default';
+    if(!target&&!fallbackOnlyEnabled){block(origin,'fallback_only_not_enabled');continue;}
     if((config.disabledCheckinOrigins??[]).includes(origin)||(config.disabledAccountKeys??[]).includes(accountKey)||
        (config.excludedOrigins??[]).includes(origin)){
       block(origin,'disabled_by_v1_configuration');continue;
     }
-    // Harvest's userId is the owner in its own database, not a PT-site ID.
-    // Never equate those unrelated namespaces for a V1 account-bound task.
-    if(target.accountId){
-      block(origin,'cross_system_identity_unverified');continue;
+    let entryUrl=null;
+    if(!target){
+      entryUrl=catalogByOrigin.get(origin)?.entryUrl;
+      try {
+        const url=new URL(entryUrl);
+        if(url.protocol!=='https:'||url.origin!==origin||url.username||url.password||url.search||url.hash||entryUrl.length>255)throw Error('invalid entry');
+      } catch {block(origin,'fallback_entry_missing_or_unsafe');continue;}
     }
     const prior=latest.results.find(r=>r.origin===origin&&(r.accountKey??'site-default')===accountKey);
     if(prior&&terminal.has(prior.status)){assessments.push({origin,state:'confirmed_by_executor'});continue;}
@@ -66,14 +77,16 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
     if(prior?.failureCode==='submission_outcome_unknown'){
       block(origin,'submission_outcome_unknown');continue;
     }
-    eligible.push({origin,accountKey,observedAt:new Date(at).toISOString(),identityBound:false,
+    eligible.push({origin,accountKey,kind:target?'registered':'fallback_only',...(entryUrl?{entryUrl}:{}),observedAt:new Date(at).toISOString(),
       trigger:site.missingFromHarvest?'registered_pt_status_unobserved':status==='unknown'?'harvest_task_done_status_unknown':'harvest_explicit_failure'});
     assessments.push({origin,state:'executor_recheck_queued'});
   }
-  return {schemaVersion:1,businessDate,source:'harvest',observedSuccess,registeredCount:registered.length,assessments,eligible,blocked};
+  return {schemaVersion:1,businessDate,source:'harvest',observedSuccess,registeredCount:registered.length,
+    fallbackOnlyCount:[...catalogOrigins].filter(origin=>!registered.some(target=>originOf(target.origin)===origin)).length,
+    assessments,eligible,blocked};
 }
 
-function writeAtomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const temporary=`${file}.${process.pid}.tmp`;fs.writeFileSync(temporary,JSON.stringify(value,null,2),'utf8');fs.renameSync(temporary,file);}
+function writeAtomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const temporary=`${file}.${process.pid}.tmp`;fs.writeFileSync(temporary,JSON.stringify(value,null,2),{encoding:'utf8',mode:0o600});fs.renameSync(temporary,file);}
 
 function claimWorker(root) {
   const file=path.join(root,'data/harvest-fallback.lock');fs.mkdirSync(path.dirname(file),{recursive:true});
@@ -89,13 +102,15 @@ function claimWorker(root) {
   throw Error('Harvest fallback lock unavailable');
 }
 
-export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,config={},now=new Date(),execute=false,runEngine=runLegacyEngine}={}) {
-  const preview=planHarvestFallback({harvest,catalog,plan,latest,config,now});
+export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,config={},now=new Date(),execute=false,
+  catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite}={}) {
+  const preview=planHarvestFallback({harvest,catalog,plan,latest,config,now,fallbackOnlyEnabled});
   if(!execute)return {...preview,mode:'preview'};
   const runtime=loadRuntimeConfig(root);
   if(runtime.executionEngine!=='v1'||!runtime.legacyRoot)throw Error('Harvest fallback requires the V1 execution engine');
   const integration=JSON.parse(fs.readFileSync(path.join(runtime.legacyRoot,'data/v2-integration.json'),'utf8'));
   if(integration.executionEngine!=='v1'||path.resolve(integration.v2ProjectRoot)!==path.resolve(root))throw Error('Harvest fallback engine bindings disagree');
+  if(preview.eligible.some(item=>item.kind==='fallback_only')&&(!catalogFile||!/^[a-f0-9]{64}$/i.test(catalogHash??'')))throw Error('PT fallback needs the bound bookmark catalog');
   if(!preview.eligible.length)return {...preview,mode:'executed',outcomes:[]};
   const workerLock=claimWorker(root);
   try{
@@ -106,17 +121,33 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     if(state.businessDate!==preview.businessDate||!Array.isArray(state.attempts))throw Error('Harvest fallback audit is invalid');
   }
   const outcomes=[];
+  const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
   for(const candidate of preview.eligible){
-    if(state.attempts.some(item=>item.origin===candidate.origin&&item.state!=='deferred_busy')){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    if(state.attempts.some(item=>item.origin===candidate.origin&&!['deferred_busy','deferred_preflight'].includes(item.state))){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
     // Persist before executing. An interrupted or uncertain attempt is not replayed.
     const attempt={origin:candidate.origin,accountKey:candidate.accountKey,observedAt:candidate.observedAt,startedAt:new Date().toISOString(),state:'in_progress'};
     state.attempts.push(attempt);writeAtomic(stateFile,state);
     try{
-      const report=await runEngine({root,mode:'execute',origins:[candidate.origin],notify:false});
-      attempt.state='completed';attempt.runId=report.runId??null;
-      attempt.v1Status=report.results?.find(r=>r.origin===candidate.origin&&r.accountKey===candidate.accountKey)?.status??'unknown';
+      if(candidate.kind==='fallback_only'){
+        const result=projectPtSiteResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash}),candidate.origin);
+        if(dayAt(new Date(result.observedAt))!==preview.businessDate||Date.parse(result.observedAt)>now.getTime()+60_000)throw Error('PT site result is not from today');
+        let report={schemaVersion:1,source:'execution-supplement',businessDate:preview.businessDate,generatedAt:now.toISOString(),sites:[]};
+        if(fs.existsSync(statusFile)){
+          report=JSON.parse(fs.readFileSync(statusFile,'utf8'));
+          if(report.source!=='execution-supplement'||report.businessDate!==preview.businessDate||!Array.isArray(report.sites))throw Error('PT status audit is invalid');
+        }
+        report.generatedAt=new Date().toISOString();
+        report.sites=report.sites.filter(site=>site.origin!==candidate.origin);
+        report.sites.push(result);writeAtomic(statusFile,report);
+        attempt.v1Status=result.status;
+      }else{
+        const report=await runEngine({root,mode:'execute',origins:[candidate.origin],notify:false});
+        attempt.runId=report.runId??null;
+        attempt.v1Status=report.results?.find(r=>r.origin===candidate.origin&&r.accountKey===candidate.accountKey)?.status??'unknown';
+      }
+      attempt.state='completed';
     }catch(error){
-      attempt.state=error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
+      attempt.state=error.code==='PT_PREFLIGHT'?'deferred_preflight':error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
       attempt.reason=String(error.message).slice(0,120);
     }
     writeAtomic(stateFile,state);
