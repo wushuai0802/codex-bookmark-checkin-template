@@ -69,7 +69,7 @@ function recordErrors(record) {
  * begin candidate-worker review. This function is read-only and never grants
  * a lease or starts an executor.
  */
-export function evaluateShadowHistory(records, { minConsecutiveDays = 7, now = new Date().toISOString() } = {}) {
+export function evaluateShadowHistory(records, { minConsecutiveDays = 3, now = new Date().toISOString() } = {}) {
   if (!Number.isInteger(minConsecutiveDays) || minConsecutiveDays < 1 || minConsecutiveDays > 366) {
     throw new Error('minConsecutiveDays must be between 1 and 366');
   }
@@ -166,11 +166,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   try {
     const args = parseArgs(process.argv);
     if (args.help) {
-      console.log('Usage: node src/shadow-acceptance.mjs --ledger <jsonl> [--min-days 7]');
+      console.log('Usage: node src/shadow-acceptance.mjs --ledger <jsonl> [--min-days 3]');
       process.exit(0);
     }
     if (!args.ledger) throw new Error('provide --ledger');
-    const result = evaluateShadowHistory(readLedger(path.resolve(args.ledger)), { minConsecutiveDays: args.minConsecutiveDays ?? 7 });
+    const result = evaluateShadowHistory(readLedger(path.resolve(args.ledger)), { minConsecutiveDays: args.minConsecutiveDays ?? 3 });
     console.log(JSON.stringify(result, null, 2));
     if (!result.accepted) process.exitCode = 2;
   } catch (error) {

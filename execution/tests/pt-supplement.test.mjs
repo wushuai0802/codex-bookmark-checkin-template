@@ -35,6 +35,9 @@ test('PT page evidence needs explicit same-day completion, not cumulative reward
   assert.equal(ptPageEvidence({...base,bodyText:'2026-09-20\n昨日签到成功 2026-09-19'}),null);
   assert.equal(ptPageEvidence({...base,url:'https://other.example/',bodyText:'今日已签到'}),null);
   assert.equal(ptPageEvidence({...base,bodyText:'今日已签到'}).businessDate,'2026-09-20');
+  assert.equal(ptPageEvidence({...base,bodyText:'今天已经签到过了'}).source,'page_text');
+  assert.equal(ptPageEvidence({...base,bodyText:'昨天已经签到过了'}),null);
+  assert.equal(ptPageEvidence({...base,bodyText:'今天还未签到'}),null);
   assert.equal(ptPageEvidence({...base,bodyText:'2026-09-20 签到成功'}).source,'page_text');
   assert.equal(ptPageEvidence({...base,status:'signed',bodyText:'这是您的第159次签到，本次签到获得800个憨豆。'}).source,'page_text');
   assert.equal(ptPageEvidence({...base,status:'signed',bodyText:'这是您的第159次签到，本次签到获得800个憨豆。',allowUndatedActionText:false}),null);

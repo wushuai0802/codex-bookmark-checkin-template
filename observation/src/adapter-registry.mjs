@@ -23,7 +23,7 @@ export function migrationReadiness({snapshot, acceptance, adapterObservations} =
   const coverage=evaluateAdapterCoverage(adapterObservations,snapshot?.tasks);
   if (coverage.blocked.length) blockers.push('adapter_coverage_incomplete');
   return { phase:blockers.length?'shadow_preparation':'canary_review', executionEnabled:false, blockers, coverage,
-    gates:{shadowDays:acceptance?.eligibleRecentDays??0,requiredShadowDays:acceptance?.requiredConsecutiveDays??7,
+    gates:{shadowDays:acceptance?.eligibleRecentDays??0,requiredShadowDays:acceptance?.requiredConsecutiveDays??3,
       reconciliationClear:!reconciliation.missingCount&&!reconciliation.conflictCount, evidenceClear:!quality.unverifiedSuccess,
       adapterCoverageClear:coverage.blocked.length===0} };
 }

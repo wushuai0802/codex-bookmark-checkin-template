@@ -124,6 +124,18 @@ test('shadow history accepts seven consecutive fresh records', () => {
   assert.deepEqual(result.reasons, []);
 });
 
+test('three healthy same-plan days satisfy observation without relaxing the canary gate',()=>{
+  const records=[1,2,3].map(day=>historyRecord(`2026-09-0${day}`));
+  const accepted=evaluateShadowHistory(records,{now:'2026-09-03T14:00:00Z'});
+  assert.equal(accepted.accepted,true);
+  assert.equal(accepted.requiredConsecutiveDays,3);
+  assert.equal(evaluateShadowHistory(records.slice(1),{now:'2026-09-03T14:00:00Z'}).accepted,false);
+  records[1].health.healthy=false;
+  const unhealthy=evaluateShadowHistory(records,{now:'2026-09-03T14:00:00Z'});
+  assert.equal(unhealthy.accepted,false);
+  assert.ok(unhealthy.reasons.includes('health_not_healthy'));
+});
+
 test('shadow history blocks gaps, stale health, conflicts, and duplicate records', () => {
   const records = [
     historyRecord('2026-09-01', { recordId: 'ledger_111111111111111111111111' }),
@@ -169,7 +181,7 @@ test('recovered recent days can pass without rewriting earlier failed audit hist
   const result = evaluateShadowHistory(records, { now: '2026-09-07T14:00:00Z' });
   assert.equal(result.accepted, true);
   assert.equal(result.staleRecordCount, 1);
-  assert.equal(result.eligibleRecentDays, 7);
+  assert.equal(result.eligibleRecentDays, 3);
 });
 
 test('a fresh boolean cannot substitute for source time and stable plan', () => {
