@@ -1,5 +1,5 @@
 import { overviewMetrics, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt } from './dashboard-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
@@ -196,7 +196,7 @@ function renderKpis(data) {
   const status = data?.status ?? {};
   const metrics = overviewMetrics(data);
   const cards = [
-    ['成功回执', metrics.success, `已核验 ${metrics.verifiedSuccess} / 待核验 ${metrics.unverifiedSuccess}`, 'success'],
+    ['执行成功', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'success'],
     ['未开放回执', metrics.unavailable, `已核验 ${metrics.verifiedUnavailable} / 待核验 ${metrics.unverifiedUnavailable}`, 'not_available'],
     ['尚未完成', metrics.pending, `${metrics.manual} 项需关注 · ${metrics.deferred} 项延后`, 'pending'],
     ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, '同站多账号分别核验', '']
@@ -308,11 +308,11 @@ function renderDailySummary(data) {
   const copy = el('div', 'daily-copy');
   const title = dailySummaryTitle(m, { previousDay, pausedCount });
   append(copy, el('p', 'eyebrow', `DAILY CHECK-IN / ${data?.businessDate ?? '—'}`), el('h2', null, title),
-    el('p', 'daily-note', `${previousDay ? '最近业务日：' : ''}${m.verifiedSuccess} 项签到已核验，${m.unverifiedSuccess} 项成功回执待核验；${m.verifiedUnavailable} 项确认未开放，${m.unverifiedUnavailable} 项未开放结论待核验。`));
+    el('p', 'daily-note', `${previousDay ? '最近业务日：' : ''}${m.success} 项执行成功，其中 ${m.verifiedSuccess} 项证据已核验、${m.unverifiedSuccess} 项待补证；${m.verifiedUnavailable} 项确认未开放，${m.unverifiedUnavailable} 项未开放结论待核验。`));
   const progress = el('div', 'daily-progress');
-  append(progress, el('strong', null, m.rate === null ? '—' : `${m.rate}%`), el('span', null, previousDay ? '最近业务日完成率' : '已核验完成率'));
-  progress.title='已核验成功数 /（总任务数 − 已确认未开放数）；待核验回执不计为已核验成功。';
-  const bar = el('div', 'completion-track'); const fill = el('i'); fill.style.width = `${Math.min(100, m.rate ?? 0)}%`; bar.append(fill); progress.append(bar);
+  append(progress, el('strong', null, m.executionRate === null ? '—' : `${m.executionRate}%`), el('span', null, previousDay ? '最近业务日执行成功率' : '执行成功率'));
+  progress.title='执行成功项 / 总账号任务数；权威核验数单独列示，未开放项不算成功。';
+  const bar = el('div', 'completion-track'); const fill = el('i'); fill.style.width = `${Math.min(100, m.executionRate ?? 0)}%`; bar.append(fill); progress.append(bar);
   append(node, copy, progress);
   $('#sync-age').textContent = `快照生成 ${formatTime(data?.generatedAt)} · ${m.ageMinutes === null ? '尚无数据' : `${m.ageMinutes} 分钟前`} · ${previousDay ? '等待今日业务回执' : m.fresh ? '数据有效' : '请检查同步'}`;
 }
@@ -397,13 +397,14 @@ function renderPtStatus(data) {
     view.querySelector('.toolbar')?.before(banner);
   }
   const counts = pt.counts ?? {};
-  const reviewCount=(pt.sites??[]).filter(site=>(site.inLegacyPlan||site.fallbackEnabled)&&
-    !['signed','already_signed','not_available'].includes(site.effective?.status)).length;
+  const ptSites=pt.sites??[];
+  const countCategory=category=>ptSites.filter(site=>ptStatusCategory(site)===category).length;
+  const reviewCount=ptSites.filter(site=>matchesPt(site,'review')).length;
   const cards = [
-    ['PT 站点', counts.sites ?? 0, `${counts.inLegacyPlan ?? 0} 个在签到计划内`, ''],
-    ['仅补签 PT', counts.fallbackOnly ?? 0, 'Harvest 未完成才交执行层复核', 'monitor'],
-    ['状态新鲜', counts.fresh ?? 0, `共 ${counts.sites ?? 0} 个站点`, 'fresh'],
-    ['待核验', reviewCount, '执行层按原站点流程复核', 'review']
+    ['PT 站点', counts.sites ?? 0, `${counts.inLegacyPlan ?? 0} 日常 · ${counts.fallbackOnly ?? 0} 仅补签`, ''],
+    ['权威完成', countCategory('confirmed'), '当日页面、接口或日志确认', 'confirmed'],
+    ['执行成功待补证', countCategory('reported'), '已报成功，不等于漏签', 'reported'],
+    ['状态未知', reviewCount, '缺少可确认的今日结论', 'review']
   ];
   const kpis = $('#pt-kpis'); kpis.replaceChildren();
   for (const [label, value, foot, scope] of cards) {
@@ -419,18 +420,24 @@ function renderPtStatus(data) {
     const siteCell = el('td'); append(siteCell, el('span', 'origin', site.displayName || site.origin), el('span', 'subtext', site.origin));
     const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? 'Harvest 未完成后复核' : '不在补签范围'));
     const effective = site.effective ?? {};
+    const category = ptStatusCategory(site);
     const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown');
+    const likelySigned = effective.status === 'unknown' && effective.fresh && !effective.authoritative &&
+      effective.evidence?.source === 'pt_page' && effective.evidence?.summary?.startsWith('检测到签到已得');
+    if (likelySigned) chip.textContent = '疑似已签到';
+    else if(category==='reported')chip.textContent='执行成功';
     if (!effective.fresh) { chip.className = 'status-chip unknown stale'; chip.textContent = effective.observedAt ? `历史：${STATUS_LABELS[effective.status] ?? '未知'}` : '暂无今日记录'; }
     append(statusCell, chip, site.discrepancy ? el('span', 'subtext discrepancy-text', '来源状态不一致') : null);
-    const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', effective.authoritative ? '权威证据' : '状态待核验'));
+    const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', category==='reported' ? '执行回执待补证' : effective.authoritative ? '权威证据' : '状态待核验'));
     const observedCell = el('td'); append(observedCell, el('span', null, formatTime(effective.observedAt)), el('span', 'subtext', effective.fresh ? '当日回执' : effective.observedAt ? '历史记录 · 非今日确认' : '暂无今日记录'));
     const actionCell = el('td');
     if (!site.inLegacyPlan&&!site.fallbackEnabled) append(actionCell,el('span',null,'仅观测'),el('span','subtext','不在当前书签补签范围'));
-    else if (['signed','already_signed'].includes(effective.status) && effective.authoritative) append(actionCell,
+    else if (category==='confirmed') append(actionCell,
       el('span',null,effective.source==='harvest'?'Harvest 今日成功':effective.source==='execution-supplement'?'补签已确认':'执行账号今日完成'),
       effective.source==='harvest'?el('span','subtext','执行账号以自身回执为准'):null);
-    else if (effective.status==='not_available' && effective.authoritative) append(actionCell,el('span',null,'功能未开放'));
-    else append(actionCell,statusChip('needs_attention'),el('span','subtext','待执行层核验'));
+    else if (category==='unavailable') append(actionCell,el('span',null,'功能未开放'));
+    else if(category==='reported')append(actionCell,el('span',null,'补录当日证据'),el('span','subtext','不重复提交签到'));
+    else append(actionCell,statusChip('needs_attention'),el('span','subtext',likelySigned ? effective.evidence.summary : '待执行层核验'));
     if(site.inLegacyPlan && state.data?.sites?.some(item=>item.origin===site.origin)){
       const manage=el('button','link-button','管理标记');manage.type='button';manage.addEventListener('click',()=>openSiteControls(site.origin));actionCell.append(manage);
     }
@@ -617,7 +624,7 @@ function renderAll() {
   if (!integrity) { integrity=el('div','scope-banner');integrity.id='integrity-note';$('#daily-summary').after(integrity); }
   const reconciliation=data.snapshot?.reconciliation;
   const quality=data.evidenceQuality??data.snapshot?.evidenceQuality;
-  integrity.textContent=`执行计划对账：缺少回执 ${reconciliation?.missingCount??0} · 身份冲突 ${reconciliation?.conflictCount??0} · 计划外回执 ${reconciliation?.unexpectedCount??0} · ${quality?.unverifiedSuccess??0} 项成功结论待核验。`;
+  integrity.textContent=`执行计划对账：缺少回执 ${reconciliation?.missingCount??0} · 身份冲突 ${reconciliation?.conflictCount??0} · 计划外回执 ${reconciliation?.unexpectedCount??0} · ${quality?.unverifiedSuccess??0} 项执行成功待补证（不等于未签到）。`;
   let shortcuts = $('#overview-shortcuts');
   if (!shortcuts) { shortcuts = el('div', 'overview-shortcuts'); shortcuts.id = 'overview-shortcuts'; $('#kpi-grid').after(shortcuts); }
   shortcuts.replaceChildren();

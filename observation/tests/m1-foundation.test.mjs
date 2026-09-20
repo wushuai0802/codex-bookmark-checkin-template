@@ -100,3 +100,44 @@ test('new execution evidence sources require their account/day signal',()=>{
  const unavailable=normalizeEvidence({status:'not_available',evidence:{source:'vibe_entitlement_status',authoritative:true,businessDate:'2026-09-02',accountId:'7',outcome:'entitlement_active'}},context);
  assert.equal(unavailable.verification,'feature_unavailable');
 });
+
+test('legacy first-party reward evidence can be verified without an older authority flag',()=>{
+ const context={businessDate:'2026-09-02',referenceAt:now,expectedId:'7'};
+ const usage={source:'usage_log',accountId:'7',createdAt:'2026-09-02T01:00:00Z',rewardAmount:25};
+ assert.equal(normalizeEvidence({status:'signed',accountId:'7',evidence:usage},context).verification,'verified');
+ for(const evidence of [
+   {...usage,accountId:'8'}, {...usage,createdAt:'2026-09-01T01:00:00Z'},
+   {...usage,createdAt:'2026-09-03T01:00:00Z'}, {...usage,rewardAmount:0},
+   {...usage,authoritative:false}
+ ])assert.equal(normalizeEvidence({status:'signed',accountId:'7',evidence},context).authoritative,false);
+ const captcha={source:'new_api_captcha',quotaAwarded:500,attempts:1};
+ assert.equal(normalizeEvidence({status:'signed',evidence:captcha},context).verification,'verified');
+ for(const evidence of [{...captcha,quotaAwarded:0},{...captcha,attempts:0},
+   {...captcha,businessDate:'2026-09-01'},{...captcha,authoritative:false}])
+   assert.equal(normalizeEvidence({status:'signed',evidence},context).authoritative,false);
+});
+
+test('a dated account-bound canary handoff keeps its verified calendar provenance',()=>{
+ const context={businessDate:'2026-09-02',referenceAt:now};
+ const evidence={source:'v2_canary',originalSource:'new_api_checkin_calendar',authoritative:true,
+   businessDate:'2026-09-02',confirmedAt:'2026-09-02T01:00:00Z'};
+ assert.equal(normalizeEvidence({status:'signed',v2Owned:true,evidence},context).verification,'verified');
+ for(const input of [
+   {status:'signed',evidence},
+   {status:'signed',v2Owned:true,evidence:{...evidence,originalSource:'unknown_adapter'}},
+   {status:'signed',v2Owned:true,evidence:{...evidence,businessDate:'2026-09-01'}},
+   {status:'signed',v2Owned:true,evidence:{...evidence,authoritative:false}}
+ ])assert.equal(normalizeEvidence(input,context).authoritative,false);
+});
+
+test('OAuth action followed by a confirmed status can retain its positive reward evidence',()=>{
+ const context={businessDate:'2026-09-02',referenceAt:now};
+ const evidence={source:'oauth_api_action_status',actionBalance:120,reward:25};
+ assert.equal(normalizeEvidence({status:'signed',evidence},context).verification,'verified');
+ for(const input of [
+   {status:'signed',evidence:{...evidence,reward:0}},
+   {status:'signed',evidence:{...evidence,actionBalance:null}},
+   {status:'signed',evidence:{...evidence,authoritative:false}},
+   {status:'signed',evidence:{...evidence,businessDate:'2026-09-01'}}
+ ])assert.equal(normalizeEvidence(input,context).authoritative,false);
+});

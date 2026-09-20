@@ -51,6 +51,8 @@ after Harvest's daily task has completed can trigger one targeted execution-laye
 recheck. Daily-plan PT sites use the normal gateway. Monitoring-only sites use
 one exact same-origin bookmark URL, only after `ptFallbackOnlyEnabled: true` is
 set in ignored `config/runtime.local.json`; it defaults to false.
+The selected bookmark catalog is also checked for sites absent from Harvest's
+result set; those sites cannot silently remain observation-only.
 An explicit same-day page result or an increase in the site's own "签到已得"
 counter within the same browser session can establish a verified supplement;
 the counter's unchanged cumulative value alone cannot.
@@ -60,9 +62,12 @@ V1 then checks its own site account and authoritative result before any
 submission. `unknown` never proves a failure or authorizes blind submission;
 stale data, sites outside the selected PT bookmark folder and ambiguous
 daily-plan accounts never create tasks. The monitoring-only path does not alter
-the daily plan or overwrite its 22-task result. It records a prepared attempt
+the daily plan or overwrite its daily result. It records a prepared attempt
 before invoking the original execution-layer site flow, with a single URL and
 no automatic retry; uncertain outcomes are not replayed.
+The read-only preview reports both eligible sites and `newAttempts` after the
+daily attempt ledger is applied. The scheduler launches no fallback worker when
+`newAttempts` is zero, even if older unresolved candidates remain visible.
 
 Harvest's `userId` identifies the Harvest database owner, **not** the PT site
 account. It is not used to match or reject a one-account-per-site fallback.

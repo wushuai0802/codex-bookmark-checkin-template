@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { classifyPageText, scoreActionText } from "./detector.mjs";
+import { classifyPageText, scoreActionText, ptPageEvidence } from "./detector.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 
@@ -333,6 +333,10 @@ try {
         challengeReloaded,
         checkinRestartCount,
         attendanceEndpoint,
+        ...(['signed','already_signed'].includes(state.status)?{
+          evidence:ptPageEvidence({origin:expectedOrigin,url:page.url(),bodyText:snapshot.bodyText,
+            status:state.status,allowUndatedActionText:false})??undefined
+        }:{}),
       };
       const explicitlyConfirmed = ["signed", "already_signed"].includes(state.status);
       const endpointReady = allowEndpointReady && state.status === "ready" && siteBodyLoaded && attendanceEndpoint;

@@ -89,7 +89,7 @@ export function accountRef(accountKey) {
 export function classifyEvidence(result) {
   const source = result?.evidence?.source ?? 'none';
   const sourceMap = {
-    usage_log: 'usage_log', api: 'api', page_text: 'page_text',
+    usage_log: 'usage_log', api: 'api', page_text: 'page_text', v2_canary: 'api',
     user_confirmation: 'user_confirmation', health_cache: 'health_cache',
     legacy_authoritative: 'legacy_authoritative', none: 'none'
   };

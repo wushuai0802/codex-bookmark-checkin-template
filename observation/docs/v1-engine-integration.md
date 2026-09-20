@@ -40,14 +40,14 @@ and report untouched. Neither manual nor scheduled runs claim business
 completion merely because the process returned zero.
 
 Harvest integration (2026-09-20): a current, explicit failure for a unique
-registered PT site can queue one targeted V1 recovery pass through the same
-V2 controller. Successful Harvest entries remain read-only status, and
-an unknown entry may queue one V1 recheck only after Harvest finishes its
-daily task and the PT site is already uniquely registered. Harvest-only entries
-remain unregistered observations. Harvest's
-database user ID cannot be used as a PT site account ID; the V1 browser
+daily-plan PT site can queue one targeted execution-layer recovery pass through
+the same controller. With the private fallback-only opt-in, an exact-scope PT
+bookmark outside the daily plan can also receive one site-bound recheck when
+Harvest reports failure, unknown or no row after its daily task completes.
+Successful Harvest entries remain status-only. Harvest's database user ID is
+not a PT site account ID; the execution-layer browser
 checks its own identity and status before any submission. No new scheduled
-task or duplicate V2 site adapter was installed. See [pt-status.md](pt-status.md).
+task or duplicate site adapter was installed. See [pt-status.md](pt-status.md).
 Each actual V1 final-report import now runs the existing read-only V1 health
 check and uses that structured output for the V2 snapshot. If the check
 cannot return a valid result, the bridge keeps the cached source marked stale

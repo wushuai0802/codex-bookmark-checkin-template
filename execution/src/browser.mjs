@@ -3,7 +3,8 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText } from "./detector.mjs";
+import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText, ptPageEvidence } from "./detector.mjs";
+export { ptPageEvidence } from "./detector.mjs";
 import { assertBookmarkNavigation, safeErrorMessage, safeLogUrl } from "./security.mjs";
 import { newApiCaptchaCandidates, recognizeNewApiCaptcha, recognizeNexusCaptcha, recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
 import { solveU2VisualChallenge } from "./u2-vision.mjs";
@@ -138,24 +139,6 @@ async function snapshotState(page) {
     hasPassword: state.passwordInputs,
     challengeSelectors: state.challengeSelectors,
   });
-}
-
-export function ptPageEvidence({origin,url,bodyText,status,now=new Date()}={}) {
-  if(!['signed','already_signed'].includes(status))return null;
-  try{if(new URL(url).origin!==origin)return null;}catch{return null;}
-  const text=String(bodyText??'').slice(0,30000);
-  const positive=/(?:今日|今天|当日).{0,18}(?:已签到|已簽到|签到成功|簽到成功)|(?:已签到|已簽到|签到成功|簽到成功).{0,18}(?:今日|今天|当日)|本次(?:签到|簽到).{0,18}(?:获得|獲得)|already checked[ -]?in today|checked in today/gi;
-  const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
-  const [year,month,day]=date.split('-');
-  const dated=new RegExp(`${year}[-/.]${month}[-/.]${day}|${year}年${Number(month)}月${Number(day)}日|${Number(month)}月${Number(day)}日`);
-  const event=/(?:已签到|已簽到|签到成功|簽到成功|successfully checked[ -]?in)/gi;
-  const signals=[...text.matchAll(positive),...text.matchAll(event)].some(match=>{
-    const start=text.lastIndexOf('\n',match.index)+1,end=text.indexOf('\n',match.index);
-    const line=text.slice(start,end<0?text.length:end).slice(0,300);
-    if(/未签到|未簽到|签到失败|簽到失敗/.test(line))return false;
-    return /(?:今日|今天|当日).{0,18}(?:已签到|已簽到|签到成功|簽到成功)|(?:已签到|已簽到|签到成功|簽到成功).{0,18}(?:今日|今天|当日)|本次(?:签到|簽到).{0,18}(?:获得|獲得)|already checked[ -]?in today|checked in today/i.test(line)||dated.test(line);
-  });
-  return signals?{source:'page_text',authoritative:true,confirmedAt:now.toISOString(),businessDate:date,statusSignal:'same_day_page_text'}:null;
 }
 
 async function waitForManagedChallenge(page, config) {
@@ -894,7 +877,10 @@ export async function tryNewApiCheckin(page) {
       ?? statusBody?.data?.checked_in_today
       ?? statusBody?.data?.checkedInToday
     );
-    if (checked) return { status: "already_signed", reason: "签到接口显示今日已签到" };
+    const businessDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+    if (checked) return { status: "already_signed", reason: "签到接口显示今日已签到",
+      evidence:{source:'new_api_checkin_status',authoritative:true,accountId:String(userId),businessDate,
+        statusSignal:'checked_in_today',confirmedAt:new Date().toISOString()} };
 
     const checkinResponse = await request("/api/user/checkin", { method: "POST", headers });
     const checkinBody = checkinResponse.body;
@@ -910,6 +896,9 @@ export async function tryNewApiCheckin(page) {
       return {
         status: "signed",
         reason: quota == null ? "已通过站点签到接口完成" : `已通过站点签到接口完成，奖励额度 ${quota}`,
+        ...(Number.isFinite(Number(quota))&&Number(quota)>0?{evidence:{source:'new_api_checkin_action',
+          authoritative:true,accountId:String(userId),businessDate,statusSignal:'reward_response',
+          rewardAmount:Number(quota),confirmedAt:new Date().toISOString()}}:{}),
       };
     }
     const checkinMessage = String(checkinBody?.message || "");
@@ -959,9 +948,12 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
   await sleep(2000);
   const responseText = String(await frame.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
   if (/"state"\s*:\s*"success"|签到成功|簽到成功|已签到|已簽到/i.test(responseText)) {
+    const now=new Date();
     return {
       status: "signed",
       reason: `OpenCD 图片验证码识别成功（置信度 ${Math.round(recognition.confidence)}）`,
+      evidence:{source:'page_text',authoritative:true,confirmedAt:now.toISOString(),
+        businessDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),statusSignal:'submitted_success_response'},
     };
   }
   // OpenCD 的 iframe 有时不返回可识别的成功文本，但服务器已经完成
@@ -970,9 +962,13 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
   await sleep(1200);
   const refreshedState = await snapshotState(page);
   if (["signed", "already_signed"].includes(refreshedState.status)) {
+    const evidence=ptPageEvidence({origin:expectedOrigin,url:page.url(),
+      bodyText:await page.locator('body').innerText({timeout:3000}).catch(()=>''),status:refreshedState.status,
+      allowUndatedActionText:false});
     return {
       ...refreshedState,
       reason: `OpenCD 图片验证码已提交并复查成功（置信度 ${Math.round(recognition.confidence)}）`,
+      ...(evidence?{evidence}:{}),
     };
   }
   return { status: "interactive_challenge", reason: "OpenCD 验证码已提交，但未收到成功结果" };
@@ -1533,7 +1529,8 @@ export async function processTarget(context, target, config, qaRules, logDirecto
           effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
         }
         const completed={...effectiveResult,attempt:attempt+1,candidateHistory};
-        if(config.capturePtEvidence===true&&['signed','already_signed'].includes(completed.status)&&completed.evidence?.authoritative!==true){
+        if((config.capturePtEvidence===true||['页面显示签到成功','今天已经签到'].includes(completed.reason))&&
+           ['signed','already_signed'].includes(completed.status)&&completed.evidence?.authoritative!==true){
           const bodyText=await page.locator('body').innerText({timeout:3000}).catch(()=> '');
           const evidence=ptPageEvidence({origin:target.origin,url:page.url(),bodyText,status:completed.status});
           if(evidence)completed.evidence=evidence;

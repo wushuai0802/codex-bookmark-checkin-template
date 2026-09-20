@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {planHarvestFallback,runHarvestFallback} from '../src/harvest-fallback.mjs';
+import {planHarvestFallback,runHarvestFallback,pendingHarvestFallbackAttempts} from '../src/harvest-fallback.mjs';
 
 const now=new Date('2026-09-20T02:00:00Z');
 const failed=(origin,account='7')=>({origin,userId:account,status:'failed',observedAt:'2026-09-20T09:55:00+08:00',evidence:{source:'harvest',authoritative:false}});
@@ -24,8 +24,22 @@ test('site-bound PT fallback includes monitored sites outside the daily plan',()
   assert.equal(report.observedSuccess,1);
   assert.deepEqual(report.blocked.map(item=>item.reason),['outside_confirmed_bookmark_scope']);
 });
+test('a bookmarked PT site absent from Harvest is reviewed after the daily task completes',()=>{
+  const f=fixture();
+  f.harvest.sites=[failed('https://ourbits.club')];
+  f.catalog.sites=f.catalog.sites.slice(0,2);
+  const preview=planHarvestFallback(f);
+  assert.deepEqual(preview.eligible.map(item=>item.origin),['https://ourbits.club','https://external.example']);
+  assert.equal(preview.eligible[1].kind,'fallback_only');
+  assert.equal(preview.eligible[1].trigger,'monitored_pt_status_unobserved');
+  f.harvest.taskCompletion.status='failed';
+  assert.equal(planHarvestFallback(f).eligible.length,0);
+  f.harvest.taskCompletion.status='completed';
+  f.fallbackOnlyEnabled=false;
+  assert.equal(planHarvestFallback(f).blocked.some(item=>item.origin==='https://external.example'&&item.reason==='fallback_only_not_enabled'),true);
+});
 test('unknown Harvest status is reviewed only after its daily task completes',()=>{
-  const f=fixture();f.harvest.sites=[{origin:'https://ourbits.club',userId:'7',status:'unknown',observedAt:null,evidence:{authoritative:false}}];
+  const f=fixture();f.catalog.sites=f.catalog.sites.slice(0,1);f.harvest.sites=[{origin:'https://ourbits.club',userId:'7',status:'unknown',observedAt:null,evidence:{authoritative:false}}];
   const reviewed=planHarvestFallback(f);
   assert.equal(reviewed.eligible[0].trigger,'harvest_task_done_status_unknown');
   f.harvest.taskCompletion.status='failed';assert.equal(planHarvestFallback(f).blocked[0].reason,'harvest_task_not_complete');
@@ -34,6 +48,7 @@ test('unknown Harvest status is reviewed only after its daily task completes',()
 });
 test('Harvest ID is not a PT account ID; stale, completed and ambiguous plans still block',()=>{
   const f=fixture();
+  f.catalog.sites=f.catalog.sites.slice(0,1);
   f.harvest.sites=f.harvest.sites.slice(0,1);
   f.plan.targets[0].accountId='8';assert.equal(planHarvestFallback(f).eligible[0].origin,'https://ourbits.club');
   f.harvest.sites[0].userId='7';f.harvest.sites[0].observedAt='2026-09-19T09:55:00+08:00';
@@ -61,6 +76,7 @@ test('fallback-only execution defaults to disabled before the private runtime is
 });
 test('Harvest completion audits every registered PT task, including one absent from Harvest',()=>{
   const f=fixture();
+  f.catalog.sites=f.catalog.sites.slice(0,1);
   f.harvest.sites=f.harvest.sites.slice(0,1);
   f.plan.targets.push({origin:'https://unobserved.example',folderNames:['PT白名单']});
   f.harvest.sites[0].status='unknown';f.harvest.sites[0].observedAt=null;f.harvest.sites[0].userId=null;
@@ -79,6 +95,7 @@ test('uncertain earlier submission remains blocked even after Harvest failure',(
 });
 test('an explicit V1 site/account disable and disabled feature cannot enter fallback',()=>{
  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);
+ f.catalog.sites=f.catalog.sites.slice(0,1);
  for(const config of [{disabledCheckinOrigins:['https://ourbits.club']},{disabledAccountKeys:['site-default']}]){
    const result=planHarvestFallback({...f,config});assert.equal(result.eligible.length,0);
    assert.equal(result.blocked[0].reason,'disabled_by_v1_configuration');
@@ -96,7 +113,7 @@ test('a Harvest failure waits for a same-day complete V1 execution plan',()=>{
 test('attempt is durable before execution, never blindly repeated and busy can retry',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-fallback-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
-  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);
+  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
   let calls=0;const success=async options=>{calls++;assert.deepEqual(options.origins,['https://ourbits.club']);return {runId:'today',results:[{origin:'https://ourbits.club',accountKey:'site-default',status:'signed'}]};};
   assert.equal((await runHarvestFallback({...f,root,execute:true,runEngine:success})).outcomes[0].v1Status,'signed');
   assert.equal((await runHarvestFallback({...f,root,execute:true,runEngine:success})).outcomes[0].state,'already_attempted');
@@ -107,7 +124,7 @@ test('attempt is durable before execution, never blindly repeated and busy can r
 test('fallback-only PT site uses the execution-layer site helper and a separate redacted report',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-site-fallback-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
-  const f=fixture();f.harvest.sites=[failed('https://external.example')];
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.catalog.sites=f.catalog.sites.slice(0,2);
   f.latest.results[0].status='already_signed';
   const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
   const catalogHash=(await import('node:crypto')).createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
@@ -125,7 +142,7 @@ test('fallback-only PT site uses the execution-layer site helper and a separate 
 test('fallback-only execution refuses an unbound catalog before persisting an attempt',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-site-unbound-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
-  const f=fixture();f.harvest.sites=[failed('https://external.example')];
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.catalog.sites=f.catalog.sites.slice(0,2);
   f.latest.results[0].status='already_signed';
   await assert.rejects(()=>runHarvestFallback({...f,root,execute:true,runSite:async()=>{throw Error('must not launch');}}),/bound bookmark catalog/);
   assert.equal(fs.existsSync(path.join(root,'outputs')),false);
@@ -133,7 +150,7 @@ test('fallback-only execution refuses an unbound catalog before persisting an at
 test('a proven pre-browser catalog failure may retry after a corrected input',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-preflight-retry-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
-  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.latest.results[0].status='already_signed';
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.catalog.sites=f.catalog.sites.slice(0,2);f.latest.results[0].status='already_signed';
   const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
   const catalogHash=(await import('node:crypto')).createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
   const args={...f,root,execute:true,catalogFile,catalogHash};
@@ -145,11 +162,26 @@ test('a proven pre-browser catalog failure may retry after a corrected input',as
 test('a V2 lock collision is not counted as an actual attempt',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-busy-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
-  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);
+  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
   const busy=await runHarvestFallback({...f,root,execute:true,runEngine:async()=>{throw Error('V2 runner is already active');}});
   assert.equal(busy.outcomes[0].state,'deferred_busy');
   const second=await runHarvestFallback({...f,root,execute:true,runEngine:async()=>({runId:'later',results:[]})});
   assert.equal(second.outcomes[0].state,'completed');
+});
+
+test('preview counts only unattempted candidates and rejects a malformed daily audit',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-preview-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
+  const preview=planHarvestFallback(f);
+  assert.equal(pendingHarvestFallbackAttempts(root,preview).length,1);
+  fs.mkdirSync(path.join(root,'outputs'));
+  const audit=path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json');
+  fs.writeFileSync(audit,JSON.stringify({businessDate:preview.businessDate,attempts:[{origin:'https://ourbits.club',state:'completed'}]}));
+  assert.equal(pendingHarvestFallbackAttempts(root,preview).length,0);
+  fs.writeFileSync(audit,JSON.stringify({businessDate:preview.businessDate,attempts:[{origin:'https://ourbits.club',state:'deferred_preflight'}]}));
+  assert.equal(pendingHarvestFallbackAttempts(root,preview).length,1);
+  fs.writeFileSync(audit,JSON.stringify({businessDate:'2026-09-19',attempts:[]}));
+  assert.throws(()=>pendingHarvestFallbackAttempts(root,preview),/audit is invalid/);
 });
 
 test('rollback to independent V2 mode refuses Harvest fallback before a claim',async t=>{

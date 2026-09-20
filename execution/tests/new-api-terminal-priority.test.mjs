@@ -25,6 +25,16 @@ test("feature-disabled API evidence survives cold starts and does not submit", a
   }
 });
 
+test('a current-day New API status carries account-bound authoritative evidence',async()=>{
+  const {result,requests}=await probe(200,{success:true,data:{stats:{checked_in_today:true}}});
+  assert.equal(result.status,'already_signed');
+  assert.equal(result.evidence.source,'new_api_checkin_status');
+  assert.equal(result.evidence.accountId,'123');
+  assert.equal(result.evidence.statusSignal,'checked_in_today');
+  assert.equal(result.evidence.authoritative,true);
+  assert.equal(requests,2);
+});
+
 test("a 401/403 is not disguised as feature disabled", async () => {
   for (const status of [401, 403]) {
     const { result, requests } = await probe(status, { success: false, message: "未启用" });

@@ -7,11 +7,13 @@ results, watches Harvest and serves the dashboard. Standalone adapter/canary
 experiments cannot take over a site while this integration is selected.
 
 After Harvest's daily task completes, a missing, failed or unknown PT status
-can queue one recheck only for a uniquely registered execution-layer task.
-Harvest success is displayed as a source-specific observation. Unregistered
-sites require deliberate enrollment; a prior uncertain submission is not
-replayed. See [PT status](pt-status.md) and
-[execution integration](v1-engine-integration.md).
+can queue one recheck for a unique daily-plan task or for an exact-scope PT
+bookmark with the private monitoring-only fallback enabled. A catalog site
+missing entirely from Harvest is included. Harvest success remains a
+source-specific observation, while an origin outside the chosen bookmarks
+cannot become a task. The daily attempt ledger prevents replaying an uncertain
+submission or launching a worker when no new attempts remain. See
+[PT status](pt-status.md) and [execution integration](v1-engine-integration.md).
 
 Historical adapter, transport and migration designs remain in the archived
 `v2` branch for audit. Their gates are not a second production schedule and

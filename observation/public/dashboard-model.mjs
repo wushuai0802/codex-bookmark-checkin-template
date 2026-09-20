@@ -27,7 +27,18 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
 }
 
 export function matchesPt(site, scope = '') {
+  const category = ptStatusCategory(site);
   return !scope || (scope === 'monitor' && !site.inLegacyPlan) || (scope === 'plan' && site.inLegacyPlan)
-    || (scope === 'fresh' && site.effective?.fresh) || (scope === 'review' && (site.inLegacyPlan===true||site.fallbackEnabled===true)
-      && !['signed','already_signed','not_available'].includes(site.effective?.status));
+    || (scope === 'fresh' && site.effective?.fresh)
+    || (scope === 'confirmed' && category === 'confirmed')
+    || (scope === 'reported' && category === 'reported')
+    || (scope === 'review' && (site.inLegacyPlan===true||site.fallbackEnabled===true) && category === 'unknown');
+}
+
+export function ptStatusCategory(site) {
+  const status=site?.effective?.status,authoritative=site?.effective?.authoritative===true;
+  if(site?.effective?.fresh===false)return 'unknown';
+  if(['signed','already_signed'].includes(status))return authoritative?'confirmed':'reported';
+  if(status==='not_available'&&authoritative)return 'unavailable';
+  return 'unknown';
 }
