@@ -99,6 +99,10 @@ try {
         if (mobile) await page.locator('#menu-toggle').click();
         await page.locator(`.nav-item[data-view="${view}"]`).click();
         await page.waitForFunction(view => document.querySelector(`#view-${view}`).classList.contains('active-view') && !document.querySelector('.main-content').inert, view);
+        if (view === 'pt-status' && mobile) assert.ok(await page.evaluate(() => {
+          const table = document.querySelector('#view-pt-status .table-wrap');
+          return table.scrollWidth <= table.clientWidth + 1;
+        }), 'PT status must not need sideways scrolling on mobile');
       }
       await page.screenshot({ path: path.join(artifacts, `settings-${viewport.width}.png`), fullPage: true });
       if (mobile) await page.locator('#menu-toggle').click();

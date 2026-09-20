@@ -434,6 +434,7 @@ function renderPtStatus(data) {
     if(site.inLegacyPlan && state.data?.sites?.some(item=>item.origin===site.origin)){
       const manage=el('button','link-button','管理标记');manage.type='button';manage.addEventListener('click',()=>openSiteControls(site.origin));actionCell.append(manage);
     }
+    for(const [cell,label] of [[scopeCell,'范围'],[statusCell,'当前状态'],[sourceCell,'来源对照'],[observedCell,'观察时间'],[actionCell,'后续动作']])cell.dataset.label=label;
     append(row, siteCell, scopeCell, statusCell, sourceCell, observedCell, actionCell); body.append(row);
   }
 }
@@ -591,8 +592,8 @@ function renderSettings(data) {
   for (const [label, value] of rows) { const row = el('div', 'setting-row'); append(row, el('span', null, label), el('strong', null, value)); content.append(row); }
   const observations=data?.adapterObservations;
   if(observations){
-    const section=el('section','adapter-validation');
-    append(section,el('h2',null,'站点观测诊断'),el('p','muted',`验证时间 ${formatTime(observations.finishedAt)} · ${observations.counts.confirmed}/${observations.counts.total} 项取得明确观察证据。诊断数据不替代执行层回执。`));
+    const section=el('details','adapter-validation');
+    append(section,el('summary',null,'站点观测诊断'),el('p','muted',`验证时间 ${formatTime(observations.finishedAt)} · ${observations.counts.confirmed}/${observations.counts.total} 项取得明确观察证据。诊断数据不替代执行层回执。`));
     const causes={expected_identity_missing:'缺少预期身份',pt_native_adapter_not_yet_enabled:'PT 原生适配待验证',access_challenge:'访问验证阻挡',login_required:'需要有效登录态',upstream_unavailable:'当前访问路径不可用',identity_mismatch:'身份不符',feature_disabled:'签到功能未开放',entitlement_contract_review:'权益格式待适配',entitlement_inactive_or_expired:'权益过期或未激活'};
     for(const observed of observations.results){
       const row=el('div','setting-row');
