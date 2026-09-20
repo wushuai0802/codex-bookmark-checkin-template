@@ -140,6 +140,24 @@ async function snapshotState(page) {
   });
 }
 
+export function ptPageEvidence({origin,url,bodyText,status,now=new Date()}={}) {
+  if(!['signed','already_signed'].includes(status))return null;
+  try{if(new URL(url).origin!==origin)return null;}catch{return null;}
+  const text=String(bodyText??'').slice(0,30000);
+  const positive=/(?:今日|今天|当日).{0,18}(?:已签到|已簽到|签到成功|簽到成功)|(?:已签到|已簽到|签到成功|簽到成功).{0,18}(?:今日|今天|当日)|already checked[ -]?in today|checked in today/gi;
+  const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
+  const [year,month,day]=date.split('-');
+  const dated=new RegExp(`${year}[-/.]${month}[-/.]${day}|${year}年${Number(month)}月${Number(day)}日|${Number(month)}月${Number(day)}日`);
+  const event=/(?:已签到|已簽到|签到成功|簽到成功|successfully checked[ -]?in)/gi;
+  const signals=[...text.matchAll(positive),...text.matchAll(event)].some(match=>{
+    const start=text.lastIndexOf('\n',match.index)+1,end=text.indexOf('\n',match.index);
+    const line=text.slice(start,end<0?text.length:end).slice(0,300);
+    if(/未签到|未簽到|签到失败|簽到失敗/.test(line))return false;
+    return /(?:今日|今天|当日).{0,18}(?:已签到|已簽到|签到成功|簽到成功)|(?:已签到|已簽到|签到成功|簽到成功).{0,18}(?:今日|今天|当日)|already checked[ -]?in today|checked in today/i.test(line)||dated.test(line);
+  });
+  return signals?{source:'page_text',authoritative:true,confirmedAt:now.toISOString(),businessDate:date,statusSignal:'same_day_page_text'}:null;
+}
+
 async function waitForManagedChallenge(page, config) {
   const deadline = Date.now() + config.cloudflareWaitMs;
   while (Date.now() < deadline) {
@@ -1514,7 +1532,13 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         if (config.failureScreenshots && !isTerminalResult(effectiveResult) && effectiveResult.status !== "login_required") {
           effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
         }
-        return { ...effectiveResult, attempt: attempt + 1, candidateHistory };
+        const completed={...effectiveResult,attempt:attempt+1,candidateHistory};
+        if(config.capturePtEvidence===true&&['signed','already_signed'].includes(completed.status)&&completed.evidence?.authoritative!==true){
+          const bodyText=await page.locator('body').innerText({timeout:3000}).catch(()=> '');
+          const evidence=ptPageEvidence({origin:target.origin,url:page.url(),bodyText,status:completed.status});
+          if(evidence)completed.evidence=evidence;
+        }
+        return completed;
       }
       if (effectiveResult?.status === "interactive_challenge") {
         if (config.failureScreenshots) effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {ptSupplementTarget,publicSupplementResult,runPtSupplement} from '../src/pt-supplement.mjs';
+import {ptPageEvidence} from '../src/browser.mjs';
 
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-site-fallback-'));
@@ -27,12 +28,22 @@ test('site target uses one exact HTTPS bookmark URL without account mapping',()=
   }
 });
 
+test('PT page evidence needs explicit same-day completion, not cumulative rewards',()=>{
+  const now=new Date('2026-09-20T02:00:00Z'),base={origin:'https://pt.example',url:'https://pt.example/attendance.php',status:'already_signed',now};
+  assert.equal(ptPageEvidence({...base,bodyText:'鲸币 [使用] (签到已得350) 2026-09-20'}),null);
+  assert.equal(ptPageEvidence({...base,bodyText:'2026-09-19 签到成功'}),null);
+  assert.equal(ptPageEvidence({...base,bodyText:'2026-09-20\n昨日签到成功 2026-09-19'}),null);
+  assert.equal(ptPageEvidence({...base,url:'https://other.example/',bodyText:'今日已签到'}),null);
+  assert.equal(ptPageEvidence({...base,bodyText:'今日已签到'}).businessDate,'2026-09-20');
+  assert.equal(ptPageEvidence({...base,bodyText:'2026-09-20 签到成功'}).source,'page_text');
+});
+
 test('supplement holds the V1 lock and uses its browser flow once without altering daily plan',async t=>{
   const args=fixture(t),events=[];
   const result=await runPtSupplement({...args,
     acquire:async file=>{events.push('lock');assert.ok(file.endsWith(path.join('tmp','run.lock')));return {file};},
     release:async()=>{events.push('release');},
-    launch:async config=>{events.push('launch');assert.equal(config.retryCount,0);assert.equal(config.failureScreenshots,false);return {close:async()=>events.push('close')};},
+    launch:async config=>{events.push('launch');assert.equal(config.retryCount,0);assert.equal(config.failureScreenshots,false);assert.equal(config.capturePtEvidence,true);return {close:async()=>events.push('close')};},
     runTarget:async(_context,target)=>{events.push('execute');assert.deepEqual(target.candidates,['https://pt.example/attendance']);return {status:'already_signed',evidence:{source:'page_text',authoritative:true,confirmedAt:args.now.toISOString()}};}
   });
   assert.deepEqual(events,['lock','launch','execute','close','release']);

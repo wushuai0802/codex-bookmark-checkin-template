@@ -61,7 +61,7 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=n
   if(!fs.existsSync(path.join(profile,'Local State')))throw Error('execution browser profile is unavailable');
   const readRules=file=>{try{return JSON.parse(fs.readFileSync(path.join(legacyRoot,file),'utf8')).rules??[];}catch(error){if(error.code==='ENOENT')return [];throw error;}};
   const rules=[...readRules('config/qa-rules.json'),...readRules('config/qa-rules.local.json')];
-  const safeConfig={...config,retryCount:0,failureScreenshots:false};
+  const safeConfig={...config,retryCount:0,failureScreenshots:false,capturePtEvidence:true};
   const lock=await acquire(path.join(legacyRoot,'tmp/run.lock'));
   let context;
   try {
