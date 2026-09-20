@@ -175,6 +175,29 @@ try {
       console.log(`PASS ${viewport.width}x${viewport.height}: navigation, calendar, pause persistence, attention, layout; zero JS errors`);
     } finally { await context.close(); }
   }
+  for(const width of [1001,1024,1160,1199,1200,1280,1440]){
+    const context=await browser.newContext({viewport:{width,height:800}});
+    try{
+      await context.addInitScript(()=>localStorage.setItem('fabricRecentViews',
+        JSON.stringify(['overview','tasks','accounts','ledger','settings','sites'])));
+      const page=await context.newPage();
+      await page.goto(`${base}/#sites`);
+      await page.waitForFunction(()=>document.querySelector('.top-nav button.active')?.textContent==='站点');
+      const layout=await page.evaluate(()=>{
+        const nav=document.querySelector('.top-nav'),caption=nav.querySelector('.recent-caption');
+        const rect=element=>element.getBoundingClientRect();
+        return {scrollWidth:nav.scrollWidth,clientWidth:nav.clientWidth,
+          captionLeft:rect(caption).left,captionRight:rect(caption).right,
+          navLeft:rect(nav).left,navRight:rect(nav).right,
+          actionsRight:rect(document.querySelector('.top-actions')).right,
+          pageWidth:document.documentElement.scrollWidth,viewport:innerWidth};
+      });
+      assert.ok(layout.scrollWidth<=layout.clientWidth+1,`recent navigation is clipped at ${width}px: ${JSON.stringify(layout)}`);
+      assert.ok(layout.captionLeft>=layout.navLeft&&layout.captionRight<=layout.navRight,`recent caption is clipped at ${width}px`);
+      assert.ok(layout.actionsRight<=width&&layout.pageWidth<=width+1,`topbar overflows at ${width}px`);
+      if(width===1160)await page.screenshot({path:path.join(artifacts,'topbar-1160.png')});
+    }finally{await context.close();}
+  }
   console.log(`Synthetic UI screenshots: ${artifacts}`);
 } finally {
   await browser?.close();
