@@ -1,0 +1,71 @@
+Option Explicit
+
+Dim shell, fso, scriptDir, rootDir, watchdogPath, launcherPath, wscriptPath, heartbeatPath, command, temporaryPath, powerShellPath, launchRole
+Set shell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+rootDir = fso.GetParentFolderName(scriptDir)
+watchdogPath = fso.BuildPath(scriptDir, "Ensure-UserScheduler.ps1")
+launcherPath = fso.BuildPath(scriptDir, "Run-HiddenPowerShell.vbs")
+wscriptPath = shell.ExpandEnvironmentStrings("%WINDIR%\System32\wscript.exe")
+heartbeatPath = fso.BuildPath(rootDir, "data\scheduler-supervisor-heartbeat.json")
+If WScript.Arguments.Count > 0 Then
+    powerShellPath = WScript.Arguments(0)
+Else
+    powerShellPath = "pwsh.exe"
+End If
+If WScript.Arguments.Count > 1 Then
+    launchRole = LCase(WScript.Arguments(1))
+Else
+    launchRole = "primary"
+End If
+command = Quote(wscriptPath) & " //B //NoLogo " & Quote(launcherPath) & " " & Quote(powerShellPath) & " " & Quote(watchdogPath) & " " & Quote(rootDir)
+
+Function Quote(value)
+    Quote = Chr(34) & Replace(CStr(value), Chr(34), Chr(34) & Chr(34)) & Chr(34)
+End Function
+
+Function WatchdogIsRunning()
+    Dim service, processes, process, line
+    WatchdogIsRunning = False
+    On Error Resume Next
+    Set service = GetObject("winmgmts:\\.\root\cimv2")
+    Set processes = service.ExecQuery("SELECT CommandLine FROM Win32_Process WHERE Name='pwsh.exe' OR Name='powershell.exe'")
+    For Each process In processes
+        line = "" & process.CommandLine
+        If InStr(1, line, watchdogPath, vbTextCompare) > 0 Then
+            WatchdogIsRunning = True
+            Exit For
+        End If
+    Next
+    On Error GoTo 0
+End Function
+
+' The Startup-folder entry is a delayed fallback for environments that remove
+' HKCU Run values.  If the primary entry already restored the watchdog, the
+' fallback exits instead of leaving a duplicate supervisor process.
+If launchRole = "fallback" Then
+    WScript.Sleep 5000
+    If WatchdogIsRunning() Then WScript.Quit 0
+End If
+
+Sub WriteHeartbeat()
+    Dim file, parent, json
+    On Error Resume Next
+    parent = fso.GetParentFolderName(heartbeatPath)
+    If Not fso.FolderExists(parent) Then fso.CreateFolder(parent)
+    temporaryPath = heartbeatPath & "." & CStr(Timer) & ".tmp"
+    json = "{""updatedAt"":""" & Year(Now) & "-" & Right("0" & Month(Now), 2) & "-" & Right("0" & Day(Now), 2) & "T" & Right("0" & Hour(Now), 2) & ":" & Right("0" & Minute(Now), 2) & ":" & Right("0" & Second(Now), 2) & """}"
+    Set file = fso.CreateTextFile(temporaryPath, True, True)
+    file.Write json
+    file.Close
+    If fso.FileExists(heartbeatPath) Then fso.DeleteFile heartbeatPath, True
+    fso.MoveFile temporaryPath, heartbeatPath
+    On Error GoTo 0
+End Sub
+
+Do
+    WriteHeartbeat
+    If Not WatchdogIsRunning() Then shell.Run command, 0, False
+    WScript.Sleep 60000
+Loop

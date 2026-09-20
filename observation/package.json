@@ -1,0 +1,31 @@
+{
+  "name": "codex-checkin-fabric-v2",
+  "version": "2.0.0-beta.3",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "playwright-core": "1.61.1"
+  },
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "smoke:live": "node scripts/live-smoke.mjs",
+    "bridge": "node src/bridge.mjs",
+    "simulate:candidate": "node src/candidate-simulator.mjs",
+    "worker:dry-run": "node src/dry-run-worker.mjs",
+    "check:shadow-history": "node src/shadow-acceptance.mjs",
+    "check:canary-gate": "node scripts/check-canary-gate.mjs",
+    "check:structure": "node scripts/check-structure.mjs",
+    "check:adapters": "node scripts/check-adapters.mjs",
+    "lint:all": "node scripts/check-js-syntax.mjs",
+    "lint:domain": "node --check src/ownership-transition.mjs && node --check src/notification-delivery.mjs && node --check src/scheduler.mjs && node --check src/canary-report-view.mjs && node --check src/execution-adapter-registry.mjs && node --check src/execution-journal.mjs && node --check src/v1-account-handoff.mjs && node --check src/runtime-config.mjs && node --check src/canary-task.mjs && node --check src/canary-runner.mjs && node --check src/profile-verifier.mjs && node --check scripts/stage-account-migration.mjs && node --check scripts/run-v2-canary.mjs && node --check scripts/prepare-canary.mjs && node --check scripts/run-v2-daily.mjs && node --check scripts/verify-v2-profile.mjs",
+    "shadow": "node src/shadow-run.mjs",
+    "dashboard": "node src/dashboard-server.mjs",
+    "notifications:flush": "node scripts/flush-v2-notifications.mjs",
+    "export:nas": "node scripts/export-nas-bundle.mjs",
+    "lint": "node scripts/check-js-syntax.mjs"
+  }
+}

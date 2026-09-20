@@ -1,0 +1,4 @@
+.status-chip.not_signed{background:#fff5df;color:var(--amber)}
+.status-chip.unreachable,.status-chip.failed{background:#fff0f1;color:var(--red)}
+.status-chip.unknown.stale{background:#fff5df;color:var(--amber)}
+.discrepancy-text{color:var(--red)!important}

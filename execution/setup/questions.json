@@ -1,0 +1,38 @@
+{
+  "groups": [
+    {
+      "id": "environment_decision",
+      "askWhen": "preflight reports missing or optional capabilities",
+      "questions": [
+        "是否允许 Codex 补全缺失的 Node.js、npm 依赖或 PowerShell 组件？",
+        "若不能使用 Windows 计划任务，是否允许回退到用户级隐藏调度器？"
+      ]
+    },
+    {
+      "id": "bookmark_scope",
+      "askBefore": ["automation_policy", "notification"],
+      "questions": [
+        "使用哪个 Chrome 配置文件？是否附加 Edge 配置？两者均可选择 Auto，Edge 也可选择 None。",
+        "Chrome 中哪些上级书签文件夹和子文件夹包含每日目标？请从预检候选中选择，并确认完整路径；若同名文件夹重复，需同时确认 GUID。",
+        "若启用 Edge，它的上级文件夹或目标子文件夹名称是否与 Chrome 不同？请从 Edge 候选中选择，并确认完整路径；若同名文件夹重复，需同时确认 GUID。"
+      ]
+    },
+    {
+      "id": "automation_policy",
+      "questions": [
+        "每天几点运行？默认 08:05。",
+        "是否启用公开内置站点规则？默认启用。",
+        "是否明确授权只读主 Chrome 密码库，并把允许域名的加密登录记录复制到独立配置？默认关闭。",
+        "问答未知时是否允许将脱敏后的最小题干发送到公开搜索？默认关闭。",
+        "留言框使用什么非敏感文本？默认“今日天气不错”。"
+      ]
+    },
+    {
+      "id": "notification",
+      "questions": [
+        "是否需要结果通知？可选择无通知或自定义命令。",
+        "自定义通知器的可执行文件和参数模板是什么？敏感值只能来自环境变量或安全存储。"
+      ]
+    }
+  ]
+}
