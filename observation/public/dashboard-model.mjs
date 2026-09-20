@@ -28,6 +28,6 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
 
 export function matchesPt(site, scope = '') {
   return !scope || (scope === 'monitor' && !site.inLegacyPlan) || (scope === 'plan' && site.inLegacyPlan)
-    || (scope === 'fresh' && site.effective?.fresh) || (scope === 'review' && site.inLegacyPlan
+    || (scope === 'fresh' && site.effective?.fresh) || (scope === 'review' && (site.inLegacyPlan===true||site.fallbackEnabled===true)
       && !['signed','already_signed','not_available'].includes(site.effective?.status));
 }

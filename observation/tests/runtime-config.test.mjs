@@ -8,6 +8,9 @@ import {loadRuntimeConfig,assertStandaloneV2Enabled} from '../src/runtime-config
 test('local runtime paths stay outside tracked source',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'runtime-config-'));fs.mkdirSync(path.join(root,'config'));const legacy=path.join(root,'legacy'),chrome=path.join(root,'chrome.exe');fs.writeFileSync(path.join(root,'config','runtime.local.json'),JSON.stringify({legacyRoot:legacy,chromeExecutable:chrome,canaryTime:'07:50'}));
   const value=loadRuntimeConfig(root);assert.equal(value.legacyRoot,path.resolve(legacy));assert.equal(value.canaryTime,'07:50');assert.equal(value.executionEngine,'v1');
+  assert.equal(value.ptFallbackOnlyEnabled,false);
+  fs.writeFileSync(path.join(root,'config','runtime.local.json'),JSON.stringify({legacyRoot:legacy,ptFallbackOnlyEnabled:true}));
+  assert.equal(loadRuntimeConfig(root).ptFallbackOnlyEnabled,true);
   assert.throws(()=>assertStandaloneV2Enabled(root),/retired/);
   fs.writeFileSync(path.join(root,'config','runtime.local.json'),JSON.stringify({legacyRoot:legacy,executionEngine:'v2'}));
   assert.equal(assertStandaloneV2Enabled(root).executionEngine,'v2');

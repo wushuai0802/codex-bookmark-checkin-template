@@ -13,7 +13,7 @@ test('bookmark inventory is exact, deduplicated and does not keep removed sites'
     { type: 'url', url: 'https://pt.example/' }, { type: 'url', url: 'https://u:p@unsafe.example/' }
   ] }, { id: 'other', children: [{ type: 'url', url: 'https://excluded.example' }] }] } } };
   const scope = { parentId: 'parent', folderId: 'pt' };
-  assert.deepEqual(bookmarkCatalog(fixture, scope).sites, [{ origin: 'https://pt.example', displayName: 'pt.example' }]);
+  assert.deepEqual(bookmarkCatalog(fixture, scope).sites, [{ origin: 'https://pt.example', entryUrl: 'https://pt.example/attendance', displayName: '站点' }]);
   fixture.roots.bar.children[0].children = [];
   assert.equal(bookmarkCatalog(fixture, scope).sites.length, 0);
   assert.throws(() => bookmarkCatalog(fixture, { ...scope, parentId: 'wrong' }), /missing/);
@@ -30,6 +30,13 @@ test('monitor-only catalog and Harvest evidence never alter task identity or pla
   assert.equal(after.ptStatus.executionEnabled, false);
   assert.equal(after.ptStatus.sites[0].inLegacyPlan, false);
   assert.equal(after.ptStatus.sites[0].effective.status, 'signed');
+  const supplemented = buildSnapshot({ ...args,ptFallbackOnlyEnabled:true,
+    monitorCatalog: {sites:[{origin:'https://monitor.example'}]},
+    ptFallbackReport:{source:'execution-supplement',businessDate:after.businessDate,sites:[{origin:'https://monitor.example',status:'already_signed',observedAt:args.generatedAt,evidence:{source:'page_text',authoritative:true}}]}
+  });
+  assert.equal(supplemented.planHash,before.planHash);
+  assert.deepEqual(supplemented.tasks,before.tasks);
+  assert.equal(supplemented.ptStatus.sites[0].fallbackEnabled,true);
 });
 
 test('catalog entries without evidence are unknown, not fresh or executable', () => {

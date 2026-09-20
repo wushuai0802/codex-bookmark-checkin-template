@@ -6,4 +6,5 @@ test('PT review filter includes registered unknown status but not unregistered o
   assert.equal(matchesPt({inLegacyPlan:true,effective:{status:'unknown'}},'review'),true);
   assert.equal(matchesPt({inLegacyPlan:true,effective:{status:'signed'}},'review'),false);
   assert.equal(matchesPt({inLegacyPlan:false,effective:{status:'unknown'}},'review'),false);
+  assert.equal(matchesPt({inLegacyPlan:false,fallbackEnabled:true,effective:{status:'unknown'}},'review'),true);
 });

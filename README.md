@@ -10,10 +10,12 @@ One check-in project, organized by responsibility rather than version:
 The deployed Windows runner uses its existing private configuration and Chrome
 profiles. The observation package calls that runner through a bounded lease;
 the NAS dashboard does not hold credentials or execute browser actions. After
-Harvest's daily task completes, registered PT sites without a confirmed result
-receive at most one execution-layer recheck. A prior uncertain submission is
-never replayed automatically. Harvest-only sites require deliberate registration
-and login before they can be supplemented.
+Harvest's daily task completes, sites in the explicitly selected PT monitoring
+bookmarks without a confirmed result may receive one execution-layer recheck.
+Monitoring-only sites use a separate PT result file and do not join the regular
+daily plan. A prior uncertain submission is never replayed automatically. This
+site-only fallback is disabled by default until the private runtime and its
+browser profile have been accepted.
 
 The historical `v2` branch and standalone adapter experiments remain available
 for audit. They are not a second production engine. Do not copy private runtime

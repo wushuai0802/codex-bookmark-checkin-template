@@ -81,3 +81,16 @@ test('PT status rejects credential-bearing reports and normalizes safe aliases',
   assert.equal(report.sites[0].status, 'signed');
   assert.equal(report.sites[0].evidence.redacted, true);
 });
+
+test('same-day site supplement is visible without adding a daily task',()=>{
+  const generatedAt='2026-09-20T02:30:00Z',origin='https://pt.example';
+  const pt=buildPtStatus({generatedAt,businessDate:'2026-09-20',monitorCatalog:{sites:[{origin}]},fallbackOnlyEnabled:true,
+    externalReport:{source:'harvest',businessDate:'2026-09-20',sites:[{origin,status:'unknown',observedAt:null}]},
+    fallbackReport:{source:'execution-supplement',businessDate:'2026-09-20',sites:[{origin,status:'signed',observedAt:'2026-09-20T02:20:00Z',evidence:{source:'page_text',authoritative:true,summary:'今日已签到'}}]}});
+  assert.equal(pt.counts.sites,1);assert.equal(pt.counts.inLegacyPlan,0);
+  assert.equal(pt.counts.fallbackOnly,1);assert.equal(pt.sites[0].fallbackEnabled,true);
+  assert.equal(pt.sites[0].effective.status,'signed');
+  assert.equal(pt.sites[0].effective.source,'execution-supplement');
+  assert.throws(()=>buildPtStatus({generatedAt,businessDate:'2026-09-20',monitorCatalog:{sites:[{origin}]},
+    fallbackReport:{source:'execution-supplement',businessDate:'2026-09-19',sites:[]}}),/wrong source or date/);
+});

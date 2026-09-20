@@ -3,6 +3,7 @@ import {fileURLToPath} from 'node:url';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {planHarvestFallback,runHarvestFallback,loadHarvestFallbackInputs} from '../src/harvest-fallback.mjs';
+import {loadRuntimeConfig} from '../src/runtime-config.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url)),args=process.argv.slice(2);
 const value=name=>{const index=args.indexOf(name);return index<0?null:args[index+1];};
 try{
@@ -17,9 +18,10 @@ try{
     }
   }
   const inputs=loadHarvestFallbackInputs({root,reportFile,catalogFile});
-  const result=execute?await runHarvestFallback({root,...inputs,execute:true}):planHarvestFallback(inputs);
+  const fallbackOnlyEnabled=loadRuntimeConfig(root).ptFallbackOnlyEnabled;
+  const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled}):planHarvestFallback({...inputs,fallbackOnlyEnabled});
   const assessmentStates=Object.fromEntries([...new Set(result.assessments.map(item=>item.state))].sort().map(state=>[state,result.assessments.filter(item=>item.state===state).length]));
   const blockedReasons=Object.fromEntries([...new Set(result.blocked.map(item=>item.reason))].sort().map(reason=>[reason,result.blocked.filter(item=>item.reason===reason).length]));
-  console.log(JSON.stringify({businessDate:result.businessDate,mode:execute?'executed':'preview',registeredCount:result.registeredCount,
+  console.log(JSON.stringify({businessDate:result.businessDate,mode:execute?'executed':'preview',registeredCount:result.registeredCount,fallbackOnlyCount:result.fallbackOnlyCount,
     observedSuccess:result.observedSuccess,eligibleCount:result.eligible.length,blockedCount:result.blocked.length,assessmentStates,blockedReasons,outcomes:result.outcomes??[]}));
 }catch(error){console.error(`Harvest fallback: ${error.message}`);process.exitCode=1;}

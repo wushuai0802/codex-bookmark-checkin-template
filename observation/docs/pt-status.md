@@ -36,11 +36,10 @@ Pass a JSON report with `--pt-status-file`:
 
 `status` may be `signed`, `already_signed`, `not_signed`, `unknown`,
 `login_required`, `unreachable`, `needs_attention`, `not_available`, or
-`failed`. A `not_signed` result is a recheck candidate only when its evidence is
-authoritative, fresh (within 26 hours), and no other source disagrees. After
-Harvest's daily task completes, the execution layer can recheck one already
-registered PT task; the normal identity, submit-once and verification rules
-still apply.
+`failed`. A fresh explicit failure or an unknown status after Harvest's daily
+task completes can enter a one-time execution-layer recheck. An unknown status
+never authorizes a blind POST: the original site flow must first inspect the
+site. Success still requires authoritative evidence.
 
 ## Unified V1-Engine Harvest Fallback
 
@@ -49,33 +48,38 @@ Harvest without its credentials and runs `scripts/harvest-fallback.mjs` against
 the fresh local report and the exact PT bookmark catalog. A current-day
 `failed` or `not_signed` record, a missing Harvest record, or an `unknown` record
 after Harvest's daily task has completed can trigger one targeted execution-layer
-recheck for a unique, already registered PT task.
+recheck. Daily-plan PT sites use the normal gateway. Monitoring-only sites use
+one exact same-origin bookmark URL, only after `ptFallbackOnlyEnabled: true` is
+set in ignored `config/runtime.local.json`; it defaults to false.
 It also waits for V1's complete final report for the same Shanghai business
 day; an older completed V1 result cannot suppress today's Harvest failure.
 V1 then checks its own site account and authoritative result before any
 submission. `unknown` never proves a failure or authorizes blind submission;
-stale data, Harvest-only sites and ambiguous V1 account origins never create
-tasks. A prepared attempt is recorded before invoking V1;
-uncertain outcomes are not replayed automatically.
+stale data, sites outside the selected PT bookmark folder and ambiguous
+daily-plan accounts never create tasks. The monitoring-only path does not alter
+the daily plan or overwrite its 22-task result. It records a prepared attempt
+before invoking the original execution-layer site flow, with a single URL and
+no automatic retry; uncertain outcomes are not replayed.
 
 Harvest's `userId` identifies the Harvest database owner, **not** the PT site
-account. Therefore a Harvest positive record is only a read-only Harvest
-observation; it cannot certify the separately configured V1 account or skip
-V1's own identity/status check. Conversely, V1 completion after a fallback
-does not prove Harvest's account completed unless Harvest later reports its
-own positive receipt. Harvest-only failed sites require deliberate V1
-registration and login before automatic fallback is possible.
+account. It is not used to match or reject a one-account-per-site fallback.
+A Harvest positive record stays status-only. A monitored site may still need
+its execution-layer Chrome session restored before a fallback can finish; a
+login-required or unverified result is not labelled as a completed check-in.
 
-The fallback runner uses V2's existing lease, V1's original site/profile
-configuration and the normal V1 retry/report path. No Harvest cookies, tokens,
+The fallback runner uses the observation gateway lease, the execution layer's
+existing profile and its site processing code. Monitoring-only results go to
+`outputs/pt-fallback-results-YYYY-MM-DD.json`, which the next shadow sync
+imports into PT status. No Harvest cookies, tokens,
 passwords or browser profiles are copied. The sync worker previews candidates
 before spawning the helper and binds the helper to SHA-256 hashes of the
 observed report and catalog; changed inputs fail closed. The present dashboard
 `manual_review_only` metadata remains an observation hint, not an execution
 permission.
 
-The report is optional. `--monitor-catalog` supplies a separate, origin-only
-bookmark inventory. Every inventory site is visible even without evidence;
+The report is optional. `--monitor-catalog` supplies the exact-scope bookmark
+inventory. It retains a same-origin entry URL locally for fallback but exposes
+only origin and display status on the NAS. Every inventory site is visible even without evidence;
 missing evidence is `unknown` with a null observation time, not a failed sign-in.
 The inventory never enters `tasks`, retry queues, leases or `planHash`.
 

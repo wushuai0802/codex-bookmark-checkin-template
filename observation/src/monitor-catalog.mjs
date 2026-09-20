@@ -14,9 +14,18 @@ export function bookmarkCatalog(bookmarks, { folderId, parentId }) {
     if (node.type === 'url') {
       try {
         const url = new URL(node.url);
-        if (url.protocol === 'https:' && !url.username && !url.password) sites.set(url.origin, {
-          origin: url.origin, displayName: shortLabel(node.name?.replace(/\s*(?:::| - Powered by).*$/, '')) || url.hostname
-        });
+        if (url.protocol === 'https:' && !url.username && !url.password) {
+          const entryUrl = `${url.origin}${url.pathname}`;
+          if (entryUrl.length > 255) return;
+          const previous = sites.get(url.origin);
+          const preferred = /\/(?:attendance|check[-_]?in|sign)[^/]*$/i.test(url.pathname);
+          if (!previous || (preferred && !/\/(?:attendance|check[-_]?in|sign)[^/]*$/i.test(new URL(previous.entryUrl).pathname))) {
+            sites.set(url.origin, {
+              origin: url.origin, entryUrl,
+              displayName: shortLabel(node.name?.replace(/\s*(?:::| - Powered by).*$/, '')) || url.hostname
+            });
+          }
+        }
       } catch { /* Malformed bookmarks cannot become monitoring targets. */ }
     }
     for (const child of node.children ?? []) collect(child);

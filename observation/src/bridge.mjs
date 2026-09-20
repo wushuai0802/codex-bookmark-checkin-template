@@ -119,7 +119,7 @@ function healthSnapshot(health, generatedAt, maxAgeHours = 26) {
  * Read and redact the legacy runner's latest state. This function performs no
  * writes and has no browser, network, or notification side effects.
  */
-export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26, healthReport, ptStatusReport, ptStatusMaxAgeHours = 26, monitorCatalog, identityReport, desiredPlan } = {}) {
+export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26, healthReport, ptStatusReport, ptFallbackReport, ptStatusMaxAgeHours = 26, monitorCatalog, ptFallbackOnlyEnabled = false, identityReport, desiredPlan } = {}) {
   if (!legacyRoot) throw new Error('legacyRoot is required');
   const root = path.resolve(legacyRoot);
   const engineIntegration=readJson(path.join(root,'data','v2-integration.json'),{required:false});
@@ -216,6 +216,8 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     receipts,
     planTargets: expected,
     externalReport: ptStatusReport,
+    fallbackReport: ptFallbackReport,
+    fallbackOnlyEnabled: ptFallbackOnlyEnabled,
     monitorCatalog,
     generatedAt,
     businessDate: businessDateFrom(generatedAt),
@@ -296,6 +298,7 @@ function parseArgs(argv) {
     else if (token === '--max-health-age-hours') args.maxHealthAgeHours = Number(argv[++i]);
     else if (token === '--health-file') args.healthFile = argv[++i];
     else if (token === '--pt-status-file') args.ptStatusFile = argv[++i];
+    else if (token === '--pt-fallback-file') args.ptFallbackFile = argv[++i];
     else if (token === '--desired-plan') args.desiredPlan = argv[++i];
     else if (token === '--identity-file') args.identityFile = argv[++i];
     else if (token === '--monitor-catalog') args.monitorCatalog = argv[++i];
@@ -316,12 +319,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     if (!legacyRoot) throw new Error('provide --legacy-root or CHECKIN_LEGACY_ROOT');
     const healthReport = args.healthFile ? readJson(path.resolve(args.healthFile)) : undefined;
     const ptStatusReport = args.ptStatusFile ? readJson(path.resolve(args.ptStatusFile)) : undefined;
+    const ptFallbackReport = args.ptFallbackFile ? readJson(path.resolve(args.ptFallbackFile)) : undefined;
     const snapshot = buildSnapshot({
       legacyRoot,
       generatedAt: args.generatedAt,
       maxHealthAgeHours: args.maxHealthAgeHours ?? 26,
       healthReport,
       ptStatusReport,
+      ptFallbackReport,
       desiredPlan:args.desiredPlan?readJson(path.resolve(args.desiredPlan)):undefined,
       identityReport:args.identityFile?readJson(path.resolve(args.identityFile)):undefined,
       monitorCatalog:args.monitorCatalog?readJson(path.resolve(args.monitorCatalog)):undefined
