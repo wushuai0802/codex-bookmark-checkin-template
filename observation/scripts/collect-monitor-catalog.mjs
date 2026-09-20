@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { readMonitorCatalog } from '../src/monitor-catalog.mjs';
+import {loadEffectiveConfig} from '../src/effective-config.mjs';
+const [legacyRoot, configFile, out] = process.argv.slice(2);
+const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+const legacyConfig = loadEffectiveConfig(legacyRoot);
+const catalog = readMonitorCatalog(legacyConfig.bookmarksPath, config);
+fs.writeFileSync(out, JSON.stringify(catalog));
+console.log(`PT bookmark catalog: ${catalog.sites.length} sites`);

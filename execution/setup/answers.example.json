@@ -1,0 +1,25 @@
+{
+  "chromeProfile": "Auto",
+  "edgeProfile": "None",
+  "mobileFolderNames": [],
+  "mobileFolderPaths": [],
+  "mobileFolderIds": [],
+  "mobileFolderGuids": [],
+  "targetFolderNames": [],
+  "edgeMobileFolderNames": [],
+  "edgeMobileFolderPaths": [],
+  "edgeMobileFolderIds": [],
+  "edgeMobileFolderGuids": [],
+  "edgeTargetFolderNames": [],
+  "schedule": "08:05",
+  "useBuiltInSiteRules": true,
+  "syncChromeSavedLogins": false,
+  "autoDetectLinuxDoOAuth": true,
+  "qaWebSearchEnabled": false,
+  "checkinMessage": "今日天气不错",
+  "notification": {
+    "mode": "none",
+    "executable": "",
+    "arguments": []
+  }
+}

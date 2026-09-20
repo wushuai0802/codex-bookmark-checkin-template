@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/candidate-task-envelope.schema.json",
+  "title": "V2 candidate task envelope",
+  "type": "object",
+  "required": ["schemaVersion", "envelopeId", "taskId", "businessDate", "planHash", "idempotencyKey", "lease", "target", "mode"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "envelopeId": {"type": "string", "pattern": "^envelope_[a-f0-9]{24}$"},
+    "taskId": {"type": "string", "pattern": "^task_[a-f0-9]{24}$"},
+    "businessDate": {"type": "string", "format": "date"},
+    "planHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "idempotencyKey": {"type": "string", "pattern": "^idem_[a-f0-9]{24}$"},
+    "lease": {"$ref": "lease.schema.json"},
+    "target": {"type": "object", "required": ["origin", "logicalSiteKey", "accountKey", "actionType"], "properties": {"origin": {"type": "string", "format": "uri"}, "logicalSiteKey": {"type": "string"}, "accountKey": {"type": "string"}, "actionType": {"const": "checkin"}}, "additionalProperties": false},
+    "mode": {"enum": ["dry_run", "execute"]}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+# Opt-in M2b dry-run transport. Use together with compose.nas.yaml.
+services:
+  checkin-fabric-dashboard:
+    environment:
+      FABRIC_WORKER_REGISTRY_FILE: /transport-config/worker-registry.json
+      FABRIC_WORKER_STATE_FILE: /transport-data/server.sqlite
+    volumes:
+      - ./transport-config:/transport-config:ro
+      - ./transport-data:/transport-data

@@ -1,0 +1,15 @@
+.status-chip.not_signed{background:#fff5df;color:var(--amber)}
+.status-chip.unreachable,.status-chip.failed{background:#fff0f1;color:var(--red)}
+.status-chip.unknown.stale{background:#fff5df;color:var(--amber)}
+.discrepancy-text{color:var(--red)!important}
+
+@media (max-width:700px) {
+  #view-pt-status table { min-width:0; }
+  #view-pt-status thead { display:none; }
+  #view-pt-status tbody tr { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:4px 12px; padding:13px 15px; border-bottom:1px solid var(--line); }
+  #view-pt-status tbody tr:last-child { border-bottom:0; }
+  #view-pt-status td { display:block; min-width:0; padding:3px 0; border:0; white-space:normal; overflow-wrap:anywhere; }
+  #view-pt-status td:first-child, #view-pt-status td:nth-child(4), #view-pt-status td:last-child { grid-column:1 / -1; }
+  #view-pt-status td:first-child .origin { font-size:12px; }
+  #view-pt-status td:not(:first-child)::before { content:attr(data-label); display:block; margin-bottom:4px; font-size:10px; color:var(--muted); }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/registration-candidate.schema.json",
+  "title": "Read-only new-site registration candidate",
+  "type": "object",
+  "required": ["schemaVersion", "candidateId", "origin", "discoverySource", "registrationState", "requiresHumanApproval"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "candidateId": {"type": "string", "pattern": "^candidate_[a-f0-9]{24}$"},
+    "origin": {"type": "string", "format": "uri"},
+    "discoverySource": {"enum": ["bookmark", "humanoid_discovery", "manual", "health_probe"]},
+    "registrationState": {"enum": ["discovered", "review_required", "approved", "rejected", "registered"]},
+    "requiresHumanApproval": {"const": true},
+    "adapterHint": {"type": ["string", "null"]},
+    "notes": {"type": "string", "maxLength": 500}
+  },
+  "additionalProperties": false
+}

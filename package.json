@@ -1,19 +1,9 @@
 {
-  "name": "codex-bookmark-checkin",
+  "name": "checkin-fabric",
+  "private": true,
   "version": "1.0.0",
-  "private": false,
-  "license": "MIT",
-  "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "health": "pwsh -NoProfile -File scripts/Test-CheckinHealth.ps1",
-    "preflight": "node src/preflight.mjs",
-    "dry-run": "node src/index.mjs --dry-run",
-    "start": "node src/index.mjs"
-  },
-  "dependencies": {
-    "playwright-core": "1.61.1",
-    "sharp": "^0.35.3",
-    "tesseract.js": "^7.0.0"
+    "test": "npm --prefix execution test && npm --prefix observation test",
+    "lint": "npm --prefix observation run lint:all && npm --prefix observation run check:structure"
   }
 }

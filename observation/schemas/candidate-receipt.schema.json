@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-checkin-fabric-v2/candidate-receipt.schema.json",
+  "title": "V2 candidate worker evidence receipt",
+  "type": "object",
+  "required": ["schemaVersion", "receiptId", "idempotencyKey", "taskId", "leaseId", "workerId", "businessDate", "status", "observedAt", "executionMode", "attempt", "evidence"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "receiptId": {"type": "string", "pattern": "^receipt_[a-f0-9]{24}$"},
+    "idempotencyKey": {"type": "string", "pattern": "^idem_[a-f0-9]{24}$"},
+    "taskId": {"type": "string", "pattern": "^task_[a-f0-9]{24}$"},
+    "leaseId": {"type": "string", "pattern": "^lease_[a-f0-9]{24}$"},
+    "workerId": {"type": "string", "pattern": "^worker_[A-Za-z0-9_-]{8,80}$"},
+    "businessDate": {"type": "string", "format": "date"},
+    "status": {"enum": ["signed", "already_signed", "not_available", "needs_attention", "deferred", "login_required", "failed"]},
+    "observedAt": {"type": "string", "format": "date-time"},
+    "executionMode": {"enum": ["dry_run", "execute"]},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 8},
+    "evidence": {"type": "object", "required": ["source", "authoritative", "summary", "redacted"], "properties": {"source": {"type": "string", "maxLength": 40}, "authoritative": {"type": "boolean"}, "summary": {"type": "string", "maxLength": 240}, "redacted": {"const": true}}, "additionalProperties": false}
+  },
+  "additionalProperties": false
+}
