@@ -6,6 +6,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLedger } from './shadow-ledger.mjs';
+import { redactText } from './contracts.mjs';
 import { healthIsFresh, timestampFresh } from './freshness.mjs';
 import { evaluateShadowHistory } from './shadow-acceptance.mjs';
 import { displayIdentity, shortLabel } from './display-identity.mjs';
@@ -148,12 +149,31 @@ function publicTask(task, receipt) {
     evidence: receipt?.evidence ? {
       source: receipt.evidence.source,
       authoritative: receipt.evidence.authoritative,
-      summary: receipt.evidence.summary,
+      summary: redactText(receipt.evidence.summary),
       redacted: receipt.evidence.redacted === true,
       rawSource: shortLabel(receipt.evidence.rawSource,64), originalSource: shortLabel(receipt.evidence.originalSource,64),
       verification: shortLabel(receipt.evidence.verification,64)
     } : null
   };
+}
+
+export function calendarHistory(records, {limit=180,now=new Date()}={}) {
+  const latest=new Map(),cutoff=now.getTime()+60_000;
+  for(const record of records??[]){
+    const day=record?.businessDate,time=Date.parse(record?.recordedAt);
+    if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day)||
+      Number.isNaN(Date.parse(`${day}T00:00:00Z`))||new Date(`${day}T00:00:00Z`).toISOString().slice(0,10)!==day||
+      !Number.isFinite(time)||time>cutoff||!Number.isInteger(record?.counts?.executionUnits)||record.counts.executionUnits<0)continue;
+    const prior=latest.get(day);
+    if(!prior||time>Date.parse(prior.recordedAt))latest.set(day,record);
+  }
+  const recent=[...latest.values()].sort((a,b)=>a.businessDate.localeCompare(b.businessDate)).slice(-limit);
+  const statuses=['signed','already_signed','not_available','needs_attention','deferred','login_required','failed','not_started'];
+  return {days:recent.map(record=>({businessDate:record.businessDate,recordedAt:record.recordedAt,
+    counts:{executionUnits:record.counts.executionUnits,status:Object.fromEntries(statuses.map(key=>[
+      key,Number.isInteger(record.counts.status?.[key])&&record.counts.status[key]>=0?record.counts.status[key]:0]))},
+    taskSummaries:Array.isArray(record.taskSummaries)?record.taskSummaries.slice(0,200).map(task=>publicTask(task,task)):null})),
+    truncated:latest.size>limit,oldestBusinessDate:recent[0]?.businessDate??null};
 }
 
 function publicPtEvidence(evidence) {
@@ -571,6 +591,11 @@ export function createDashboardServer({
     }
     if (requestUrl.pathname.startsWith('/api/')) {
       if (!authorized(request, response)) return;
+      if (requestUrl.pathname === '/api/calendar') {
+        try { sendJson(response, 200, calendarHistory(latestLedger(root, ledgerFile).records)); }
+        catch { sendError(response, 500, 'data_error', 'calendar history could not be read'); }
+        return;
+      }
       let view;
       try { view = loadView(); }
       catch { sendError(response, 500, 'data_error', 'dashboard data could not be read'); return; }

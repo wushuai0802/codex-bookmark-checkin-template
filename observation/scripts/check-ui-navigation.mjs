@@ -15,6 +15,10 @@ const snapshot = buildSnapshot({
   legacyRoot: fileURLToPath(new URL('../tests/fixtures/legacy/', import.meta.url)),
   generatedAt: new Date().toISOString()
 });
+const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+snapshot.businessDate=today;
+snapshot.tasks=snapshot.tasks.map(task=>({...task,businessDate:today}));
+snapshot.ptStatus.businessDate=today;
 const ptSite = (host, status, authoritative) => ({
   origin: `https://${host}.example`, displayName: host, fallbackEnabled: true,
   effective: { source: authoritative ? 'harvest' : 'execution-supplement', status,
@@ -27,14 +31,22 @@ snapshot.ptStatus.sites = [ptSite('confirmed','signed',true),ptSite('reported','
 snapshot.ptStatus.counts = { ...snapshot.ptStatus.counts, sites: 3, externalOnly: 3, fallbackOnly: 3,
   status: { ...snapshot.ptStatus.counts.status, signed: 2, unknown: 1 } };
 fs.writeFileSync(path.join(dataDir, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
-fs.writeFileSync(path.join(dataDir, 'shadow-ledger.jsonl'), `${JSON.stringify(createLedgerRecord(snapshot))}\n`);
+const baseRecord=createLedgerRecord(snapshot),dayMs=86_400_000;
+const historical=Array.from({length:36},(_,index)=>{
+  const businessDate=new Date(Date.parse(`${snapshot.businessDate}T00:00:00Z`)-(36-index)*dayMs).toISOString().slice(0,10);
+  return {...baseRecord,businessDate,recordedAt:`${businessDate}T12:00:00Z`,
+    recordId:`ledger_${(index+1).toString(16).padStart(24,'0')}`,
+    taskSummaries:baseRecord.taskSummaries.map(task=>({...task,businessDate}))};
+});
+fs.writeFileSync(path.join(dataDir,'shadow-ledger.jsonl'),
+  [...historical,baseRecord].map(record=>JSON.stringify(record)).join('\n')+'\n');
 const { server } = createDashboardServer({ dataDir, adminToken: '', bind: '127.0.0.1', port: 0 });
 let browser;
 try {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ headless: true, channel: process.env.FABRIC_UI_BROWSER ?? 'chrome' });
-  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
     fs.writeFileSync(path.join(dataDir, 'control-state.json'), JSON.stringify({ schemaVersion: 1, sites: {}, audit: [] }));
     const context = await browser.newContext({ viewport, timezoneId: 'Asia/Shanghai' });
     try {
@@ -58,13 +70,34 @@ try {
       await openCalendar();
       assert.equal(await page.locator('#view-overview').isVisible(), false);
       assert.ok(await page.locator('.calendar-day').count() >= 28);
+      await page.waitForFunction(()=>document.querySelector('#calendar-summary').textContent.includes('天有回执')
+        && !document.querySelector('#calendar-summary').textContent.includes('正在读取历史'));
+      const history=await(await fetch(`${base}/api/calendar`)).json();
+      assert.equal(history.days.length,37);
+      assert.equal((await(await fetch(`${base}/api/overview`)).json()).ledger.length,30);
       await page.locator('.calendar-day').first().click();
       assert.match(await page.locator('#calendar-detail').textContent(), /^\d{4}-\d{2}-01/);
+      assert.equal(await page.getByRole('button',{name:'回到今天'}).isEnabled(),true);
+      await page.getByRole('button',{name:'回到今天'}).click();
       await page.locator(`.calendar-day[aria-label^="${snapshot.businessDate}"]`).click();
       assert.match(await page.locator('#calendar-detail').textContent(), /项完成/);
-      assert.ok(await page.locator('#calendar-detail .calendar-receipt-card').count() > 0);
-      await page.locator('#calendar-nav .calendar-nav-btn').first().click();
-      assert.match(await page.locator('#calendar-nav').textContent(), /上个月/);
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),1);
+      if(mobile)assert.ok(await page.evaluate(()=>{
+        const filters=document.querySelector('.calendar-filters'),right=filters.getBoundingClientRect().right;
+        return [...filters.querySelectorAll('button')].every(button=>button.getBoundingClientRect().right<=right+1&&
+          button.scrollWidth<=button.clientWidth+1);
+      }),`calendar filters are clipped at ${viewport.width}px`);
+      const selectedDay=Number(snapshot.businessDate.slice(-2));
+      if(selectedDay>1){
+        await page.locator(`.calendar-day[data-date="${snapshot.businessDate}"]`).press('ArrowLeft');
+        assert.equal(await page.locator('.calendar-day:focus').getAttribute('data-date'),
+          `${snapshot.businessDate.slice(0,8)}${String(selectedDay-1).padStart(2,'0')}`);
+      }
+      await page.locator('.calendar-filters').getByRole('button',{name:/全部/}).click();
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),snapshot.tasks.length);
+      assert.equal(await page.locator('.calendar-filters button:focus').getAttribute('aria-pressed'),'true');
+      await page.getByRole('button',{name:'上个月'}).click();
+      assert.ok(await page.locator('.calendar-day.warn, .calendar-day.success').count()>0);
       await page.getByRole('button', {name:'回到今天'}).click();
       assert.equal(await page.locator('[data-top-view="calendar"]').count(), 1);
       assert.ok(await page.locator('#page-title').textContent());

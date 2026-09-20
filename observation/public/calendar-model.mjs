@@ -40,3 +40,27 @@ export function dayTotals(entry) {
   const unavailable = status.not_available ?? 0;
   return {total, completed, unavailable, pending:Math.max(0,total-completed-unavailable)};
 }
+
+export function monthTotals(records,month) {
+  const result={recordDays:0,total:0,completed:0,unavailable:0,pending:0};
+  for(const [date,entry] of records){
+    if(!date.startsWith(`${month}-`))continue;
+    const totals=dayTotals(entry);
+    result.recordDays++;
+    for(const key of ['total','completed','unavailable','pending'])result[key]+=totals[key];
+  }
+  return result;
+}
+
+export function calendarTaskGroup(status) {
+  if(['signed','already_signed'].includes(status))return 'completed';
+  if(status==='not_available')return 'unavailable';
+  return 'pending';
+}
+
+export function calendarTasks(entry,filter='all') {
+  const priority={pending:0,completed:1,unavailable:2};
+  return [...(entry?.tasks??[])].filter(task=>filter==='all'||calendarTaskGroup(task.observedStatus)===filter)
+    .sort((a,b)=>priority[calendarTaskGroup(a.observedStatus)]-priority[calendarTaskGroup(b.observedStatus)]||
+      String(a.displayName??a.origin??'').localeCompare(String(b.displayName??b.origin??''),'zh-CN'));
+}
