@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
-import { createDashboardServer } from '../src/dashboard-server.mjs';
+import { createDashboardServer,calendarHistory } from '../src/dashboard-server.mjs';
 
 const legacyRoot = fileURLToPath(new URL('./fixtures/legacy/', import.meta.url));
 
@@ -19,6 +19,40 @@ async function start(options) {
 function close(instance) {
   return new Promise((resolve) => instance.server.close(resolve));
 }
+
+test('calendar keeps the latest valid daily receipt beyond the recent run list',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-calendar-history-'));
+  const row=(businessDate,recordedAt,completed)=>({businessDate,recordedAt,
+    counts:{executionUnits:2,status:{signed:completed,needs_attention:2-completed}},
+    taskSummaries:[{origin:'https://example.test',displayName:'Example',observedStatus:'signed',
+      evidence:{source:'page_text',summary:'token=abc',authoritative:true}}]});
+  const older=row('2026-08-01','2026-08-01T01:00:00Z',1);
+  const records=[older,...Array.from({length:35},(_,index)=>row('2026-09-02',
+    `2026-09-02T${String(index%24).padStart(2,'0')}:${String(index).padStart(2,'0')}:00Z`,1)),
+    row('2026-09-02','2026-09-02T23:59:00Z',2),row('2026-02-30','2026-02-30T00:00:00Z',2)];
+  fs.writeFileSync(path.join(root,'shadow-ledger.jsonl'),records.map(record=>JSON.stringify(record)).join('\n')+'\n');
+  const projected=calendarHistory(records,{now:new Date('2026-09-03T00:00:00Z')});
+  assert.deepEqual(projected.days.map(day=>day.businessDate),['2026-08-01','2026-09-02']);
+  assert.equal(projected.days[1].counts.status.signed,2);
+  assert.doesNotMatch(JSON.stringify(projected),/token=abc/);
+  assert.equal(calendarHistory(records,{limit:1,now:new Date('2026-09-03T00:00:00Z')}).oldestBusinessDate,'2026-09-02');
+  const longHistory=Array.from({length:182},(_,index)=>{
+    const day=new Date(Date.UTC(2026,0,index+1)).toISOString().slice(0,10);
+    return row(day,`${day}T12:00:00Z`,1);
+  });
+  const bounded=calendarHistory(longHistory,{now:new Date('2027-01-01T00:00:00Z')});
+  assert.equal(bounded.days.length,180);
+  assert.equal(bounded.truncated,true);
+  assert.equal(bounded.oldestBusinessDate,longHistory[2].businessDate);
+  const {instance,base}=await start({dataDir:root});
+  try{
+    const overview=await(await fetch(`${base}/api/overview`)).json();
+    assert.equal(overview.ledger.length,30);
+    const calendar=await(await fetch(`${base}/api/calendar`)).json();
+    assert.equal(calendar.days.length,2);
+    assert.equal(calendar.days[0].businessDate,'2026-08-01');
+  }finally{await close(instance);fs.rmSync(root,{recursive:true,force:true});}
+});
 
 test('dashboard serves summary, tasks, and static UI from redacted data', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-dashboard-'));
@@ -88,6 +122,7 @@ test('non-loopback deployment uses an HttpOnly session and exposes only bounded 
   try {
     assert.equal((await fetch(`${base}/healthz`)).status, 200);
     assert.equal((await fetch(`${base}/api/summary`)).status, 401);
+    assert.equal((await fetch(`${base}/api/calendar`)).status, 401);
     const session = await fetch(`${base}/api/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -103,6 +138,7 @@ test('non-loopback deployment uses an HttpOnly session and exposes only bounded 
     assert.doesNotMatch(setCookie, /test-token-1234567890/);
     const cookie = setCookie.split(';', 1)[0];
     assert.equal((await fetch(`${base}/api/config`, { headers: { Cookie: cookie } })).status, 200);
+    assert.equal((await fetch(`${base}/api/calendar`, { headers: { Cookie: cookie } })).status, 200);
     assert.equal((await fetch(`${base}/api/config`, { headers: { Cookie: ['fabric_session','test-token-1234567890'].join('=') } })).status, 401);
     const unauthorized = await fetch(`${base}/api/controls/sites`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: 'https://example.com', policy: 'pause' }) });
     assert.equal(unauthorized.status, 401);

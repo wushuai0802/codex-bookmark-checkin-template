@@ -4,7 +4,7 @@ import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
 import { createNoticeState, pendingNotices, pausedNotices, attentionPreview } from './notice-state.mjs';
-import {dailyRecords, monthCells, moveMonth, dayTotals} from './calendar-model.mjs';
+import {dailyRecords, monthCells, moveMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
 
 const notices = createNoticeState();
 let attentionScrollUntil = 0;
@@ -17,7 +17,9 @@ for (const storageName of ['sessionStorage', 'localStorage']) {
   } catch { /* storage may be disabled by the browser */ }
 }
 
-const state = { view: 'overview', data: null, loading: false, ptScope: '', calendarMonth: null, calendarDate: null };
+const state = { view: 'overview', data: null, loading: false, ptScope: '', calendarMonth: null,
+  calendarDate: null,calendarFilter: null,calendarHistory: null,calendarLoading: false,
+  calendarError: null,calendarTruncated: false };
 let sidebarReturnFocus = null;
 let sidebarExitTimer = null;
 let sidebarCloseWatcher = null;
@@ -563,28 +565,81 @@ function renderLedgerDetails(record) {
 function renderCalendar(data) {
   const view=$('#checkin-calendar'),summary=$('#calendar-summary'),detail=$('#calendar-detail'),nav=$('#calendar-nav');if(!view||!summary||!detail||!nav)return;
   const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
-  const records=dailyRecords({ledger:data?.ledger,snapshot:data?.snapshot,tasks:data?.tasks});
+  const records=dailyRecords({ledger:state.calendarHistory??data?.ledger,snapshot:data?.snapshot,tasks:data?.tasks});
   state.calendarMonth ??= today.slice(0,7); state.calendarDate ??= today;
-  const {offset,days}=monthCells(state.calendarMonth),labels=['一','二','三','四','五','六','日'];
-  summary.textContent=`${state.calendarMonth.slice(0,4)} 年 ${Number(state.calendarMonth.slice(5))} 月 · ${[...records.keys()].filter(date=>date.startsWith(state.calendarMonth)).length} 个有执行记录的日期`;
+  const {offset,days}=monthCells(state.calendarMonth),labels=['周一','周二','周三','周四','周五','周六','周日'];
+  const monthly=monthTotals(records,state.calendarMonth),earliest=[...records.keys()].sort()[0]?.slice(0,7)??today.slice(0,7);
+  summary.replaceChildren(el('span','calendar-summary-count',monthly.recordDays?
+    `${monthly.recordDays} 天有回执 · ${monthly.completed} 项完成 · ${monthly.unavailable} 项未开放 · ${monthly.pending} 项待处理`:'本月暂无执行回执'));
+  const legend=el('span','calendar-legend');
+  for(const [name,label] of [['completed','已完成'],['unavailable','未开放'],['pending','待处理']]){
+    const item=el('span');append(item,el('i',`calendar-swatch ${name}`,''),document.createTextNode(label));legend.append(item);
+  }
+  summary.append(legend);
+  if(state.calendarLoading)summary.append(el('span','calendar-history-note','正在读取历史…'));
+  else if(state.calendarError)summary.append(el('span','calendar-history-note error',state.calendarHistory?
+    '历史刷新失败，显示已缓存记录':'历史记录暂不可用，当前仅显示最近数据'));
+  else if(state.calendarTruncated)summary.append(el('span','calendar-history-note','仅展示最近 180 个有回执的日期'));
   nav.replaceChildren();
   const heading=el('h3','calendar-month-title',`${state.calendarMonth.slice(0,4)} 年 ${Number(state.calendarMonth.slice(5))} 月`);
   const buttons=el('div','calendar-nav-buttons');
-  const previous=el('button','calendar-nav-btn','上个月');previous.type='button';previous.addEventListener('click',()=>{state.calendarMonth=moveMonth(state.calendarMonth,-1);state.calendarDate=null;renderCalendar(data);});
-  const next=el('button','calendar-nav-btn','下个月');next.type='button';next.addEventListener('click',()=>{state.calendarMonth=moveMonth(state.calendarMonth,1);state.calendarDate=null;renderCalendar(data);});
-  const todayButton=el('button','calendar-nav-btn today-btn','回到今天');todayButton.type='button';todayButton.disabled=state.calendarMonth===today.slice(0,7);todayButton.addEventListener('click',()=>{state.calendarMonth=today.slice(0,7);state.calendarDate=today;renderCalendar(data);});
+  const previous=el('button','calendar-nav-btn month-step','‹');previous.type='button';previous.title='上个月';previous.setAttribute('aria-label','上个月');previous.disabled=state.calendarHistory!==null&&state.calendarMonth<=earliest;
+  previous.addEventListener('click',()=>{state.calendarMonth=moveMonth(state.calendarMonth,-1);state.calendarDate=null;state.calendarFilter=null;renderCalendar(data);});
+  const next=el('button','calendar-nav-btn month-step','›');next.type='button';next.title='下个月';next.setAttribute('aria-label','下个月');next.disabled=state.calendarMonth>=today.slice(0,7);
+  next.addEventListener('click',()=>{state.calendarMonth=moveMonth(state.calendarMonth,1);state.calendarDate=null;state.calendarFilter=null;renderCalendar(data);});
+  const todayButton=el('button','calendar-nav-btn today-btn','今天');todayButton.type='button';todayButton.setAttribute('aria-label','回到今天');todayButton.disabled=state.calendarMonth===today.slice(0,7)&&state.calendarDate===today;
+  todayButton.addEventListener('click',()=>{state.calendarMonth=today.slice(0,7);state.calendarDate=today;state.calendarFilter=null;renderCalendar(data);});
   append(buttons,previous,todayButton,next);append(nav,heading,buttons);
   view.replaceChildren();for(const label of labels)view.append(el('span','calendar-weekday',label));for(let i=0;i<offset;i++)view.append(el('span','calendar-empty',''));
   const stateOf=entry=>{if(!entry)return 'none';const totals=dayTotals(entry);if(totals.pending>0)return 'warn';if(totals.completed>0)return 'success';if(totals.unavailable>0)return 'done';return 'observe';};
   for(let day=1;day<=days;day++){
-    const date=`${state.calendarMonth}-${String(day).padStart(2,'0')}`,entry=records.get(date),totals=dayTotals(entry),button=el('button',`calendar-day ${stateOf(entry)}${date===today?' today':''}`,String(day));button.type='button';button.setAttribute('aria-label',`${date} ${entry?`${totals.completed} 项完成，${totals.pending} 项待处理`:'无执行记录'}`);
-    button.addEventListener('click',()=>{state.calendarDate=date;renderCalendar(data);});view.append(button);
+    const date=`${state.calendarMonth}-${String(day).padStart(2,'0')}`,entry=records.get(date),totals=dayTotals(entry);
+    const button=el('button',`calendar-day ${stateOf(entry)}${date===today?' today':''}${date===state.calendarDate?' selected':''}`);button.type='button';button.disabled=date>today;
+    button.dataset.date=date;
+    button.setAttribute('aria-label',`${date} ${entry?`${totals.completed} 项完成，${totals.unavailable} 项未开放，${totals.pending} 项待处理`:'无执行记录'}`);
+    button.setAttribute('aria-pressed',String(date===state.calendarDate));
+    append(button,el('span','calendar-day-number',String(day)),el('span','calendar-day-count',entry?(totals.total?`${totals.completed}/${totals.total}`:'无任务'):date===today?'今天':''));
+    if(entry&&totals.total){
+      const track=el('span','calendar-day-track');
+      for(const [kind,count] of [['completed',totals.completed],['unavailable',totals.unavailable],['pending',totals.pending]]){
+        if(count){const segment=el('i',kind);segment.style.width=`${count/totals.total*100}%`;track.append(segment);}
+      }
+      button.append(track);
+    }
+    button.addEventListener('click',()=>{state.calendarDate=date;state.calendarFilter=totals.pending?'pending':'all';renderCalendar(data);
+      view.querySelector(`.calendar-day[data-date="${date}"]`)?.focus({preventScroll:true});});
+    button.addEventListener('keydown',event=>{
+      const step={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7}[event.key];
+      if(!step)return;
+      const target=view.querySelector(`.calendar-day[data-date="${state.calendarMonth}-${String(day+step).padStart(2,'0')}"]`);
+      if(target&&!target.disabled){event.preventDefault();target.focus();}
+    });
+    view.append(button);
   }
-  const selected=records.get(state.calendarDate);const totals=dayTotals(selected);detail.replaceChildren();
-  const header=el('div','calendar-detail-header');append(header,el('strong',null,state.calendarDate??`${state.calendarMonth}-01`),el('span','muted',selected?`更新于 ${formatTime(selected.recordedAt)}`:'没有执行记录'));detail.append(header);
-  if(!selected){detail.append(el('p','calendar-empty-state','当天没有签到执行回执。'));return;}
-  detail.append(el('p','muted',`${totals.completed} 项完成 · ${totals.unavailable} 项未开放 · ${totals.pending} 项待处理`));
-  for(const task of selected.tasks??[]){const card=el('div','calendar-receipt-card');append(card,el('span','receipt-account',siteTitle(task)),statusChip(task.observedStatus),el('span','subtext',`${identityTitle(task)} · ${evidenceLabel(task)}`));detail.append(card);}
+  const selected=records.get(state.calendarDate),totals=dayTotals(selected);detail.replaceChildren();
+  const header=el('div','calendar-detail-header');append(header,el('strong',null,state.calendarDate??'日期明细'),el('span','muted',selected?`更新于 ${formatTime(selected.recordedAt)}`:''));detail.append(header);
+  if(!selected){detail.append(el('p','calendar-empty-state',state.calendarDate?'当日暂无执行回执':'本月暂无选定回执'));return;}
+  detail.append(el('p','calendar-detail-totals',`${totals.completed} 项完成 · ${totals.unavailable} 项未开放 · ${totals.pending} 项待处理`));
+  if(!Array.isArray(selected.tasks)||!selected.tasks.length){detail.append(el('p','calendar-empty-state','仅有当日汇总，未保存逐站回执'));return;}
+  state.calendarFilter??=totals.pending?'pending':'all';
+  const filters=el('div','calendar-filters');filters.setAttribute('role','group');filters.setAttribute('aria-label','筛选当天任务');
+  for(const [filter,label,count] of [['pending','待处理',totals.pending],['all','全部',totals.total],['completed','已完成',totals.completed],['unavailable','未开放',totals.unavailable]]){
+    const button=el('button',state.calendarFilter===filter?'active':'',`${label} ${count}`);button.type='button';button.setAttribute('aria-pressed',String(state.calendarFilter===filter));
+    button.addEventListener('click',()=>{state.calendarFilter=filter;renderCalendar(data);
+      detail.querySelector('.calendar-filters button[aria-pressed="true"]')?.focus({preventScroll:true});});filters.append(button);
+  }
+  detail.append(filters);
+  const tasks=calendarTasks(selected,state.calendarFilter);
+  if(!tasks.length){detail.append(el('p','calendar-empty-state','该分类暂无任务回执'));return;}
+  const list=el('div','calendar-receipts');
+  for(const task of tasks){
+    const row=el('div','calendar-receipt-row'),identity=el('div','calendar-receipt-identity');
+    append(identity,el('strong',null,siteTitle(task)),el('span','subtext',identityTitle(task)));
+    append(row,identity,statusChip(task.observedStatus),el('span','calendar-receipt-evidence',
+      state.calendarFilter==='pending'?task.evidence?.summary||evidenceLabel(task):evidenceLabel(task)));
+    list.append(row);
+  }
+  detail.append(list);
 }
 
 function renderSettings(data) {
@@ -661,9 +716,23 @@ async function loadData() {
     const overview = await api('/api/overview');
     state.data = { ...overview, ledger: overview.ledger ?? [] };
     showLogin(false); renderAll();
+    if(state.view==='calendar')void loadCalendarHistory({force:true});
   } catch (error) {
     $('#service-status').textContent = '连接失败'; $('.status-dot').style.background = '#d76f78'; showError(error.name === 'TimeoutError' ? '请求超时，保留上次数据；请稍后刷新。' : error.message);
   } finally { state.loading = false; $('#refresh-btn').disabled = false; $('#refresh-btn').textContent = '刷新数据'; }
+}
+
+async function loadCalendarHistory({force=false}={}) {
+  if(state.calendarLoading||(!force&&state.calendarHistory))return;
+  state.calendarLoading=true;state.calendarError=null;
+  if(state.data&&state.view==='calendar')renderCalendar(state.data);
+  try{
+    const response=await api('/api/calendar');
+    if(!Array.isArray(response.days))throw Error('日历历史格式无效');
+    state.calendarHistory=response.days;
+    state.calendarTruncated=response.truncated===true;
+  }catch(error){state.calendarError=error.message;}
+  finally{state.calendarLoading=false;if(state.data&&state.view==='calendar')renderCalendar(state.data);}
 }
 
 function switchView(view) {
@@ -672,6 +741,7 @@ function switchView(view) {
 
 function renderView(view) {
   state.view = view;
+  if(view==='calendar'&&state.data)void loadCalendarHistory({force:true});
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
   document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active-view', item.id === `view-${view}`));
   const titles = { overview: '签到运行总览', calendar: '签到日历', tasks: '任务管理', 'pt-status': 'PT 状态', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '运行设置' };

@@ -119,6 +119,11 @@ keeping browser control and check-in execution in the execution layer.
   plan hash, execution/business completeness, and health freshness.
 - **Tasks:** searchable/filterable task ledger with account references,
   evidence source, authoritative flag, and execution owner.
+- **Calendar:** one latest redacted execution receipt per Shanghai business day,
+  fetched independently from the last 30 run-audit entries. It retains up to
+  180 recorded days, shows completed/unavailable/pending proportions and opens
+  pending tasks first with filters for the other outcomes. An absent day stays
+  empty; Harvest observations are not counted as execution receipts.
 - **PT status:** status catalog for PT sites from the execution layer, Harvest,
   or another observer. It distinguishes regular PT tasks from sites in the
   separate PT-only fallback scope, with source-by-source status, freshness and
@@ -162,7 +167,7 @@ keeping browser control and check-in execution in the execution layer.
 
 All `/api/*` routes require the dashboard token when the service is not
 loopback-only. `GET /healthz` is a minimal unauthenticated container health
-probe. Read APIs are `/api/summary`, `/api/tasks`, `/api/pt-status`,
+probe. Read APIs are `/api/summary`, `/api/calendar`, `/api/tasks`, `/api/pt-status`,
 `/api/overview`,
 `/api/sites`, `/api/accounts`, `/api/ledger`, `/api/controls`, `/api/config`,
 and `/api/health`. The only mutation is `POST /api/controls/sites`; it
