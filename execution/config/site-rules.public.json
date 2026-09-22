@@ -17,6 +17,7 @@
   "newApiCheckinOrigins": [
     "https://ai-cf.ailinyu.de",
     "https://checkin.new-api.abrdns.com",
+    "https://elysia.h-e.top",
     "https://free.lyclaude.site",
     "https://jianzhile.vip",
     "https://muyuan.do",
@@ -120,6 +121,7 @@
   "oauthLoginUrls": {
     "https://agentrouter.org": "https://agentrouter.org/login",
     "https://checkin.new-api.abrdns.com": "https://checkin.new-api.abrdns.com/",
+    "https://elysia.h-e.top": "https://elysia.h-e.top/sign-in",
     "https://free.lyclaude.site": "https://free.lyclaude.site/login",
     "https://new-api.koyeb.app": "https://new-api.koyeb.app/login",
     "https://up.x666.me": "https://up.x666.me/api/auth/login"
@@ -134,6 +136,7 @@
     "https://agentrouter.org": "LinuxDO",
     "https://muyuan.do": "LinuxDO",
     "https://checkin.new-api.abrdns.com": "LinuxDO",
+    "https://elysia.h-e.top": "LinuxDO",
     "https://free.lyclaude.site": "LinuxDO",
     "https://new-api.koyeb.app": "LinuxDO",
     "https://x666.me": "LinuxDO"

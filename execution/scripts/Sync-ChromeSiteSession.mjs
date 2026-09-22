@@ -71,6 +71,8 @@ async function inspectLanding(page) {
     try {
       const ids = new Set();
       for (const storage of [localStorage, sessionStorage]) {
+        const directUid = String(storage.getItem("uid") ?? "").trim();
+        if (/^[1-9]\d{0,18}$/.test(directUid)) ids.add(directUid);
         for (let index = 0; index < storage.length; index += 1) {
           try {
             const value = JSON.parse(storage.getItem(storage.key(index)) || "null");
@@ -201,14 +203,18 @@ try {
 
   await fs.mkdir(path.dirname(sessionStorageOutputPath), { recursive: true });
   const temporaryOutput = `${sessionStorageOutputPath}.${process.pid}.tmp`;
-  await fs.writeFile(temporaryOutput, `${JSON.stringify({
-    version: 1,
-    origin,
-    capturedAt: new Date().toISOString(),
-    local: sourceStorage.local,
-    session: sourceStorage.session,
-  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  await fs.rename(temporaryOutput, sessionStorageOutputPath);
+  try {
+    await fs.writeFile(temporaryOutput, `${JSON.stringify({
+      version: 1,
+      origin,
+      capturedAt: new Date().toISOString(),
+      local: sourceStorage.local,
+      session: sourceStorage.session,
+    }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await fs.rename(temporaryOutput, sessionStorageOutputPath);
+  } finally {
+    await fs.rm(temporaryOutput, { force: true }).catch(() => {});
+  }
 
   targetContext = await chromium.launchPersistentContext(targetUserDataDir, commonOptions);
   if (cookies.length > 0) await targetContext.addCookies(cookies);

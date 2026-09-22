@@ -150,6 +150,7 @@ async function startDirectLinuxDoOAuth(page, redirectOverride = "") {
   const authorizeUrl = await page.evaluate(async (configuredRedirectUri) => {
     const readJson = async (pathValue, options = {}) => {
       const response = await fetch(pathValue, { ...options, credentials: "include", headers: { Accept: "application/json", ...(options.headers ?? {}) } }).catch(() => null);
+      if (response?.status === 429) throw new Error("OAuth endpoint HTTP 429");
       if (!response?.ok) return null;
       return response.json().catch(() => null);
     };
@@ -242,7 +243,12 @@ async function runOAuthFlow(context) {
     observedPage.on("response", (response) => {
       try {
         const route = new URL(response.url());
-        if (response.status() === 429 && ["linux.do", "connect.linux.do"].includes(route.hostname)) {
+        const targetStateRateLimited = response.status() === 429
+          && route.origin === origin
+          && route.pathname === "/api/oauth/state";
+        const upstreamRateLimited = response.status() === 429
+          && ["linux.do", "connect.linux.do"].includes(route.hostname);
+        if (targetStateRateLimited || upstreamRateLimited) {
           oauthRateLimited = true;
         }
       } catch { /* ignore non-URL responses */ }
@@ -361,7 +367,7 @@ async function runOAuthFlow(context) {
   if (popup) {
     page = popup;
     observeOAuthCallbacks(page);
-  } else if (!startedDirectOAuth && /linux\s*do/i.test(provider) && shouldStartOAuthFallback(page.url(), origin, oauthCallbackEvidence)) {
+  } else if (!startedDirectOAuth && !oauthRateLimited && /linux\s*do/i.test(provider) && shouldStartOAuthFallback(page.url(), origin, oauthCallbackEvidence)) {
     await startDirectLinuxDoOAuth(page);
   }
   await page.waitForTimeout(1500);

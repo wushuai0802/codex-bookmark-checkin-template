@@ -58,6 +58,11 @@ test("OAuth provider click preserves a trusted gesture through transient overlay
 test("OAuth helper reports LinuxDO 429 without logging route traces", async () => {
   const source = await fs.readFile(new URL("../src/oauth-login.mjs", import.meta.url), "utf8");
   assert.match(source, /response\.status\(\) === 429/);
+  assert.match(source, /route\.origin === origin/);
+  assert.match(source, /route\.pathname === "\/api\/oauth\/state"/);
+  assert.match(source, /response\?\.status === 429/);
+  assert.match(source, /throw new Error\("OAuth endpoint HTTP 429"\)/);
+  assert.match(source, /!startedDirectOAuth && !oauthRateLimited/);
   assert.match(source, /failureCode: "oauth_rate_limited"/);
   assert.doesNotMatch(source, /oauthRouteTrace/);
 });
