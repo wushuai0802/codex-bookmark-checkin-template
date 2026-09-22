@@ -25,6 +25,7 @@ function resolveClassicLevel() {
         .reverse();
     } catch {}
     for (const version of versions) {
+      candidates.push(path.join(pluginRoot, version, "node_modules", "classic-level"));
       candidates.push(path.join(pluginRoot, version, "scripts", "node_modules", "classic-level"));
     }
   }
@@ -98,28 +99,20 @@ for (const [key, value] of rows) {
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 const current = await fs.readFile(outputPath, "utf8").then(JSON.parse).catch(() => null);
 const temporary = `${outputPath}.${process.pid}.tmp`;
-await fs.writeFile(temporary, `${JSON.stringify({
-  version: 1,
-  origin,
-  capturedAt: new Date().toISOString(),
-  local: Array.isArray(current?.local) ? current.local : [],
-  session: [...entries.entries()],
-}, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-await fs.rename(temporary, outputPath);
+try {
+  await fs.writeFile(temporary, `${JSON.stringify({
+    version: 1,
+    origin,
+    capturedAt: new Date().toISOString(),
+    local: Array.isArray(current?.local) ? current.local : [],
+    session: [...entries.entries()],
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.rename(temporary, outputPath);
+} finally {
+  await fs.rm(temporary, { force: true }).catch(() => {});
+}
 process.stdout.write(JSON.stringify({
   namespaceCount: namespaceRows.length,
   mapCount: mapIds.size,
-  mapIds: [...mapIds],
   entryCount: entries.size,
-  keyNames: [...entries.keys()],
-  matchingKeySamples: namespaceRows.slice(0, 10).map(([key, value]) => ({
-    key: key.toString("utf8").replace(/[\u0000-\u001f\u007f]/g, "?"),
-    keyLength: key.length,
-    valueLength: value.length,
-  })),
-  structuralKeySamples: rows
-    .map(([key]) => key.toString("utf8"))
-    .filter((key) => /namespace|map-/i.test(key))
-    .slice(0, 30)
-    .map((key) => key.replace(/[\u0000-\u001f\u007f]/g, "?")),
 }));

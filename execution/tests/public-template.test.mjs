@@ -123,6 +123,13 @@ test("Muyuan 启用签到并使用无调试 Cloudflare 预热", async () => {
   );
 });
 
+test("Elysia 使用明确的 LinuxDO 登录入口", async () => {
+  const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
+  assert.equal(rules.newApiCheckinOrigins.includes("https://elysia.h-e.top"), true);
+  assert.equal(rules.automaticOAuthProviders["https://elysia.h-e.top"], "LinuxDO");
+  assert.equal(rules.oauthLoginUrls["https://elysia.h-e.top"], "https://elysia.h-e.top/sign-in");
+});
+
 test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async () => {
   const rules = JSON.parse(await fs.readFile(new URL("../config/site-rules.public.json", import.meta.url), "utf8"));
   const agentRouter = rules.oauthReloginCheckinRules["https://agentrouter.org"];

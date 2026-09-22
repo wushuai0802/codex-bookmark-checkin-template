@@ -1,10 +1,16 @@
 # Production Boundary and Historical Work
 
-The project now has one production execution owner. The Windows execution
-package keeps the established browser profiles, site rules, retries and
-authoritative results. The observation package leases a run, imports redacted
-results, watches Harvest and serves the dashboard. Standalone adapter/canary
+The project has one production execution owner. The Windows execution package
+keeps the established browser profiles, site rules, retries and authoritative
+results. The observation package leases a run, imports redacted results,
+watches Harvest and serves the dashboard. Standalone adapter and Canary
 experiments cannot take over a site while this integration is selected.
+
+The old V1/V2 labels remain only in compatibility file names and historical
+audit records. They are not separate production versions. The complete project
+is published from the default `main` branch as `execution/` and `observation/`.
+The final standalone controller history is preserved by the
+`archive-v2-final-20260922` tag instead of a permanent `v2` branch.
 
 The current observation history indicator requires three consecutive healthy,
 fresh days on the same plan. A shorter display threshold does not override an
@@ -20,7 +26,7 @@ cannot become a task. The daily attempt ledger prevents replaying an uncertain
 submission or launching a worker when no new attempts remain. See
 [PT status](pt-status.md) and [execution integration](v1-engine-integration.md).
 
-Historical adapter, transport and migration designs remain in the archived
-`v2` branch for audit. Their gates are not a second production schedule and
-should not be presented as the current operating procedure. Removing their
-offline source and fixtures requires a separate rollback review.
+Historical adapter, transport and migration modules remain offline for audit
+and rollback tests. Their gates are not a second production schedule and must
+not be presented as the current operating procedure. Removing those modules or
+fixtures requires a separate rollback review.

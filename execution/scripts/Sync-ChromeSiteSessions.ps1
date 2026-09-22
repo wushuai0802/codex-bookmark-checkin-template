@@ -13,10 +13,11 @@ $sourceProfile = Join-Path $sourceRoot ([string]$config.sourceProfileDirectory)
 $targetRoot = [System.IO.Path]::GetFullPath([string]$config.automationUserDataDir)
 $chromeExecutable = [System.IO.Path]::GetFullPath([string]$config.chromeExecutable)
 $helper = Join-Path $PSScriptRoot 'Sync-ChromeSiteSession.mjs'
+$sessionExtractor = Join-Path $PSScriptRoot 'Extract-ChromeSessionStorage.mjs'
 $tmpRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'tmp')).TrimEnd('\')
 $tmpPrefix = "$tmpRoot\"
 
-foreach ($required in @($helper, $chromeExecutable, (Join-Path $sourceRoot 'Local State'), $sourceProfile, (Join-Path $targetRoot 'Local State'))) {
+foreach ($required in @($helper, $sessionExtractor, $chromeExecutable, (Join-Path $sourceRoot 'Local State'), $sourceProfile, (Join-Path $targetRoot 'Local State'))) {
     if (-not (Test-Path -LiteralPath $required)) { throw "会话同步所需文件不存在：$required" }
 }
 
@@ -44,6 +45,7 @@ foreach ($rawTarget in $TargetUrl) {
     if (-not $uri.IsAbsoluteUri -or $uri.Scheme -ne 'https' -or $uri.UserInfo) {
         throw "目标页面必须是无凭据 HTTPS 地址：$rawTarget"
     }
+    $origin = $uri.GetLeftPart([UriPartial]::Authority)
 
     $shadowRoot = Join-Path $tmpRoot "chrome-session-shadow-$PID-$([Guid]::NewGuid().ToString('N'))"
     $sessionStoragePath = Join-Path $tmpRoot "chrome-session-storage-$PID-$([Guid]::NewGuid().ToString('N')).json"
@@ -74,6 +76,16 @@ foreach ($rawTarget in $TargetUrl) {
             Copy-Item -LiteralPath $sourceCookies -Destination (Join-Path $shadowRoot 'Default\Network\Cookies') -Force
         }
 
+        $sessionDatabase = Join-Path $shadowRoot 'Default\Session Storage'
+        if (Test-Path -LiteralPath $sessionDatabase) {
+            $extractionRaw = @(& node $sessionExtractor $sessionDatabase $origin $sessionStoragePath)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Chrome sessionStorage 提取失败，退出码 $LASTEXITCODE：$($uri.Host)"
+            }
+            try { $null = (($extractionRaw -join [Environment]::NewLine) | ConvertFrom-Json) }
+            catch { throw "Chrome sessionStorage 提取器返回了无效结果：$($uri.Host)" }
+        }
+
         $raw = @(& node $helper $shadowRoot $targetRoot $uri.AbsoluteUri $chromeExecutable $sessionStoragePath)
         if ($LASTEXITCODE -ne 0) { throw "站点会话同步失败，退出码 $LASTEXITCODE：$($uri.Host)" }
         $value = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
@@ -91,17 +103,30 @@ foreach ($rawTarget in $TargetUrl) {
         }
     }
     finally {
-        foreach ($temporaryPath in @($resolvedShadowRoot, $resolvedSessionStoragePath, "$resolvedSessionStoragePath.bak")) {
-            if (-not $temporaryPath.StartsWith($tmpPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw '临时清理目标越界。'
-            }
-            if (Test-Path -LiteralPath $temporaryPath) {
-                $item = Get-Item -LiteralPath $temporaryPath -Force
-                if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                    throw "拒绝清理重解析点：$temporaryPath"
+        $sessionFileName = [System.IO.Path]::GetFileName($resolvedSessionStoragePath)
+        $sessionTemporaryFiles = @(Get-ChildItem -LiteralPath $tmpRoot -Filter "$sessionFileName.*.tmp" -File -Force -ErrorAction SilentlyContinue)
+        $cleanupTargets = @($resolvedSessionStoragePath, "$resolvedSessionStoragePath.bak") `
+            + @($sessionTemporaryFiles | Select-Object -ExpandProperty FullName) `
+            + @($resolvedShadowRoot)
+        $cleanupErrors = @()
+        foreach ($temporaryPath in $cleanupTargets) {
+            try {
+                if (-not $temporaryPath.StartsWith($tmpPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw '临时清理目标越界。'
                 }
-                Remove-Item -LiteralPath $temporaryPath -Recurse -Force
+                if (Test-Path -LiteralPath $temporaryPath) {
+                    $item = Get-Item -LiteralPath $temporaryPath -Force
+                    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                        throw "拒绝清理重解析点：$temporaryPath"
+                    }
+                    if ($item.PSIsContainer) { Remove-Item -LiteralPath $temporaryPath -Recurse -Force }
+                    else { Remove-Item -LiteralPath $temporaryPath -Force }
+                }
             }
+            catch { $cleanupErrors += $_.Exception.Message }
+        }
+        if ($cleanupErrors.Count -gt 0) {
+            throw "会话同步临时文件清理失败：$($cleanupErrors -join '；')"
         }
     }
 }

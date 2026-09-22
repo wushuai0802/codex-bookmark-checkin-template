@@ -17,8 +17,9 @@ daily plan. A prior uncertain submission is never replayed automatically. This
 site-only fallback is disabled by default until the private runtime and its
 browser profile have been accepted.
 
-The historical `v2` branch and standalone adapter experiments remain available
-for audit. They are not a second production engine. Do not copy private runtime
+The final standalone controller history is preserved by the
+`archive-v2-final-20260922` tag. Historical adapter experiments remain offline
+for audit; they are not a second production engine. Do not copy private runtime
 data into this repository or force-merge unrelated Git histories.
 
 ## Local Checks
