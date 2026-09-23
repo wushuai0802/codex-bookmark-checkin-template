@@ -18,9 +18,14 @@ export function siteTitle(item) {
 
 export function matchesTask(task, { status = '', query = '' } = {}) {
   const value = task.observedStatus;
-  const statusMatch = status === 'success' ? ['signed', 'already_signed'].includes(value)
-    : status === 'pending' ? !['signed', 'already_signed', 'not_available'].includes(value)
-    : !status || value === status;
+  const statusGroups = {
+    completed: ['signed', 'already_signed'],
+    pending: ['deferred', 'needs_attention', 'failed', 'unknown', 'not_started', 'login_required'],
+    attention: ['needs_attention', 'failed', 'unknown', 'not_started'],
+    login_required: ['login_required'],
+    unavailable: ['not_available'],
+  };
+  const statusMatch = !status || (statusGroups[status] ? statusGroups[status].includes(value) : value === status);
   const haystack = [task.origin, task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
     task.identity?.username, task.identity?.userId, task.identity?.label].join(' ').toLowerCase();
   return statusMatch && haystack.includes(query.trim().toLowerCase());

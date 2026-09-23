@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesPt,ptStatusCategory} from '../public/dashboard-model.mjs';
+import {matchesPt,ptStatusCategory,matchesTask} from '../public/dashboard-model.mjs';
+
+test('task filters use non-overlapping business groups',()=>{
+  const task=status=>({observedStatus:status,origin:'https://example.test'});
+  for(const status of ['signed','already_signed'])assert.equal(matchesTask(task(status),{status:'completed'}),true);
+  assert.equal(matchesTask(task('deferred'),{status:'pending'}),true);
+  assert.equal(matchesTask(task('needs_attention'),{status:'attention'}),true);
+  assert.equal(matchesTask(task('failed'),{status:'attention'}),true);
+  assert.equal(matchesTask(task('unknown'),{status:'attention'}),true);
+  assert.equal(matchesTask(task('not_started'),{status:'attention'}),true);
+  assert.equal(matchesTask(task('login_required'),{status:'login_required'}),true);
+  assert.equal(matchesTask(task('not_available'),{status:'unavailable'}),true);
+  assert.equal(matchesTask(task('deferred'),{status:'completed'}),false);
+});
 
 test('PT review filter includes registered unknown status but not unregistered observations',()=>{
   assert.equal(matchesPt({inLegacyPlan:true,effective:{status:'unknown'}},'review'),true);

@@ -65,7 +65,7 @@ test('display identity preserves actual ID and never includes credentials', () =
 
 test('KPI and identity searches use exact status groups, PT filters stay separate', () => {
   const task = { origin: 'https://example.com', identity: { userId: '12345', username: 'reader' }, observedStatus: 'already_signed' };
-  assert.equal(matchesTask(task, { status: 'success', query: '12345' }), true);
+  assert.equal(matchesTask(task, { status: 'completed', query: '12345' }), true);
   assert.equal(matchesTask(task, { status: 'pending' }), false);
   assert.equal(matchesTask({ ...task, observedStatus: 'not_available' }, { status: 'pending' }), false);
   assert.equal(matchesPt({ inLegacyPlan: false }, 'monitor'), true);
