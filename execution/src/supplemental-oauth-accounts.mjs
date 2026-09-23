@@ -4,7 +4,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loginHelperOutcome, parseLoginHelperResult } from "./login-recovery.mjs";
 import { authoritativeAccountDisplay, resultIdentity } from "./result-identity.mjs";
-import { oauthAccountCheckinMode } from "./new-api-account-checkin.mjs";
+import { checkNewApiAccount, oauthAccountCheckinMode } from "./new-api-account-checkin.mjs";
+import { launchAutomationContext } from "./browser.mjs";
 
 const execFileAsync = promisify(execFile);
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -212,6 +213,45 @@ export function oauthAccountRetryPolicy(config = {}) {
   return { attempts, delayMs };
 }
 
+// Use the same account-bound, submit-once New API contract as native OAuth,
+// but first try the existing profile session without a logout or OAuth click.
+// Only an explicit login_required result authorizes native OAuth recovery.
+export async function runNewApiAccountSession(account, config, {
+  launchContext = launchAutomationContext,
+  checkin = checkNewApiAccount,
+} = {}) {
+  let context;
+  let checkStarted = false;
+  try {
+    context = await launchContext({ ...config, automationUserDataDir: account.automationUserDataDir, headless: true });
+    const page = await context.newPage();
+    await page.goto(`${account.origin}/profile`, {
+      waitUntil: "domcontentloaded", timeout: Number(config.navigationTimeoutMs) || 20000,
+    });
+    checkStarted = true;
+    const dailyCheckin = await checkin(page, account.origin, account.accountId);
+    if (dailyCheckin?.status === "login_required") return null;
+    if (!["signed", "already_signed", "deferred", "needs_attention", "not_available"].includes(dailyCheckin?.status)) {
+      return oauthHelperResultToCheckin(account, {
+        dailyCheckin: { status: "needs_attention", reason: "账号签到状态不确定，已停止重复提交",
+          failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false },
+      });
+    }
+    return oauthHelperResultToCheckin(account, {
+      status: ["signed", "already_signed"].includes(dailyCheckin.status) ? "logged_in" : "needs_attention",
+      finalUrl: `${account.origin}/profile`, dailyCheckin,
+    });
+  } catch {
+    if (!checkStarted) return null;
+    return oauthHelperResultToCheckin(account, {
+      dailyCheckin: { status: "needs_attention", reason: "账号签到请求结果不明，禁止重复提交",
+        failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false },
+    });
+  } finally {
+    await context?.close().catch(() => {});
+  }
+}
+
 export async function runOAuthAccount(account, config, rootDirectory) {
   const marker = path.join(account.automationUserDataDir, "Local State");
   try { await fs.access(marker); } catch {
@@ -220,6 +260,10 @@ export async function runOAuthAccount(account, config, rootDirectory) {
       reason: "独立登录会话尚未初始化",
       failureCode: "configuration_mismatch",
     });
+  }
+  if (account.supplementalAccount === true && oauthAccountCheckinMode(account.checkinMode) === "new_api") {
+    const sessionResult = await runNewApiAccountSession(account, config);
+    if (sessionResult) return sessionResult;
   }
   const executable = config.powershellExecutable || "pwsh.exe";
   const args = [

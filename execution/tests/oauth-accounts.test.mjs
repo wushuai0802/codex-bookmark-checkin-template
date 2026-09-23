@@ -17,6 +17,7 @@ import {
   configuredSupplementalOAuthAccounts,
   oauthAccountRetryPolicy,
   oauthHelperResultToCheckin,
+  runNewApiAccountSession,
 } from "../src/supplemental-oauth-accounts.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -381,6 +382,46 @@ test("OAuth 账号瞬时失败使用有界重试策略", () => {
     attempts: 1,
     delayMs: 0,
   });
+});
+
+test("New API 账号优先复用精确 Profile 会话并返回当日权威结果", async () => {
+  const account = { ...supplemental(), checkinMode: "new_api", supplementalAccount: true };
+  let closed = false;
+  const result = await runNewApiAccountSession(account, { navigationTimeoutMs: 1000 }, {
+    launchContext: async (config) => {
+      assert.equal(config.automationUserDataDir, account.automationUserDataDir);
+      assert.equal(config.headless, true);
+      return { newPage: async () => ({ goto: async (url) => assert.equal(url, `${account.origin}/profile`) }),
+        close: async () => { closed = true; } };
+    },
+    checkin: async (_page, originValue, accountId) => {
+      assert.equal(originValue, account.origin);
+      assert.equal(accountId, account.accountId);
+      return { status: "already_signed", reason: "calendar confirmed",
+        evidence: { source: "new_api_checkin_calendar", accountId, checkinDate: "2026-09-01" } };
+    },
+  });
+  assert.equal(result.status, "already_signed");
+  assert.equal(result.evidence.accountId, account.accountId);
+  assert.equal(closed, true);
+});
+
+test("New API 会话只有明确失效才交给原生 OAuth，提交异常禁止再次尝试", async () => {
+  const account = { ...supplemental(), checkinMode: "new_api", supplementalAccount: true };
+  let closed = 0;
+  const launchContext = async () => ({ newPage: async () => ({ goto: async () => {} }), close: async () => { closed++; } });
+  const loginRequired = await runNewApiAccountSession(account, {}, {
+    launchContext, checkin: async () => ({ status: "login_required" }),
+  });
+  assert.equal(loginRequired, null);
+  const unknown = await runNewApiAccountSession(account, {}, {
+    launchContext, checkin: async () => { throw Error("uncertain after request"); },
+  });
+  assert.equal(unknown.status, "needs_attention");
+  assert.equal(unknown.failureCode, "submission_outcome_unknown");
+  assert.equal(unknown.submissionAttempted, true);
+  assert.equal(unknown.retryable, false);
+  assert.equal(closed, 2);
 });
 
 test("New API accounts preserve their explicit mode and nonretryable result", () => {
