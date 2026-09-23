@@ -34,6 +34,15 @@ const STATUS_LABELS = {
   unreachable: '不可访问', failed: '失败', unknown: '未知', not_started:'未执行（缺少回执）'
 };
 
+const TASK_FILTERS = [
+  ['', '全部任务'],
+  ['completed', '已完成'],
+  ['unavailable', '未开放'],
+  ['deferred', '已延迟'],
+  ['login_required', '需登录'],
+  ['attention', '需关注'],
+];
+
 const $ = (selector) => document.querySelector(selector);
 
 function text(value, fallback = '—') {
@@ -198,7 +207,7 @@ function renderKpis(data) {
   const status = data?.status ?? {};
   const metrics = overviewMetrics(data);
   const cards = [
-    ['执行成功', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'success'],
+    ['执行成功', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'completed'],
     ['未开放回执', metrics.unavailable, `已核验 ${metrics.verifiedUnavailable} / 待核验 ${metrics.unverifiedUnavailable}`, 'not_available'],
     ['尚未完成', metrics.pending, `${metrics.manual} 项需关注 · ${metrics.deferred} 项延后`, 'pending'],
     ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, '同站多账号分别核验', '']
@@ -777,7 +786,7 @@ function applyRoute(route, { restoreScroll = true } = {}) {
   const changedFilters = $('#task-search').value !== route.query || $('#task-status').value !== route.status
     || $('#task-account').value !== route.account || state.ptScope !== route.ptScope;
   if (changedView) renderView(route.view);
-  $('#task-search').value = route.query; $('#task-status').value = route.status;
+  $('#task-search').value = route.query; $('#task-status').value = route.status; $('#task-status')._syncFilterLabel?.(route.status);
   $('#task-account').value = route.account;
   state.ptScope = route.ptScope;
   if (state.data && (changedView || changedFilters)) { applyTaskFilter(); renderPtStatus(state.data.ptStatus); }
@@ -807,13 +816,37 @@ function applyTaskFilter() {
   renderTasks(tasks);
 }
 
+function setupTaskStatusFilter() {
+  const native = $('#task-status');
+  if (!native) return;
+  native.classList.add('filter-native-compat');
+  native.replaceChildren();
+  for (const [value, label] of TASK_FILTERS) {
+    const option = el('option', null, label); option.value = value; native.append(option);
+  }
+  const wrapper = el('div', 'filter-menu');
+  const trigger = el('button', 'filter-trigger', TASK_FILTERS[0][1]);
+  trigger.type = 'button'; trigger.setAttribute('aria-haspopup', 'listbox'); trigger.setAttribute('aria-expanded', 'false');
+  const menu = el('div', 'filter-options'); menu.setAttribute('role', 'listbox'); menu.hidden = true;
+  const close = () => { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); wrapper.classList.remove('open'); };
+  for (const [value, label] of TASK_FILTERS) {
+    const option = el('button', 'filter-option', label); option.type = 'button'; option.dataset.value = value; option.setAttribute('role', 'option');
+    option.addEventListener('click', () => { native.value = value; trigger.textContent = label; close(); native.dispatchEvent(new Event('change', { bubbles: true })); });
+    menu.append(option);
+  }
+  trigger.addEventListener('click', () => { const open = menu.hidden; menu.hidden = !open; trigger.setAttribute('aria-expanded', String(open)); wrapper.classList.toggle('open', open); });
+  document.addEventListener('click', event => { if (!wrapper.contains(event.target)) close(); });
+  wrapper.append(trigger, menu); native.after(wrapper);
+  native._syncFilterLabel = value => { trigger.textContent = (TASK_FILTERS.find(([key]) => key === value) ?? TASK_FILTERS[0])[1]; };
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   renderRecentPages(state.view);
   installCompactTopbar({topbar:document.querySelector('.topbar')});
   const accountFilter = el('select'); accountFilter.id = 'task-account'; accountFilter.setAttribute('aria-label', '筛选账号');
   $('#task-status').after(accountFilter); accountFilter.addEventListener('change', applyTaskFilter);
   $('#task-search').placeholder = '搜索站点、用户名或 ID';
-  for (const [key, label] of [['success', '全部成功'], ['pending', '全部未完成'], ...['login_required', 'failed', 'unknown','not_started'].map(key => [key, STATUS_LABELS[key]])]) { const option = el('option', null, label); option.value = key; $('#task-status').append(option); }
+  setupTaskStatusFilter();
   history.scrollRestoration = 'manual';
   navigation = createNavigation({ history, location, onChange: applyRoute, readScroll: () => window.scrollY });
   applyRoute(navigation.current);
