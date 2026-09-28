@@ -19,6 +19,7 @@ import {
 } from "./login-recovery.mjs";
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
+import { pendingQuotaClaim } from "./quota-claim-guard.mjs";
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
   applyPreferredCandidates,
@@ -301,6 +302,13 @@ try {
     const runLog = await createRunLog(logsRoot);
     const startedAt = new Date();
     const siteState = await loadSiteState(siteStatePath);
+    let previousFinalReport = null;
+    try {
+      const latest = JSON.parse(await fs.readFile(path.join(logsRoot, "latest.json"), "utf8"));
+      if (latest.runState === "final" && latest.isComplete === true && Array.isArray(latest.results)) {
+        previousFinalReport = latest;
+      }
+    } catch { /* a persisted pending claim still blocks when latest is unreadable */ }
     const qaCache = await loadQaCache(qaCachePath);
     const qaRules = [
       ...(qaConfig.rules ?? []),
@@ -601,8 +609,11 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
+        const guardedQuotaClaim = pendingQuotaClaim(target, siteState, previousFinalReport, config);
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
-        const targetResult = explicitSelection && prior && isTerminalResult(prior)
+        const targetResult = guardedQuotaClaim
+          ? guardedQuotaClaim
+          : explicitSelection && prior && isTerminalResult(prior)
           && !reenabledTerminal
           ? prior
           : isolatedPrimaryByIdentity.has(resultIdentity(target))
@@ -993,7 +1004,7 @@ try {
     });
     const primaryResults = [...results, ...manualConfirmedResults, ...temporarilyUnavailableResults]
       .filter((result) => result.supplementalAccount !== true);
-    await writeSiteState(siteStatePath, updateSiteState(siteState, primaryResults, finishedAt));
+    await writeSiteState(siteStatePath, updateSiteState(siteState, primaryResults, finishedAt, config));
     await writeQaCache(qaCachePath, updateQaCache(qaCache, results, finishedAt));
     await fs.rm(nativeWafPreflightPath, { force: true }).catch(() => {});
     console.log(JSON.stringify({ resultPath, summary }, null, 2));

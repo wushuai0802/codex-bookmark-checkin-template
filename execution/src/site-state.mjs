@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { atomicWriteJson } from "./security.mjs";
 import { isConfirmedNotAvailable } from "./result-contract.mjs";
+import { quotaClaimState } from "./quota-claim-guard.mjs";
 
 const SUCCESSFUL = new Set(["signed", "already_signed"]);
 
@@ -86,7 +87,7 @@ function reusablePreferredUrl(result) {
   }
 }
 
-export function updateSiteState(previous, results, finishedAt = new Date()) {
+export function updateSiteState(previous, results, finishedAt = new Date(), config = {}) {
   const sites = { ...(previous?.sites ?? {}) };
   const timestamp = finishedAt.toISOString();
   for (const result of results) {
@@ -100,6 +101,7 @@ export function updateSiteState(previous, results, finishedAt = new Date()) {
     const cachedConfirmation = result.status === "not_available" && result.cached === true;
     const shouldRefreshConfirmation = confirmed && !cachedConfirmation;
     const preferredUrl = reusablePreferredUrl(result) ?? prior.preferredUrl ?? null;
+    const pendingQuotaClaimAt = quotaClaimState(prior.pendingQuotaClaimAt, result, finishedAt, config);
     sites[result.origin] = {
       ...prior,
       lastStatus: result.status,
@@ -128,6 +130,7 @@ export function updateSiteState(previous, results, finishedAt = new Date()) {
       averageDurationMs,
       lastDurationMs: durationMs,
       preferredUrl,
+      ...(pendingQuotaClaimAt === undefined ? {} : { pendingQuotaClaimAt }),
     };
   }
   return { version: 1, updatedAt: timestamp, sites };
