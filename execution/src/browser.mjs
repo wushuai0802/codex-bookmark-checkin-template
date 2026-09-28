@@ -41,9 +41,8 @@ const CANDIDATE_STATUS_PRIORITY = new Map([
   ["error", 30],
   ["no_action", 20],
 ]);
-// NexusPHP ordinary attendance forms may contain a layout table whose class
-// includes captcha; ignore that container while keeping real challenge
-// controls inside the selector.
+// NexusPHP uses this table for ordinary attendance forms too. Ignore only
+// the layout container; real challenge controls inside still match below.
 export const CHALLENGE_SELECTOR = 'iframe[src*="captcha" i], iframe[src*="turnstile" i], iframe[src*="challenge" i], .cf-turnstile, .h-captcha, .g-recaptcha, cap-widget, [data-cap-api-endpoint], [class*="captcha" i]:not(table.attendance-captcha-table)';
 
 function sleep(ms) {
@@ -69,6 +68,7 @@ export function configuredTargetSkip(target, config = {}) {
     (config.disabledAccountBindings ?? []).some((item) => item?.accountKey === accountKey && item?.origin === target?.origin);
   const accountDisabled = Boolean(accountKey && (handoffDisabled || (config.disabledAccountKeys ?? []).includes(accountKey)));
   if (!originDisabled && !accountDisabled) return null;
+
   const v2Evidence = handoffDisabled
     ? config.v2AuthoritativeResults?.[`${String(target?.origin ?? '')}|${accountKey}`]
     : null;
@@ -80,6 +80,7 @@ export function configuredTargetSkip(target, config = {}) {
       disabledAccountKey: accountKey,
     };
   }
+
   const reason = accountDisabled && !originDisabled
     ? handoffDisabled ? `已按 V2 交接标记停用账号 ${accountKey} 的旧签到任务` : '已按配置取消该账号签到任务'
     : '已按配置取消该站签到任务';
@@ -495,7 +496,7 @@ export async function waitForQuotaRequestField(page, timeoutMs = 10000) {
 }
 
 // The Vibe frontend confirms a claim only when code=1 and data.claimed=true.
-// HTTP success or a visible claim button is not a claim receipt.
+// HTTP success or a visible "领取" button is not a claim receipt.
 export function classifyVibeClaimResponse(value, httpStatus = 200, now = new Date()) {
   if (httpStatus !== 200 || value?.code !== 1) return null;
   if (value?.data?.claimed === true) {
@@ -553,6 +554,8 @@ export async function tryQuotaRequestFlow(page, activeOrigin, config, { waitForF
     if (await input.count() === 1 && await input.isVisible().catch(() => false)) { submit = input; break; }
   }
   if (!submit) return { status: "needs_attention", reason: "已填写额度申请理由，但未找到提交按钮" };
+  // Register before the click: the Vibe API response can arrive before the
+  // page's toast is rendered. Observe only the exact same-origin claim call.
   const claimResponse = activeOrigin === VIBE_CLAIM_ORIGIN && typeof page.waitForResponse === "function"
     ? page.waitForResponse((response) => {
       try {
@@ -562,6 +565,8 @@ export async function tryQuotaRequestFlow(page, activeOrigin, config, { waitForF
       } catch { return false; }
     }, { timeout: 12000 }).catch(() => null)
     : null;
+  // A click timeout can occur after the browser has sent the request. Treat it
+  // as an unknown submission unless the exact claim response proves otherwise.
   const clickFailed = await submit.click({ timeout: 10000 }).then(() => false, () => true);
   let claimResult = null;
   if (claimResponse) {
@@ -1024,6 +1029,11 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
     length: 6,
     alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
   });
+  // The original V1 OpenCD path submitted a complete six-character OCR
+  // candidate and relied on the server response plus the follow-up page
+  // check. The migrated path rejected candidates when Tesseract returned a
+  // usable raw code but no calibrated confidence value (confidence=0), which
+  // made otherwise valid OpenCD runs look like interactive challenges.
   const candidateCode = /^[A-Z0-9]{6}$/.test(String(recognition.code ?? ""))
     ? String(recognition.code)
     : (/^[A-Z0-9]{6}$/.test(String(recognition.rawCode ?? "")) ? String(recognition.rawCode) : null);
@@ -1582,7 +1592,9 @@ export async function launchAutomationContext(config) {
   return context;
 }
 
-export async function processTarget(context, target, config, qaRules, logDirectory, { runCandidate = processCandidate } = {}) {
+export async function processTarget(context, target, config, qaRules, logDirectory, {
+  runCandidate = processCandidate,
+} = {}) {
   const configuredSkip = configuredTargetSkip(target, config);
   if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
   let lastResult = null;
