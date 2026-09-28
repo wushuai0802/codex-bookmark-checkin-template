@@ -72,6 +72,27 @@ try {
       await page.waitForFunction(() => document.querySelector('#task-status').value==='pending'
         && document.querySelector('#task-result-count').textContent.includes('1 / 3'));
       assert.equal(await page.locator('#tasks-body tr').count(),1);
+      const statusTrigger=page.locator('.ui-select[data-for="task-status"] .ui-select-trigger');
+      assert.equal(await page.locator('#task-status').getAttribute('aria-hidden'),'true');
+      assert.equal(await page.locator('#task-status').getAttribute('tabindex'),'-1');
+      await statusTrigger.click();
+      assert.equal(await page.getByRole('listbox',{name:'筛选任务状态'}).isVisible(),true);
+      const menuBox=await page.locator('.ui-select-menu').boundingBox();
+      assert.ok(menuBox.height<viewport.height*.55,'option list covers too much of the screen');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('.ui-select-menu').count(),0);
+      assert.equal(await statusTrigger.evaluate(node=>document.activeElement===node),true);
+      await statusTrigger.click();
+      await page.getByRole('listbox').getByRole('option',{name:'已完成'}).click();
+      assert.equal(await page.locator('#task-status').inputValue(),'completed');
+      assert.equal(await page.locator('#tasks-body tr').count(),2);
+      await statusTrigger.click();
+      await page.getByRole('listbox').getByRole('option',{name:'尚未完成'}).click();
+      assert.equal(await page.locator('#tasks-body tr').count(),1);
+      await statusTrigger.press('ArrowDown');
+      await page.keyboard.press('Home');
+      assert.equal(await page.locator('.ui-select-option:focus').textContent(),'全部任务');
+      await page.keyboard.press('Escape');
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       await page.locator('#kpi-grid .kpi').nth(1).click();
@@ -93,6 +114,15 @@ try {
         && !document.querySelector('#calendar-summary').textContent.includes('正在读取历史'));
       const history=await(await fetch(`${base}/api/calendar`)).json();
       assert.equal(history.days.length,37);
+      const currentMonth=await page.locator('.calendar-month-title').textContent();
+      assert.equal(await page.getByRole('button',{name:'上个月'}).isEnabled(),true);
+      assert.equal(await page.getByRole('button',{name:'下个月'}).isEnabled(),true);
+      await page.getByRole('button',{name:'下个月'}).click();
+      assert.notEqual(await page.locator('.calendar-month-title').textContent(),currentMonth);
+      assert.match(await page.locator('#calendar-summary').textContent(),/未来月份/);
+      assert.equal(await page.locator('.calendar-day.selected').count(),0);
+      await page.getByRole('button',{name:'上个月'}).click();
+      assert.equal(await page.locator('.calendar-month-title').textContent(),currentMonth);
       assert.equal((await(await fetch(`${base}/api/overview`)).json()).ledger.length,30);
       await page.locator('.calendar-day').first().click();
       assert.match(await page.locator('#calendar-detail').textContent(), /^\d{4}-\d{2}-01/);
@@ -208,8 +238,11 @@ try {
       await page.locator('.nav-item[data-view="sites"]').click();
       const siteCard = page.locator('#sites-grid .site-card').filter({ hasText: 'daily.example' });
       const controls = siteCard.locator('.site-controls');
-      await controls.locator('select').first().selectOption('pause');
-      await controls.locator('select').nth(1).selectOption('24');
+      await controls.locator('.ui-select-trigger').first().click();
+      await page.getByRole('listbox').getByRole('option',{name:'暂缓关注'}).click();
+      assert.equal(await controls.locator('select').first().inputValue(),'pause');
+      await controls.locator('.ui-select-trigger').nth(1).click();
+      await page.getByRole('listbox').getByRole('option',{name:'24 小时'}).click();
       await controls.getByRole('button', { name: '保存标记' }).click();
       await page.locator('#sites-grid .site-card').filter({ hasText: 'daily.example' })
         .locator('.control-note').filter({ hasText: '暂缓关注至' }).waitFor();

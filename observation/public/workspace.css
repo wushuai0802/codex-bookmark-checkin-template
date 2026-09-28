@@ -190,6 +190,11 @@
   border:1px solid var(--control-line); border-radius:8px; background:var(--surface);
   color:var(--text); min-height:42px; font-size:13px;
 }
+:root[data-workspace="cpam"] .filters .ui-select select.ui-select-native,
+:root[data-workspace="cpam"] .site-controls .ui-select select.ui-select-native {
+  position:absolute; width:1px; height:1px; min-height:0; padding:0; border:0;
+}
+:root[data-workspace="cpam"] .ui-select-trigger { border-color:var(--control-line); }
 :root[data-workspace="cpam"] .filters input:focus,
 :root[data-workspace="cpam"] .filters select:focus { border-color:var(--blue); }
 :root[data-workspace="cpam"] .toolbar { gap:14px; align-items:center; }
