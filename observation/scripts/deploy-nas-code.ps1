@@ -140,7 +140,7 @@ foreach($item in $items){
 }
 
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
-$stage="/tmp/checkin-fabric-deploy-$stamp-$([guid]::NewGuid().ToString('N'))"
+$stage="$RemoteRoot/.staging/code-$stamp-$([guid]::NewGuid().ToString('N'))"
 $remoteBackup="$RemoteRoot/backups/code-$stamp.tar.gz"
 $archive=Join-Path ([IO.Path]::GetTempPath()) "checkin-fabric-v2-$stamp-$([guid]::NewGuid().ToString('N')).tar.gz"
 $stageCreated=$false
@@ -148,7 +148,7 @@ $backupReady=$false
 $deployStarted=$false
 
 try {
-  & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "umask 077 && mkdir -m 0700 '$stage'"
+  & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "sudo -n install -d -m 0700 '$stage' && sudo -n chown `$(id -u):`$(id -g) '$stage'"
   if($LASTEXITCODE -ne 0){throw 'NAS staging directory creation failed'}
   $stageCreated=$true
   $remotePreflight="sudo -n test -d '$RemoteRoot' && sudo -n mkdir -p '$RemoteRoot/backups'"
@@ -230,6 +230,6 @@ catch {
 finally {
   if(Test-Path -LiteralPath $archive -PathType Leaf){Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue}
   if($stageCreated){
-    try {& $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "rm -rf '$stage'" | Out-Null} catch {}
+    try {& $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "sudo -n rm -rf '$stage'" | Out-Null} catch {}
   }
 }
