@@ -9,6 +9,19 @@ const value=name=>{const index=args.indexOf(name);return index<0?null:args[index
 try{
   const reportFile=value('--report-file'),catalogFile=value('--catalog-file'),execute=args.includes('--apply');
   if(!reportFile||!catalogFile)throw Error('provide --report-file and --catalog-file');
+  const recoveredOrigin=value('--login-recovered-origin');
+  const recoveredAccount=value('--login-recovered-account')??'site-default';
+  let recoveredAtByAccount={};
+  if(recoveredOrigin){
+    if(!execute)throw Error('login recovery requires --apply');
+    const parsed=new URL(recoveredOrigin);
+    if(parsed.protocol!=='https:'||parsed.origin!==recoveredOrigin||parsed.username||parsed.password)
+      throw Error('login recovery requires one exact HTTPS origin');
+    if(!/^[A-Za-z0-9._-]{1,80}$/.test(recoveredAccount))throw Error('invalid login recovery account key');
+    recoveredAtByAccount={
+      [`${recoveredOrigin}#account=${encodeURIComponent(recoveredAccount)}`]:new Date().toISOString()
+    };
+  }else if(args.includes('--login-recovered-account'))throw Error('login recovery account needs an origin');
   if(execute){
     for(const [file,flag] of [[reportFile,'--report-sha256'],[catalogFile,'--catalog-sha256']]){
       const expected=value(flag);
@@ -19,7 +32,7 @@ try{
   }
   const inputs=loadHarvestFallbackInputs({root,reportFile,catalogFile});
   const fallbackOnlyEnabled=loadRuntimeConfig(root).ptFallbackOnlyEnabled;
-  const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled}):planHarvestFallback({...inputs,fallbackOnlyEnabled});
+  const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount}):planHarvestFallback({...inputs,fallbackOnlyEnabled});
   const newAttempts=execute?null:pendingHarvestFallbackAttempts(root,result).length;
   const assessmentStates=Object.fromEntries([...new Set(result.assessments.map(item=>item.state))].sort().map(state=>[state,result.assessments.filter(item=>item.state===state).length]));
   const blockedReasons=Object.fromEntries([...new Set(result.blocked.map(item=>item.reason))].sort().map(reason=>[reason,result.blocked.filter(item=>item.reason===reason).length]));

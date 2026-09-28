@@ -151,6 +151,22 @@ test("a submission with unknown outcome cannot reach another candidate", async (
   assert.equal(result.failureCode, "submission_outcome_unknown");
 });
 
+test("a pre-submit login failure can be retried after login, while mixed candidates stay uncertain", async () => {
+  const context = { newPage: async () => ({ close: async () => {} }) };
+  const start = { status: "login_required", reason: "session expired", submissionAttempted: false };
+  const single = await (await import("../src/browser.mjs")).processTarget(context,
+    { origin: "https://login.example", candidates: ["https://login.example/status"] },
+    { retryCount: 0, failureScreenshots: false }, [], "", { runCandidate: async () => start });
+  assert.equal(single.submissionAttempted, false);
+  const mixed = await (await import("../src/browser.mjs")).processTarget(context,
+    { origin: "https://login.example", candidates: ["https://login.example/status", "https://login.example/action"] },
+    { retryCount: 0, failureScreenshots: false }, [], "", {
+      runCandidate: async (_page, _target, url) => url.endsWith("/status") ? start
+        : { status: "needs_attention", reason: "action uncertain", submissionAttempted: true },
+    });
+  assert.notEqual(mixed.submissionAttempted, false);
+});
+
 test("TLS handshake failure cannot be reclassified using a stale login page", async () => {
   const result = await resultFromPageFailure({ url: () => "https://tls.example.test/login" }, new Error("page.goto: net::ERR_SSL_VERSION_OR_CIPHER_MISMATCH"), {});
   assert.equal(result.status, "deferred");

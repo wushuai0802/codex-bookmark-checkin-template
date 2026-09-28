@@ -68,6 +68,7 @@ test("a 401/403 is not disguised as feature disabled", async () => {
   for (const status of [401, 403]) {
     const { result, requests } = await probe(status, { success: false, message: "未启用" });
     assert.equal(result.status, "login_required");
+    assert.equal(result.submissionAttempted, false);
     assert.equal(requests, 3);
   }
 });

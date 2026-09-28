@@ -890,7 +890,7 @@ export async function tryNewApiCheckin(page) {
       const candidateId = userIdFrom(bundle);
       const candidateToken = typeof bundle?.access_token === "string" ? bundle.access_token : "";
       if (candidateId != null && userId != null && String(candidateId) !== String(userId)) {
-        return { status: "login_required", reason: "认证会话账号与页面身份不一致" };
+        return { status: "login_required", reason: "认证会话账号与页面身份不一致", submissionAttempted: false };
       }
       if (candidateToken) {
         accessToken = candidateToken;
@@ -921,7 +921,7 @@ export async function tryNewApiCheckin(page) {
       const candidateToken = typeof bundle?.access_token === "string" ? bundle.access_token : "";
       if (retryRefresh.status >= 200 && retryRefresh.status < 300 && retryRefresh.body?.success === true && candidateToken) {
         if (candidateId != null && userId != null && String(candidateId) !== String(userId)) {
-          return { status: "login_required", reason: "认证会话账号与页面身份不一致" };
+          return { status: "login_required", reason: "认证会话账号与页面身份不一致", submissionAttempted: false };
         }
         accessToken = candidateToken;
         tokenType = bundle?.token_type === "Bearer" ? "Bearer" : "Bearer";
@@ -936,7 +936,7 @@ export async function tryNewApiCheckin(page) {
     const statusBody = statusResponse.body;
     if (!statusBody && statusResponse.status === 0) return null;
     if ([401, 403].includes(statusResponse.status)) {
-      return { status: "login_required", reason: "签到接口拒绝当前登录会话" };
+      return { status: "login_required", reason: "签到接口拒绝当前登录会话", submissionAttempted: false };
     }
     if (statusResponse.status === 429) return { status: "deferred", retryCause: "rate_limit", reason: "签到接口请求受限" };
     if (statusResponse.status >= 500) return { status: "deferred", retryCause: "upstream_unavailable", reason: "签到接口服务暂时不可用" };
@@ -1599,6 +1599,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
   if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
   let lastResult = null;
   const candidateHistory = [];
+  let allCandidatesUnsubmitted = true;
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
     const page = await context.newPage();
     let attemptResult = null;
@@ -1613,6 +1614,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         } catch (error) {
           result = await resultFromPageFailure(page, error, config);
         }
+        if (result?.submissionAttempted !== false) allCandidatesUnsubmitted = false;
         candidateHistory.push(candidateHistoryEntry(candidateUrl, result, attempt + 1));
         attemptResult = preferCandidateResult(attemptResult, result);
         lastResult = preferCandidateResult(lastResult, result);
@@ -1630,6 +1632,10 @@ export async function processTarget(context, target, config, qaRules, logDirecto
           effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
         }
         const completed={...effectiveResult,attempt:attempt+1,candidateHistory};
+        if (completed.status === "login_required") {
+          if (allCandidatesUnsubmitted) completed.submissionAttempted = false;
+          else delete completed.submissionAttempted;
+        }
         if((config.capturePtEvidence===true||['页面显示签到成功','今天已经签到'].includes(completed.reason))&&
            ['signed','already_signed'].includes(completed.status)&&completed.evidence?.authoritative!==true){
           const bodyText=await page.locator('body').innerText({timeout:3000}).catch(()=> '');
@@ -1647,6 +1653,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
       }
     } catch (error) {
       const result = await resultFromPageFailure(page, error, config);
+      allCandidatesUnsubmitted = false;
       candidateHistory.push(candidateHistoryEntry(page.url(), result, attempt + 1));
       attemptResult = preferCandidateResult(attemptResult, result);
       lastResult = preferCandidateResult(lastResult, result);
