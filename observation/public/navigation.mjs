@@ -1,12 +1,14 @@
+import { normalizeTaskFilter } from './dashboard-model.mjs';
+
 const views = new Set(['overview', 'calendar', 'tasks', 'pt-status', 'sites', 'accounts', 'ledger', 'settings']);
 
 export function normalizeRoute(value = {}) {
   return { fabricNav: 1, view: views.has(value.view) ? value.view : 'overview',
     query: typeof value.query === 'string' ? value.query.slice(0, 80) : '',
-    status: typeof value.status === 'string' ? value.status.slice(0, 40) : '',
+    status: typeof value.status === 'string' ? normalizeTaskFilter(value.status.slice(0, 40)) : '',
     ledgerFilter: ['all','pending','changed'].includes(value.ledgerFilter) ? value.ledgerFilter : 'all',
     account: typeof value.account === 'string' ? value.account.slice(0, 300) : '',
-    ptScope: ['monitor','plan','fresh','review'].includes(value.ptScope) ? value.ptScope : '',
+    ptScope: ['monitor','plan','fresh','review','confirmed','reported'].includes(value.ptScope) ? value.ptScope : '',
     scrollY: Math.max(0, Number(value.scrollY) || 0),
     overlay: value.overlay && ['menu','task','ledger','account'].includes(value.overlay.type)
       ? { type: value.overlay.type, id: String(value.overlay.id ?? '').slice(0, 120) } : null };

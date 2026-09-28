@@ -60,6 +60,25 @@ try {
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       const mobile = viewport.width <= 700;
+      await page.locator('#kpi-grid .kpi').nth(2).click();
+      assert.equal(await page.locator('#task-status').inputValue(),'pending');
+      assert.equal(await page.locator('#tasks-body tr').count(),1);
+      if (mobile) {
+        assert.equal(await page.locator('#task-mobile-list .mobile-task-card').count(),1);
+        assert.equal(await page.locator('#task-mobile-list .mobile-task-card .status-chip').isVisible(),true);
+        assert.equal(await page.locator('#view-tasks .table-wrap').isVisible(),false);
+      }
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector('#task-status').value==='pending'
+        && document.querySelector('#task-result-count').textContent.includes('1 / 3'));
+      assert.equal(await page.locator('#tasks-body tr').count(),1);
+      await page.goto(base);
+      await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+      await page.locator('#kpi-grid .kpi').nth(1).click();
+      assert.equal(await page.locator('#task-status').inputValue(),'unavailable');
+      assert.match(await page.locator('#tasks-body').textContent(),/没有匹配的任务/);
+      await page.goto(base);
+      await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       const openCalendar = async () => {
         if (mobile) await page.locator('#menu-toggle').click();
         await page.locator('.nav-item[data-view="calendar"]').click();
@@ -114,6 +133,9 @@ try {
       // Repeated attention clicks must not hide every view or restart scrolling.
       await page.locator('#attention-jump').click();
       await page.waitForFunction(() => location.hash === '#overview');
+      // Opening the queue preserves unread state; acknowledgement is explicit.
+      assert.equal(await page.locator('#attention-badge').isVisible(), true);
+      await page.getByRole('button',{name:'全部标记为已读'}).click();
       await page.waitForTimeout(1000);
       const scrollBefore = await page.evaluate(() => scrollY);
       for (let i = 0; i < 5; i++) {
@@ -152,6 +174,10 @@ try {
       await page.locator('#pt-kpis .kpi').filter({hasText:'执行成功待补证'}).click();
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
       assert.match(await page.locator('#pt-status-body').textContent(),/reported\.example/);
+      assert.equal(new URL(page.url()).hash,'#pt-status?scope=reported');
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector('#pt-status-body').textContent.includes('reported.example'));
+      assert.equal(await page.locator('#pt-status-body tr').count(),1);
       await page.locator('#pt-kpis .kpi').filter({hasText:'状态未知'}).click();
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
       assert.match(await page.locator('#pt-status-body').textContent(),/unknown\.example/);
@@ -197,7 +223,7 @@ try {
       assert.ok(Date.parse(original.attention.pausedUntil) > Date.now());
       if (mobile) await page.locator('#menu-toggle').click();
       await page.locator('.nav-item[data-view="overview"]').click();
-      await page.waitForFunction(() => document.querySelector('#attention-count').textContent.trim() === '0 项');
+      await page.waitForFunction(() => document.querySelector('#attention-count').textContent.trim().startsWith('0 待关注'));
       await page.waitForFunction(() => !document.body.classList.contains('sidebar-open')
         && !document.body.classList.contains('sidebar-exiting')
         && !document.querySelector('.main-content').inert);
@@ -217,16 +243,15 @@ try {
       await page.goto(`${base}/#sites`);
       await page.waitForFunction(()=>document.querySelector('.top-nav button.active')?.textContent==='站点');
       const layout=await page.evaluate(()=>{
-        const nav=document.querySelector('.top-nav'),caption=nav.querySelector('.recent-caption');
+        const nav=document.querySelector('.top-nav'),heading=document.querySelector('.topbar-heading');
         const rect=element=>element.getBoundingClientRect();
-        return {scrollWidth:nav.scrollWidth,clientWidth:nav.clientWidth,
-          captionLeft:rect(caption).left,captionRight:rect(caption).right,
-          navLeft:rect(nav).left,navRight:rect(nav).right,
+        return {navVisible:getComputedStyle(nav).display!=='none',
+          headingRight:rect(heading).right, actionsLeft:rect(document.querySelector('.top-actions')).left,
           actionsRight:rect(document.querySelector('.top-actions')).right,
           pageWidth:document.documentElement.scrollWidth,viewport:innerWidth};
       });
-      assert.ok(layout.scrollWidth<=layout.clientWidth+1,`recent navigation is clipped at ${width}px: ${JSON.stringify(layout)}`);
-      assert.ok(layout.captionLeft>=layout.navLeft&&layout.captionRight<=layout.navRight,`recent caption is clipped at ${width}px`);
+      assert.equal(layout.navVisible,false,'workspace navigation lives in the sidebar');
+      assert.ok(layout.headingRight<=layout.actionsLeft+1,`topbar controls overlap at ${width}px: ${JSON.stringify(layout)}`);
       assert.ok(layout.actionsRight<=width&&layout.pageWidth<=width+1,`topbar overflows at ${width}px`);
       if(width===1160)await page.screenshot({path:path.join(artifacts,'topbar-1160.png')});
     }finally{await context.close();}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesPt,ptStatusCategory,matchesTask,matchesLedger,ledgerPendingCount} from '../public/dashboard-model.mjs';
+import {matchesPt,ptStatusCategory,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS} from '../public/dashboard-model.mjs';
 
 test('task filters use non-overlapping business groups',()=>{
   const task=status=>({observedStatus:status,origin:'https://example.test'});
@@ -12,6 +12,13 @@ test('task filters use non-overlapping business groups',()=>{
   assert.equal(matchesTask(task('not_started'),{status:'attention'}),true);
   assert.equal(matchesTask(task('login_required'),{status:'login_required'}),true);
   assert.equal(matchesTask(task('not_available'),{status:'unavailable'}),true);
+  assert.equal(matchesTask(task('not_available'),{status:'not_available'}),true);
+  assert.equal(matchesTask(task('signed'),{status:'success'}),true);
+  assert.equal(matchesTask(task('needs_attention'),{status:'pending'}),true);
+  assert.equal(matchesTask(task('signed'),{status:'pending'}),false);
+  for (const key of ['completed','pending','unavailable','attention']) {
+    assert.ok(TASK_FILTERS.some(([value]) => value === key), key + ' must be selectable from the dashboard');
+  }
   assert.equal(matchesTask(task('deferred'),{status:'completed'}),false);
 });
 

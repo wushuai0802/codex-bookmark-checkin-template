@@ -16,7 +16,21 @@ export function siteTitle(item) {
   catch { return item.displayName || item.origin || '未知站点'; }
 }
 
+export const TASK_FILTERS = [
+  ['', '全部任务'],
+  ['completed', '已完成'],
+  ['pending', '尚未完成'],
+  ['unavailable', '未开放'],
+  ['attention', '需关注'],
+  ['deferred', '已延迟'],
+  ['login_required', '需登录'],
+];
+
+export const normalizeTaskFilter = value => value === 'not_available' ? 'unavailable'
+  : value === 'success' ? 'completed' : value;
+
 export function matchesTask(task, { status = '', query = '' } = {}) {
+  status = normalizeTaskFilter(status);
   const value = task.observedStatus;
   const statusGroups = {
     completed: ['signed', 'already_signed'],

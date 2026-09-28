@@ -1,9 +1,9 @@
 import { overviewMetrics, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, matchesLedger, ledgerPendingCount } from './dashboard-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, matchesLedger, ledgerPendingCount, TASK_FILTERS } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
-import { createNoticeState, pendingNotices, pausedNotices, attentionPreview } from './notice-state.mjs';
+import { createNoticeState, pausedNotices, attentionPreview } from './notice-state.mjs';
 import {dailyRecords, monthCells, moveMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
 
 const notices = createNoticeState();
@@ -17,7 +17,7 @@ for (const storageName of ['sessionStorage', 'localStorage']) {
   } catch { /* storage may be disabled by the browser */ }
 }
 
-const state = { view: 'overview', data: null, loading: false, ptScope: '', ledgerFilter:'all', calendarMonth: null,
+const state = { view: 'overview', data: null, loading: false, ptScope: '', ledgerFilter:'all', taskPage:1, calendarMonth: null,
   calendarDate: null,calendarFilter: null,calendarHistory: null,calendarLoading: false,
   calendarError: null,calendarTruncated: false };
 let sidebarReturnFocus = null;
@@ -33,15 +33,6 @@ const STATUS_LABELS = {
   not_signed: '未签到（已确认）', needs_attention: '需关注', deferred: '已延迟', login_required: '需登录',
   unreachable: '不可访问', failed: '失败', unknown: '未知', not_started:'未执行（缺少回执）'
 };
-
-const TASK_FILTERS = [
-  ['', '全部任务'],
-  ['completed', '已完成'],
-  ['unavailable', '未开放'],
-  ['deferred', '已延迟'],
-  ['login_required', '需登录'],
-  ['attention', '需关注'],
-];
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -120,7 +111,12 @@ function renderSidebar(open) {
     toggle.setAttribute('aria-label', mobile ? (open ? '关闭导航' : '打开导航') : (collapsed ? '展开侧栏' : '收起侧栏'));
     toggle.title = toggle.getAttribute('aria-label');
   }
-  if (close) close.setAttribute('aria-expanded', String(open));
+  if (close) {
+    const collapsed = document.body.classList.contains('sidebar-collapsed');
+    close.textContent = mobile ? '×' : collapsed ? '›' : '‹';
+    close.setAttribute('aria-label', mobile ? '关闭导航' : collapsed ? '展开侧栏' : '收起侧栏');
+    close.setAttribute('aria-expanded', String(mobile ? open : !collapsed));
+  }
   if (mobile && open && !sidebarCloseWatcher && typeof window.CloseWatcher === 'function') {
     try {
       const watcher = new window.CloseWatcher();
@@ -164,18 +160,18 @@ function setSidebarOpen(open) {
 }
 
 function setSidebarCollapsed(collapsed) {
-  if (matchMedia('(max-width:700px)').matches) return;
   document.body.classList.toggle('sidebar-collapsed', collapsed);
+  const mobile = matchMedia('(max-width:700px)').matches;
   const button = $('#sidebar-close');
   if (button) {
-    button.textContent = collapsed ? '›' : '‹';
-    button.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
-    button.title = collapsed ? '展开侧栏' : '收起侧栏';
+    button.textContent = mobile ? '×' : collapsed ? '›' : '‹';
+    button.setAttribute('aria-label', mobile ? '关闭导航' : collapsed ? '展开侧栏' : '收起侧栏');
+    button.title = button.getAttribute('aria-label');
   }
   const toggle = $('#menu-toggle');
   if (toggle) {
-    toggle.setAttribute('aria-expanded', String(!collapsed));
-    toggle.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
+    toggle.setAttribute('aria-expanded', String(mobile ? document.body.classList.contains('sidebar-open') : !collapsed));
+    toggle.setAttribute('aria-label', mobile ? (document.body.classList.contains('sidebar-open') ? '关闭导航' : '打开导航') : collapsed ? '展开侧栏' : '收起侧栏');
     toggle.title = toggle.getAttribute('aria-label');
   }
   try { localStorage.setItem('fabricSidebarCollapsed', collapsed ? '1' : '0'); } catch { }
@@ -239,7 +235,7 @@ function renderKpis(data) {
   const metrics = overviewMetrics(data);
   const cards = [
     ['执行成功', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'completed'],
-    ['未开放回执', metrics.unavailable, `已核验 ${metrics.verifiedUnavailable} / 待核验 ${metrics.unverifiedUnavailable}`, 'not_available'],
+    ['未开放回执', metrics.unavailable, `已核验 ${metrics.verifiedUnavailable} / 待核验 ${metrics.unverifiedUnavailable}`, 'unavailable'],
     ['尚未完成', metrics.pending, `${metrics.manual} 项需关注 · ${metrics.deferred} 项延后`, 'pending'],
     ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, '同站多账号分别核验', '']
   ];
@@ -355,6 +351,10 @@ function renderDailySummary(data) {
   append(progress, el('strong', null, m.executionRate === null ? '—' : `${m.executionRate}%`), el('span', null, previousDay ? '最近业务日执行成功率' : '执行成功率'));
   progress.title='执行成功项 / 总账号任务数；权威核验数单独列示，未开放项不算成功。';
   const bar = el('div', 'completion-track'); const fill = el('i'); fill.style.width = `${Math.min(100, m.executionRate ?? 0)}%`; bar.append(fill); progress.append(bar);
+  const tasksButton = el('button', 'button primary summary-action', m.pending ? '查看待处理' : '查看全部任务');
+  tasksButton.type = 'button';
+  tasksButton.addEventListener('click', () => openTasks({ status: m.pending ? 'pending' : '' }));
+  copy.append(tasksButton);
   append(node, copy, progress);
   $('#sync-age').textContent = `快照生成 ${formatTime(data?.generatedAt)} · ${m.ageMinutes === null ? '尚无数据' : `${m.ageMinutes} 分钟前`} · ${previousDay ? '等待今日业务回执' : m.fresh ? '数据有效' : '请检查同步'}`;
 }
@@ -372,8 +372,8 @@ function renderReadiness(data) {
 }
 
 function renderAttention(tasks) {
-  const { all: pending, pausedCount, visible, remaining } = attentionPreview(tasks);
-  $('#attention-count').textContent = `${pending.length} 项`;
+  const { all: pending, pausedCount, visible, remaining } = attentionPreview(tasks, matchMedia('(max-width:700px)').matches ? 3 : 4);
+  $('#attention-count').textContent = `${pending.length} 待关注${pausedCount ? ` · ${pausedCount} 暂缓` : ''}`;
   const unread = pending.filter(task => !notices.isRead(task)).length;
   const badge = $('#attention-badge');
   if (badge) { badge.textContent = String(unread); badge.hidden = unread === 0; badge.style.display = unread ? '' : 'none'; }
@@ -415,22 +415,52 @@ function renderAttention(tasks) {
 
 function renderTasks(tasks) {
   const body = $('#tasks-body'); body.replaceChildren();
+  const mobile = $('#task-mobile-list'); mobile.replaceChildren();
   const summary = $('#task-result-count');
   if (summary) summary.textContent = `${tasks.length} / ${state.data?.tasks?.length ?? tasks.length} 项任务`;
   const clear = $('#task-clear-filters');
   if (clear) clear.disabled = !($('#task-search').value || $('#task-status').value || $('#task-account').value);
-  if (!tasks.length) { const row = el('tr'); const cell = el('td'); cell.colSpan = 6; cell.textContent = '没有匹配的任务'; row.append(cell); body.append(row); return; }
-  for (const task of tasks) {
+  const pager = $('#task-pagination'); pager.replaceChildren();
+  const pageSize = tasks.length > 50 ? 25 : tasks.length || 1;
+  const pageCount = Math.max(1, Math.ceil(tasks.length / pageSize));
+  state.taskPage = Math.min(Math.max(1,state.taskPage),pageCount);
+  pager.hidden = tasks.length <= 50;
+  if (!pager.hidden) {
+    const previous = el('button','button secondary','上一页'); previous.type='button'; previous.disabled=state.taskPage===1;
+    const next = el('button','button secondary','下一页'); next.type='button'; next.disabled=state.taskPage===pageCount;
+    const move = step => { state.taskPage+=step; applyTaskFilter(); $('#view-tasks .toolbar').scrollIntoView({block:'start',behavior:'instant'}); summary.focus({preventScroll:true}); };
+    previous.addEventListener('click',()=>move(-1)); next.addEventListener('click',()=>move(1));
+    append(pager,previous,el('span',null,`第 ${state.taskPage} / ${pageCount} 页`),next);
+  }
+  if (!tasks.length) {
+    const row = el('tr'); const cell = el('td'); cell.colSpan = 6; cell.textContent = '没有匹配的任务'; row.append(cell); body.append(row);
+    mobile.append(el('p', 'empty-state', '没有匹配的任务，请调整或清除筛选。'));
+    return;
+  }
+  for (const task of tasks.slice((state.taskPage-1)*pageSize,state.taskPage*pageSize)) {
     const row = el('tr');
     const taskCell = el('td'); const detail = el('button', 'link-button', '查看详情'); detail.type = 'button'; detail.addEventListener('click', () => taskDetails(task));
-    append(taskCell, detail, el('span', 'subtext', task.businessDate));
+    taskCell.append(detail);
     const siteCell = el('td'); append(siteCell, el('span', 'origin', siteTitle(task)), el('span', 'subtext', task.origin));
     const accountCell = el('td'); append(accountCell, el('span', 'origin', identityTitle(task)), el('span', 'subtext', identityCaption(task)));
     const statusCell = el('td'); append(statusCell, statusChip(task.observedStatus),
       task.attention?.pausedUntil ? el('span', 'subtext', `暂缓关注至 ${formatTime(task.attention.pausedUntil)}`) : null);
     const evidenceCell = el('td'); append(evidenceCell, el('span', null, evidenceLabel(task)), el('span', 'subtext evidence-summary', task.evidence?.summary ?? '无详细证据'), el('span', 'subtext', task.observedAt ? formatTime(task.observedAt) : '—'));
-    const ownerCell = el('td'); append(ownerCell, el('span', null, task.executionOwner === 'legacy-checkin' || task.executionOwner === 'v2-worker' ? '执行层' : task.executionOwner), el('span', 'subtext', task.executionMode === 'observe_only' ? '观测记录' : '按站点流程执行'));
-    append(row, taskCell, siteCell, accountCell, statusCell, evidenceCell, ownerCell); body.append(row);
+    const observedCell = el('td'); append(observedCell, el('span', null, task.observedAt ? formatTime(task.observedAt) : '—'), el('span', 'subtext', task.businessDate));
+    append(row, siteCell, accountCell, statusCell, evidenceCell, observedCell, taskCell); body.append(row);
+    const card = el('article', 'mobile-task-card');
+    const heading = el('div', 'mobile-task-head');
+    const identity = el('div', 'mobile-task-identity');
+    append(identity, el('strong', null, siteTitle(task)), el('span', 'subtext', identityTitle(task)));
+    append(heading, identity, statusChip(task.observedStatus));
+    const explanation = el('p', 'mobile-task-evidence', task.evidence?.summary || evidenceLabel(task));
+    const footer = el('div', 'mobile-task-foot');
+    const timestamp = el('span', 'muted', task.attention?.pausedUntil ? `暂缓关注至 ${formatTime(task.attention.pausedUntil)}` : task.observedAt ? formatTime(task.observedAt) : task.businessDate);
+    const action = el('button', 'link-button', '查看详情 →'); action.type = 'button';
+    action.setAttribute('aria-label', `查看${siteTitle(task)}的任务详情`);
+    action.addEventListener('click', () => taskDetails(task));
+    append(footer, timestamp, action);
+    append(card, heading, explanation, footer); mobile.append(card);
   }
 }
 
@@ -464,9 +494,9 @@ function renderPtStatus(data) {
   for (const site of sites) {
     const row = el('tr');
     const siteCell = el('td'); append(siteCell, el('span', 'origin', site.displayName || site.origin), el('span', 'subtext', site.origin));
-    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? 'Harvest 未完成后复核' : '不在补签范围'));
     const effective = site.effective ?? {};
     const category = ptStatusCategory(site);
+    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? category === 'confirmed' ? '今日已确认，无需补签' : 'Harvest 未完成后复核' : '不在补签范围'));
     const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown');
     const likelySigned = effective.status === 'unknown' && effective.fresh && !effective.authoritative &&
       effective.evidence?.source === 'pt_page' && effective.evidence?.summary?.startsWith('检测到签到已得');
@@ -767,19 +797,10 @@ function renderAll() {
   renderOverview(liveSnapshot);
   renderCalendar(data);
   let integrity = $('#integrity-note');
-  if (!integrity) { integrity=el('div','scope-banner');integrity.id='integrity-note';$('#daily-summary').after(integrity); }
+  if (!integrity) { integrity=el('p','scope-banner');integrity.id='integrity-note';$('#status-chart').after(integrity); }
   const reconciliation=data.snapshot?.reconciliation;
   const quality=data.evidenceQuality??data.snapshot?.evidenceQuality;
   integrity.textContent=`执行计划对账：缺少回执 ${reconciliation?.missingCount??0} · 身份冲突 ${reconciliation?.conflictCount??0} · 计划外回执 ${reconciliation?.unexpectedCount??0} · ${quality?.unverifiedSuccess??0} 项执行成功待补证（不等于未签到）。`;
-  let shortcuts = $('#overview-shortcuts');
-  if (!shortcuts) { shortcuts = el('div', 'overview-shortcuts'); shortcuts.id = 'overview-shortcuts'; $('#kpi-grid').after(shortcuts); }
-  shortcuts.replaceChildren();
-  for (const [label, view] of [[`PT 监测 ${data.ptStatus?.counts?.sites ?? 0}`, 'pt-status'], ['站点目录', 'sites'], ['账号与 ID', 'accounts'], ['观察验收记录', 'ledger'], ['系统健康', 'settings']]) {
-    const button = el('button'); button.type = 'button';
-    const arrow = el('span', 'shortcut-arrow', '→'); arrow.setAttribute('aria-hidden', 'true');
-    append(button, el('span', 'shortcut-label', label), arrow);
-    button.addEventListener('click', () => switchView(view)); shortcuts.append(button);
-  }
   $('#view-accounts .toolbar .muted').textContent = '站点用户名与用户 ID · 不展示登录凭据';
   const selectedAccount = $('#task-account').value;
   $('#task-account').replaceChildren(el('option', null, '所有账号'));
@@ -869,8 +890,16 @@ function applyRoute(route, { restoreScroll = true } = {}) {
   const changedView = state.view !== route.view;
   const changedFilters = $('#task-search').value !== route.query || $('#task-status').value !== route.status
     || $('#task-account').value !== route.account || state.ptScope !== route.ptScope || state.ledgerFilter !== route.ledgerFilter;
+  if (changedFilters) state.taskPage=1;
   if (changedView) renderView(route.view);
-  $('#task-search').value = route.query; $('#task-status').value = route.status; $('#task-status')._syncFilterLabel?.(route.status);
+  $('#task-search').value = route.query;
+  const statusFilter = $('#task-status');
+  if (route.status && ![...statusFilter.options].some(option => option.value === route.status)) {
+    const option = el('option', null, STATUS_LABELS[route.status] ?? `状态：${route.status}`);
+    option.value = route.status;
+    statusFilter.append(option);
+  }
+  statusFilter.value = route.status;
   $('#task-account').value = route.account;
   state.ptScope = route.ptScope;
   state.ledgerFilter=route.ledgerFilter;
@@ -905,25 +934,11 @@ function applyTaskFilter() {
 function setupTaskStatusFilter() {
   const native = $('#task-status');
   if (!native) return;
-  native.classList.add('filter-native-compat');
+  native.setAttribute('aria-label', '筛选任务状态');
   native.replaceChildren();
   for (const [value, label] of TASK_FILTERS) {
     const option = el('option', null, label); option.value = value; native.append(option);
   }
-  const wrapper = el('div', 'filter-menu');
-  const trigger = el('button', 'filter-trigger', TASK_FILTERS[0][1]);
-  trigger.type = 'button'; trigger.setAttribute('aria-haspopup', 'listbox'); trigger.setAttribute('aria-expanded', 'false');
-  const menu = el('div', 'filter-options'); menu.setAttribute('role', 'listbox'); menu.hidden = true;
-  const close = () => { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); wrapper.classList.remove('open'); };
-  for (const [value, label] of TASK_FILTERS) {
-    const option = el('button', 'filter-option', label); option.type = 'button'; option.dataset.value = value; option.setAttribute('role', 'option');
-    option.addEventListener('click', () => { native.value = value; trigger.textContent = label; close(); native.dispatchEvent(new Event('change', { bubbles: true })); });
-    menu.append(option);
-  }
-  trigger.addEventListener('click', () => { const open = menu.hidden; menu.hidden = !open; trigger.setAttribute('aria-expanded', String(open)); wrapper.classList.toggle('open', open); });
-  document.addEventListener('click', event => { if (!wrapper.contains(event.target)) close(); });
-  wrapper.append(trigger, menu); native.after(wrapper);
-  native._syncFilterLabel = value => { trigger.textContent = (TASK_FILTERS.find(([key]) => key === value) ?? TASK_FILTERS[0])[1]; };
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -935,10 +950,13 @@ document.addEventListener('DOMContentLoaded', () => {
   clearFilters.id = 'task-clear-filters'; clearFilters.type = 'button'; clearFilters.disabled = true;
   accountFilter.after(clearFilters);
   const count = el('p', 'filter-summary', '正在读取任务…'); count.id = 'task-result-count';
+  count.tabIndex = -1; count.setAttribute('aria-live','polite');
   $('#view-tasks .toolbar > div:first-child').append(count);
+  const pager = el('nav','task-pagination'); pager.id='task-pagination'; pager.setAttribute('aria-label','任务分页');
+  $('#view-tasks .task-results').after(pager);
   clearFilters.addEventListener('click', () => {
+    state.taskPage=1;
     $('#task-search').value = ''; $('#task-status').value = ''; $('#task-account').value = '';
-    $('#task-status')._syncFilterLabel?.('');
     navigation.updateFilters({ query:'', status:'', account:'' });
     applyTaskFilter(); $('#task-search').focus();
   });
@@ -954,6 +972,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const menuOpen = navigation.current.overlay?.type === 'menu';
     if (!mobile && menuOpen) navigation.closeOverlay();
     else renderSidebar(mobile && menuOpen);
+    setSidebarCollapsed(document.body.classList.contains('sidebar-collapsed'));
+    if (state.data) renderAttention(state.data.tasks ?? []);
   });
   document.querySelectorAll('.nav-item').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.view)));
   document.querySelectorAll('[data-ledger-filter]').forEach(button=>button.addEventListener('click',()=>{
@@ -987,22 +1007,17 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#attention-jump')?.addEventListener('click', () => {
     if (navigation.current.view !== 'overview') switchView('overview');
     if (!state.data) return;
-    const unread = pendingNotices(state.data.tasks ?? []).filter(task => !notices.isRead(task));
-    if (unread.length) {
-      notices.markRead(unread);
-      renderAttention(state.data.tasks ?? []);
-    }
     if (performance.now() < attentionScrollUntil) return;
     const target = $('#attention-list').closest('.panel');
     const top = target.getBoundingClientRect().top;
     const inset = $('.topbar-shell').getBoundingClientRect().bottom + 16;
     // Compact mobile headers change height after scrolling. Do not realign an
     // already visible panel against the new header on every subsequent click.
-    if (top >= 0 && top < innerHeight - 80) return;
+    if (top >= -inset && top < innerHeight - 80) return;
     attentionScrollUntil = performance.now() + 800;
     window.scrollTo({ top: Math.max(0, window.scrollY + top - inset), behavior: reducedMotion() ? 'instant' : 'smooth' });
   });
-  const saveFilters = () => { applyTaskFilter(); navigation.updateFilters({ query: $('#task-search').value, status: $('#task-status').value, account: $('#task-account').value }); };
+  const saveFilters = () => { state.taskPage=1; applyTaskFilter(); navigation.updateFilters({ query: $('#task-search').value, status: $('#task-status').value, account: $('#task-account').value }); };
   $('#task-search').addEventListener('input', saveFilters); $('#task-status').addEventListener('change', saveFilters); $('#task-account').addEventListener('change', saveFilters);
   $('#token-visibility').addEventListener('click', () => {
     const input = $('#token-input');

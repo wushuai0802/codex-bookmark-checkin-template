@@ -41,8 +41,20 @@ test('back dismisses overlays and rapid close cannot consume two entries', () =>
 test('initial deep link and route filters survive reload', () => {
   const route = routeFromHash('#tasks?status=success&q=example%20reader');
   assert.equal(route.view,'tasks'); assert.equal(route.query,'example reader');
-  assert.equal(routeHash(route),'#tasks?q=example+reader&status=success');
+  assert.equal(route.status,'completed');
+  assert.equal(routeHash(route),'#tasks?q=example+reader&status=completed');
   assert.equal(routeFromHash('#invalid').view,'overview');
+});
+
+test('legacy unavailable links and PT evidence filters survive URL normalization', () => {
+  const task = routeFromHash('#tasks?status=not_available');
+  assert.equal(task.status, 'unavailable');
+  assert.equal(routeHash(task), '#tasks?status=unavailable');
+  for (const scope of ['confirmed', 'reported']) {
+    const route = routeFromHash('#pt-status?scope=' + scope);
+    assert.equal(route.ptScope, scope);
+    assert.equal(routeHash(route), '#pt-status?scope=' + scope);
+  }
 });
 
 test('ledger filters survive deep links and browser back', () => {

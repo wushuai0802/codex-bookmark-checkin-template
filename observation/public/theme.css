@@ -199,23 +199,6 @@
 .detail-row { display:grid; grid-template-columns:100px minmax(0,1fr); gap:12px; border-bottom:1px solid var(--line); padding:15px 0; font-size:12px; }
 .detail-row strong { font-weight:500; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
 .main-content { container-type:inline-size; container-name:workspace; }
-.overview-shortcuts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:18px; }
-.overview-shortcuts button { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; min-height:44px; padding:10px 12px; border:1px solid var(--line); border-radius:6px; background:var(--surface); color:var(--accent-text); font-size:12px; text-align:left; }
-.overview-shortcuts button:last-child { grid-column:1 / -1; }
-.shortcut-label { min-width:0; overflow-wrap:anywhere; line-height:1.5; }
-.shortcut-arrow { flex:0 0 16px; text-align:right; transition:transform var(--motion-fast); }
-.overview-shortcuts button:hover { background:var(--info-bg); border-color:var(--blue); }
-.overview-shortcuts button:hover .shortcut-arrow { transform:translateX(2px); }
-@container workspace (min-width:480px) {
-  .overview-shortcuts { grid-template-columns:repeat(6,minmax(0,1fr)); }
-  .overview-shortcuts button { grid-column:span 2; }
-  .overview-shortcuts button:nth-last-child(-n+2) { grid-column:span 3; }
-}
-@container workspace (min-width:800px) {
-  .overview-shortcuts { grid-template-columns:repeat(5,minmax(0,1fr)); }
-  .overview-shortcuts button,.overview-shortcuts button:nth-last-child(-n+2) { grid-column:auto; }
-}
-@container workspace (max-width:260px) { .overview-shortcuts { grid-template-columns:minmax(0,1fr); } }
 .filters { flex-wrap:wrap; min-width:0; }
 #task-account { width:210px; max-width:100%; }
 @media(max-width:700px) { #task-account { width:100%; } .filters input { flex-basis:100%; width:100%; } .kpi-link { padding:16px 12px; } }
@@ -327,8 +310,8 @@ body,.sidebar,.kpi,.site-card,.account-card,.ledger-entry { transition:backgroun
 .nav-item { position:relative; padding-left:16px; transition:background-color var(--motion-fast),color var(--motion-fast); }
 .nav-item::before,.nav-item.active::before { content:''; position:absolute; left:4px; top:50%; transform:translateY(-50%); width:3px; height:14px; margin:0; border-radius:3px; background:var(--blue); opacity:0; transition:opacity var(--motion-fast); }
 .nav-item.active::before { opacity:1; }
-.button,.icon-button,.theme-choice,.overview-shortcuts button { transition:background-color var(--motion-fast),color var(--motion-fast),border-color var(--motion-fast),transform var(--motion-fast); }
-.button:active,.icon-button:active,.theme-choice:active,.overview-shortcuts button:active { transform:scale(.97); }
+.button,.icon-button,.theme-choice { transition:background-color var(--motion-fast),color var(--motion-fast),border-color var(--motion-fast),transform var(--motion-fast); }
+.button:active,.icon-button:active,.theme-choice:active { transform:scale(.97); }
 .kpi-link::after { transition:transform var(--motion-fast) var(--motion-ease); }
 .kpi-link:hover::after { transform:translate(2px,-2px); }
 .task-drawer { overscroll-behavior:contain; }
