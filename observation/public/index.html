@@ -13,6 +13,9 @@
   <link rel="stylesheet" href="/theme.css">
   <link rel="stylesheet" href="/glass-preview.css">
   <link rel="stylesheet" href="/article-glass.css">
+  <link rel="stylesheet" href="/ios26-v2.css">
+  <link rel="stylesheet" href="/ios26-glass.css">
+  <link rel="stylesheet" href="/workspace.css">
 </head>
 <body>
   <div class="app-shell">
@@ -22,14 +25,14 @@
         <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="关闭导航" aria-controls="main-sidebar" aria-expanded="false">×</button>
       </div>
       <nav class="nav" aria-label="主导航">
-        <span class="nav-section-label">监控</span><button class="nav-item active" data-view="overview">总览</button>
-        <button class="nav-item" data-view="calendar">签到日历</button>
-        <button class="nav-item" data-view="tasks">任务</button>
-        <button class="nav-item" data-view="pt-status">PT 状态</button>
-        <span class="nav-section-label">资源</span><button class="nav-item" data-view="sites">站点</button>
-        <button class="nav-item" data-view="accounts">账户</button>
-        <span class="nav-section-label">审计</span><button class="nav-item" data-view="ledger">运行记录</button>
-        <button class="nav-item" data-view="settings">设置</button>
+        <span class="nav-section-label">监控</span><button class="nav-item active" data-view="overview" data-short="总" aria-label="总览" title="总览"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg><span class="nav-label">总览</span></button>
+        <button class="nav-item" data-view="calendar" data-short="日" aria-label="签到日历" title="签到日历"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M8 15l2 2 5-5"/></svg><span class="nav-label">签到日历</span></button>
+        <button class="nav-item" data-view="tasks" data-short="任" aria-label="任务" title="任务"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 14h7"/></svg><span class="nav-label">任务</span></button>
+        <button class="nav-item" data-view="pt-status" data-short="PT" aria-label="PT 状态" title="PT 状态"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h4l3-7 4 12 3-6h4"/></svg><span class="nav-label">PT 状态</span></button>
+        <span class="nav-section-label">资源</span><button class="nav-item" data-view="sites" data-short="站" aria-label="站点" title="站点"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg><span class="nav-label">站点</span></button>
+        <button class="nav-item" data-view="accounts" data-short="账" aria-label="账户" title="账户"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M17 14a5 5 0 0 1 4 5v1"/></svg><span class="nav-label">账户</span></button>
+        <span class="nav-section-label">审计</span><button class="nav-item" data-view="ledger" data-short="录" aria-label="运行记录" title="运行记录"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5zM16 3v4h3M8 11h8M8 15h8"/></svg><span class="nav-label">运行记录</span></button>
+        <button class="nav-item" data-view="settings" data-short="设" aria-label="设置" title="设置"><svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg><span class="nav-label">设置</span></button>
       </nav>
       <div class="theme-control" aria-label="外观主题">
         <div class="theme-control-heading"><span>外观</span><span class="theme-choice-label" id="theme-choice-label">跟随系统</span></div>
@@ -49,6 +52,7 @@
       </div>
       <section id="login-panel" class="login-panel hidden" aria-live="polite"><div><h2>需要控制台令牌</h2><p>令牌验证后仅保存在服务端签发的安全会话中，不写入浏览器存储。</p></div><form id="login-form"><label for="token-input">管理令牌</label><div class="token-row"><input id="token-input" type="password" autocomplete="off" spellcheck="false" required maxlength="256"><button id="token-visibility" class="button secondary" type="button" aria-label="显示令牌">显示</button><button class="button primary" type="submit">连接</button></div><div class="token-options"><label class="remember-token"><input id="remember-token" type="checkbox"> <span>在此设备保持登录（7 天）</span></label><button id="clear-token" class="link-button clear-token" type="button">退出安全会话</button></div><p id="login-error" class="error-text"></p></form></section>
       <section id="app-error" class="alert error hidden" role="alert"></section>
+      <div id="refresh-feedback" class="feedback-toast hidden" role="status" aria-live="polite"></div>
       <div id="view-overview" class="view active-view">
         <section id="daily-summary" class="daily-summary" aria-live="polite"></section>
         <div class="sync-strip"><span id="sync-age">正在读取快照…</span><label><input id="auto-refresh" type="checkbox" checked> 每分钟自动刷新</label></div>
@@ -62,7 +66,7 @@
       <div id="view-pt-status" class="view"><div class="toolbar"><div><p class="eyebrow">PT STATUS</p><h2>PT 状态</h2></div><span class="muted">执行层回执与 Harvest 对账</span></div><div id="pt-kpis" class="kpi-grid"></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>站点</th><th>范围</th><th>当前状态</th><th>来源对照</th><th>观察时间</th><th>后续动作</th></tr></thead><tbody id="pt-status-body"></tbody></table></div></article></div>
       <div id="view-sites" class="view"><div class="toolbar"><div><p class="eyebrow">SITE CATALOG</p><h2>站点管理</h2></div><span class="muted">查看执行进度 · 管理提醒标记</span></div><div id="sites-grid" class="cards-grid"></div></div>
       <div id="view-accounts" class="view"><div class="toolbar"><div><p class="eyebrow">ACCOUNT ISOLATION</p><h2>账户管理</h2></div><span class="muted">仅显示脱敏账户引用</span></div><div id="accounts-grid" class="cards-grid"></div></div>
-      <div id="view-ledger" class="view"><div class="toolbar"><div><p class="eyebrow">APPEND-ONLY HISTORY</p><h2>运行记录</h2></div><span class="muted">最多显示最近 30 条</span></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>记录时间</th><th>业务日期</th><th>计划哈希</th><th>漂移</th><th>任务数</th><th>健康</th></tr></thead><tbody id="ledger-body"></tbody></table></div></article></div>
+      <div id="view-ledger" class="view"><div class="toolbar"><div><p class="eyebrow">APPEND-ONLY HISTORY</p><h2>运行记录</h2><p id="ledger-result-count" class="filter-summary">最多显示最近 30 条</p></div><div class="ledger-filters" role="group" aria-label="运行记录筛选"><button type="button" data-ledger-filter="all">全部</button><button type="button" data-ledger-filter="pending">有待处理</button><button type="button" data-ledger-filter="changed">有变化</button></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>记录时间</th><th>业务日期</th><th>计划哈希</th><th>漂移</th><th>任务数</th><th>健康</th></tr></thead><tbody id="ledger-body"></tbody></table></div></article></div>
       <div id="view-settings" class="view"><div class="toolbar"><div><p class="eyebrow">OPERATIONS</p><h2>运行设置</h2></div></div><div class="settings-panel"><div id="settings-content"></div></div></div>
     </main>
   </div>

@@ -31,6 +31,19 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
   return statusMatch && haystack.includes(query.trim().toLowerCase());
 }
 
+export function ledgerPendingCount(record) {
+  const counts = record?.counts?.status ?? {};
+  const total = record?.counts?.executionUnits ?? 0;
+  return Math.max(0, total - (counts.signed ?? 0) - (counts.already_signed ?? 0) - (counts.not_available ?? 0));
+}
+
+export function matchesLedger(record, filter = 'all') {
+  if (filter === 'pending') return ledgerPendingCount(record) > 0;
+  if (filter === 'changed') return (record?.drift?.statusChanges?.length ?? 0) > 0
+    || record?.drift?.classification === 'plan_changed' || (record?.changes?.length ?? 0) > 0;
+  return true;
+}
+
 export function matchesPt(site, scope = '') {
   const category = ptStatusCategory(site);
   return !scope || (scope === 'monitor' && !site.inLegacyPlan) || (scope === 'plan' && site.inLegacyPlan)

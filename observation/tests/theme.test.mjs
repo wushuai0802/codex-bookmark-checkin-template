@@ -46,10 +46,14 @@ test('invalid or unavailable storage does not break theme switching', () => {
     assert.equal(h.root.style.colorScheme, 'light');
   }
 });
-test('article appearance is default, with a query-only rollback and previous preview', () => {
-  assert.equal(harness(null, false, false).root.dataset.glassPreview, 'article');
+test('workspace appearance is default, with query-only glass previews and plain fallback', () => {
+  assert.equal(harness(null, false, false).root.dataset.workspace, 'cpam');
+  assert.equal(harness('dark', true, false).root.dataset.theme, 'dark');
+  assert.equal(harness(null, false, false, '?ui=cpam').root.dataset.workspace, 'cpam');
   assert.equal(harness(null, false, false, '?glass=off').root.dataset.glassPreview, undefined);
+  assert.equal(harness(null, false, false, '?glass=off').root.dataset.workspace, undefined);
   assert.equal(harness(null, false, false, '?glass=1').root.dataset.glassPreview, '1');
+  assert.equal(harness(null, false, false, '?glass=ios26-v2').root.dataset.glassPreview, 'ios26-v2');
   const article = harness('dark', true, false, '?glass=article');
   assert.equal(article.root.dataset.glassPreview, 'article');
   assert.equal(article.root.dataset.theme, 'dark');

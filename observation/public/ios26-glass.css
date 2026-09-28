@@ -1,0 +1,137 @@
+/* iOS 26 Liquid Glass composition preview. Opt in with ?glass=ios26. */
+html[data-glass-preview="ios26"] {
+  --ios-bg: #f7f9fc;
+  --ios-ink: #202c40;
+  --ios-muted: #5b6d85;
+  --ios-blue: #2868d8;
+  --ios-border: rgba(255,255,255,.82);
+  --ios-highlight: rgba(255,255,255,.9);
+  --ios-shadow: 0 18px 48px rgba(55,83,118,.14);
+  --ios-nav: rgba(255,255,255,.42);
+  --ios-toolbar: rgba(255,255,255,.58);
+  --ios-card: rgba(255,255,255,.72);
+  --ios-modal: rgba(255,255,255,.86);
+  color-scheme: light;
+}
+html[data-glass-preview="ios26"] body {
+  color: var(--ios-ink);
+  background:
+    radial-gradient(70rem 45rem at -8% 6%, rgba(255,210,157,.46), transparent 55%),
+    radial-gradient(70rem 44rem at 108% 9%, rgba(160,207,255,.50), transparent 58%),
+    var(--ios-bg);
+  background-attachment: fixed;
+}
+html[data-glass-preview="ios26"] .sidebar {
+  width: 248px;
+  padding: 22px 12px;
+  background: var(--ios-nav);
+  border-right: 1px solid var(--ios-border);
+  box-shadow: inset -1px 0 var(--ios-highlight), 10px 0 30px rgba(55,83,118,.08);
+  -webkit-backdrop-filter: blur(24px) saturate(130%);
+  backdrop-filter: blur(24px) saturate(130%);
+}
+html[data-glass-preview="ios26"] .brand-mark {
+  background: linear-gradient(145deg,#5a9ff5,#2868d8);
+  border: 1px solid rgba(255,255,255,.7);
+  box-shadow: inset 0 1px var(--ios-highlight), 0 8px 18px rgba(40,104,216,.22);
+  border-radius: 10px;
+}
+html[data-glass-preview="ios26"] .nav-item { color: var(--ios-muted); border-radius: 12px; padding: 11px 14px; }
+html[data-glass-preview="ios26"] .nav-item.active,
+html[data-glass-preview="ios26"] .nav-item:hover {
+  color: #2457a3;
+  background: rgba(255,255,255,.68);
+  box-shadow: inset 0 1px var(--ios-highlight), 0 5px 16px rgba(55,83,118,.09);
+}
+html[data-glass-preview="ios26"] .topbar {
+  background: var(--ios-toolbar);
+  border-bottom: 1px solid var(--ios-border);
+  box-shadow: inset 0 1px var(--ios-highlight), 0 10px 30px rgba(55,83,118,.1);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  backdrop-filter: blur(18px) saturate(130%);
+}
+html[data-glass-preview="ios26"] .topbar h1 { font-size: 24px; font-weight: 700; }
+html[data-glass-preview="ios26"] .button.primary {
+  background: var(--ios-blue);
+  border-radius: 12px;
+  box-shadow: inset 0 1px rgba(255,255,255,.45), 0 7px 18px rgba(40,104,216,.25);
+}
+html[data-glass-preview="ios26"] .kpi,
+html[data-glass-preview="ios26"] .site-card,
+html[data-glass-preview="ios26"] .account-card {
+  background: linear-gradient(145deg,rgba(255,255,255,.78),rgba(255,255,255,.42));
+  border: 1px solid var(--ios-border);
+  border-radius: 20px;
+  box-shadow: inset 0 1px var(--ios-highlight), var(--ios-shadow);
+}
+html[data-glass-preview="ios26"] .kpi { padding: 20px; }
+html[data-glass-preview="ios26"] .kpi-value { font-size: 30px; }
+html[data-glass-preview="ios26"] .panel {
+  background: var(--ios-card);
+  border: 1px solid var(--ios-border);
+  border-radius: 20px;
+  box-shadow: inset 0 1px var(--ios-highlight), var(--ios-shadow);
+}
+html[data-glass-preview="ios26"] .daily-summary {
+  background: linear-gradient(145deg,rgba(255,255,255,.78),rgba(255,255,255,.42));
+  border: 1px solid var(--ios-border);
+  border-left: 4px solid #d18a47;
+  border-radius: 20px;
+  box-shadow: inset 0 1px var(--ios-highlight), var(--ios-shadow);
+}
+html[data-glass-preview="ios26"] .scope-banner,
+html[data-glass-preview="ios26"] .overview-shortcuts button {
+  background: rgba(255,255,255,.58);
+  border: 1px solid var(--ios-border);
+  border-radius: 14px;
+  box-shadow: inset 0 1px var(--ios-highlight), 0 8px 18px rgba(55,83,118,.07);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+html[data-glass-preview="ios26"] .overview-shortcuts button { min-height: 48px; }
+html[data-glass-preview="ios26"] .attention-item { border-radius: 0; border-bottom: 1px solid rgba(213,224,233,.85); background: transparent; }
+html[data-glass-preview="ios26"] .attention-view-all { border-radius: 12px; background: rgba(255,255,255,.7); }
+html[data-glass-preview="ios26"] .table-panel,
+html[data-glass-preview="ios26"] .task-drawer,
+html[data-glass-preview="ios26"] .ledger-drawer { background: rgba(255,255,255,.96); border-radius: 20px; box-shadow: -18px 0 48px rgba(55,83,118,.18); }
+html[data-glass-preview="ios26"] .filters input,
+html[data-glass-preview="ios26"] .filters select,
+html[data-glass-preview="ios26"] .token-row input,
+html[data-glass-preview="ios26"] .site-controls input,
+html[data-glass-preview="ios26"] .site-controls select {
+  background: rgba(255,255,255,.72);
+  border: 1px solid var(--ios-border);
+  border-radius: 12px;
+  box-shadow: inset 0 1px var(--ios-highlight);
+}
+html[data-glass-preview="ios26"] .badge,
+html[data-glass-preview="ios26"] .status-chip { border-radius: 999px; }
+html[data-glass-preview="ios26"] .daily-summary h2 { font-size: 27px; }
+html[data-glass-preview="ios26"] .panel h2,
+html[data-glass-preview="ios26"] .toolbar h2 { font-size: 18px; }
+html[data-glass-preview="ios26"] .v2-execution-summary .health-stat,
+html[data-glass-preview="ios26"] .health-stat,
+html[data-glass-preview="ios26"] .meta-item { background: rgba(255,255,255,.34); border-radius: 12px; }
+html[data-glass-preview="ios26"] .status-chart { background: rgba(255,255,255,.28); border-radius: 16px; }
+html[data-glass-preview="ios26"] .task-drawer::backdrop,
+html[data-glass-preview="ios26"] .ledger-drawer::backdrop { background: rgba(22,39,56,.24); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  html[data-glass-preview="ios26"] .sidebar,
+  html[data-glass-preview="ios26"] .topbar,
+  html[data-glass-preview="ios26"] .panel,
+  html[data-glass-preview="ios26"] .kpi,
+  html[data-glass-preview="ios26"] .site-card,
+  html[data-glass-preview="ios26"] .account-card { background: #f8fbff; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  html[data-glass-preview="ios26"] .sidebar,
+  html[data-glass-preview="ios26"] .topbar,
+  html[data-glass-preview="ios26"] .panel,
+  html[data-glass-preview="ios26"] .kpi,
+  html[data-glass-preview="ios26"] .daily-summary { background: #fff; border-color: #637992; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+@media (max-width: 700px) {
+  html[data-glass-preview="ios26"] .sidebar { width: clamp(192px,60vw,232px); }
+  html[data-glass-preview="ios26"] .daily-summary h2 { font-size: 21px; }
+  html[data-glass-preview="ios26"] .kpi { border-radius: 16px; }
+}

@@ -1,16 +1,21 @@
 # Dashboard capability map
 
-## Glass appearance
+## Workspace appearance
 
-The article-inspired appearance is the dashboard default. `?glass=off` locally
-restores the previous plain surfaces without changing the API or execution state;
-`?glass=1` retains the earlier, cooler glass draft for comparison. Appearance
-uses the existing light/dark/system preference. Glass is limited to navigation,
-the top bar and overview surfaces; tables and detail reading areas remain opaque.
+The operational workspace appearance is the dashboard default. Its light header
+uses a soft blue surface; dark mode uses a translucent slate header. The desktop
+sidebar starts as a compact icon rail and can be expanded with the header button;
+the choice is stored locally. Mobile keeps the drawer. The attention queue stays
+bounded when many tasks need review. `?ui=cpam` selects the workspace explicitly.
+
+`?glass=off` shows the plain base theme; `?glass=1`, `?glass=article`,
+`?glass=ios26`, and `?glass=ios26-v2` keep earlier glass previews available.
+Appearance uses the existing light/dark/system preference. Glass previews are
+limited to navigation, the top bar and overview surfaces; tables and detail reading areas remain opaque.
 Reduced-transparency, high-contrast and unsupported-backdrop browsers use opaque
 surfaces.
 
-The light appearance follows the referenced Liquid Glass article's warm-apricot / cool-blue ambient
+The article preview follows the referenced Liquid Glass article's warm-apricot / cool-blue ambient
 gradients, `#F7F9FC` base, `#2868D8` action color, and graded surfaces:
 42% white / 24px blur navigation, 58% / 18px toolbar, 72% / no blur cards,
 86% / 30px blur login overlay, and near-solid reading areas. Browser-local
@@ -39,20 +44,22 @@ History retains up to 400 recent public V2 receipts, rather than only 30.
 Snapshot freshness also requires its Shanghai business date to be today; a newly
 resynced previous-day legacy result does not become today's completion claim.
 
-The sticky header is now compact by default: 64px on wide screens, 56px on
-mobile without recent pages, or 92px with its shortcut row. Scrolling past 96px
-reduces it to 48px; it expands again within 12px of the page top. A stable flow
+The workspace header is 66px on wide screens and 58px on mobile. The original
+compact header remains in the glass previews: 64px wide, 56px on mobile
+without recent pages, or 92px with its shortcut row. Scrolling past 96px
+reduces that header to 48px; it expands again within 12px of the page top. A stable flow
 slot and non-intercepting transparent area avoid scroll anchoring or blocked
 content when it shrinks. Touch menu and refresh stay visible. Keyboard-focused
 shortcuts remain reachable; reduced motion disables transitions.
 
-The sidebar is the full directory. The top bar shows only home plus up to five
-recently visited pages, horizontally scrollable on narrow screens. The
+The sidebar is the full directory. The workspace header keeps page title and
+actions in view, while glass previews also show home and up to five recently
+visited pages, horizontally scrollable on narrow screens. The
 `fabricRecentViews` localStorage value contains allowlisted view names only,
 never searches, task IDs, account IDs or tokens. Unavailable storage falls back
 to memory. No empty shortcut row is displayed on a first visit.
 
-Mobile navigation is limited to 60% of viewport width (192-232px), with scrollable
+Mobile workspace navigation is limited to 68% of viewport width (208-252px), with scrollable
 contents on short screens. Overview shortcuts use the main content container's
 width to form equal-width 2/2/1, 3/2, or 5-column layouts. Touch targets retain a
 44px minimum height and labels wrap without shrinking the font.

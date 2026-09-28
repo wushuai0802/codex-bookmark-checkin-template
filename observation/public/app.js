@@ -1,5 +1,5 @@
 import { overviewMetrics, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory } from './dashboard-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, matchesLedger, ledgerPendingCount } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
@@ -17,7 +17,7 @@ for (const storageName of ['sessionStorage', 'localStorage']) {
   } catch { /* storage may be disabled by the browser */ }
 }
 
-const state = { view: 'overview', data: null, loading: false, ptScope: '', calendarMonth: null,
+const state = { view: 'overview', data: null, loading: false, ptScope: '', ledgerFilter:'all', calendarMonth: null,
   calendarDate: null,calendarFilter: null,calendarHistory: null,calendarLoading: false,
   calendarError: null,calendarTruncated: false };
 let sidebarReturnFocus = null;
@@ -97,17 +97,30 @@ function showError(message = '') {
   node.classList.toggle('hidden', !message);
 }
 
+let feedbackTimer = null;
+function showFeedback(message, tone = 'success') {
+  const node = $('#refresh-feedback');
+  if (!node) return;
+  clearTimeout(feedbackTimer);
+  node.textContent = message;
+  node.className = `feedback-toast ${tone}`;
+  node.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+  feedbackTimer = setTimeout(() => node.classList.add('hidden'), 3200);
+}
+
 function renderSidebar(open) {
   const wasOpen = document.body.classList.contains('sidebar-open');
   document.body.classList.toggle('sidebar-open', open);
   const toggle = $('#menu-toggle');
   const close = $('#sidebar-close');
+  const mobile = matchMedia('(max-width:700px)').matches;
   if (toggle) {
-    toggle.setAttribute('aria-expanded', String(open));
-    toggle.setAttribute('aria-label', open ? '关闭导航' : '打开导航');
+    const collapsed = document.body.classList.contains('sidebar-collapsed');
+    toggle.setAttribute('aria-expanded', String(mobile ? open : !collapsed));
+    toggle.setAttribute('aria-label', mobile ? (open ? '关闭导航' : '打开导航') : (collapsed ? '展开侧栏' : '收起侧栏'));
+    toggle.title = toggle.getAttribute('aria-label');
   }
   if (close) close.setAttribute('aria-expanded', String(open));
-  const mobile = matchMedia('(max-width:700px)').matches;
   if (mobile && open && !sidebarCloseWatcher && typeof window.CloseWatcher === 'function') {
     try {
       const watcher = new window.CloseWatcher();
@@ -148,6 +161,24 @@ function setSidebarOpen(open) {
   if (!navigation || !matchMedia('(max-width:700px)').matches) { renderSidebar(false); return; }
   if (open) navigation.openOverlay('menu');
   else if (navigation.current.overlay?.type === 'menu') navigation.closeOverlay();
+}
+
+function setSidebarCollapsed(collapsed) {
+  if (matchMedia('(max-width:700px)').matches) return;
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  const button = $('#sidebar-close');
+  if (button) {
+    button.textContent = collapsed ? '›' : '‹';
+    button.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
+    button.title = collapsed ? '展开侧栏' : '收起侧栏';
+  }
+  const toggle = $('#menu-toggle');
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
+    toggle.title = toggle.getAttribute('aria-label');
+  }
+  try { localStorage.setItem('fabricSidebarCollapsed', collapsed ? '1' : '0'); } catch { }
 }
 
 function mountDialog(dialog, previousFocus) {
@@ -384,6 +415,10 @@ function renderAttention(tasks) {
 
 function renderTasks(tasks) {
   const body = $('#tasks-body'); body.replaceChildren();
+  const summary = $('#task-result-count');
+  if (summary) summary.textContent = `${tasks.length} / ${state.data?.tasks?.length ?? tasks.length} 项任务`;
+  const clear = $('#task-clear-filters');
+  if (clear) clear.disabled = !($('#task-search').value || $('#task-status').value || $('#task-account').value);
   if (!tasks.length) { const row = el('tr'); const cell = el('td'); cell.colSpan = 6; cell.textContent = '没有匹配的任务'; row.append(cell); body.append(row); return; }
   for (const task of tasks) {
     const row = el('tr');
@@ -510,11 +545,54 @@ function renderAccounts(accounts) {
     const count = el('div', 'card-stat'); count.append(el('b', null, account.taskCount), el('span', null, '任务')); stats.append(count);
     const completed = el('div', 'card-stat'); completed.append(el('b', null, done), el('span', null, '已完成')); stats.append(completed);
     const sites = (account.sites ?? []).join(' · ');
+    const detail = el('button', 'link-button', '查看账号概览 →');
+    detail.type='button';
+    detail.addEventListener('click', () => {
+      const key=`${account.accountRef}|${account.origin}`;
+      if(key.length>120) openTasks({account:`${account.origin}|${account.accountRef}`});
+      else navigation.openOverlay('account',key);
+    });
     const link = el('button', 'link-button', '查看账号任务 →');
     link.addEventListener('click', () => openTasks({ account: `${account.origin}|${account.accountRef}` }));
     append(card, el('span', 'subtext', siteTitle(account)), top, el('span', 'subtext account-id', identityCaption(account)),
-      stats, el('span', 'subtext', sites || '无站点'), link); grid.append(card);
+      stats, el('span', 'subtext', sites || '无站点'), detail, link); grid.append(card);
   }
+}
+
+function renderAccountDetails(account) {
+  const previousFocus=document.activeElement;
+  const dialog=el('dialog','task-drawer account-drawer');
+  const header=el('div','panel-heading');
+  const title=el('h2',null,`${siteTitle(account)} · ${identityTitle(account)}`);
+  title.id='account-detail-title';dialog.setAttribute('aria-labelledby',title.id);
+  const close=el('button','icon-button','×');close.type='button';close.setAttribute('aria-label','关闭账号概览');
+  close.addEventListener('click',()=>navigation.closeOverlay());append(header,title,close);dialog.append(header);
+  dialog.append(el('p','muted',identityCaption(account)));
+  const tasks=(state.data?.tasks??[]).filter(task=>task.origin===account.origin&&task.accountRef===account.accountRef);
+  const today=el('section','account-detail-section');today.append(el('h3',null,'今日结果'));
+  if(!tasks.length)today.append(el('p','muted','本次快照暂无该账号的任务回执。'));
+  for(const task of tasks){
+    const row=el('div','account-result');
+    append(row,el('strong',null,siteTitle(task)),statusChip(task.observedStatus));
+    append(today,row,el('p','account-evidence',task.evidence?.summary??'尚无详细证据'),
+      el('p','muted',`${evidenceLabel(task)} · ${task.observedAt?formatTime(task.observedAt):'未记录时间'}`));
+  }
+  dialog.append(today);
+  const identity=el('section','account-detail-section');identity.append(el('h3',null,'身份与归属'));
+  for(const [label,value] of [['账号来源',account.identity?.source??'未记录'],['执行归属',[...new Set(tasks.map(task=>task.executionOwner))].join('、')||'未记录'],['站点',account.origin]]){
+    const row=el('div','detail-row');append(row,el('span',null,label),el('strong',null,value));identity.append(row);
+  }
+  dialog.append(identity);
+  const history=el('section','account-detail-section');history.append(el('h3',null,'近期已保存记录'));
+  const recent=(state.data?.ledger??[]).slice().reverse().flatMap(record=>(record.taskSummaries??[])
+    .filter(task=>task.origin===account.origin&&task.accountRef===account.accountRef)
+    .map(task=>({date:record.businessDate,status:task.observedStatus,summary:task.evidence?.summary??'无详细证据'}))).slice(0,5);
+  if(!recent.length)history.append(el('p','muted','近期观察批次未保存该账号的逐项明细。'));
+  for(const item of recent){const row=el('div','account-history-row');append(row,el('span',null,item.date),statusChip(item.status),el('span','muted',item.summary));history.append(row);}
+  dialog.append(history);
+  const taskLink=el('button','button secondary','查看该账号任务 →');taskLink.type='button';
+  taskLink.addEventListener('click',()=>openTasks({account:`${account.origin}|${account.accountRef}`}));
+  dialog.append(taskLink);mountDialog(dialog,previousFocus);
 }
 
 function renderLedger(records) {
@@ -523,15 +601,19 @@ function renderLedger(records) {
   let body = $('#ledger-list');
   if (!body) { body = el('div', 'ledger-list'); body.id = 'ledger-list'; view.append(body); }
   body.replaceChildren();
-  view.querySelector('.toolbar .muted').textContent = '同步观察记录 · 不代表重新执行签到';
-  if (!records.length) { body.append(el('p', 'empty-state', '暂无运行记录')); return; }
-  for (const record of [...records].reverse()) {
+  const shown=records.filter(record=>matchesLedger(record,state.ledgerFilter));
+  $('#ledger-result-count').textContent=`显示 ${shown.length} / ${records.length} 条观察记录 · 不代表重新执行签到`;
+  for(const button of document.querySelectorAll('[data-ledger-filter]')){
+    button.setAttribute('aria-pressed',String(button.dataset.ledgerFilter===state.ledgerFilter));
+  }
+  if (!shown.length) { body.append(el('p', 'empty-state', records.length?'该筛选下暂无记录。':'暂无运行记录。')); return; }
+  for (const record of [...shown].reverse()) {
     const row = el('article', 'ledger-entry');
     const top = el('div', 'ledger-entry-heading');
     append(top, el('h3', null, `${record.businessDate} 签到结果观察`), el('time', 'muted', formatTime(record.recordedAt)));
     const counts = record.counts?.status ?? {};
     const success = (counts.signed ?? 0) + (counts.already_signed ?? 0);
-    const pending = Math.max(0, (record.counts?.executionUnits ?? 0) - success - (counts.not_available ?? 0));
+    const pending = ledgerPendingCount(record);
     const totals = el('div', 'ledger-totals');
     append(totals, el('span', 'badge good', `成功 ${success}`), el('span', pending ? 'badge warn' : 'badge', `待处理 ${pending}`), el('span', 'badge', `未开放 ${counts.not_available ?? 0}`), el('span', 'muted', `${record.counts?.logicalSites ?? 0} 站 / ${record.counts?.executionUnits ?? 0} 个账号任务`));
     const changed = record.drift?.statusChanges?.length ?? 0;
@@ -718,16 +800,18 @@ function renderAll() {
   applyRoute(navigation.current, { restoreScroll: !hasRenderedData }); hasRenderedData = true;
 }
 
-async function loadData() {
+async function loadData({ manual = false } = {}) {
   if (state.loading) return;
   state.loading = true; showError(''); $('#refresh-btn').disabled = true; $('#refresh-btn').textContent = '刷新中…';
   try {
     const overview = await api('/api/overview');
     state.data = { ...overview, ledger: overview.ledger ?? [] };
     showLogin(false); renderAll();
+    if (manual) showFeedback('数据已刷新 · ' + formatTime(overview.snapshot?.generatedAt));
     if(state.view==='calendar')void loadCalendarHistory({force:true});
   } catch (error) {
     $('#service-status').textContent = '连接失败'; $('.status-dot').style.background = '#d76f78'; showError(error.name === 'TimeoutError' ? '请求超时，保留上次数据；请稍后刷新。' : error.message);
+    if (manual) showFeedback('刷新失败，已保留上次数据', 'error');
   } finally { state.loading = false; $('#refresh-btn').disabled = false; $('#refresh-btn').textContent = '刷新数据'; }
 }
 
@@ -784,12 +868,13 @@ function renderRecentPages(view) {
 function applyRoute(route, { restoreScroll = true } = {}) {
   const changedView = state.view !== route.view;
   const changedFilters = $('#task-search').value !== route.query || $('#task-status').value !== route.status
-    || $('#task-account').value !== route.account || state.ptScope !== route.ptScope;
+    || $('#task-account').value !== route.account || state.ptScope !== route.ptScope || state.ledgerFilter !== route.ledgerFilter;
   if (changedView) renderView(route.view);
   $('#task-search').value = route.query; $('#task-status').value = route.status; $('#task-status')._syncFilterLabel?.(route.status);
   $('#task-account').value = route.account;
   state.ptScope = route.ptScope;
-  if (state.data && (changedView || changedFilters)) { applyTaskFilter(); renderPtStatus(state.data.ptStatus); }
+  state.ledgerFilter=route.ledgerFilter;
+  if (state.data && (changedView || changedFilters)) { applyTaskFilter(); renderPtStatus(state.data.ptStatus); renderLedger(state.data.ledger??[]); }
   renderSidebar(route.overlay?.type === 'menu' && matchMedia('(max-width:700px)').matches);
   const key = route.overlay ? `${route.overlay.type}:${route.overlay.id}` : '';
   const dialogs = [...document.querySelectorAll('dialog[open]')];
@@ -803,6 +888,7 @@ function applyRoute(route, { restoreScroll = true } = {}) {
   if (!matching && state.data) {
     if (route.overlay?.type === 'task') { const task = state.data.tasks.find(task => task.taskId === route.overlay.id); if (task) renderTaskDetails(task); }
     if (route.overlay?.type === 'ledger') { const record = state.data.ledger.find(record => record.recordId === route.overlay.id); if (record) renderLedgerDetails(record); }
+    if (route.overlay?.type === 'account') { const account=state.data.accounts.find(item=>`${item.accountRef}|${item.origin}`===route.overlay.id); if(account)renderAccountDetails(account); }
   }
   if (restoreScroll && Math.abs(window.scrollY - route.scrollY) > 1) window.scrollTo({ top: route.scrollY, behavior: 'instant' });
   if (changedView && hasRenderedData) playMotion($(`#view-${route.view}`), [{opacity:0,transform:'translateY(6px)'}, {opacity:1,transform:'translateY(0)'}], 180);
@@ -845,6 +931,17 @@ document.addEventListener('DOMContentLoaded', () => {
   installCompactTopbar({topbar:document.querySelector('.topbar')});
   const accountFilter = el('select'); accountFilter.id = 'task-account'; accountFilter.setAttribute('aria-label', '筛选账号');
   $('#task-status').after(accountFilter); accountFilter.addEventListener('change', applyTaskFilter);
+  const clearFilters = el('button', 'button secondary task-clear-filters', '清除筛选');
+  clearFilters.id = 'task-clear-filters'; clearFilters.type = 'button'; clearFilters.disabled = true;
+  accountFilter.after(clearFilters);
+  const count = el('p', 'filter-summary', '正在读取任务…'); count.id = 'task-result-count';
+  $('#view-tasks .toolbar > div:first-child').append(count);
+  clearFilters.addEventListener('click', () => {
+    $('#task-search').value = ''; $('#task-status').value = ''; $('#task-account').value = '';
+    $('#task-status')._syncFilterLabel?.('');
+    navigation.updateFilters({ query:'', status:'', account:'' });
+    applyTaskFilter(); $('#task-search').focus();
+  });
   $('#task-search').placeholder = '搜索站点、用户名或 ID';
   setupTaskStatusFilter();
   history.scrollRestoration = 'manual';
@@ -859,9 +956,20 @@ document.addEventListener('DOMContentLoaded', () => {
     else renderSidebar(mobile && menuOpen);
   });
   document.querySelectorAll('.nav-item').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.view)));
+  document.querySelectorAll('[data-ledger-filter]').forEach(button=>button.addEventListener('click',()=>{
+    state.ledgerFilter=button.dataset.ledgerFilter;
+    navigation.updateFilters({ledgerFilter:state.ledgerFilter});
+    if(state.data)renderLedger(state.data.ledger??[]);
+  }));
   document.querySelectorAll('[data-view-link]').forEach((item) => item.addEventListener('click', () => switchView(item.dataset.viewLink)));
-  $('#menu-toggle').addEventListener('click', () => setSidebarOpen(!document.body.classList.contains('sidebar-open')));
-  $('#sidebar-close').addEventListener('click', () => setSidebarOpen(false));
+  $('#menu-toggle').addEventListener('click', () => {
+    if (matchMedia('(max-width:700px)').matches) setSidebarOpen(!document.body.classList.contains('sidebar-open'));
+    else setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+  });
+  $('#sidebar-close').addEventListener('click', () => {
+    if (matchMedia('(max-width:700px)').matches) setSidebarOpen(false);
+    else setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+  });
   $('#sidebar-backdrop').addEventListener('click', () => setSidebarOpen(false));
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && navigation.current.overlay?.type === 'menu') setSidebarOpen(false);
@@ -872,7 +980,10 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   });
-  $('#refresh-btn').addEventListener('click', loadData);
+  $('#refresh-btn').addEventListener('click', () => void loadData({ manual:true }));
+  let sidebarCollapsed = true;
+  try { sidebarCollapsed = localStorage.getItem('fabricSidebarCollapsed') !== '0'; } catch { }
+  setSidebarCollapsed(sidebarCollapsed);
   $('#attention-jump')?.addEventListener('click', () => {
     if (navigation.current.view !== 'overview') switchView('overview');
     if (!state.data) return;

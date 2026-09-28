@@ -1,6 +1,8 @@
 (() => {
-  const glass = new URLSearchParams(window.location.search).get('glass');
-  if (glass !== 'off') document.documentElement.dataset.glassPreview = glass === '1' ? '1' : 'article';
+  const params = new URLSearchParams(window.location.search);
+  const glass = params.get('glass');
+  if (params.get('ui') === 'cpam' || (params.get('ui') === null && glass === null)) document.documentElement.dataset.workspace = 'cpam';
+  else if (glass !== 'off') document.documentElement.dataset.glassPreview = ['1','article','ios26','ios26-v2'].includes(glass) ? glass : 'ios26-v2';
   const key = 'fabricTheme';
   const normalize = value => ['light', 'dark', 'system'].includes(value) ? value : 'system';
   const system = window.matchMedia('(prefers-color-scheme: dark)');

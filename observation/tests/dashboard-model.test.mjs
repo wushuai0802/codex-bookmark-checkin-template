@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesPt,ptStatusCategory,matchesTask} from '../public/dashboard-model.mjs';
+import {matchesPt,ptStatusCategory,matchesTask,matchesLedger,ledgerPendingCount} from '../public/dashboard-model.mjs';
 
 test('task filters use non-overlapping business groups',()=>{
   const task=status=>({observedStatus:status,origin:'https://example.test'});
@@ -13,6 +13,15 @@ test('task filters use non-overlapping business groups',()=>{
   assert.equal(matchesTask(task('login_required'),{status:'login_required'}),true);
   assert.equal(matchesTask(task('not_available'),{status:'unavailable'}),true);
   assert.equal(matchesTask(task('deferred'),{status:'completed'}),false);
+});
+
+test('ledger review filters keep pending and drift records distinct', () => {
+  const pending = {counts:{executionUnits:2,status:{signed:1}}};
+  const changed = {counts:{executionUnits:1,status:{signed:1}},drift:{statusChanges:[{taskId:'sample'}]}};
+  assert.equal(ledgerPendingCount(pending), 1);
+  assert.equal(matchesLedger(pending, 'pending'), true);
+  assert.equal(matchesLedger(changed, 'pending'), false);
+  assert.equal(matchesLedger(changed, 'changed'), true);
 });
 
 test('PT review filter includes registered unknown status but not unregistered observations',()=>{

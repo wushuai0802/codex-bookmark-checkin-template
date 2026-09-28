@@ -45,6 +45,16 @@ test('initial deep link and route filters survive reload', () => {
   assert.equal(routeFromHash('#invalid').view,'overview');
 });
 
+test('ledger filters survive deep links and browser back', () => {
+  assert.equal(routeFromHash('#ledger?filter=pending').ledgerFilter, 'pending');
+  assert.equal(routeHash(routeFromHash('#ledger?filter=changed')), '#ledger?filter=changed');
+  const h = harness();
+  h.nav.navigate({view:'ledger', ledgerFilter:'pending'});
+  h.nav.navigate({view:'accounts'});
+  h.back();
+  assert.equal(h.nav.current.ledgerFilter, 'pending');
+});
+
 test('every sidebar destination has a route, view, and recent-page label', () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const destinations = [...html.matchAll(/data-view="([^"]+)"/g)].map(match => match[1]);

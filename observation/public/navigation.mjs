@@ -4,23 +4,25 @@ export function normalizeRoute(value = {}) {
   return { fabricNav: 1, view: views.has(value.view) ? value.view : 'overview',
     query: typeof value.query === 'string' ? value.query.slice(0, 80) : '',
     status: typeof value.status === 'string' ? value.status.slice(0, 40) : '',
+    ledgerFilter: ['all','pending','changed'].includes(value.ledgerFilter) ? value.ledgerFilter : 'all',
     account: typeof value.account === 'string' ? value.account.slice(0, 300) : '',
     ptScope: ['monitor','plan','fresh','review'].includes(value.ptScope) ? value.ptScope : '',
     scrollY: Math.max(0, Number(value.scrollY) || 0),
-    overlay: value.overlay && ['menu','task','ledger'].includes(value.overlay.type)
+    overlay: value.overlay && ['menu','task','ledger','account'].includes(value.overlay.type)
       ? { type: value.overlay.type, id: String(value.overlay.id ?? '').slice(0, 120) } : null };
 }
 
 export function routeFromHash(hash) {
   const [view, query = ''] = hash.replace(/^#/, '').split('?');
   const params = new URLSearchParams(query);
-  return normalizeRoute({ view, query: params.get('q'), status: params.get('status'), account: params.get('account'), ptScope: params.get('scope') });
+  return normalizeRoute({ view, query: params.get('q'), status: params.get('status'), account: params.get('account'), ptScope: params.get('scope'), ledgerFilter:params.get('filter') });
 }
 
 export function routeHash(route) {
   const params = new URLSearchParams();
   if (route.view === 'tasks') for (const [key, value] of [['q',route.query],['status',route.status],['account',route.account]]) if (value) params.set(key,value);
   if (route.view === 'pt-status' && route.ptScope) params.set('scope',route.ptScope);
+  if (route.view === 'ledger' && route.ledgerFilter !== 'all') params.set('filter',route.ledgerFilter);
   return `#${route.view}${params.size ? '?' + params : ''}`;
 }
 
