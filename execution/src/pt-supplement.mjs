@@ -6,6 +6,7 @@ import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
+const rewardHintOrigins=new Set(['https://hdtime.org','https://cyanbug.net']);
 
 function exactOrigin(value){
   const url=new URL(value);
@@ -39,10 +40,12 @@ export function publicSupplementResult(origin,result,now=new Date()){
   const source=['api','page_text','usage_log','pt_page'].includes(result?.evidence?.source)?result.evidence.source:'none';
   return {origin,status,observedAt:now.toISOString(),
     evidence:{source,authoritative:authoritative||unavailable,summary:authoritative?'执行层确认今日签到':
+      terminal.has(claimed)&&result?.evidence?.statusSignal==='cumulative_reward'?'检测到签到已得，疑似已签到；尚缺今日回执':
       terminal.has(claimed)?'执行层返回完成状态，仍需权威证据复核':
       status==='login_required'?'执行层会话需要登录':
       result?.failureCode==='submission_outcome_unknown'?'提交结果不明，禁止自动重放':'执行层尚未确认签到结果'},
-    ...(result?.failureCode==='submission_outcome_unknown'?{submissionOutcomeUnknown:true}:{})};
+    ...(result?.failureCode==='submission_outcome_unknown'?{submissionOutcomeUnknown:true}:{}),
+    ...(claimed==='login_required'&&result?.submissionAttempted===false?{submissionAttempted:false}:{})};
 }
 
 export function ptRewardCounter(bodyText){
@@ -86,11 +89,15 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=n
     context=await launch(safeConfig);
     const before=await readReward(context,target.origin,safeConfig);
     let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
-    if(terminal.has(result?.status)&&result?.evidence?.authoritative!==true&&before!==null){
+    if(terminal.has(result?.status)&&result?.evidence?.authoritative!==true&&
+       (before!==null||rewardHintOrigins.has(target.origin))){
       const after=await readReward(context,target.origin,safeConfig);
-      if(after!==null&&after>before){
+      if(before!==null&&after!==null&&after>before){
         result={...result,evidence:{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),
           businessDate:dayAt(now),statusSignal:'reward_increment'}};
+      }else if(rewardHintOrigins.has(target.origin)&&after!==null&&after>0&&
+               (before===null||after===before)){
+        result={...result,evidence:{source:'pt_page',authoritative:false,statusSignal:'cumulative_reward'}};
       }
     }
     return publicSupplementResult(target.origin,result,now);

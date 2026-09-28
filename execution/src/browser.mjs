@@ -23,6 +23,8 @@ const rootDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
 const CHALLENGE = new Set(["interactive_challenge", "managed_challenge_timeout"]);
 const UNCONFIRMED = new Set(["visited", "clicked"]);
+const VIBE_CLAIM_ORIGIN = "https://new.sharedchat.cc";
+const VIBE_CLAIM_PATH = "/frontend-api/vibe-code/codex/claim";
 const CANDIDATE_STATUS_PRIORITY = new Map([
   ["signed", 100],
   ["already_signed", 100],
@@ -39,7 +41,10 @@ const CANDIDATE_STATUS_PRIORITY = new Map([
   ["error", 30],
   ["no_action", 20],
 ]);
-export const CHALLENGE_SELECTOR = 'iframe[src*="captcha" i], iframe[src*="turnstile" i], iframe[src*="challenge" i], .cf-turnstile, .h-captcha, .g-recaptcha, cap-widget, [data-cap-api-endpoint], [class*="captcha" i]';
+// NexusPHP ordinary attendance forms may contain a layout table whose class
+// includes captcha; ignore that container while keeping real challenge
+// controls inside the selector.
+export const CHALLENGE_SELECTOR = 'iframe[src*="captcha" i], iframe[src*="turnstile" i], iframe[src*="challenge" i], .cf-turnstile, .h-captcha, .g-recaptcha, cap-widget, [data-cap-api-endpoint], [class*="captcha" i]:not(table.attendance-captcha-table)';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -60,10 +65,23 @@ export function preferCandidateResult(current, candidate) {
 export function configuredTargetSkip(target, config = {}) {
   const originDisabled = (config.disabledCheckinOrigins ?? []).includes(target?.origin);
   const accountKey = String(target?.accountKey ?? '').trim();
-  const accountDisabled = Boolean(accountKey && (config.disabledAccountKeys ?? []).includes(accountKey));
+  const handoffDisabled = config.executionEngine !== 'v1' && accountKey &&
+    (config.disabledAccountBindings ?? []).some((item) => item?.accountKey === accountKey && item?.origin === target?.origin);
+  const accountDisabled = Boolean(accountKey && (handoffDisabled || (config.disabledAccountKeys ?? []).includes(accountKey)));
   if (!originDisabled && !accountDisabled) return null;
+  const v2Evidence = handoffDisabled
+    ? config.v2AuthoritativeResults?.[`${String(target?.origin ?? '')}|${accountKey}`]
+    : null;
+  if (v2Evidence?.v2Owned === true && ["signed", "already_signed"].includes(v2Evidence.status)) {
+    return {
+      ...v2Evidence,
+      accountKey,
+      disabledByAccountConfig: true,
+      disabledAccountKey: accountKey,
+    };
+  }
   const reason = accountDisabled && !originDisabled
-    ? '已按配置取消该账号签到任务'
+    ? handoffDisabled ? `已按 V2 交接标记停用账号 ${accountKey} 的旧签到任务` : '已按配置取消该账号签到任务'
     : '已按配置取消该站签到任务';
   return {
     status: "not_available",
@@ -476,6 +494,39 @@ export async function waitForQuotaRequestField(page, timeoutMs = 10000) {
   } while (true);
 }
 
+// The Vibe frontend confirms a claim only when code=1 and data.claimed=true.
+// HTTP success or a visible claim button is not a claim receipt.
+export function classifyVibeClaimResponse(value, httpStatus = 200, now = new Date()) {
+  if (httpStatus !== 200 || value?.code !== 1) return null;
+  if (value?.data?.claimed === true) {
+    const businessDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now);
+    const accountId = value?.data?.accountId ?? value?.data?.userId;
+    return {
+      status: "signed",
+      reason: "Codex 权益接口确认今日领取成功",
+      evidence: {
+        source: "vibe_claim_response",
+        authoritative: true,
+        endpoint: VIBE_CLAIM_PATH,
+        businessDate,
+        statusSignal: "claimed_true",
+        confirmedAt: now.toISOString(),
+        ...(accountId == null ? {} : { accountId: String(accountId).slice(0, 120) }),
+      },
+    };
+  }
+  if (value?.data?.claimed === false) {
+    return {
+      status: "needs_attention",
+      reason: "权益接口明确未批准本次领取；需检查站点限制",
+      failureCode: "claim_not_granted",
+      submissionAttempted: true,
+      retryable: false,
+    };
+  }
+  return null;
+}
+
 export async function tryQuotaRequestFlow(page, activeOrigin, config, { waitForField = waitForQuotaRequestField } = {}) {
   const rule = config.quotaRequestRules?.[activeOrigin];
   if (!rule) return null;
@@ -502,7 +553,34 @@ export async function tryQuotaRequestFlow(page, activeOrigin, config, { waitForF
     if (await input.count() === 1 && await input.isVisible().catch(() => false)) { submit = input; break; }
   }
   if (!submit) return { status: "needs_attention", reason: "已填写额度申请理由，但未找到提交按钮" };
-  await submit.click({ timeout: 10000 });
+  const claimResponse = activeOrigin === VIBE_CLAIM_ORIGIN && typeof page.waitForResponse === "function"
+    ? page.waitForResponse((response) => {
+      try {
+        const url = new URL(response.url());
+        return url.origin === activeOrigin && url.pathname === VIBE_CLAIM_PATH
+          && response.request().method() === "POST";
+      } catch { return false; }
+    }, { timeout: 12000 }).catch(() => null)
+    : null;
+  const clickFailed = await submit.click({ timeout: 10000 }).then(() => false, () => true);
+  let claimResult = null;
+  if (claimResponse) {
+    const response = await claimResponse;
+    if (response) {
+      const payload = await response.json().catch(() => null);
+      claimResult = classifyVibeClaimResponse(payload, response.status());
+    }
+  }
+  if (claimResult) return claimResult;
+  if (clickFailed) {
+    return {
+      status: "needs_attention",
+      reason: "额度申请提交动作结果不明，已停止重复提交",
+      failureCode: "submission_outcome_unknown",
+      submissionAttempted: true,
+      retryable: false,
+    };
+  }
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await sleep(Math.max(1000, Number(config.actionWaitMs) || 0));
   const state = await waitForManagedChallenge(page, config);
@@ -794,6 +872,8 @@ export async function tryNewApiCheckin(page) {
     }
 
     let accessToken = null;
+    let tokenType = "Bearer";
+    let refreshedIdentity = null;
     // Refresh is a read-only authentication rotation.  It is deliberately
     // attempted once per page and never used as a check-in/action retry.
     const refresh = await request("/api/user/auth/refresh", {
@@ -809,15 +889,17 @@ export async function tryNewApiCheckin(page) {
       }
       if (candidateToken) {
         accessToken = candidateToken;
+        tokenType = bundle?.token_type === "Bearer" ? "Bearer" : "Bearer";
+        refreshedIdentity = candidateId == null ? null : String(candidateId);
         userId = candidateId ?? userId;
       }
     }
-    if (userId == null) return null;
+    if (userId == null && refreshedIdentity == null) return null;
 
     const headers = {
       Accept: "application/json",
       ...(userId == null ? {} : { "New-Api-User": String(userId) }),
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(accessToken ? { Authorization: `${tokenType} ${accessToken}` } : {}),
     };
     const currentDate = new Date();
     const month = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, "0")}`;
@@ -837,9 +919,11 @@ export async function tryNewApiCheckin(page) {
           return { status: "login_required", reason: "认证会话账号与页面身份不一致" };
         }
         accessToken = candidateToken;
+        tokenType = bundle?.token_type === "Bearer" ? "Bearer" : "Bearer";
+        refreshedIdentity = candidateId == null ? null : String(candidateId);
         userId = candidateId ?? userId;
         headers["New-Api-User"] = String(userId ?? "");
-        headers.Authorization = `Bearer ${accessToken}`;
+        headers.Authorization = `${tokenType} ${accessToken}`;
         statusResponse = await request(`/api/user/checkin?month=${month}`, { headers });
       }
     }
@@ -940,10 +1024,13 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
     length: 6,
     alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
   });
-  if (!/^[A-Z0-9]{6}$/.test(recognition.code) || Number(recognition.confidence) < 45) {
+  const candidateCode = /^[A-Z0-9]{6}$/.test(String(recognition.code ?? ""))
+    ? String(recognition.code)
+    : (/^[A-Z0-9]{6}$/.test(String(recognition.rawCode ?? "")) ? String(recognition.rawCode) : null);
+  if (!candidateCode || (Number(recognition.confidence) > 0 && Number(recognition.confidence) < 45)) {
     return { status: "interactive_challenge", reason: "OpenCD 六位验证码本地识别置信度不足，未提交可疑答案" };
   }
-  await input.fill(recognition.code);
+  await input.fill(candidateCode);
   await submit.click();
   await sleep(2000);
   const responseText = String(await frame.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -1021,7 +1108,9 @@ export async function tryNexusImageCaptcha(page, config = {}, {
     const imageHash = scopedForm.locator('input[type="hidden"][name="imagehash"]');
     const submitCount = await submit.count();
     const imageCount = await image.count();
-    if (inputCount === 0 && submitCount === 0 && imageCount === 0) return null;
+    // An ordinary attendance form has the same submit label. Only activate
+    // CAPTCHA handling when an input, image or challenge hash is present.
+    if (inputCount === 0 && imageCount === 0 && await imageHash.count() === 0) return null;
     if (inputCount !== 1 || submitCount !== 1 || imageCount !== 1) {
       return {
         status: "needs_attention",
@@ -1493,7 +1582,7 @@ export async function launchAutomationContext(config) {
   return context;
 }
 
-export async function processTarget(context, target, config, qaRules, logDirectory) {
+export async function processTarget(context, target, config, qaRules, logDirectory, { runCandidate = processCandidate } = {}) {
   const configuredSkip = configuredTargetSkip(target, config);
   if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
   let lastResult = null;
@@ -1506,7 +1595,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         let result;
         try {
           result = withRetrySchedule(
-            await processCandidate(page, target, candidateUrl, config, qaRules),
+            await runCandidate(page, target, candidateUrl, config, qaRules),
             config,
           );
         } catch (error) {
@@ -1519,7 +1608,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         // public/API URL may require login while another dedicated check-in
         // URL already has a valid session, so only a completed result should
         // prevent trying the remaining candidates.
-        if (isTerminalResult(result)) break;
+        if (isTerminalResult(result) || result?.submissionAttempted === true) break;
       }
 
       const effectiveResult = preferCandidateResult(lastResult, attemptResult);

@@ -27,7 +27,11 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
     catalogByOrigin.set(origin,site);
   }
   const catalogOrigins=new Set(catalogByOrigin.keys());
-  const registered=plan.targets.filter(target=>(target.folderNames??[]).some(folder=>typeof folder==='string'&&/pt/i.test(folder)));
+  const registered=plan.targets.filter(target=>{
+    const folderMatch=(target.folderNames??[]).some(folder=>typeof folder==='string'&&/pt/i.test(folder));
+    let origin=null;try{origin=originOf(target.origin);}catch{}
+    return folderMatch||(origin&&catalogOrigins.has(origin));
+  });
   const observations=new Map(),assessments=[];
   const block=(origin,reason)=>{blocked.push({origin,reason});assessments.push({origin,state:'blocked',reason});};
   for(const site of harvest.sites){
@@ -80,7 +84,7 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
     if(prior?.failureCode==='submission_outcome_unknown'){
       block(origin,'submission_outcome_unknown');continue;
     }
-    eligible.push({origin,accountKey,kind:target?'registered':'fallback_only',...(entryUrl?{entryUrl}:{}),observedAt:new Date(at).toISOString(),
+    eligible.push({origin,accountKey,businessDate,kind:target?'registered':'fallback_only',...(entryUrl?{entryUrl}:{}),observedAt:new Date(at).toISOString(),
       trigger:site.missingFromHarvest?(target?'registered_pt_status_unobserved':'monitored_pt_status_unobserved'):
         status==='unknown'?'harvest_task_done_status_unknown':'harvest_explicit_failure'});
     assessments.push({origin,state:'executor_recheck_queued'});
@@ -100,12 +104,22 @@ function readAttemptState(root,businessDate){
   return {file,state};
 }
 
-const alreadyAttempted=(state,candidate)=>state.attempts.some(item=>item.origin===candidate.origin&&
-  !['deferred_busy','deferred_preflight'].includes(item.state));
+const recoveryIdentity=candidate=>`${candidate.origin}#account=${encodeURIComponent(candidate.accountKey)}`;
+const retryableWithoutSubmission=(item,candidate,recoveredAtByAccount)=>item.origin===candidate.origin&&
+  (item.accountKey??'site-default')===candidate.accountKey&&
+  item.state==='completed'&&item.v1Status==='login_required'&&
+  item.submissionState==='not_submitted'&&item.recoveryEligible===true&&
+  item.businessDate===candidate.businessDate&&
+  Number.isFinite(Date.parse(recoveredAtByAccount?.[recoveryIdentity(candidate)]))&&
+  Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])>Date.parse(item.startedAt);
+const alreadyAttempted=(state,candidate,recoveredAtByAccount={})=>state.attempts.some(item=>item.origin===candidate.origin&&
+  (item.accountKey??'site-default')===candidate.accountKey&&
+  !['deferred_busy','deferred_preflight'].includes(item.state)&&
+  !retryableWithoutSubmission(item,candidate,recoveredAtByAccount));
 
-export function pendingHarvestFallbackAttempts(root,preview){
+export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={}}={}){
   const {state}=readAttemptState(root,preview.businessDate);
-  return preview.eligible.filter(candidate=>!alreadyAttempted(state,candidate));
+  return preview.eligible.filter(candidate=>!alreadyAttempted(state,candidate,recoveredAtByAccount));
 }
 
 function claimWorker(root) {
@@ -123,7 +137,8 @@ function claimWorker(root) {
 }
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,config={},now=new Date(),execute=false,
-  catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite}={}) {
+  catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
+  clock=()=>new Date(),recoveredAtByAccount={}}={}) {
   const preview=planHarvestFallback({harvest,catalog,plan,latest,config,now,fallbackOnlyEnabled});
   if(!execute)return {...preview,mode:'preview'};
   const runtime=loadRuntimeConfig(root);
@@ -138,14 +153,20 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   const outcomes=[];
   const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
   for(const candidate of preview.eligible){
-    if(alreadyAttempted(state,candidate)){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    if(alreadyAttempted(state,candidate,recoveredAtByAccount)){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
     // Persist before executing. An interrupted or uncertain attempt is not replayed.
-    const attempt={origin:candidate.origin,accountKey:candidate.accountKey,observedAt:candidate.observedAt,startedAt:new Date().toISOString(),state:'in_progress'};
+    const attempt={origin:candidate.origin,accountKey:candidate.accountKey,businessDate:preview.businessDate,
+      observedAt:candidate.observedAt,startedAt:clock().toISOString(),state:'in_progress'};
+    if(Number.isFinite(Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])))
+      attempt.recoveredAt=recoveredAtByAccount[recoveryIdentity(candidate)];
     state.attempts.push(attempt);writeAtomic(stateFile,state);
     try{
       if(candidate.kind==='fallback_only'){
         const result=projectPtSiteResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash}),candidate.origin);
-        if(dayAt(new Date(result.observedAt))!==preview.businessDate||Date.parse(result.observedAt)>now.getTime()+60_000)throw Error('PT site result is not from today');
+        const receivedAt=clock();
+        attempt.resultObservedAt=result.observedAt;
+        if(dayAt(new Date(result.observedAt))!==preview.businessDate||Date.parse(result.observedAt)>receivedAt.getTime()+60_000)
+          throw Error('PT site result is not from today');
         let report={schemaVersion:1,source:'execution-supplement',businessDate:preview.businessDate,generatedAt:now.toISOString(),sites:[]};
         if(fs.existsSync(statusFile)){
           report=JSON.parse(fs.readFileSync(statusFile,'utf8'));
@@ -155,10 +176,19 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         report.sites=report.sites.filter(site=>site.origin!==candidate.origin);
         report.sites.push(result);writeAtomic(statusFile,report);
         attempt.v1Status=result.status;
+        if(result.status==='login_required'&&result.submissionAttempted===false){
+          attempt.submissionState='not_submitted';
+          attempt.recoveryEligible=true;
+        }
       }else{
         const report=await runEngine({root,mode:'execute',origins:[candidate.origin],notify:false});
         attempt.runId=report.runId??null;
-        attempt.v1Status=report.results?.find(r=>r.origin===candidate.origin&&r.accountKey===candidate.accountKey)?.status??'unknown';
+        const result=report.results?.find(r=>r.origin===candidate.origin&&(r.accountKey??'site-default')===candidate.accountKey);
+        attempt.v1Status=result?.status??'unknown';
+        if(result?.status==='login_required'&&result.submissionAttempted===false){
+          attempt.submissionState='not_submitted';
+          attempt.recoveryEligible=true;
+        }
       }
       attempt.state='completed';
     }catch(error){

@@ -4,7 +4,7 @@ const typedSources=new Set([
   'page_text','api','usage_log','new_api_checkin_calendar','new_api_checkin_status',
   'new_api_checkin_action','new_api_captcha','oauth_api_status','oauth_api_action',
   'oauth_api_action_status','oauth_reward_log','pt_page','anyrouter_status',
-  'anyrouter_log','vibe_entitlement_status','sign_in_response','v2_canary',
+  'anyrouter_log','vibe_entitlement_status','vibe_claim_response','sign_in_response','v2_canary',
   'sign_in_already_claimed_contract'
 ]);
 
@@ -25,6 +25,8 @@ function hasStructuredEvidence(raw,source,businessDate){
   if(source==='pt_page')return Boolean((raw.accountId||raw.userId)&&dayMatches&&raw.statusSignal);
   if(['anyrouter_status','anyrouter_log'].includes(source))return Boolean(raw.accountId&&dayMatches&&(raw.statusSignal||Number.isFinite(Number(raw.rewardAmount))));
   if(source==='vibe_entitlement_status')return Boolean((raw.accountId||raw.userId)&&dayMatches&&(raw.outcome||raw.claimDate||raw.dailyRewardVerified===true));
+  if(source==='vibe_claim_response')return Boolean(raw.endpoint==='/frontend-api/vibe-code/codex/claim'
+    &&dayMatches&&raw.statusSignal==='claimed_true');
   if(source==='sign_in_already_claimed_contract')return Boolean(dayMatches||raw.rewardAmount!=null);
   if(source==='v2_canary')return Boolean(dayMatches&&raw.confirmedAt&&
     ['new_api_checkin_calendar','new_api_checkin_status','new_api_checkin_action'].includes(raw.originalSource));

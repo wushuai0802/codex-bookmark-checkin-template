@@ -56,6 +56,21 @@ function safeTerminalDailyCheckin(value) {
     if (Number.isFinite(rewardAmount) && rewardAmount >= 0 && rewardAmount <= 1_000_000_000) {
       evidence.rewardAmount = rewardAmount;
     }
+    for (const key of ["accountId", "userId"]) {
+      const candidate = String(rawEvidence[key] ?? "").trim();
+      if (candidate && /^\d{1,32}$/.test(candidate)) evidence[key] = candidate;
+    }
+    for (const key of ["businessDate", "checkinDate", "recordDate", "claimDate"]) {
+      const candidate = String(rawEvidence[key] ?? "").trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) evidence[key] = candidate;
+    }
+    const confirmedAt = String(rawEvidence.confirmedAt ?? "").trim();
+    if (confirmedAt && Number.isFinite(Date.parse(confirmedAt))) evidence.confirmedAt = new Date(confirmedAt).toISOString();
+    const statusSignal = String(rawEvidence.statusSignal ?? "").trim();
+    if (statusSignal && /^[A-Za-z0-9_.:-]{1,80}$/.test(statusSignal)) evidence.statusSignal = statusSignal;
+    const endpoint = String(rawEvidence.endpoint ?? "").trim();
+    if (endpoint && endpoint.startsWith("/") && endpoint.length <= 160 && !/[\s?#]/.test(endpoint)) evidence.endpoint = endpoint;
+    if (rawEvidence.authoritative === true) evidence.authoritative = true;
   }
   return {
     status,

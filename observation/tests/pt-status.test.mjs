@@ -34,6 +34,21 @@ test('PT status merges legacy plan sites with Harvest-only observations', () => 
   assert.equal(legacy.effective.status, 'signed');
 });
 
+test('a monitored PT site is joined to the full execution plan across a non-PT folder label',()=>{
+  const result=buildPtStatus({
+    generatedAt:'2026-09-04T04:00:00.000Z',businessDate:'2026-09-04',
+    planTargets:[{origin:'https://open.cd',title:'OpenCD',folderNames:['公益站']}],
+    tasks:[{taskId:'open-task',origin:'https://open.cd/index.php',accountRef:null,observedStatus:'signed'}],
+    receipts:[{taskId:'open-task',observedAt:'2026-09-04T03:00:00.000Z',evidence:{source:'page_text',authoritative:true,summary:'今日已签到'}}],
+    monitorCatalog:{sites:[{origin:'https://open.cd',displayName:'OpenCD'}]},
+    externalReport:{source:'harvest',businessDate:'2026-09-04',sites:[{origin:'https://open.cd',status:'unknown',observedAt:null}]}
+  });
+  assert.equal(result.counts.inLegacyPlan,1);
+  assert.equal(result.sites[0].origin,'https://open.cd');
+  assert.equal(result.sites[0].effective.status,'signed');
+  assert.equal(result.sites[0].effective.source,'legacy-checkin');
+});
+
 test('conflicting sources are visible and stale observations are never supplement candidates', () => {
   const result = buildPtStatus({
     generatedAt: '2026-09-04T04:00:00.000Z', businessDate: '2026-09-04',

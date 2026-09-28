@@ -233,10 +233,15 @@ export function buildPtStatus({
   if(supplemental && (supplemental.source!=='execution-supplement'||supplemental.businessDate!==businessDate))throw Error('PT fallback report has the wrong source or date');
   const targets = new Map();
   const stableFallbackAt = businessDate ? `${businessDate}T00:00:00.000Z` : generatedAt;
+  const monitorOrigins = new Set((monitorCatalog?.sites ?? []).map(site => {
+    try { return normalizeOriginForStatus(site.origin); } catch { return null; }
+  }).filter(Boolean));
   for (const target of planTargets) {
-    if (!isPtTarget(target)) continue;
     try {
       const origin = normalizeOriginForStatus(target.origin);
+      // A monitored PT site may be explicitly configured under another
+      // execution folder (OpenCD is currently labelled 公益站).
+      if (!isPtTarget(target) && !monitorOrigins.has(origin)) continue;
       targets.set(origin, { ...target, origin });
     } catch { /* Invalid bookmark targets are handled by the main bridge. */ }
   }
@@ -249,10 +254,12 @@ export function buildPtStatus({
     grouped.set(key, list);
   };
   for (const task of tasks) {
-    if (!targets.has(task.origin)) continue;
+    let taskOrigin;
+    try { taskOrigin = normalizeOriginForStatus(task.origin); } catch { continue; }
+    if (!targets.has(taskOrigin)) continue;
     const receipt = receiptByTask.get(task.taskId);
     add(normalizeObservation({
-      origin: task.origin,
+      origin: taskOrigin,
       accountRef: task.accountRef,
       status: task.observedStatus,
       observedAt: task.observedStatus === 'not_started' ? null : receipt?.observedAt ?? generatedAt,
@@ -260,7 +267,7 @@ export function buildPtStatus({
       managedBy: 'legacy-checkin',
       inLegacyPlan: true,
       evidence: receipt?.evidence ?? { source: 'none', authoritative: false, summary: '' }
-    }, { generatedAt, maxAgeHours, inLegacyPlan: true, fallbackObservedAt: stableFallbackAt, displayName: displayNameFor(targets.get(task.origin), task.origin) }));
+    }, { generatedAt, maxAgeHours, inLegacyPlan: true, fallbackObservedAt: stableFallbackAt, displayName: displayNameFor(targets.get(taskOrigin), taskOrigin) }));
   }
   for (const [origin, target] of targets) {
     if ([...grouped.keys()].some((key) => key.startsWith(`${origin}|`))) continue;
@@ -273,14 +280,18 @@ export function buildPtStatus({
   const monitorSites = new Map((monitorCatalog?.sites ?? []).map(site => [normalizeOriginForStatus(site.origin), site]));
   for (const item of report?.sites ?? []) {
     if (monitorCatalog && !monitorSites.has(item.origin) && !targets.has(item.origin)) continue;
-    const matches = tasks.filter(task => task.origin === item.origin);
+    const matches = tasks.filter(task => {
+      try { return normalizeOriginForStatus(task.origin) === item.origin; } catch { return false; }
+    });
     // An external default-account observation may join only a single known account.
     if (!item.accountRef && matches.length === 1) item.accountRef = matches[0].accountRef;
     add(item);
   }
   for(const item of supplemental?.sites??[]){
     if(!monitorSites.has(item.origin) && !targets.has(item.origin))continue;
-    const matches=tasks.filter(task=>task.origin===item.origin);
+    const matches=tasks.filter(task=>{
+      try { return normalizeOriginForStatus(task.origin) === item.origin; } catch { return false; }
+    });
     if(!item.accountRef&&matches.length===1)item.accountRef=matches[0].accountRef;
     add(item);
   }

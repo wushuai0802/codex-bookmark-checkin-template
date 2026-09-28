@@ -16,7 +16,8 @@ export function projectPtSiteResult(value,origin){
   return {origin,status,observedAt:new Date(value.observedAt).toISOString(),
     evidence:{source:sources.has(evidence.source)?evidence.source:'none',authoritative:evidence.authoritative===true,
       summary:typeof evidence.summary==='string'?evidence.summary.slice(0,160):''},
-    ...(value.submissionOutcomeUnknown===true?{submissionOutcomeUnknown:true}:{})};
+    ...(value.submissionOutcomeUnknown===true?{submissionOutcomeUnknown:true}:{}),
+    ...(status==='login_required'&&value.submissionAttempted===false?{submissionAttempted:false}:{})};
 }
 
 export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,spawnChild=spawn,timeoutMs=600_000}){

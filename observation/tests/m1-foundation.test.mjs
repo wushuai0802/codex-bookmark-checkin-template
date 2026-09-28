@@ -99,6 +99,15 @@ test('new execution evidence sources require their account/day signal',()=>{
  assert.equal(weak.authoritative,false);assert.equal(weak.verification,'unverified_source');
  const unavailable=normalizeEvidence({status:'not_available',evidence:{source:'vibe_entitlement_status',authoritative:true,businessDate:'2026-09-02',accountId:'7',outcome:'entitlement_active'}},context);
  assert.equal(unavailable.verification,'feature_unavailable');
+ const vibe=normalizeEvidence({status:'signed',evidence:{source:'vibe_claim_response',authoritative:true,
+   endpoint:'/frontend-api/vibe-code/codex/claim',businessDate:'2026-09-02',statusSignal:'claimed_true',
+   confirmedAt:'2026-09-02T01:00:00Z'}},context);
+ assert.equal(vibe.verification,'verified');
+ for(const evidence of [
+   {source:'vibe_claim_response',authoritative:true,endpoint:'/other',businessDate:'2026-09-02',statusSignal:'claimed_true',confirmedAt:'2026-09-02T01:00:00Z'},
+   {source:'vibe_claim_response',authoritative:true,endpoint:'/frontend-api/vibe-code/codex/claim',businessDate:'2026-09-01',statusSignal:'claimed_true',confirmedAt:'2026-09-02T01:00:00Z'},
+   {source:'vibe_claim_response',authoritative:true,endpoint:'/frontend-api/vibe-code/codex/claim',businessDate:'2026-09-02',statusSignal:'claimed_false',confirmedAt:'2026-09-02T01:00:00Z'}
+ ]) assert.equal(normalizeEvidence({status:'signed',evidence},context).authoritative,false);
 });
 
 test('legacy first-party reward evidence can be verified without an older authority flag',()=>{

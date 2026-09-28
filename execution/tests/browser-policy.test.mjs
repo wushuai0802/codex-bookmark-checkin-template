@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   CHALLENGE_SELECTOR,
   candidateHistoryEntry,
+  classifyVibeClaimResponse,
   configuredLoginCompletion,
   configuredTargetSkip,
   dismissBlockingModal,
@@ -93,6 +94,61 @@ test("delayed claim dialog retries only opening, never blind submission", async 
   assert.equal(opened, 1);
   assert.equal(waits, 2);
   assert.equal(result, null);
+});
+
+test("Vibe claim requires the exact claimed receipt", () => {
+  const now = new Date("2026-09-28T00:42:00Z");
+  const claimed = classifyVibeClaimResponse({ code: 1, data: { claimed: true } }, 200, now);
+  assert.equal(claimed.status, "signed");
+  assert.equal(claimed.evidence.source, "vibe_claim_response");
+  assert.equal(claimed.evidence.endpoint, "/frontend-api/vibe-code/codex/claim");
+  assert.equal(claimed.evidence.businessDate, "2026-09-28");
+  assert.equal(classifyVibeClaimResponse({ code: 1, data: { claimed: false } }, 200, now).retryable, false);
+  assert.equal(classifyVibeClaimResponse({ code: 1, data: { claimed: true } }, 502, now), null);
+  assert.equal(classifyVibeClaimResponse({ code: "1", data: { claimed: true } }, 200, now), null);
+});
+
+test("Vibe claim observes the matching POST response before the page toast", async () => {
+  const origin = "https://new.sharedchat.cc";
+  const receipt = {
+    url: () => `${origin}/frontend-api/vibe-code/codex/claim`,
+    request: () => ({ method: () => "POST" }),
+    status: () => 200,
+    json: async () => ({ code: 1, data: { claimed: true } }),
+  };
+  const page = {
+    getByRole: (_role, { name }) => ({
+      count: async () => name === "领取" ? 1 : 0,
+      isVisible: async () => name === "领取",
+      click: async () => {},
+    }),
+    waitForResponse: async predicate => {
+      assert.equal(predicate(receipt), true);
+      assert.equal(predicate({ ...receipt, url: () => "https://other.example/frontend-api/vibe-code/codex/claim" }), false);
+      return receipt;
+    },
+  };
+  const result = await tryQuotaRequestFlow(page, origin, {
+    quotaRequestRules: { [origin]: { reason: "用于个人编程学习和项目开发测试" } },
+  }, { waitForField: async () => ({ fill: async () => {} }) });
+  assert.equal(result.status, "signed");
+  assert.equal(result.evidence.source, "vibe_claim_response");
+});
+
+test("a submission with unknown outcome cannot reach another candidate", async () => {
+  const visited = [];
+  const context = { newPage: async () => ({ close: async () => {} }) };
+  const target = { origin: "https://example.test", candidates: ["https://example.test/first", "https://example.test/second"] };
+  const result = await (await import("../src/browser.mjs")).processTarget(context, target,
+    { retryCount: 2, failureScreenshots: false }, [], "", {
+      runCandidate: async (_page, _target, url) => {
+        visited.push(url);
+        return { status: "needs_attention", reason: "提交结果未知", failureCode: "submission_outcome_unknown",
+          submissionAttempted: true, retryable: false };
+      },
+    });
+  assert.deepEqual(visited, ["https://example.test/first"]);
+  assert.equal(result.failureCode, "submission_outcome_unknown");
 });
 
 test("TLS handshake failure cannot be reclassified using a stale login page", async () => {
@@ -223,7 +279,7 @@ test("显式停用账号只影响绑定账号，旧交接标记不再改变执�
   assert.equal(configuredTargetSkip({origin,accountKey:"account-b"},
     {disabledAccountKeys:["account-a"]}),null);
   assert.equal(configuredTargetSkip({origin,accountKey:"account-a"},
-    {disabledAccountBindings:[{origin,accountKey:"account-a"}]}),null);
+    {executionEngine:"v1",disabledAccountBindings:[{origin,accountKey:"account-a"}]}),null);
 });
 
 test("配置为登录即完成的站点返回签到成功", () => {

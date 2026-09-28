@@ -58,7 +58,12 @@ export function publishEngineReport({root,legacyRoot,exitCode=null,requireFreshS
   const currentHealth=readLegacyHealth({root,legacyRoot});
   const snapshot=buildSnapshot({legacyRoot,generatedAt:now.toISOString(),...(currentHealth?{healthReport:currentHealth}:{})});
   for(const task of snapshot.tasks){task.executionOwner='v2-worker';task.executionMode='v1_engine';}
-  const results=latest.results.map(r=>({origin:new URL(r.origin).origin,accountKey:r.accountKey??'site-default',status:r.status,reason:redactText(r.reason??''),availabilityKind:r.availabilityKind??null}));
+  const results=latest.results.map(r=>({origin:new URL(r.origin).origin,accountKey:r.accountKey??'site-default',status:r.status,reason:redactText(r.reason??''),availabilityKind:r.availabilityKind??null,
+    ...(r.failureCode?{failureCode:String(r.failureCode).slice(0,80)}:{}),
+    ...(r.submissionAttempted===true?{submissionAttempted:true}:{}),
+    ...(r.submissionAttempted===false?{submissionAttempted:false}:{}),
+    ...(r.retryable===false?{retryable:false}:{}),
+  }));
   const counts={completed:0,unavailable:0,unresolved:0};
   for(const r of results){if(['signed','already_signed'].includes(r.status))counts.completed++;else if(r.status==='not_available'&&r.availabilityKind!=='task_disabled')counts.unavailable++;else counts.unresolved++;}
   const report={schemaVersion:1,mode:'v2_v1_engine',executionEngine:'v1',businessDate:day,runId:latest.runId,sourceFinishedAt:latest.finishedAt,observedAt:now.toISOString(),healthCheckedAt:currentHealth?.checkedAt??null,plannedTotal:latest.plannedTotal,processedTotal:latest.processedTotal,executionComplete:latest.isComplete===true,businessComplete:latest.isComplete===true&&counts.unresolved===0,exitCode,counts,results};
