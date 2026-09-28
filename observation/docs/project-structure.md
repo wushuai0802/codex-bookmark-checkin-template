@@ -28,3 +28,18 @@ Historical standalone adapter, migration and dry-worker modules remain in the
 source tree only for audit and rollback tests, not in the scheduled production
 path. Their history is documented in `docs/migration-phases.md`; remove or move
 them only after the single-repository integration and rollback review.
+
+For PT sites, a configured execution target may carry a folder label that
+differs from the browser's physical bookmark folder. The exact monitor catalog
+defines PT scope; join that catalog to the full daily execution plan by origin
+and account identity. OpenCD is a current example: its physical bookmark is
+under the monitoring folder while its configured daily target is labelled
+`公益站`. The label never authorizes a second check-in.
+
+Results and proof are separate. A terminal execution result without a dated,
+authoritative receipt remains protected against duplicate submission while
+read-only verification may fill its evidence. A Harvest fallback attempt that
+returns `login_required` remains an unresolved business result; only a later
+account-bound recovery with explicit no-submission evidence can be considered
+for another attempt. The fallback attempt ledger is preserved across code
+rollback because restoring an older ledger cannot undo an external check-in.

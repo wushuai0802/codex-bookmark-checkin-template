@@ -22,6 +22,20 @@ The final standalone controller history is preserved by the
 for audit; they are not a second production engine. Do not copy private runtime
 data into this repository or force-merge unrelated Git histories.
 
+## Active and historical paths
+
+The scheduled Windows entry invokes `observation/scripts/run-v1-engine.mjs`,
+which holds the observation lease and launches the configured private
+execution runner. `observation/src/harvest-fallback.mjs` reads the completed
+Harvest report and exact PT bookmark catalog before a bounded recheck.
+`observation/src/bridge.mjs` publishes redacted status to the dashboard.
+Their names include `v1` for compatibility with the installed scheduler; there
+is one execution owner. Historical Canary, migration, adapter experiment and
+transport modules remain available for audit and rollback tests and have no
+second production schedule. The ownership map and rollback boundary are in
+`observation/docs/project-structure.md` and
+`observation/docs/migration-phases.md`.
+
 ## Local Checks
 
 Use Node.js 24 for the observation package. Install and test each package from
