@@ -118,21 +118,47 @@ function readAttemptState(root,businessDate){
 }
 
 const recoveryIdentity=candidate=>`${candidate.origin}#account=${encodeURIComponent(candidate.accountKey)}`;
-const retryableWithoutSubmission=(item,candidate,recoveredAtByAccount)=>item.origin===candidate.origin&&
+const retryableWithoutSubmission=(item,candidate,recoveredAtByAccount,now)=>item.origin===candidate.origin&&
   (item.accountKey??'site-default')===candidate.accountKey&&
   item.state==='completed'&&item.v1Status==='login_required'&&
   item.submissionState==='not_submitted'&&item.recoveryEligible===true&&
   item.businessDate===candidate.businessDate&&
   Number.isFinite(Date.parse(recoveredAtByAccount?.[recoveryIdentity(candidate)]))&&
-  Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])>Date.parse(item.startedAt);
-const alreadyAttempted=(state,candidate,recoveredAtByAccount={})=>state.attempts.some(item=>item.origin===candidate.origin&&
+  Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])>Date.parse(item.finishedAt??item.startedAt)&&
+  Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])<=now.getTime()&&
+  now.getTime()-Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])<=30*60_000&&
+  now.getTime()-Date.parse(item.finishedAt??item.startedAt)>=60_000&&
+  dayAt(new Date(recoveredAtByAccount[recoveryIdentity(candidate)]))===candidate.businessDate;
+const alreadyAttempted=(state,candidate,recoveredAtByAccount={},now=new Date())=>{
+  const attempts=state.attempts.filter(item=>item.origin===candidate.origin&&
+    (item.accountKey??'site-default')===candidate.accountKey);
+  // A recovery signal wakes a bounded read-only recheck. It does not prove login.
+  if(attempts.filter(item=>!['deferred_busy','deferred_preflight'].includes(item.state)).length>=3)return true;
+  return attempts.some(item=>item.origin===candidate.origin&&
   (item.accountKey??'site-default')===candidate.accountKey&&
   !['deferred_busy','deferred_preflight'].includes(item.state)&&
-  !retryableWithoutSubmission(item,candidate,recoveredAtByAccount));
+  !retryableWithoutSubmission(item,candidate,recoveredAtByAccount,now));
+};
 
-export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={}}={}){
+function unresolvedEarlierAttempt(root,candidate){
+  const directory=path.join(root,'outputs');
+  if(!fs.existsSync(directory))return false;
+  for(const name of fs.readdirSync(directory)){
+    const match=/^harvest-fallback-attempts-([0-9]{4}-[0-9]{2}-[0-9]{2})[.]json$/.exec(name);
+    if(!match||match[1]>=candidate.businessDate)continue;
+    const {state}=readAttemptState(root,match[1]);
+    if(state.attempts.some(item=>item.origin===candidate.origin&&
+      (item.accountKey??'site-default')===candidate.accountKey&&
+      (['in_progress','outcome_unknown','completed_cross_day'].includes(item.state)||
+       item.outcome?.submissionOutcomeUnknown===true)))return true;
+  }
+  return false;
+}
+
+export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={},now=new Date()}={}){
   const {state}=readAttemptState(root,preview.businessDate);
-  return preview.eligible.filter(candidate=>!alreadyAttempted(state,candidate,recoveredAtByAccount));
+  return preview.eligible.filter(candidate=>!alreadyAttempted(state,candidate,recoveredAtByAccount,now)&&
+    !unresolvedEarlierAttempt(root,candidate));
 }
 
 function claimWorker(root) {
@@ -151,7 +177,7 @@ function claimWorker(root) {
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
-  clock=()=>new Date(),recoveredAtByAccount={}}={}) {
+  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={}}={}) {
   const preview=planHarvestFallback({harvest,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled});
   if(!execute)return {...preview,mode:'preview'};
   const runtime=loadRuntimeConfig(root);
@@ -166,7 +192,10 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   const outcomes=[];
   const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
   for(const candidate of preview.eligible){
-    if(alreadyAttempted(state,candidate,recoveredAtByAccount)){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    const candidateNow=clock();
+    if(dayAt(candidateNow)!==preview.businessDate){outcomes.push({origin:candidate.origin,state:'business_day_changed'});break;}
+    if(alreadyAttempted(state,candidate,recoveredAtByAccount,candidateNow)){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    if(unresolvedEarlierAttempt(root,candidate)){outcomes.push({origin:candidate.origin,state:'prior_outcome_unknown'});continue;}
     let currentSupplement=null;
     if(fs.existsSync(statusFile)){
       currentSupplement=JSON.parse(fs.readFileSync(statusFile,'utf8'));
@@ -176,9 +205,30 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     if(confirmedSupplement(currentSupplement,candidate.origin,preview.businessDate,clock())){
       outcomes.push({origin:candidate.origin,state:'already_confirmed'});continue;
     }
+    if(refreshHarvest){
+      let live;
+      try{
+        live=await refreshHarvest();
+        const livePreview=planHarvestFallback({harvest:live,catalog,plan,latest,
+          fallbackReport:currentSupplement,config,now:clock(),fallbackOnlyEnabled});
+        if(live.taskCompletion?.resultId!==harvest.taskCompletion?.resultId||
+           live.taskCompletion?.completedAt!==harvest.taskCompletion?.completedAt){
+          outcomes.push({origin:candidate.origin,state:'harvest_task_changed'});
+          break;
+        }
+        if(!livePreview.eligible.some(item=>item.origin===candidate.origin&&
+          item.accountKey===candidate.accountKey&&item.kind===candidate.kind)){
+          outcomes.push({origin:candidate.origin,state:'harvest_status_changed'});
+          continue;
+        }
+      }catch{
+        outcomes.push({origin:candidate.origin,state:'harvest_refresh_unavailable'});
+        break;
+      }
+    }
     // Persist before executing. An interrupted or uncertain attempt is not replayed.
     const attempt={origin:candidate.origin,accountKey:candidate.accountKey,businessDate:preview.businessDate,
-      observedAt:candidate.observedAt,startedAt:clock().toISOString(),state:'in_progress'};
+      observedAt:candidate.observedAt,startedAt:candidateNow.toISOString(),state:'in_progress'};
     if(Number.isFinite(Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])))
       attempt.recoveredAt=recoveredAtByAccount[recoveryIdentity(candidate)];
     state.attempts.push(attempt);writeAtomic(stateFile,state);
@@ -186,15 +236,29 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
       if(candidate.kind==='fallback_only'){
         const result=projectPtSiteResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash}),candidate.origin);
         const receivedAt=clock();
+        // Keep the redacted receipt before later validation or publication.
+        attempt.outcome=result;
+        attempt.finishedAt=receivedAt.toISOString();
         attempt.resultObservedAt=result.observedAt;
-        if(dayAt(new Date(result.observedAt))!==preview.businessDate||Date.parse(result.observedAt)>receivedAt.getTime()+60_000)
-          throw Error('PT site result is not from today');
+        attempt.resultBusinessDate=dayAt(new Date(result.observedAt));
+        attempt.v1Status=result.status;
+        writeAtomic(stateFile,state);
+        if(Date.parse(result.observedAt)>receivedAt.getTime()+60_000||
+           Date.parse(result.observedAt)<Date.parse(attempt.startedAt)-60_000)
+          throw Error('PT site result timestamp is stale or in the future');
+        if(attempt.resultBusinessDate!==preview.businessDate||dayAt(receivedAt)!==preview.businessDate){
+          attempt.state='completed_cross_day';
+          attempt.reason='Receipt preserved; read-only reconciliation required after business-day change';
+          writeAtomic(stateFile,state);
+          outcomes.push({origin:candidate.origin,state:attempt.state,v1Status:attempt.v1Status});
+          break;
+        }
         let report={schemaVersion:1,source:'execution-supplement',businessDate:preview.businessDate,generatedAt:now.toISOString(),sites:[]};
         if(fs.existsSync(statusFile)){
           report=JSON.parse(fs.readFileSync(statusFile,'utf8'));
           if(report.source!=='execution-supplement'||report.businessDate!==preview.businessDate||!Array.isArray(report.sites))throw Error('PT status audit is invalid');
         }
-        report.generatedAt=new Date().toISOString();
+        report.generatedAt=receivedAt.toISOString();
         report.sites=report.sites.filter(site=>site.origin!==candidate.origin);
         report.sites.push(result);writeAtomic(statusFile,report);
         attempt.v1Status=result.status;
@@ -204,16 +268,30 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         }
       }else{
         const report=await runEngine({root,mode:'execute',origins:[candidate.origin],notify:false});
+        attempt.finishedAt=clock().toISOString();
         attempt.runId=report.runId??null;
         const result=report.results?.find(r=>r.origin===candidate.origin&&(r.accountKey??'site-default')===candidate.accountKey);
+        attempt.outcome=result?{origin:candidate.origin,accountKey:candidate.accountKey,
+          status:result.status,submissionAttempted:result.submissionAttempted??null,
+          failureCode:result.failureCode??null}:null;
+        writeAtomic(stateFile,state);
         attempt.v1Status=result?.status??'unknown';
+        if(dayAt(new Date(attempt.finishedAt))!==preview.businessDate){
+          attempt.state='completed_cross_day';
+          attempt.reason='Engine report preserved; read-only reconciliation required after business-day change';
+          writeAtomic(stateFile,state);
+          outcomes.push({origin:candidate.origin,state:attempt.state,v1Status:attempt.v1Status});
+          break;
+        }
         if(result?.status==='login_required'&&result.submissionAttempted===false){
           attempt.submissionState='not_submitted';
           attempt.recoveryEligible=true;
         }
       }
+      attempt.finishedAt??=clock().toISOString();
       attempt.state='completed';
     }catch(error){
+      attempt.finishedAt??=clock().toISOString();
       attempt.state=error.code==='PT_PREFLIGHT'?'deferred_preflight':error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
       attempt.reason=String(error.message).slice(0,120);
     }

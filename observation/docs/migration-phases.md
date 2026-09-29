@@ -51,3 +51,26 @@ write gating for regular PT runs, generalized cross-midnight intent recovery,
 atomic multi-file generations, and safe plan-metadata migration remain
 separate acceptance items. Do not remove historical compatibility modules
 before their live and dynamic callers have been accounted for.
+
+## Fallback write boundary: 2026-09-29
+
+The live fallback CLI now requires a fresh Harvest query before **each** PT
+candidate. A new or active task, newly confirmed success, stale or unreachable
+query stops the candidate before creating a submission intent. The Windows
+sync launcher supplies its existing SSH alias and configured read-only
+Harvest database path. The display-only cache cannot satisfy this gate.
+
+An attempt carries the business date, start/end time and sanitized outcome.
+A response crossing the Shanghai day boundary is saved in the attempt
+journal, excluded from the previous day's completed report, and blocks another
+write until read-only reconciliation. A new day's fallback also checks for
+unresolved earlier attempts. The named-account login continuation needs a
+fresh same-day recovery signal after the last failed attempt, a one-minute
+cooldown, a 30-minute signal lifetime and at most two resumptions.
+
+The recovery signal is only a wake-up hint: the execution layer must still
+confirm login and today's status. This change does not prove or configure a
+cross-system transaction with Harvest. Regular daily-plan PT jobs still need
+their own Harvest gate, and existing old uncertain records require
+case-by-case read-only confirmation. Neither the PT bookmark catalog nor
+private account/profile bindings were modified.

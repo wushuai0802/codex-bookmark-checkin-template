@@ -8,7 +8,7 @@ import {planHarvestFallback,runHarvestFallback,pendingHarvestFallbackAttempts} f
 const now=new Date('2026-09-20T02:00:00Z');
 const failed=(origin,account='7')=>({origin,userId:account,status:'failed',observedAt:'2026-09-20T09:55:00+08:00',evidence:{source:'harvest',authoritative:false}});
 const fixture=()=>({
-  now,fallbackOnlyEnabled:true,harvest:{source:'harvest',businessDate:'2026-09-20',generatedAt:'2026-09-20T09:58:00+08:00',sites:[
+  now,clock:()=>now,fallbackOnlyEnabled:true,harvest:{source:'harvest',businessDate:'2026-09-20',generatedAt:'2026-09-20T09:58:00+08:00',sites:[
     failed('https://ourbits.club'),failed('https://external.example'),{origin:'https://signed.example',status:'signed',observedAt:'2026-09-20T09:55:00+08:00',evidence:{authoritative:true}},
     {origin:'https://uncertain.example',userId:'7',status:'unknown',observedAt:null}
   ],taskCompletion:{resultId:5,status:'completed',startedAt:'2026-09-20T09:14:00+08:00',completedAt:'2026-09-20T09:16:00+08:00'}},catalog:{sites:[{origin:'https://ourbits.club'},{origin:'https://external.example',entryUrl:'https://external.example/attendance'},{origin:'https://signed.example',entryUrl:'https://signed.example/'}]},
@@ -201,7 +201,7 @@ test('a login-only attempt can resume only after a newer account recovery',async
   const blocked=pendingHarvestFallbackAttempts(root,planHarvestFallback(f));
   assert.equal(blocked.length,0);
   const recoveredAtByAccount={'https://external.example#account=site-default':'2026-09-20T02:03:00Z'};
-  assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{recoveredAtByAccount}).length,1);
+  assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{recoveredAtByAccount,now:new Date('2026-09-20T02:04:00Z')}).length,1);
   const retried=await runHarvestFallback({...args,clock:()=>new Date('2026-09-20T02:04:00Z'),recoveredAtByAccount,
     runSite:async()=>({origin:'https://external.example',status:'already_signed',observedAt:'2026-09-20T02:04:01Z',evidence:{source:'page_text',authoritative:true}})});
   assert.equal(retried.outcomes[0].v1Status,'already_signed');
@@ -218,6 +218,76 @@ test('a slow PT result uses the receive clock instead of the batch start clock',
   const result=await runHarvestFallback({...f,root,execute:true,catalogFile,catalogHash,clock:()=>ticks.shift()??new Date('2026-09-20T02:02:00Z'),
     runSite:async()=>({origin:'https://external.example',status:'already_signed',observedAt:'2026-09-20T02:01:30Z',evidence:{source:'page_text',authoritative:true}})});
   assert.equal(result.outcomes[0].v1Status,'already_signed');
+});
+test('midnight preserves a redacted receipt and stops the rest of the batch',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-midnight-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture();f.now=new Date('2026-09-20T15:59:50Z');
+  f.harvest.generatedAt='2026-09-20T15:59:49Z';
+  f.harvest.sites=[failed('https://external.example'),failed('https://ourbits.club')];
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  const catalogHash=(await import('node:crypto')).createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
+  const ticks=[f.now,new Date('2026-09-20T16:00:30Z')];let siteCalls=0;
+  const result=await runHarvestFallback({...f,root,execute:true,catalogFile,catalogHash,clock:()=>ticks.shift()??new Date('2026-09-20T16:00:30Z'),
+    runSite:async()=>{siteCalls++;return{origin:'https://external.example',status:'already_signed',
+      observedAt:'2026-09-20T16:00:10Z',evidence:{source:'page_text',authoritative:true,summary:'今日已签到'}};},
+    runEngine:async()=>{throw Error('the next site must wait');}});
+  assert.equal(siteCalls,1);
+  assert.deepEqual(result.outcomes.map(item=>item.state),['completed_cross_day']);
+  const audit=JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json')));
+  assert.equal(audit.attempts[0].resultBusinessDate,'2026-09-21');
+  assert.equal(audit.attempts[0].outcome.status,'already_signed');
+  assert.equal(fs.existsSync(path.join(root,'outputs/pt-fallback-results-2026-09-20.json')),false);
+  const tomorrow={businessDate:'2026-09-21',eligible:[{origin:'https://external.example',accountKey:'site-default',businessDate:'2026-09-21'}]};
+  assert.equal(pendingHarvestFallbackAttempts(root,tomorrow,{now:new Date('2026-09-20T16:01:00Z')}).length,0);
+});
+test('fresh Harvest state is checked before every PT write and outages fail closed',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-refresh-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.catalog.sites=f.catalog.sites.slice(0,2);
+  f.latest.results[0].status='already_signed';
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  const catalogHash=(await import('node:crypto')).createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
+  let calls=0;
+  const args={...f,root,execute:true,catalogFile,catalogHash,runSite:async()=>{
+    calls++;return{origin:'https://external.example',status:'already_signed',observedAt:f.now.toISOString(),
+      evidence:{source:'page_text',authoritative:true}};}};
+  const success={...f.harvest,sites:[{origin:'https://external.example',status:'already_signed',
+    observedAt:f.now.toISOString(),evidence:{source:'harvest',authoritative:true}}]};
+  assert.equal((await runHarvestFallback({...args,refreshHarvest:async()=>success})).outcomes[0].state,'harvest_status_changed');
+  assert.equal((await runHarvestFallback({...args,refreshHarvest:async()=>({...f.harvest,taskCompletion:null})})).outcomes[0].state,'harvest_task_changed');
+  assert.equal((await runHarvestFallback({...args,refreshHarvest:async()=>{throw Error('SSH unavailable');}})).outcomes[0].state,'harvest_refresh_unavailable');
+  assert.equal(calls,0);
+  assert.equal(fs.existsSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json')),false);
+  assert.equal((await runHarvestFallback({...args,refreshHarvest:async()=>f.harvest})).outcomes[0].state,'completed');
+  assert.equal(calls,1);
+});
+test('a recovered login is bounded by time, cooldown, business day and two resumptions',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-login-budget-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.catalog.sites=f.catalog.sites.slice(0,2);
+  f.latest.results[0].status='already_signed';
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  const catalogHash=(await import('node:crypto')).createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
+  let current=new Date('2026-09-20T02:00:00Z'),calls=0;
+  const args={...f,root,execute:true,catalogFile,catalogHash,clock:()=>current,
+    runSite:async()=>{calls++;return{origin:'https://external.example',status:'login_required',
+      observedAt:current.toISOString(),submissionAttempted:false,evidence:{source:'none',authoritative:false}};}};
+  await runHarvestFallback(args);
+  const preview=planHarvestFallback(f);
+  const key='https://external.example#account=site-default';
+  assert.equal(pendingHarvestFallbackAttempts(root,preview,{now:new Date('2026-09-20T02:01:00Z'),
+    recoveredAtByAccount:{[key]:'2026-09-20T01:59:00Z'}}).length,0);
+  current=new Date('2026-09-20T02:03:00Z');
+  await runHarvestFallback({...args,recoveredAtByAccount:{[key]:'2026-09-20T02:02:00Z'}});
+  current=new Date('2026-09-20T02:06:00Z');
+  await runHarvestFallback({...args,recoveredAtByAccount:{[key]:'2026-09-20T02:05:00Z'}});
+  current=new Date('2026-09-20T02:09:00Z');
+  const refused=await runHarvestFallback({...args,recoveredAtByAccount:{[key]:'2026-09-20T02:08:00Z'}});
+  assert.equal(refused.outcomes[0].state,'already_attempted');
+  assert.equal(calls,3);
+  assert.equal(pendingHarvestFallbackAttempts(root,preview,{now:new Date('2026-09-20T04:00:00Z'),
+    recoveredAtByAccount:{[key]:'2026-09-20T02:08:00Z'}}).length,0);
 });
 test('a V2 lock collision is not counted as an actual attempt',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-busy-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
