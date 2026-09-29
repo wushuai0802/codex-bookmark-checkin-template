@@ -174,8 +174,12 @@ export function normalizePtStatusReport(report, {
 function betterObservation(a, b) {
   const confirmedCompletion = item => item.freshness.fresh && item.evidence.authoritative
     && ['signed', 'already_signed'].includes(item.status);
+  const unconfirmedNegative = item => !item.evidence.authoritative
+    && ['failed', 'not_signed', 'unknown', 'needs_attention', 'interactive_challenge'].includes(item.status);
   if (a.status === 'unknown' && !a.evidence.authoritative && confirmedCompletion(b)) return b;
   if (b.status === 'unknown' && !b.evidence.authoritative && confirmedCompletion(a)) return a;
+  if (confirmedCompletion(a) && unconfirmedNegative(b)) return a;
+  if (confirmedCompletion(b) && unconfirmedNegative(a)) return b;
   const time = new Date(a.observedAt) - new Date(b.observedAt);
   if (time !== 0) return time > 0 ? a : b;
   return (SOURCE_PRIORITY.get(a.source) ?? 0) >= (SOURCE_PRIORITY.get(b.source) ?? 0) ? a : b;

@@ -90,6 +90,19 @@ test('a later unverified unknown cannot hide same-day authoritative V1 completio
   assert.equal(conflict.discrepancy, true);
 });
 
+test('a newer non-authoritative execution failure cannot hide an authoritative OpenCD read-only receipt',()=>{
+  const result=buildPtStatus({generatedAt:'2026-09-29T03:00:00Z',businessDate:'2026-09-29',
+    planTargets:[{origin:'https://open.cd',folderNames:['公益站']}],
+    tasks:[{taskId:'open',origin:'https://open.cd',accountRef:null,observedStatus:'failed'}],
+    receipts:[{taskId:'open',observedAt:'2026-09-29T02:55:00Z',evidence:{source:'none',authoritative:false,summary:'提交结果不明'}}],
+    monitorCatalog:{sites:[{origin:'https://open.cd'}]},
+    fallbackReport:{source:'execution-supplement',businessDate:'2026-09-29',sites:[{origin:'https://open.cd',status:'already_signed',observedAt:'2026-09-29T02:00:00Z',evidence:{source:'pt_page',authoritative:true,summary:'顶部显示查看签到记录'}}]},
+  });
+  assert.equal(result.sites[0].effective.status,'already_signed');
+  assert.equal(result.sites[0].effective.source,'execution-supplement');
+  assert.equal(result.sites[0].discrepancy,false);
+});
+
 test('PT status rejects credential-bearing reports and normalizes safe aliases', () => {
   assert.throws(() => normalizePtStatusReport({ source: 'harvest', sites: [{ origin: 'https://example.com', status: 'signed', password: 'TEST' }] }), /sensitive field/);
   const report = normalizePtStatusReport({ generatedAt: '2026-09-04T04:00:00.000Z', source: 'harvest', sites: [{ origin: 'https://example.com', status: 'checked_in', observedAt: '2026-09-04T03:00:00.000Z', evidence: { source: 'api', authoritative: true, summary: 'ok' } }] });
