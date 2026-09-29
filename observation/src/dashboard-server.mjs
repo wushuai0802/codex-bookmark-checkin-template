@@ -129,6 +129,16 @@ function latestLedger(dataDir, configuredFile) {
   return found ? { file: found.file, records: readLedger(found.file) } : { file: null, records: [] };
 }
 
+function assertMatchingGeneration(snapshot,records){
+  if(!snapshot||!records.length)return;
+  const newest=records.at(-1);
+  if(newest?.snapshotId!==snapshot.snapshotId||
+     newest?.businessDate!==snapshot.businessDate||
+     newest?.planHash!==snapshot.planHash){
+    throw Error('snapshot and ledger generations disagree');
+  }
+}
+
 function publicTask(task, receipt) {
   return {
     taskId: task.taskId,
@@ -516,6 +526,9 @@ export function createDashboardServer({
   function loadView() {
     const current = latestSnapshot(root, snapshotFile);
     const ledger = latestLedger(root, ledgerFile);
+    // The two files are replaced independently. An in-flight upload or a
+    // failed second rename must not mix today's snapshot with another ledger.
+    assertMatchingGeneration(current.snapshot,ledger.records);
     const canaryResults=publicCanaryResults(root);
     const runtime=readDashboardRuntime(root);
     const view = buildView(current.snapshot, ledger.records, canaryResults, runtime);
@@ -592,7 +605,12 @@ export function createDashboardServer({
     if (requestUrl.pathname.startsWith('/api/')) {
       if (!authorized(request, response)) return;
       if (requestUrl.pathname === '/api/calendar') {
-        try { sendJson(response, 200, calendarHistory(latestLedger(root, ledgerFile).records)); }
+        try {
+          const current=latestSnapshot(root,snapshotFile);
+          const ledger=latestLedger(root,ledgerFile);
+          assertMatchingGeneration(current.snapshot,ledger.records);
+          sendJson(response, 200, calendarHistory(ledger.records));
+        }
         catch { sendError(response, 500, 'data_error', 'calendar history could not be read'); }
         return;
       }

@@ -116,6 +116,24 @@ test('dashboard serves summary, tasks, and static UI from redacted data', async 
   } finally { await close(instance); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('dashboard never combines a new snapshot with a stale ledger generation',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-generation-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:'2026-09-02T14:00:00.000Z'});
+  fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+  const record={snapshotId:'snap_000000000000000000000000',businessDate:snapshot.businessDate,
+    planHash:snapshot.planHash,recordId:'ledger_000000000000000000000000',recordedAt:snapshot.generatedAt};
+  fs.writeFileSync(path.join(root,'shadow-ledger.jsonl'),JSON.stringify(record)+'\n');
+  const {instance,base}=await start({dataDir:root});
+  try{
+    assert.equal((await fetch(base+'/api/overview')).status,500);
+    assert.equal((await fetch(base+'/api/calendar')).status,500);
+    fs.writeFileSync(path.join(root,'shadow-ledger.jsonl'),JSON.stringify({...record,snapshotId:snapshot.snapshotId})+'\n');
+    assert.equal((await fetch(base+'/api/overview')).status,200);
+    assert.equal((await fetch(base+'/api/calendar')).status,200);
+  }finally{await close(instance);}
+});
+
 test('non-loopback deployment uses an HttpOnly session and exposes only bounded controls', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-dashboard-auth-'));
   const { instance, base } = await start({ dataDir: root, adminToken: 'test-token-1234567890', trustProxyTls: true });
