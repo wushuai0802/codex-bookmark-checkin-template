@@ -43,3 +43,14 @@ returns `login_required` remains an unresolved business result; only a later
 account-bound recovery with explicit no-submission evidence can be considered
 for another attempt. The fallback attempt ledger is preserved across code
 rollback because restoring an older ledger cannot undo an external check-in.
+
+Regular monitored PT tasks now require a fresh Harvest completion result
+before the existing execution adapter can write, when the private integration
+binding opts in. The monitor-only fallback independently refreshes Harvest
+before each candidate. A display cache does not authorize either path.
+
+Standalone Canary and transport modules remain because their compatibility
+readers, gates and fixture tests are still used for historical results and
+rollback verification. The active Windows schedule dispatches only the
+execution package. Delete a historical module only after auditing its dynamic
+and production callers; a file name is not evidence that a module is unused.

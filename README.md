@@ -11,7 +11,10 @@ The deployed Windows runner uses its existing private configuration and Chrome
 profiles. The observation package calls that runner through a bounded lease;
 the NAS dashboard does not hold credentials or execute browser actions. After
 Harvest's daily task completes, sites in the explicitly selected PT monitoring
-bookmarks without a confirmed result may receive one execution-layer recheck.
+bookmarks without a confirmed result may receive a bounded execution-layer
+recheck after a fresh read of Harvest for each candidate. Regular monitored PT
+tasks use the same Harvest completion gate before browser actions when enabled
+in their private runtime binding.
 Monitoring-only sites use a separate PT result file and do not join the regular
 daily plan. A prior uncertain submission is never replayed automatically. This
 site-only fallback is disabled by default until the private runtime and its
