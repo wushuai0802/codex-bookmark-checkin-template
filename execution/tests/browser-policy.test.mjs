@@ -396,6 +396,11 @@ test("斑马跳过包含提交动作的通用 New API 探测", () => {
   const tracker = { origin: "https://tracker.example", folderNames: ["签到"] };
   assert.equal(shouldTryGenericNewApiCheckin(bmapi), false);
   assert.equal(shouldTryGenericNewApiCheckin(bmapi, [bmapi.origin]), false);
+  for (const origin of ["https://open.cd", "https://ptsbao.club"]) {
+    const historicallyLabelledPt = {origin,folderNames:["公益站"]};
+    assert.equal(shouldTryGenericNewApiCheckin(historicallyLabelledPt), false);
+    assert.equal(shouldTryGenericNewApiCheckin(historicallyLabelledPt,[origin]), false);
+  }
   assert.equal(shouldTryGenericNewApiCheckin(publicSite), true);
   assert.equal(shouldTryGenericNewApiCheckin(publicSite, [publicSite.origin]), true);
   assert.equal(shouldTryGenericNewApiCheckin(publicSite, [explicitlyConfigured.origin]), true);

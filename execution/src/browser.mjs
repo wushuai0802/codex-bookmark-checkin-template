@@ -129,7 +129,10 @@ function targetUsesConfiguredOrigins(target, configuredOrigins) {
 }
 
 export function shouldTryGenericNewApiCheckin(target, configuredOrigins = null) {
-  if (target?.origin === "https://bmapi.020212.xyz") return false;
+  // These tracker targets retain historical "公益站" plan labels for
+  // fingerprint compatibility. Folder metadata must not trigger a generic
+  // New API action against a PT tracker.
+  if (["https://bmapi.020212.xyz", "https://open.cd", "https://ptsbao.club"].includes(target?.origin)) return false;
   if (target?.folderNames?.includes("公益站")) return true;
   const configured = new Set(configuredOrigins ?? []);
   return (target?.allowedOrigins ?? [target?.origin]).some((origin) => configured.has(origin));
