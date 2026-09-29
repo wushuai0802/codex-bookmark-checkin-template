@@ -187,7 +187,8 @@ function betterObservation(a, b) {
 
 function mergeSiteObservations(observations, target) {
   const ordered = [...observations].sort((a, b) => new Date(b.observedAt) - new Date(a.observedAt));
-  const effective = ordered.reduce((current, item) => current ? betterObservation(current, item) : item, null);
+  const effective = ordered.filter(item=>item.freshness.fresh)
+    .reduce((current, item) => current ? betterObservation(current, item) : item, null);
   const bySource = new Map();
   for (const item of ordered) {
     const previous = bySource.get(item.source);
@@ -197,7 +198,7 @@ function mergeSiteObservations(observations, target) {
     source: item.source, status: item.status, observedAt: item.observedAt,
     fresh: item.freshness.fresh, authoritative: item.evidence.authoritative
   }));
-  const distinctStatuses = new Set(sourceStatuses.filter((item) => item.authoritative).map((item) => item.status));
+  const distinctStatuses = new Set(sourceStatuses.filter((item) => item.authoritative&&item.fresh).map((item) => item.status));
   const supplementCandidate = distinctStatuses.size <= 1 && effective?.supplementCandidate === true;
   return {
     siteRef: stableSiteRef(ordered[0].origin, ordered[0].accountRef),
@@ -210,7 +211,8 @@ function mergeSiteObservations(observations, target) {
       source: effective.source, status: effective.status, observedAt: effective.observedAt,
       fresh: effective.freshness.fresh, authoritative: effective.evidence.authoritative,
       evidence: effective.evidence
-    } : null,
+    } : {source:'v2-observer',status:'unknown',observedAt:null,fresh:false,authoritative:false,
+      evidence:{source:'none',authoritative:false,summary:'尚无今日确认回执',redacted:true,statusVerified:false}},
     sourceStatuses,
     discrepancy: distinctStatuses.size > 1,
     supplementCandidate,

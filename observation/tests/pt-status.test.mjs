@@ -62,7 +62,7 @@ test('conflicting sources are visible and stale observations are never supplemen
     }
   });
   const site = result.sites[0];
-  assert.equal(site.discrepancy, true);
+  assert.equal(site.discrepancy, false);
   assert.equal(site.supplementCandidate, false);
   assert.equal(site.effective.fresh, true);
   assert.equal(site.sourceStatuses.length, 2);
@@ -121,4 +121,22 @@ test('same-day site supplement is visible without adding a daily task',()=>{
   assert.equal(pt.sites[0].effective.source,'execution-supplement');
   assert.throws(()=>buildPtStatus({generatedAt,businessDate:'2026-09-20',monitorCatalog:{sites:[{origin}]},
     fallbackReport:{source:'execution-supplement',businessDate:'2026-09-19',sites:[]}}),/wrong source or date/);
+});
+
+test('yesterday completion stays in source history but cannot count as today completed',()=>{
+  const origin='https://pt.example',base={generatedAt:'2026-09-30T00:55:00+08:00',businessDate:'2026-09-30',
+    planTargets:[{origin,folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef:null,observedStatus:'signed'}],
+    receipts:[{taskId,observedAt:'2026-09-29T10:00:00+08:00',evidence:{source:'page_text',authoritative:true,summary:'昨日已签到'}}],
+    monitorCatalog:{sites:[{origin}]}};
+  const before=buildPtStatus(base);
+  assert.equal(before.counts.status.signed,0);
+  assert.equal(before.counts.status.unknown,1);
+  assert.equal(before.sites[0].sourceStatuses[0].status,'signed');
+  assert.equal(before.sites[0].sourceStatuses[0].fresh,false);
+  const after=buildPtStatus({...base,externalReport:{source:'harvest',businessDate:'2026-09-30',sites:[
+    {origin,status:'signed',observedAt:'2026-09-30T09:50:00+08:00',evidence:{source:'harvest',authoritative:true}}
+  ]},generatedAt:'2026-09-30T10:00:00+08:00'});
+  assert.equal(after.counts.status.signed,1);
+  assert.equal(after.sites[0].effective.source,'harvest');
 });
