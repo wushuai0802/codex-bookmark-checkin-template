@@ -16,6 +16,7 @@ import { tryNewApiCaptchaCheckin, tryNewApiSignIn } from "./new-api-signin.mjs";
 import { isTerminalResult } from "./result-contract.mjs";
 import { applyOptionalBaiduSecondOpinion } from "./baidu-ocr.mjs";
 import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
+import { checkHarvestPtBeforeWrite } from "./harvest-pt-gate.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -1273,6 +1274,9 @@ async function tryU2Captcha(page, expectedOrigin, config) {
 }
 
 async function processCandidate(page, target, candidateUrl, config, qaRules) {
+  const checkPt=()=>checkHarvestPtBeforeWrite(target,{root:rootDirectory});
+  const beforeVisit=checkPt();
+  if(beforeVisit)return beforeVisit;
   const allowedOrigins = target.allowedOrigins ?? [target.origin];
   const useNewApiCheckin = shouldTryGenericNewApiCheckin(target, config.newApiCheckinOrigins);
   const useExtendedDiscovery = targetUsesConfiguredOrigins(target, config.extendedDiscoveryOrigins);
@@ -1300,6 +1304,8 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
     activeOrigin = new URL(activeUrl).origin;
   }
+  const afterVisit=checkPt();
+  if(afterVisit)return afterVisit;
   const u2Result = await tryU2Captcha(page, activeOrigin, config);
   if (u2Result) return { ...u2Result, url: safeLogUrl(page.url()) };
 
@@ -1367,6 +1373,8 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
 
   const visitRule = (config.visitCheckinRules ?? {})[activeOrigin];
   if (visitRule?.after) {
+    const beforeVisitRule=checkPt();
+    if(beforeVisitRule)return beforeVisitRule;
     const match = String(visitRule.after).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
     if (!match) throw new Error(`访问签到时间配置无效：${activeOrigin}`);
     const current = new Date();
@@ -1386,6 +1394,8 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     };
   }
 
+  const beforeActionDiscovery=checkPt();
+  if(beforeActionDiscovery)return beforeActionDiscovery;
   const qaResult = await tryQaFlow(page, qaRules, activeOrigin, config);
   if (qaResult) return { ...qaResult, url: safeLogUrl(page.url()) };
 
@@ -1419,6 +1429,8 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     }
   }
   if (action) {
+    const beforeClick=checkPt();
+    if(beforeClick)return beforeClick;
     await clickCandidate(page, action);
     await sleep(config.actionWaitMs);
     activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
@@ -1448,6 +1460,8 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
 
     const secondAction = await findCheckinAction(page, allowedOrigins, action);
     if (secondAction) {
+      const beforeSecondClick=checkPt();
+      if(beforeSecondClick)return beforeSecondClick;
       await clickCandidate(page, secondAction);
       await sleep(/转动|轉動/.test(secondAction.text) ? Math.max(config.actionWaitMs, 8000) : config.actionWaitMs);
       activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);

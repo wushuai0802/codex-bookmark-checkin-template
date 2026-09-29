@@ -69,8 +69,27 @@ fresh same-day recovery signal after the last failed attempt, a one-minute
 cooldown, a 30-minute signal lifetime and at most two resumptions.
 
 The recovery signal is only a wake-up hint: the execution layer must still
-confirm login and today's status. This change does not prove or configure a
-cross-system transaction with Harvest. Regular daily-plan PT jobs still need
-their own Harvest gate, and existing old uncertain records require
+confirm login and today's status. This change does not prove a cross-system
+transaction with Harvest. Existing old uncertain records require
 case-by-case read-only confirmation. Neither the PT bookmark catalog nor
 private account/profile bindings were modified.
+
+## Regular PT plan write gate
+
+The private opt-in in the execution binding enables a live Harvest check for
+the exact monitored PT origin before the first navigation and again before
+potential browser actions. It holds no execution lock while waiting for
+Harvest; a missing or active daily result produces a bounded deferred
+outcome. A matching authoritative same-day Harvest success is represented as
+observed already signed, with its user ID deliberately ignored for PT account
+binding. Failed, missing and unknown Harvest site entries proceed to the
+existing execution adapter only after Harvest's completed daily task is
+verified. Ambiguous multi-account origins and missing catalog/probe state stop
+before submission. Non-PT targets keep their existing schedule.
+
+The current production PT targets have no native WAF preflight overlap. If a
+new PT target later gains a native preflight path, extend this gate to that
+path before enrolling the target. There is no cross-process transaction with
+Harvest; a new Harvest task can still start after the last read. The next
+natural scheduler run must verify intended PT deferrals and identity-bound
+receipts without replaying completed actions.
