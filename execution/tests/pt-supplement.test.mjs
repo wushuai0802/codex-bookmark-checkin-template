@@ -78,7 +78,7 @@ test('OpenCD read-only verification uses the selected profile and never calls a 
   fs.writeFileSync(args.catalogFile,JSON.stringify(catalog));
   fs.writeFileSync(path.join(args.root,'data/last-valid-bookmark-plan.json'),JSON.stringify({targets:[{origin}]}));
   const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');
-  const body='wushuai0802，歡迎回來 [控制面板]\n當前時間：08:43\n[查看簽到記錄] [21點]\n[退出]';
+  const body='fixture_user，歡迎回來 [控制面板]\n當前時間：08:43\n[查看簽到記錄] [21點]\n[退出]';
   const visited=[];
   const result=await runPtSupplement({...args,origin,catalogHash,now,readOnly:true,
     acquire:async()=>({owner:{nonce:'fixture'}}),release:async()=>{},

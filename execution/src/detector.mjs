@@ -108,7 +108,7 @@ export function ptPageEvidence({origin,url,bodyText,status,now=new Date(),allowU
   // Require the authenticated header, exact page, near-current site time and
   // the signed control; a historical forum mention never qualifies.
   if(origin==='https://open.cd'&&observedUrl.pathname==='/index.php'){
-    const header=text.slice(0,700),clock=header.match(/(?:当前|當前)時間\s*[:：]\s*(\d{1,2}):(\d{2})/);
+    const header=text.slice(0,700),clock=header.match(/(?:当前时间|當前時間)\s*[:：]\s*(\d{1,2}):(\d{2})/);
     const shanghai=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);
     const [hour,minute]=shanghai.split(':').map(Number);
     const siteMinutes=clock?Number(clock[1])*60+Number(clock[2]):NaN;

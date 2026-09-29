@@ -16,13 +16,15 @@ test("识别已签到状态", () => {
 
 test("OpenCD authenticated daily header is same-day evidence; historical text and stale clock are not", () => {
   const now=new Date("2026-09-29T00:46:00Z");
-  const prefix="首頁 論壇 音樂\nwushuai0802，歡迎回來 [控制面板]\n當前時間： 08:43\n";
+  const prefix="首頁 論壇 音樂\nfixture_user，歡迎回來 [控制面板]\n當前時間： 08:43\n";
   const body=prefix+"[查看簽到記錄] [21點] [菠菜]\n[退出]\n最近消息\n2026.09.18 查看签到记录";
   const args={origin:"https://open.cd",url:"https://open.cd/index.php",bodyText:body,status:"already_signed",now};
   const evidence=ptPageEvidence({...args,allowUndatedActionText:false});
   assert.equal(evidence.authoritative,true);
   assert.equal(evidence.businessDate,"2026-09-29");
   assert.equal(evidence.statusSignal,"open_cd_daily_record_entry");
+  const simplified=body.replace("當前時間","当前时间").replace("歡迎回來","欢迎回来").replace("[查看簽到記錄] [21點]","[已签到] [21点]");
+  assert.equal(ptPageEvidence({...args,bodyText:simplified,allowUndatedActionText:false})?.authoritative,true);
   for(const changed of [
     {bodyText:prefix+"[签到] [21點]\n[退出]\n2026.09.18 查看签到记录"},
     {bodyText:body.replace("08:43","06:43")},

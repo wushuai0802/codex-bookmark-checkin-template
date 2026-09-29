@@ -36,3 +36,29 @@ function Test-TerminalCheckinResult($Result) {
     if ([string]$Result.status -in @('signed', 'already_signed')) { return $true }
     return Test-ConfirmedNotAvailableResult $Result
 }
+
+# Pure readback contract: never click, navigate, or infer success from a loaded page.
+function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$Clicked = $false, [datetimeoffset]$Now = [datetimeoffset]::UtcNow) {
+    if ($null -eq $Snapshot -or $Snapshot.success -ne $true -or $Snapshot.sameOrigin -ne $true -or
+        $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute) { return $null }
+    try {
+        $expected = [uri]$TargetUrl
+        $actual = [uri][string]$Snapshot.currentUrl
+        if ($expected.Scheme -ne 'https' -or $actual.Scheme -ne 'https' -or $expected.UserInfo -or $actual.UserInfo -or
+            $expected.Port -ne $actual.Port -or
+            ($expected.IdnHost.ToLowerInvariant() -replace '^www\.', '') -ne ($actual.IdnHost.ToLowerInvariant() -replace '^www\.', '') -or
+            $actual.AbsolutePath -notmatch '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$') { return $null }
+    } catch { return $null }
+    $body = [string]$Snapshot.bodyText
+    $daily = $body -match '(?:今日|今天|当日|當日).{0,12}(?:已签到|已簽到|已经签到|已經簽到)|已完成今日签到|already checked[ -]?in today|checked in today'
+    $action = $Clicked -and $body -match '签到成功|簽到成功|本次(?:签到|簽到).{0,18}(?:获得|獲得)'
+    if (-not $daily -and -not $action) { return $null }
+    return [pscustomobject]@{
+        source = 'page_text'
+        authoritative = $true
+        confirmedAt = $Now.ToUniversalTime().ToString('o')
+        businessDate = $Now.ToOffset([timespan]::FromHours(8)).ToString('yyyy-MM-dd')
+        pagePath = $actual.AbsolutePath
+        statusSignal = 'same_day_page_text'
+    }
+}

@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $originUri = [uri]$Origin
 $targetUri = [uri]$Url
@@ -340,6 +341,7 @@ try {
             [pscustomobject]@{
                 status = 'signed'
                 reason = '无调试原生 Chrome 页面确认签到完成'
+                evidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 cloudflareChallengeClicked = $cloudflareChallengeClicked
