@@ -71,7 +71,7 @@ test('supplement holds the V1 lock and uses its browser flow once without alteri
   assert.equal(JSON.parse(fs.readFileSync(path.join(args.root,'data/last-valid-bookmark-plan.json'))).targets.length,0);
 });
 
-test('OpenCD read-only verification uses the selected profile and never calls a submit path',async t=>{
+test('read-only PT verification uses the selected profile and never calls a submit path',async t=>{
   const args=fixture(t),origin='https://open.cd',now=new Date('2026-09-29T00:46:00Z');
   const catalog={sites:[{origin,entryUrl:'https://open.cd/index.php'},
     {origin:'https://pt.example',entryUrl:'https://pt.example/attendance'}]};
@@ -88,7 +88,10 @@ test('OpenCD read-only verification uses the selected profile and never calls a 
   assert.deepEqual(visited,['https://open.cd/index.php']);
   assert.equal(result.status,'already_signed');
   assert.equal(result.evidence.authoritative,true);
-  await assert.rejects(()=>runPtSupplement({...args,catalogHash,origin:'https://pt.example',readOnly:true}),/limited to OpenCD/);
+  const generic=await runPtSupplement({...args,catalogHash,origin:'https://pt.example',readOnly:true,
+    launch:async()=>({newPage:async()=>({goto:async()=>{},url:()=>args.origin+'/attendance',locator:()=>({innerText:async()=> '今日已签到'}),close:async()=>{}}),close:async()=>{}})});
+  assert.equal(generic.status,'already_signed');
+  assert.equal(generic.evidence.authoritative,true);
 });
 
 test('unverified completion and uncertain submission are never reported as success',()=>{

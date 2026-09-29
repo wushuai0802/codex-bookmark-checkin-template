@@ -76,7 +76,9 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=n
   const legacyRoot=path.resolve(root);
   const config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config/config.json'),'utf8'));
   const plan=JSON.parse(fs.readFileSync(path.join(legacyRoot,'data/last-valid-bookmark-plan.json'),'utf8'));
-  if(readOnly&&target.origin!=='https://open.cd')throw Error('read-only PT status is limited to OpenCD');
+  // Read-only verification is allowed for every exact, private-opt-in
+  // bookmark. It performs one GET and bounded page-text inspection only; the
+  // mutation path remains reserved for a fallback-only target.
   if(!Array.isArray(plan.targets)||(!readOnly&&plan.targets.some(item=>item.origin===target.origin)))throw Error('PT origin belongs to the daily plan');
   if((config.excludedOrigins??[]).includes(target.origin)||(config.disabledCheckinOrigins??[]).includes(target.origin)||
     (config.disabledAccountKeys??[]).includes('site-default'))throw Error('PT origin disabled by execution configuration');
@@ -98,7 +100,10 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=n
           allowUndatedActionText:false});
         return {origin:target.origin,status:evidence?'already_signed':'unknown',observedAt:now.toISOString(),
           evidence:{source:evidence?.source??'none',authoritative:Boolean(evidence),
-            summary:evidence?'OpenCD 顶部今日签到控件显示完成':'尚未取得 OpenCD 当日签到证据'}};
+            ...(evidence?.statusSignal?{statusSignal:evidence.statusSignal}:{}),
+            summary:evidence
+              ? target.origin==='https://open.cd'?'OpenCD 顶部今日签到控件显示完成':'签到页明确显示今日已完成'
+              : '尚未取得当日签到证据'}};
       }finally{await page.close().catch(()=>{});}
     }
     const before=await readReward(context,target.origin,safeConfig);
