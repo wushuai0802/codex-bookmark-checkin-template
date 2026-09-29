@@ -9,12 +9,22 @@ const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&
 const terminal=new Set(['signed','already_signed']);
 const failures=new Set(['failed','not_signed']);
 
-export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=new Date(),fallbackOnlyEnabled=false}={}) {
+function confirmedSupplement(report,origin,businessDate,now){
+  const site=report?.sites?.find(item=>originOf(item?.origin)===origin);
+  const at=Date.parse(site?.observedAt??'');
+  return Boolean(site&&terminal.has(site.status)&&site.evidence?.authoritative===true&&
+    ['pt_page','page_text','api','usage_log'].includes(site.evidence?.source)&&
+    Number.isFinite(at)&&at<=now.getTime()+60_000&&dayAt(new Date(at))===businessDate);
+}
+
+export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),fallbackOnlyEnabled=false}={}) {
   const businessDate=dayAt(now),eligible=[],blocked=[];let observedSuccess=0;
   if(harvest?.source!=='harvest'||harvest.businessDate!==businessDate||!Array.isArray(harvest.sites)||
      !Number.isFinite(Date.parse(harvest.generatedAt))||Date.parse(harvest.generatedAt)>now.getTime()+60_000||
      now.getTime()-Date.parse(harvest.generatedAt)>30*60_000)throw Error('Harvest report is stale or invalid');
   if(!Array.isArray(catalog?.sites)||!Array.isArray(plan?.targets)||!Array.isArray(latest?.results))throw Error('execution plan or catalog missing');
+  if(fallbackReport&&(fallbackReport.source!=='execution-supplement'||fallbackReport.businessDate!==businessDate||
+     !Array.isArray(fallbackReport.sites)))throw Error('PT supplement report has the wrong source or date');
   const currentV1=latest.runState==='final'&&latest.isComplete===true&&String(latest.runId??'').startsWith(businessDate.replaceAll('-','')+'-');
   const doneAt=Date.parse(harvest.taskCompletion?.completedAt),startedAt=Date.parse(harvest.taskCompletion?.startedAt);
   const harvestCompleted=harvest.taskCompletion?.status==='completed'&&Number.isInteger(harvest.taskCompletion.resultId)&&
@@ -47,6 +57,9 @@ export function planHarvestFallback({harvest,catalog,plan,latest,config={},now=n
     if(!observations.has(origin))observations.set(origin,{origin,status:'unknown',missingFromHarvest:true});
   }
   for(const [origin,site] of observations){
+    if(confirmedSupplement(fallbackReport,origin,businessDate,now)){
+      assessments.push({origin,state:'confirmed_by_executor_supplement'});continue;
+    }
     const confirmedAt=Date.parse(site.observedAt);
     const confirmed=terminal.has(site.status)&&site.evidence?.authoritative===true&&Number.isFinite(confirmedAt)&&dayAt(new Date(confirmedAt))===businessDate;
     if(confirmed){observedSuccess++;assessments.push({origin,state:'confirmed_by_harvest'});continue;}
@@ -136,10 +149,10 @@ function claimWorker(root) {
   throw Error('Harvest fallback lock unavailable');
 }
 
-export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,config={},now=new Date(),execute=false,
+export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
   clock=()=>new Date(),recoveredAtByAccount={}}={}) {
-  const preview=planHarvestFallback({harvest,catalog,plan,latest,config,now,fallbackOnlyEnabled});
+  const preview=planHarvestFallback({harvest,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled});
   if(!execute)return {...preview,mode:'preview'};
   const runtime=loadRuntimeConfig(root);
   if(runtime.executionEngine!=='v1'||!runtime.legacyRoot)throw Error('Harvest fallback requires the V1 execution engine');
@@ -154,6 +167,15 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
   for(const candidate of preview.eligible){
     if(alreadyAttempted(state,candidate,recoveredAtByAccount)){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    let currentSupplement=null;
+    if(fs.existsSync(statusFile)){
+      currentSupplement=JSON.parse(fs.readFileSync(statusFile,'utf8'));
+      if(currentSupplement.source!=='execution-supplement'||currentSupplement.businessDate!==preview.businessDate||
+        !Array.isArray(currentSupplement.sites))throw Error('PT status audit is invalid');
+    }
+    if(confirmedSupplement(currentSupplement,candidate.origin,preview.businessDate,clock())){
+      outcomes.push({origin:candidate.origin,state:'already_confirmed'});continue;
+    }
     // Persist before executing. An interrupted or uncertain attempt is not replayed.
     const attempt={origin:candidate.origin,accountKey:candidate.accountKey,businessDate:preview.businessDate,
       observedAt:candidate.observedAt,startedAt:clock().toISOString(),state:'in_progress'};
@@ -205,9 +227,12 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
 export function loadHarvestFallbackInputs({root,reportFile,catalogFile}={}) {
   const legacyRoot=loadRuntimeConfig(root).legacyRoot;
   if(!legacyRoot)throw Error('legacy root is required');
+  const day=dayAt(new Date());
+  const supplementFile=path.join(root,'outputs',`pt-fallback-results-${day}.json`);
   return {harvest:JSON.parse(fs.readFileSync(reportFile,'utf8')),
     catalog:JSON.parse(fs.readFileSync(catalogFile,'utf8')),
     plan:JSON.parse(fs.readFileSync(path.join(legacyRoot,'data/last-valid-bookmark-plan.json'),'utf8')),
     config:JSON.parse(fs.readFileSync(path.join(legacyRoot,'config/config.json'),'utf8')),
-    latest:JSON.parse(fs.readFileSync(path.join(legacyRoot,'logs/latest.json'),'utf8'))};
+    latest:JSON.parse(fs.readFileSync(path.join(legacyRoot,'logs/latest.json'),'utf8')),
+    fallbackReport:fs.existsSync(supplementFile)?JSON.parse(fs.readFileSync(supplementFile,'utf8')):null};
 }

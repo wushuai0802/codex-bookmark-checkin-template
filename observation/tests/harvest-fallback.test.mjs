@@ -35,6 +35,22 @@ test('a monitored PT target keeps its execution result even when its execution f
   assert.equal(report.eligible[0].kind,'registered');
   assert.equal(report.eligible[0].origin,'https://external.example');
 });
+
+test('a dated authoritative read-only supplement prevents the same monitored origin entering fallback',()=>{
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];
+  f.catalog.sites=f.catalog.sites.filter(site=>site.origin==='https://external.example');
+  f.plan.targets=[{origin:'https://external.example',folderNames:['公益站']}];
+  f.fallbackReport={source:'execution-supplement',businessDate:'2026-09-20',sites:[{
+    origin:'https://external.example',status:'already_signed',observedAt:'2026-09-20T01:59:00Z',
+    evidence:{source:'pt_page',authoritative:true}}]};
+  const result=planHarvestFallback(f);
+  assert.equal(result.eligible.length,0);
+  assert.equal(result.assessments[0].state,'confirmed_by_executor_supplement');
+  f.fallbackReport.sites[0].observedAt='2026-09-19T01:59:00Z';
+  assert.equal(planHarvestFallback(f).eligible.length,1);
+  f.fallbackReport.businessDate='2026-09-19';
+  assert.throws(()=>planHarvestFallback(f),/wrong source or date/);
+});
 test('a bookmarked PT site absent from Harvest is reviewed after the daily task completes',()=>{
   const f=fixture();
   f.harvest.sites=[failed('https://ourbits.club')];
