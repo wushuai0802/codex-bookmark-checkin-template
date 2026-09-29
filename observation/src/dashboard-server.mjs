@@ -333,9 +333,27 @@ function mergeCanaryTask(task, receipt, canary){
 
 function liveCanaryByTask(canaryResults){const map=new Map();for(const item of canaryResults??[])if(item?.taskId)map.set(item.taskId,chooseCanaryResult(map.get(item.taskId),item));return map;}
 
+function confirmedPtByTask(snapshot){
+  if(snapshot?.ptStatus?.businessDate!==snapshot?.businessDate)return new Map();
+  const counts=new Map();
+  for(const task of snapshot?.tasks??[])counts.set(task.origin,(counts.get(task.origin)??0)+1);
+  const verified=new Map();
+  for(const site of snapshot?.ptStatus?.sites??[]){
+    const current=site?.effective,at=Date.parse(current?.observedAt??'');
+    if(!['signed','already_signed'].includes(current?.status)||current?.authoritative!==true||
+       current?.evidence?.authoritative!==true||
+       current?.fresh!==true||!Number.isFinite(at)||
+       new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(at))!==snapshot.businessDate)continue;
+    if(!site.accountRef&&counts.get(site.origin)!==1)continue;
+    verified.set(site.origin+'|'+(site.accountRef??'site-default'),current);
+  }
+  return verified;
+}
+
 function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   const receiptByTask = new Map((snapshot?.receipts ?? []).map((receipt) => [receipt.taskId, receipt]));
   const canaryByTask=liveCanaryByTask(canaryResults);
+  const ptByTask=confirmedPtByTask(snapshot);
   const tasks = (snapshot?.tasks ?? []).map((task) => {
     const merged=mergeCanaryTask(task, receiptByTask.get(task.taskId), canaryByTask.get(task.taskId));
     if(runtime?.owners.some(item=>item.origin===task.origin&&item.accountRef===task.accountRef)) {
@@ -345,6 +363,16 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
         merged.observedStatus='not_started';merged.observedAt=null;merged.executionMode='execute';
         merged.evidence={source:'none',authoritative:false,summary:'账号已由 V2 执行，尚未收到本业务日的执行回执',redacted:true,verification:'not_started'};
       }
+    }
+    const pt=ptByTask.get(task.origin+'|'+(task.accountRef??'site-default'));
+    if(pt&&task.businessDate===snapshot.businessDate&&
+       !['signed','already_signed'].includes(merged.observedStatus)){
+      merged.executionObservedStatus=merged.observedStatus;
+      merged.observedStatus=pt.status;
+      merged.observedAt=pt.observedAt;
+      merged.evidence={source:pt.evidence?.source??'none',authoritative:true,
+        summary:redactText(pt.evidence?.summary??'当日 PT 页面已确认签到'),redacted:true,
+        verification:'verified'};
     }
     return merged;
   });

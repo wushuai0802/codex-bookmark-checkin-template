@@ -134,6 +134,31 @@ test('dashboard never combines a new snapshot with a stale ledger generation',as
   }finally{await close(instance);}
 });
 
+test('a same-account same-day authoritative PT readback supersedes an earlier runner failure in overview',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-pt-readback-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:'2026-09-02T14:00:00.000Z'});
+  const task=snapshot.tasks[0];task.observedStatus='failed';
+  snapshot.ptStatus.sites=[{origin:task.origin,accountRef:task.accountRef,
+    effective:{status:'already_signed',source:'execution-supplement',authoritative:true,fresh:true,
+      observedAt:'2026-09-02T14:01:00Z',evidence:{source:'page_text',authoritative:true,summary:'今日已签到'}}}];
+  fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+  const {instance,base}=await start({dataDir:root});
+  try{
+    const first=(await(await fetch(base+'/api/overview')).json()).tasks[0];
+    assert.equal(first.observedStatus,'already_signed');
+    assert.equal(first.executionObservedStatus,'failed');
+    assert.equal(first.evidence.authoritative,true);
+    snapshot.ptStatus.sites[0].accountRef='acct_ffffffffffffffff';
+    fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+    assert.equal((await(await fetch(base+'/api/overview')).json()).tasks[0].observedStatus,'failed');
+    snapshot.ptStatus.sites[0].accountRef=task.accountRef;
+    snapshot.ptStatus.sites[0].effective.observedAt='2026-09-01T14:01:00Z';
+    fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+    assert.equal((await(await fetch(base+'/api/overview')).json()).tasks[0].observedStatus,'failed');
+  }finally{await close(instance);}
+});
+
 test('non-loopback deployment uses an HttpOnly session and exposes only bounded controls', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-dashboard-auth-'));
   const { instance, base } = await start({ dataDir: root, adminToken: 'test-token-1234567890', trustProxyTls: true });
