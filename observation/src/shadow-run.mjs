@@ -18,6 +18,7 @@ function parseArgs(argv) {
     else if (token === '--generated-at') args.generatedAt = argv[++i];
     else if (token === '--health-file') args.healthFile = argv[++i];
     else if (token === '--pt-status-file') args.ptStatusFile = argv[++i];
+    else if (token === '--pt-status-cache-file') args.ptStatusCacheFile = argv[++i];
     else if (token === '--pt-fallback-file') args.ptFallbackFile = argv[++i];
     else if (token === '--monitor-catalog') args.monitorCatalog = argv[++i];
     else if (token === '--identity-file') args.identityFile = argv[++i];
@@ -42,6 +43,21 @@ function loadJsonReport(file, label) {
   catch (error) { throw new Error(`invalid ${label}: ${error.message}`); }
 }
 
+// Display-only fallback. Preserve original evidence times; this cache must
+// never authorize a Harvest fallback dispatch or a new site submission.
+export function loadSameDayHarvestCache(file, now = new Date()) {
+  if (!file) return undefined;
+  try {
+    const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const observed = Date.parse(report.generatedAt);
+    const day = value => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai'}).format(value);
+    if (report.source !== 'harvest' || report.schemaVersion !== 1 || !Array.isArray(report.sites) ||
+        !Number.isFinite(observed) || observed > now.getTime() + 60_000 ||
+        report.businessDate !== day(now) || day(new Date(observed)) !== day(now)) return undefined;
+    return report;
+  } catch { return undefined; }
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
   try {
     const args = parseArgs(process.argv);
@@ -54,11 +70,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     const projectRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
     const businessDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(args.generatedAt??Date.now()));
     const automaticFallbackFile=path.join(projectRoot,'outputs',`pt-fallback-results-${businessDate}.json`);
+    const livePtReport = loadJsonReport(args.ptStatusFile, 'PT status report');
+    const cachedPtReport = livePtReport ? undefined : loadSameDayHarvestCache(args.ptStatusCacheFile, new Date(args.generatedAt??Date.now()));
     const snapshot = buildSnapshot({
       legacyRoot,
       generatedAt: args.generatedAt,
       healthReport: loadJsonReport(args.healthFile, 'health report'),
-      ptStatusReport: loadJsonReport(args.ptStatusFile, 'PT status report'),
+      ptStatusReport: livePtReport ?? cachedPtReport,
       ptFallbackReport: loadJsonReport(args.ptFallbackFile??(fs.existsSync(automaticFallbackFile)?automaticFallbackFile:null), 'PT fallback report'),
       ptFallbackOnlyEnabled:loadRuntimeConfig(projectRoot).ptFallbackOnlyEnabled,
       monitorCatalog: loadJsonReport(args.monitorCatalog, 'PT bookmark catalog'),
@@ -76,6 +94,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
       logicalSites: snapshot.counts.logicalSites,
       executionUnits: snapshot.counts.executionUnits,
       mode: snapshot.mode,
+      ptStatusCached: Boolean(cachedPtReport),
       output: args.out ? path.resolve(args.out) : null,
       ledger: args.ledger ? path.resolve(args.ledger) : null
     }, null, 2));

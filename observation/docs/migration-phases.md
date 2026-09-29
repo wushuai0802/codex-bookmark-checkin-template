@@ -30,3 +30,24 @@ Historical adapter, transport and migration modules remain offline for audit
 and rollback tests. Their gates are not a second production schedule and must
 not be presented as the current operating procedure. Removing those modules or
 fixtures requires a separate rollback review.
+
+## Reliability batch: 2026-09-29
+
+- A fresh, authoritative PT completion receipt takes precedence over a later
+  unverified failure. Conflicting authoritative evidence still needs review.
+- Native Chrome readers now produce bounded same-day page evidence, and every
+  confirmed preflight branch preserves it. This fixes future receipt loss; it
+  does not invent evidence for historical terminal records.
+- OpenCD readback recognizes both simplified and traditional daily-header
+  text without submitting again. The exact monitor catalog and complete
+  execution plan determine PT ownership, not a legacy folder label.
+- `shadow-run --pt-status-cache-file` accepts only a validated same-day
+  Harvest report for display continuity. It retains original evidence times.
+  A cached report never authorizes fallback dispatch; a successful live
+  Harvest read and the existing submission safeguards remain required.
+
+These changes do not complete the larger scheduler migration. Shared Harvest
+write gating for regular PT runs, generalized cross-midnight intent recovery,
+atomic multi-file generations, and safe plan-metadata migration remain
+separate acceptance items. Do not remove historical compatibility modules
+before their live and dynamic callers have been accounted for.
