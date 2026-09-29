@@ -19,7 +19,7 @@ import {
 } from "./login-recovery.mjs";
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
-import { pendingQuotaClaim } from "./quota-claim-guard.mjs";
+import { pendingOpenCdSubmission, pendingQuotaClaim } from "./quota-claim-guard.mjs";
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
   applyPreferredCandidates,
@@ -609,7 +609,8 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
-        const guardedQuotaClaim = pendingQuotaClaim(target, siteState, previousFinalReport, config);
+        const guardedQuotaClaim = pendingQuotaClaim(target, siteState, previousFinalReport, config)
+          ?? pendingOpenCdSubmission(target, siteState, previousFinalReport);
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
         const targetResult = guardedQuotaClaim
           ? guardedQuotaClaim

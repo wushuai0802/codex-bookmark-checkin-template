@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { atomicWriteJson } from "./security.mjs";
 import { isConfirmedNotAvailable } from "./result-contract.mjs";
-import { quotaClaimState } from "./quota-claim-guard.mjs";
+import { openCdSubmissionState, quotaClaimState } from "./quota-claim-guard.mjs";
 
 const SUCCESSFUL = new Set(["signed", "already_signed"]);
 
@@ -102,6 +102,7 @@ export function updateSiteState(previous, results, finishedAt = new Date(), conf
     const shouldRefreshConfirmation = confirmed && !cachedConfirmation;
     const preferredUrl = reusablePreferredUrl(result) ?? prior.preferredUrl ?? null;
     const pendingQuotaClaimAt = quotaClaimState(prior.pendingQuotaClaimAt, result, finishedAt, config);
+    const pendingOpenCdAt = openCdSubmissionState(prior.pendingOpenCdAt, result, finishedAt);
     sites[result.origin] = {
       ...prior,
       lastStatus: result.status,
@@ -131,6 +132,7 @@ export function updateSiteState(previous, results, finishedAt = new Date(), conf
       lastDurationMs: durationMs,
       preferredUrl,
       ...(pendingQuotaClaimAt === undefined ? {} : { pendingQuotaClaimAt }),
+      ...(pendingOpenCdAt === undefined ? {} : { pendingOpenCdAt }),
     };
   }
   return { version: 1, updatedAt: timestamp, sites };

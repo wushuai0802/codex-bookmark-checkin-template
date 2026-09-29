@@ -6,6 +6,7 @@ const AVAILABILITY_KINDS = new Set([
 
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const FEATURE_DISABLED_EVIDENCE = new Map([
+  ["new_api_status", new Set(["budele_enabled_false"])],
   ["bmapi_checkin_status", new Set(["enabled_false"])],
   ["new_api_checkin_status", new Set(["message_not_enabled"])],
   ["new_api_checkin_action", new Set(["message_not_enabled"])],

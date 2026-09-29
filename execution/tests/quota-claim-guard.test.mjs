@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pendingQuotaClaim, quotaClaimState } from "../src/quota-claim-guard.mjs";
+import { pendingOpenCdSubmission, pendingQuotaClaim, quotaClaimState } from "../src/quota-claim-guard.mjs";
 import { updateSiteState } from "../src/site-state.mjs";
 
 const origin = "https://new.sharedchat.cc";
@@ -39,4 +39,17 @@ test("only the matching authoritative dated claim receipt clears the quarantine"
   ]) {
     assert.equal(quotaClaimState(state.sites[origin].pendingQuotaClaimAt, bad, new Date("2026-09-29T02:00:00Z"), config), day.toISOString());
   }
+});
+
+test("a previously submitted OpenCD captcha with no receipt is quarantined across later runs", () => {
+  const openCd={origin:"https://open.cd",accountKey:"site-default"};
+  const legacy={origin:openCd.origin,status:"interactive_challenge",
+    reason:"OpenCD 验证码已提交，但未收到成功结果"};
+  const prior={runState:"final",isComplete:true,results:[legacy]};
+  const blocked=pendingOpenCdSubmission(openCd,{sites:{}},prior);
+  assert.equal(blocked.failureCode,"submission_outcome_unknown");
+  assert.equal(blocked.submissionAttempted,true);
+  const updated=updateSiteState({sites:{}},[{...legacy,...blocked}],day,config);
+  assert.equal(pendingOpenCdSubmission(openCd,updated,null).retryable,false);
+  assert.equal(pendingOpenCdSubmission({origin:"https://other.example"},updated,prior),null);
 });

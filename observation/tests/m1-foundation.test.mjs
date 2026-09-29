@@ -99,6 +99,9 @@ test('new execution evidence sources require their account/day signal',()=>{
  assert.equal(weak.authoritative,false);assert.equal(weak.verification,'unverified_source');
  const unavailable=normalizeEvidence({status:'not_available',evidence:{source:'vibe_entitlement_status',authoritative:true,businessDate:'2026-09-02',accountId:'7',outcome:'entitlement_active'}},context);
  assert.equal(unavailable.verification,'feature_unavailable');
+ const moved=normalizeEvidence({status:'not_available',evidence:{source:'new_api_status',authoritative:true,
+   outcome:'budele_enabled_false',confirmedAt:'2026-09-02T01:00:00Z'}},context);
+ assert.equal(moved.verification,'feature_unavailable');
  const vibe=normalizeEvidence({status:'signed',evidence:{source:'vibe_claim_response',authoritative:true,
    endpoint:'/frontend-api/vibe-code/codex/claim',businessDate:'2026-09-02',statusSignal:'claimed_true',
    confirmedAt:'2026-09-02T01:00:00Z'}},context);

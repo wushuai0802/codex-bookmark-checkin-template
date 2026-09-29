@@ -2,7 +2,7 @@ import {classifyEvidence,redactText} from './contracts.mjs';
 
 const typedSources=new Set([
   'page_text','api','usage_log','new_api_checkin_calendar','new_api_checkin_status',
-  'new_api_checkin_action','new_api_captcha','oauth_api_status','oauth_api_action',
+  'new_api_checkin_action','new_api_captcha','new_api_status','oauth_api_status','oauth_api_action',
   'oauth_api_action_status','oauth_reward_log','pt_page','anyrouter_status',
   'anyrouter_log','vibe_entitlement_status','vibe_claim_response','sign_in_response','v2_canary',
   'sign_in_already_claimed_contract'
@@ -59,6 +59,7 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
   else if(result?.status==='not_available'){
     const original=rawSource==='cached_confirmation'?raw.originalSource:rawSource;
     const feature=['new_api_checkin_status','new_api_checkin_action'].includes(original)&&raw.outcome==='message_not_enabled'
+      ||original==='new_api_status'&&raw.outcome==='budele_enabled_false'
       ||original==='vibe_entitlement_status'&&['claim_not_enabled','claim_not_configured','entitlement_active'].includes(raw.outcome)
       ||original==='pt_page'&&raw.statusSignal==='maintenance';
     const validTime=Number.isFinite(parsed)&&Number.isFinite(reference)&&parsed<=reference+60_000;

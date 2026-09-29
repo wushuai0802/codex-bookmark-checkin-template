@@ -1068,7 +1068,8 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
       ...(evidence?{evidence}:{}),
     };
   }
-  return { status: "interactive_challenge", reason: "OpenCD 验证码已提交，但未收到成功结果" };
+  return { status: "needs_attention", reason: "OpenCD 验证码已提交，但未收到成功结果",
+    failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false };
 }
 
 async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config) {

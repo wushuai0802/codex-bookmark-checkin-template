@@ -14,6 +14,13 @@ test("识别已签到状态", () => {
   assert.equal(classifyPageText({ bodyText: "每日签到 今日已签到，明天再来吧", challengeSelectors: true }).status, "already_signed");
 });
 
+test("站点的数据恢复公告进入上游延期状态，历史维护字样不覆盖当日成功", () => {
+  const maintenance = classifyPageText({ bodyText: "维护通知 站点处于数据恢复与测试阶段，暂时无法访问。" });
+  assert.equal(maintenance.status, "deferred");
+  assert.equal(maintenance.retryCause, "upstream_unavailable");
+  assert.equal(classifyPageText({ bodyText: "历史维护通知 今日已签到" }).status, "already_signed");
+});
+
 test("识别签到成功状态", () => {
   assert.equal(classifyPageText({ bodyText: "签到成功，获得 10 积分" }).status, "signed");
   assert.equal(classifyPageText({ bodyText: "这是您的第159次签到，本次签到获得800个憨豆。" }).status, "signed");
