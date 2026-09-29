@@ -71,6 +71,26 @@ test('supplement holds the V1 lock and uses its browser flow once without alteri
   assert.equal(JSON.parse(fs.readFileSync(path.join(args.root,'data/last-valid-bookmark-plan.json'))).targets.length,0);
 });
 
+test('OpenCD read-only verification uses the selected profile and never calls a submit path',async t=>{
+  const args=fixture(t),origin='https://open.cd',now=new Date('2026-09-29T00:46:00Z');
+  const catalog={sites:[{origin,entryUrl:'https://open.cd/index.php'},
+    {origin:'https://pt.example',entryUrl:'https://pt.example/attendance'}]};
+  fs.writeFileSync(args.catalogFile,JSON.stringify(catalog));
+  fs.writeFileSync(path.join(args.root,'data/last-valid-bookmark-plan.json'),JSON.stringify({targets:[{origin}]}));
+  const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');
+  const body='wushuai0802，歡迎回來 [控制面板]\n當前時間：08:43\n[查看簽到記錄] [21點]\n[退出]';
+  const visited=[];
+  const result=await runPtSupplement({...args,origin,catalogHash,now,readOnly:true,
+    acquire:async()=>({owner:{nonce:'fixture'}}),release:async()=>{},
+    launch:async()=>({newPage:async()=>({goto:async url=>{visited.push(url);},url:()=>args.origin.replace('pt.example','open.cd')+'/index.php',locator:()=>({innerText:async()=>body}),close:async()=>{}}),close:async()=>{}}),
+    readReward:async()=>{throw Error('read-only mode cannot visit rewards');},
+    runTarget:async()=>{throw Error('read-only mode cannot submit a check-in');}});
+  assert.deepEqual(visited,['https://open.cd/index.php']);
+  assert.equal(result.status,'already_signed');
+  assert.equal(result.evidence.authoritative,true);
+  await assert.rejects(()=>runPtSupplement({...args,catalogHash,origin:'https://pt.example',readOnly:true}),/limited to OpenCD/);
+});
+
 test('unverified completion and uncertain submission are never reported as success',()=>{
   const now=new Date('2026-09-20T02:00:00Z');
   assert.equal(publicSupplementResult('https://pt.example',{status:'signed'},now).status,'unknown');

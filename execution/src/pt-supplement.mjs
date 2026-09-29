@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import {launchAutomationContext,processTarget} from './browser.mjs';
+import {launchAutomationContext,processTarget,ptPageEvidence} from './browser.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
@@ -66,6 +66,7 @@ export async function readPtRewardCounter(context,origin,config){
 }
 
 export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=new Date(),
+  readOnly=false,
   launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
   acquire=acquireRunLock,release=releaseRunLock}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
@@ -75,7 +76,8 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=n
   const legacyRoot=path.resolve(root);
   const config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config/config.json'),'utf8'));
   const plan=JSON.parse(fs.readFileSync(path.join(legacyRoot,'data/last-valid-bookmark-plan.json'),'utf8'));
-  if(!Array.isArray(plan.targets)||plan.targets.some(item=>item.origin===target.origin))throw Error('PT origin belongs to the daily plan');
+  if(readOnly&&target.origin!=='https://open.cd')throw Error('read-only PT status is limited to OpenCD');
+  if(!Array.isArray(plan.targets)||(!readOnly&&plan.targets.some(item=>item.origin===target.origin)))throw Error('PT origin belongs to the daily plan');
   if((config.excludedOrigins??[]).includes(target.origin)||(config.disabledCheckinOrigins??[]).includes(target.origin)||
     (config.disabledAccountKeys??[]).includes('site-default'))throw Error('PT origin disabled by execution configuration');
   const profile=path.resolve(legacyRoot,config.automationUserDataDir??'');
@@ -87,6 +89,18 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now=n
   let context;
   try {
     context=await launch(safeConfig);
+    if(readOnly){
+      const page=await context.newPage();
+      try{
+        await page.goto(target.candidates[0],{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)});
+        const evidence=ptPageEvidence({origin:target.origin,url:page.url(),
+          bodyText:await page.locator('body').innerText({timeout:5000}),status:'already_signed',now,
+          allowUndatedActionText:false});
+        return {origin:target.origin,status:evidence?'already_signed':'unknown',observedAt:now.toISOString(),
+          evidence:{source:evidence?.source??'none',authoritative:Boolean(evidence),
+            summary:evidence?'OpenCD 顶部今日签到控件显示完成':'尚未取得 OpenCD 当日签到证据'}};
+      }finally{await page.close().catch(()=>{});}
+    }
     const before=await readReward(context,target.origin,safeConfig);
     let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
     if(terminal.has(result?.status)&&result?.evidence?.authoritative!==true&&

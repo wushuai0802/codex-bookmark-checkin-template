@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, scoreActionText, solveArithmeticQuestion } from "../src/detector.mjs";
+import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, ptPageEvidence, scoreActionText, solveArithmeticQuestion } from "../src/detector.mjs";
 
 test("识别已签到状态", () => {
   assert.equal(classifyPageText({ bodyText: "您今日已签到，请明天再来" }).status, "already_signed");
@@ -12,6 +12,24 @@ test("识别已签到状态", () => {
   assert.equal(classifyPageText({ bodyText: "鲸币 [使用]: 154,464.0 (簽到已得350)" }).status, "ready");
   assert.equal(classifyPageText({ bodyText: "今日已签到，鲸币 [使用]: 154,464.0 (签到已得350)" }).status, "already_signed");
   assert.equal(classifyPageText({ bodyText: "每日签到 今日已签到，明天再来吧", challengeSelectors: true }).status, "already_signed");
+});
+
+test("OpenCD authenticated daily header is same-day evidence; historical text and stale clock are not", () => {
+  const now=new Date("2026-09-29T00:46:00Z");
+  const prefix="首頁 論壇 音樂\nwushuai0802，歡迎回來 [控制面板]\n當前時間： 08:43\n";
+  const body=prefix+"[查看簽到記錄] [21點] [菠菜]\n[退出]\n最近消息\n2026.09.18 查看签到记录";
+  const args={origin:"https://open.cd",url:"https://open.cd/index.php",bodyText:body,status:"already_signed",now};
+  const evidence=ptPageEvidence({...args,allowUndatedActionText:false});
+  assert.equal(evidence.authoritative,true);
+  assert.equal(evidence.businessDate,"2026-09-29");
+  assert.equal(evidence.statusSignal,"open_cd_daily_record_entry");
+  for(const changed of [
+    {bodyText:prefix+"[签到] [21點]\n[退出]\n2026.09.18 查看签到记录"},
+    {bodyText:body.replace("08:43","06:43")},
+    {bodyText:body.replace("歡迎回來", "登入")},
+    {url:"https://open.cd/forums.php"},
+    {origin:"https://other.example",url:"https://other.example/index.php"},
+  ])assert.equal(ptPageEvidence({...args,...changed,allowUndatedActionText:false}),null);
 });
 
 test("站点的数据恢复公告进入上游延期状态，历史维护字样不覆盖当日成功", () => {

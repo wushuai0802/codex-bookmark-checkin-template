@@ -6,12 +6,13 @@ import {runPtSupplement} from '../src/pt-supplement.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 try {
-  const [origin,catalogFile,catalogHash]=process.argv.slice(2);
+  const [origin,catalogFile,catalogHash,mode]=process.argv.slice(2);
+  if(mode && mode!=='--read-only')throw Error('unknown PT supplement mode');
   const integration=JSON.parse(fs.readFileSync(path.join(root,'data/v2-integration.json'),'utf8'));
   if(integration.executionEngine!=='v1'||!path.isAbsolute(integration.v2ProjectRoot))throw Error('execution lease unavailable');
   const {validateEngineLease}=await import(pathToFileURL(path.join(integration.v2ProjectRoot,'src/legacy-engine.mjs')).href);
   validateEngineLease({root:integration.v2ProjectRoot,legacyRoot:root});
-  const result=await runPtSupplement({root,origin,catalogFile,catalogHash});
+  const result=await runPtSupplement({root,origin,catalogFile,catalogHash,readOnly:mode==='--read-only'});
   console.log(JSON.stringify(result));
 } catch (error) {
   console.error('PT supplement could not establish a verified result');

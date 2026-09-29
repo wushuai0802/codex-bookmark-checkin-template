@@ -36,7 +36,11 @@ function hasStructuredEvidence(raw,source,businessDate){
 export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={}){
   const raw=result?.evidence&&typeof result.evidence==='object'?result.evidence:{};
   const source=classifyEvidence(result),rawSource=typeof raw.source==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(raw.source)?raw.source:'none';
-  const success=['signed','already_signed'].includes(result?.status),structuredLegacy=hasStructuredEvidence(raw,rawSource,businessDate),legacySignedResponse=rawSource==='sign_in_response'&&raw.authoritative===true;
+  const success=['signed','already_signed'].includes(result?.status),
+    openCdDailyControl=result?.origin==='https://open.cd'&&rawSource==='pt_page'&&
+      raw.statusSignal==='open_cd_daily_record_entry'&&raw.pagePath==='/index.php'&&raw.businessDate===businessDate,
+    structuredLegacy=hasStructuredEvidence(raw,rawSource,businessDate)||openCdDailyControl,
+    legacySignedResponse=rawSource==='sign_in_response'&&raw.authoritative===true;
   const inferredAuthority=success&&raw.authoritative!==false&&(
     rawSource==='usage_log'&&structuredLegacy&&Number.isFinite(Number(raw.rewardAmount))&&Number(raw.rewardAmount)>0||
     rawSource==='new_api_captcha'&&Number.isInteger(Number(raw.attempts))&&Number(raw.attempts)>0&&

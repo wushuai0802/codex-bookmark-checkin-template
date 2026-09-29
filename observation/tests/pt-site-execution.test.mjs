@@ -41,6 +41,14 @@ test('child receives the exact origin and lease; busy lock is retryable without 
     return child;
   };
   assert.equal((await spawnPtSiteChild({...args,spawnChild})).status,'login_required');
+  const readOnlyChild=(_node,argv,options)=>{
+    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash,'--read-only']);
+    assert.equal(options.env.CHECKIN_V2_ENGINE_LEASE,'lease-fixture');
+    const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
+    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'unknown',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);});
+    return child;
+  };
+  assert.equal((await spawnPtSiteChild({...args,readOnly:true,spawnChild:readOnlyChild})).status,'unknown');
   const busy=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};setImmediate(()=>child.emit('exit',3,null));return child;};
   await assert.rejects(()=>spawnPtSiteChild({...args,spawnChild:busy}),/already active/);
 });

@@ -95,6 +95,11 @@ test('new execution evidence sources require their account/day signal',()=>{
  assert.equal(calendar.verification,'verified');
  const pt=normalizeEvidence({status:'signed',evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-02',accountId:'7',statusSignal:'signed_text'}},context);
  assert.equal(pt.source,'api');assert.equal(pt.authoritative,true);assert.equal(pt.verification,'verified');
+ const openCd={status:'already_signed',origin:'https://open.cd',evidence:{source:'pt_page',authoritative:true,
+   businessDate:'2026-09-02',pagePath:'/index.php',statusSignal:'open_cd_daily_record_entry',confirmedAt:'2026-09-02T01:00:00Z'}};
+ assert.equal(normalizeEvidence(openCd,context).verification,'verified');
+ assert.equal(normalizeEvidence({...openCd,origin:'https://other.example'},context).authoritative,false);
+ assert.equal(normalizeEvidence({...openCd,evidence:{...openCd.evidence,businessDate:'2026-09-01'}},context).authoritative,false);
  const weak=normalizeEvidence({status:'signed',evidence:{source:'anyrouter_log',authoritative:true,rewardAmount:25}},context);
  assert.equal(weak.authoritative,false);assert.equal(weak.verification,'unverified_source');
  const unavailable=normalizeEvidence({status:'not_available',evidence:{source:'vibe_entitlement_status',authoritative:true,businessDate:'2026-09-02',accountId:'7',outcome:'entitlement_active'}},context);

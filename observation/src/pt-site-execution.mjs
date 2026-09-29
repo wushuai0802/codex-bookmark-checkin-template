@@ -20,10 +20,10 @@ export function projectPtSiteResult(value,origin){
     ...(status==='login_required'&&value.submissionAttempted===false?{submissionAttempted:false}:{})};
 }
 
-export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,spawnChild=spawn,timeoutMs=600_000}){
+export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,spawnChild=spawn,timeoutMs=600_000}){
   const script=path.join(legacyRoot,'scripts/Run-PtSupplement.mjs');
   if(!fs.existsSync(script))throw Error('PT site execution helper is missing');
-  const command=[script,origin,catalogFile,catalogHash];
+  const command=[script,origin,catalogFile,catalogHash,...(readOnly?['--read-only']:[])];
   const output=await new Promise((resolve,reject)=>{
     const child=spawnChild(process.execPath,command,{cwd:legacyRoot,windowsHide:true,shell:false,
       stdio:['ignore','pipe','pipe'],env:{...process.env,CHECKIN_V2_ENGINE_ROOT:root,CHECKIN_V2_ENGINE_LEASE:lease.owner.nonce}});
@@ -43,7 +43,7 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
 }
 
 export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catalogHash,
-  acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  readOnly=false,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
   const absoluteCatalog=path.resolve(root,catalogFile??'');
   const actualHash=fs.existsSync(absoluteCatalog)?crypto.createHash('sha256').update(fs.readFileSync(absoluteCatalog)).digest('hex'):null;
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??'')||actualHash!==catalogHash.toLowerCase()){
@@ -55,7 +55,7 @@ export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catal
   if(integration.executionEngine!=='v1'||path.resolve(integration.v2ProjectRoot).toLowerCase()!==path.resolve(root).toLowerCase())throw Error('PT site gateway binding mismatch');
   const lease=acquire(root);
   try {
-    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease});
+    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly});
     return projectPtSiteResult(value,origin);
   } finally {release(lease);}
 }
