@@ -4,7 +4,7 @@ import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
 import { createNoticeState, pausedNotices, attentionPreview } from './notice-state.mjs';
-import {dailyRecords, monthCells, moveMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
+import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
 import { enhanceSelect, closeSelectMenu } from './select-menu.mjs';
 import {statusLabels as STATUS_LABELS} from './checkin-contract.generated.mjs';
 
@@ -711,22 +711,30 @@ function renderLedgerDetails(record) {
 
 function renderCalendar(data) {
   const view=$('#checkin-calendar'),summary=$('#calendar-summary'),detail=$('#calendar-detail'),nav=$('#calendar-nav');if(!view||!summary||!detail||!nav)return;
+  closeSelectMenu();
   const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
   state.calendarScope??='all';
   const records=dailyRecords({ledger:state.calendarHistory??data?.ledger,snapshot:data?.snapshot,tasks:data?.tasks,
     ptStatus:data?.ptStatus,scope:state.calendarScope});
-  state.calendarMonth ??= today.slice(0,7);
-  state.calendarDate = state.calendarDate?.startsWith(state.calendarMonth + '-') ? state.calendarDate
-    : state.calendarMonth === today.slice(0,7) ? today : null;
-  const {offset,days}=monthCells(state.calendarMonth),labels=['周一','周二','周三','周四','周五','周六','周日'];
-  const monthly=monthTotals(records,state.calendarMonth);
   const earliestKnown=[...records.keys()].sort()[0]?.slice(0,7);
   const firstMonth=earliestKnown && earliestKnown<moveMonth(today.slice(0,7),-36)
     ? earliestKnown : moveMonth(today.slice(0,7),-36);
-  const lastMonth=moveMonth(today.slice(0,7),12);
+  const bounds={minimum:firstMonth+'-01',maximum:today};
+  state.calendarDate=moveCalendarDay(state.calendarDate??today,0,bounds);
+  state.calendarMonth=state.calendarDate.slice(0,7);
+  const {offset,days}=monthCells(state.calendarMonth),labels=['周一','周二','周三','周四','周五','周六','周日'];
+  const monthly=monthTotals(records,state.calendarMonth);
+  const focusControl=id=>{
+    const target=nav.querySelector(`.ui-select[data-for="${id}"] .ui-select-trigger`)??document.getElementById(id);
+    (target&&!target.disabled?target:view.querySelector('.calendar-day.selected'))?.focus({preventScroll:true});
+  };
+  const selectDate=(date,focusId)=>{
+    state.calendarDate=date;state.calendarMonth=date.slice(0,7);state.calendarFilter=null;renderCalendar(data);
+    if(focusId)focusControl(focusId);
+  };
   summary.replaceChildren(el('span','calendar-summary-count',monthly.recordDays?
     `${monthly.recordDays} 天有回执 · ${monthly.completed} 项完成 · ${monthly.unavailable} 项未开放 · ${monthly.pending} 项待处理`
-    : state.calendarMonth>today.slice(0,7) ? '未来月份 · 尚无执行回执' : '此月没有已保存的执行回执'));
+    : '此月没有已保存的执行回执'));
   const legend=el('span','calendar-legend');
   for(const [name,label] of [['completed','已完成'],['unavailable','未开放'],['pending','待处理']]){
     const item=el('span');append(item,el('i',`calendar-swatch ${name}`,''),document.createTextNode(label));legend.append(item);
@@ -737,20 +745,34 @@ function renderCalendar(data) {
     '历史刷新失败，显示已缓存记录':'历史记录暂不可用，当前仅显示最近数据'));
   else if(state.calendarTruncated)summary.append(el('span','calendar-history-note','仅展示最近 180 个有回执的日期'));
   nav.replaceChildren();
-  const heading=el('h3','calendar-month-title',`${state.calendarMonth.slice(0,4)} 年 ${Number(state.calendarMonth.slice(5))} 月`);
+  const period=el('div','calendar-period');period.setAttribute('role','group');period.setAttribute('aria-label','选择年月');
+  const year=el('select');year.id='calendar-year';year.setAttribute('aria-label','选择年份');
+  for(let value=Number(today.slice(0,4));value>=Number(firstMonth.slice(0,4));value--){
+    const option=el('option',null,`${value} 年`);option.value=String(value);option.selected=String(value)===state.calendarMonth.slice(0,4);year.append(option);
+  }
+  const month=el('select');month.id='calendar-month';month.setAttribute('aria-label','选择月份');
+  for(let value=1;value<=12;value++){
+    const option=el('option',null,`${value} 月`);option.value=String(value).padStart(2,'0');
+    const candidate=state.calendarMonth.slice(0,4)+'-'+option.value;
+    option.selected=candidate===state.calendarMonth;option.disabled=candidate<firstMonth||candidate>today.slice(0,7);month.append(option);
+  }
+  year.addEventListener('change',()=>selectDate(selectCalendarMonth(state.calendarDate,year.value+state.calendarMonth.slice(4),bounds),'calendar-year'));
+  month.addEventListener('change',()=>selectDate(selectCalendarMonth(state.calendarDate,state.calendarMonth.slice(0,5)+month.value,bounds),'calendar-month'));
+  append(period,year,month);
   const buttons=el('div','calendar-nav-buttons');
-  const previous=el('button','calendar-nav-btn month-step','‹');previous.type='button';previous.title='上个月';previous.setAttribute('aria-label','上个月');previous.disabled=state.calendarMonth<=firstMonth;
-  previous.addEventListener('click',()=>{state.calendarMonth=moveMonth(state.calendarMonth,-1);state.calendarDate=null;state.calendarFilter=null;renderCalendar(data);});
-  const next=el('button','calendar-nav-btn month-step','›');next.type='button';next.title='下个月';next.setAttribute('aria-label','下个月');next.disabled=state.calendarMonth>=lastMonth;
-  next.addEventListener('click',()=>{state.calendarMonth=moveMonth(state.calendarMonth,1);state.calendarDate=null;state.calendarFilter=null;renderCalendar(data);});
+  const previous=el('button','calendar-nav-btn day-step','‹');previous.id='calendar-prev-day';previous.type='button';previous.title='前一天';previous.setAttribute('aria-label','前一天');previous.disabled=state.calendarDate<=bounds.minimum;
+  previous.addEventListener('click',()=>selectDate(moveCalendarDay(state.calendarDate,-1,bounds),'calendar-prev-day'));
+  const next=el('button','calendar-nav-btn day-step','›');next.id='calendar-next-day';next.type='button';next.title='后一天';next.setAttribute('aria-label','后一天');next.disabled=state.calendarDate>=today;
+  next.addEventListener('click',()=>selectDate(moveCalendarDay(state.calendarDate,1,bounds),'calendar-next-day'));
   const todayButton=el('button','calendar-nav-btn today-btn','今天');todayButton.type='button';todayButton.setAttribute('aria-label','回到今天');todayButton.disabled=state.calendarMonth===today.slice(0,7)&&state.calendarDate===today;
-  todayButton.addEventListener('click',()=>{state.calendarMonth=today.slice(0,7);state.calendarDate=today;state.calendarFilter=null;renderCalendar(data);});
+  todayButton.addEventListener('click',()=>selectDate(today,'calendar-today'));todayButton.id='calendar-today';
   const scope=el('select');scope.id='calendar-scope';scope.setAttribute('aria-label','日历范围');
   for(const [value,label] of [['all','全部任务'],['regular','常规任务'],['pt','PT 站点']]){
     const option=el('option',null,label);option.value=value;option.selected=state.calendarScope===value;scope.append(option);
   }
-  scope.addEventListener('change',()=>{state.calendarScope=scope.value;state.calendarFilter=null;renderCalendar(data);});
-  append(buttons,scope,previous,todayButton,next);append(nav,heading,buttons);enhanceSelect(scope);
+  scope.addEventListener('change',()=>{state.calendarScope=scope.value;state.calendarFilter=null;renderCalendar(data);focusControl('calendar-scope');});
+  const dayControls=el('div','calendar-day-controls');append(dayControls,previous,todayButton,next);
+  append(buttons,scope,dayControls);append(nav,period,buttons);for(const select of [year,month,scope])enhanceSelect(select);
   view.replaceChildren();for(const label of labels)view.append(el('span','calendar-weekday',label));for(let i=0;i<offset;i++)view.append(el('span','calendar-empty',''));
   const stateOf=entry=>{if(!entry)return 'none';const totals=dayTotals(entry);if(totals.pending>0)return 'warn';if(totals.completed>0)return 'success';if(totals.unavailable>0)return 'done';return 'observe';};
   for(let day=1;day<=days;day++){
@@ -771,9 +793,10 @@ function renderCalendar(data) {
       view.querySelector(`.calendar-day[data-date="${date}"]`)?.focus({preventScroll:true});});
     button.addEventListener('keydown',event=>{
       const step={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7}[event.key];
-      if(!step)return;
-      const target=view.querySelector(`.calendar-day[data-date="${state.calendarMonth}-${String(day+step).padStart(2,'0')}"]`);
-      if(target&&!target.disabled){event.preventDefault();target.focus();}
+      if(!step||event.ctrlKey||event.altKey||event.metaKey)return;
+      const targetDate=moveCalendarDay(date,step,bounds);event.preventDefault();
+      if(targetDate.slice(0,7)!==state.calendarMonth)selectDate(targetDate);
+      view.querySelector(`.calendar-day[data-date="${targetDate}"]`)?.focus({preventScroll:true});
     });
     view.append(button);
   }
