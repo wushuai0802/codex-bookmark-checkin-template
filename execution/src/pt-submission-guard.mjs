@@ -16,7 +16,7 @@ export async function guardPtSubmission(run, check) {
     const result = await run(beforeSubmit);
     if (attempted && !['signed','already_signed'].includes(result?.status)) {
       if (result?.failureCode === 'captcha_ocr_exhausted' && result?.captchaRejected === true) return { ...result, submissionAttempted: true, retryable: false };
-      return { ...result, ...unknown() };
+      return { ...result, ...unknown(), ...(/维护通知|数据恢复|全量恢复/.test(result?.reason??'')?{siteCondition:'site_maintenance'}:{}) };
     }
     return { ...result, ...(attempted ? { submissionAttempted: true } : {}) };
   } catch (error) {

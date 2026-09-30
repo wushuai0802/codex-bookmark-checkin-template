@@ -514,7 +514,7 @@ function renderPtStatus(data) {
       effective.source==='harvest'?el('span','subtext','执行账号以自身回执为准'):null);
     else if (category==='unavailable') append(actionCell,el('span',null,'功能未开放'));
     else if(category==='reported')append(actionCell,el('span',null,'补录当日证据'),el('span','subtext','不重复提交签到'));
-    else append(actionCell,statusChip('needs_attention'),el('span','subtext',likelySigned ? effective.evidence.summary : '待执行层核验'));
+    else append(actionCell,statusChip('needs_attention'),el('span','subtext',effective.evidence?.summary || site.recovery?.summary || '待执行层核验'));
     if(site.inLegacyPlan && state.data?.sites?.some(item=>item.origin===site.origin)){
       const manage=el('button','link-button','管理标记');manage.type='button';manage.addEventListener('click',()=>openSiteControls(site.origin));actionCell.append(manage);
     }

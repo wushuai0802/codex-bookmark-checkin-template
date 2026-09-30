@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
+import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
@@ -46,10 +47,14 @@ try{
     }
   }
   const inputs=loadHarvestFallbackInputs({root,reportFile,catalogFile});
-  const fallbackOnlyEnabled=loadRuntimeConfig(root).ptFallbackOnlyEnabled;
-  const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount,
+  const runtime=loadRuntimeConfig(root),fallbackOnlyEnabled=runtime.ptFallbackOnlyEnabled;
+  const {ptReadPolicy}=await import(pathToFileURL(path.join(runtime.legacyRoot,'src/pt-read-policy.mjs')));
+  const readOnlyOrigins=inputs.catalog.sites.filter(site=>{
+    try{return ptReadPolicy(site.origin,inputs.config).dailyHeader===true;}catch{return false;}
+  }).map(site=>site.origin);
+  const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount,readOnlyOrigins,
     refreshHarvest:liveHarvestProbe(value('--harvest-ssh-target'),value('--harvest-db-path'))}):planHarvestFallback({...inputs,fallbackOnlyEnabled});
-  const newAttempts=execute?null:pendingHarvestFallbackAttempts(root,result).length;
+  const newAttempts=execute?null:pendingHarvestFallbackAttempts(root,result,{readOnlyOrigins}).length;
   const assessmentStates=Object.fromEntries([...new Set(result.assessments.map(item=>item.state))].sort().map(state=>[state,result.assessments.filter(item=>item.state===state).length]));
   const blockedReasons=Object.fromEntries([...new Set(result.blocked.map(item=>item.reason))].sort().map(reason=>[reason,result.blocked.filter(item=>item.reason===reason).length]));
   console.log(JSON.stringify({businessDate:result.businessDate,mode:execute?'executed':'preview',registeredCount:result.registeredCount,fallbackOnlyCount:result.fallbackOnlyCount,

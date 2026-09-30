@@ -16,6 +16,29 @@ remain unverified; the request never turns into a check-in. OpenCD's CAPTCHA
 flow remains in the formal executor. Opening its CAPTCHA dialog is distinct
 from submitting the answer.
 
+The generic entry point records a bound passive observation without submitting:
+
+```powershell
+node scripts/verify-pt.mjs <exact-origin> <catalog-file> <catalog-sha256>
+```
+
+Reviewed Nexus daily headers support authenticated current-day signed and
+unsigned controls. Scripts, service workers, action requests and redirects
+remain blocked. A public maintenance notice explains availability only; it
+does not confirm account status or resolve an earlier uncertain submission.
+
+For supported fallback-only sites, a historical blocker triggers a bounded
+passive check (up to three per day, at least thirty minutes apart). A fresh
+authoritative unsigned daily control can permit one guarded daily attempt;
+the executor checks the passive page again inside its locks before using the
+mature check-in flow. Changed, stale, unsigned-but-unverified or mismatched
+evidence does not permit a submission. Original uncertain attempts remain
+unchanged, and every recovery records the observation which allowed it.
+Successful passive reads stop submission. Diagnostics cannot replace success.
+
+The dashboard reports the blocking day and safe failure categories. It does
+not expose raw page errors, browser storage or account credentials.
+
 A dated passive receipt can close the executor's OpenCD quarantine and be
 reused by subsequent runs without another site submission.
 

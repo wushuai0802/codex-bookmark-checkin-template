@@ -339,6 +339,50 @@ test('rollback to independent V2 mode refuses Harvest fallback before a claim',a
   assert.equal(fs.existsSync(path.join(root,'outputs')),false);
 });
 
+test('historical uncertainty permits only a fresh passive check and guarded daily recovery',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-daily-recovery-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture(),origin='https://external.example';f.harvest.sites=[failed(origin)];
+  f.catalog.sites=f.catalog.sites.filter(s=>s.origin===origin);f.plan.targets=[];f.latest.results=[];
+  fs.mkdirSync(path.join(root,'outputs'),{recursive:true});
+  const oldFile=path.join(root,'outputs/harvest-fallback-attempts-2026-09-19.json');
+  fs.writeFileSync(oldFile,JSON.stringify({businessDate:'2026-09-19',attempts:[{origin,state:'outcome_unknown',startedAt:'2026-09-19T01:00:00Z'}]}));
+  const old=fs.readFileSync(oldFile,'utf8');
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  const args={...f,root,execute:true,catalogFile,catalogHash:'a'.repeat(64),readOnlyOrigins:[origin]};
+  const preview=planHarvestFallback(f);
+  assert.equal(pendingHarvestFallbackAttempts(root,preview,{now}).length,0);
+  assert.equal(pendingHarvestFallbackAttempts(root,preview,{now,readOnlyOrigins:[origin]}).length,1);
+  const passive={origin,status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',profileBinding:'b'.repeat(64),
+    accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+    evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:now.toISOString(),evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}};
+  const calls=[];
+  const output=await runHarvestFallback({...args,runSite:async options=>{
+    calls.push(options.readOnly?'read':options.verifyBeforeSubmit?'guarded':'unguarded');
+    return options.readOnly?passive:{...passive,status:'signed',submissionAttempted:true,operationMode:'legacy_checkin',readSafety:'attendance_page_risk'};
+  }});
+  assert.deepEqual(calls,['read','guarded']);assert.equal(output.outcomes[0].v1Status,'signed');
+  assert.equal(fs.readFileSync(oldFile,'utf8'),old);
+  assert.equal(pendingHarvestFallbackAttempts(root,preview,{now,readOnlyOrigins:[origin]}).length,0);
+  const state=JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json')));
+  assert.equal(state.attempts[0].recoveryEvidence.status,'not_signed');
+});
+
+test('uncertain passive result never permits a recovery submission',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-read-failure-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture(),origin='https://external.example';f.harvest.sites=[failed(origin)];
+  f.catalog.sites=f.catalog.sites.filter(s=>s.origin===origin);f.plan.targets=[];f.latest.results=[];
+  let calls=0;
+  const result=await runHarvestFallback({...f,root,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins:[origin],
+    runSite:async options=>{calls++;assert.equal(options.readOnly,true);return {origin,status:'unknown',observedAt:now.toISOString(),
+      businessDate:'2026-09-20',profileBinding:'b'.repeat(64),accountKey:'site-default',operationMode:'safe_history_page',
+      readSafety:'reviewed_passive',submissionAttempted:false,evidence:{source:'none',authoritative:false}};}});
+  assert.equal(calls,1);assert.equal(result.outcomes[0].state,'passive_result_unverified');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json'))).attempts.length,0);
+  assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now,readOnlyOrigins:[origin]}).length,0);
+});
+
 function configureUnifiedFixture(root){
   const legacyRoot=path.join(root,'legacy');fs.mkdirSync(path.join(root,'config'),{recursive:true});
   fs.mkdirSync(path.join(legacyRoot,'data'),{recursive:true});

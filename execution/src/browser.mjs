@@ -842,15 +842,18 @@ export async function tryNewApiCheckin(page) {
     // status/action sequence.
     const parseResponse = async (response) => {
       let body = null;
+      let challenge = false;
       if (typeof response?.text === "function") {
         const text = await response.text().catch(() => "");
         try { body = JSON.parse(text); } catch { /* non-JSON or challenge */ }
+        challenge = !body && /<(?:!doctype|html|title)\b/i.test(text)
+          && /Just a moment|cf-chl-|challenge-platform|Verify you are human|Attention Required/i.test(text);
       } else if (typeof response?.json === "function") {
         // Keep the helper testable with the minimal Response doubles used by
         // the offline suite, while real Chromium responses use text() above.
         body = await response.json().catch(() => null);
       }
-      return { status: Number(response?.status ?? 0), body };
+      return { status: Number(response?.status ?? 0), body, challenge };
     };
     const request = async (url, options = {}) => {
       try {
@@ -922,6 +925,9 @@ export async function tryNewApiCheckin(page) {
     const currentDate = new Date();
     const month = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, "0")}`;
     let statusResponse = await request(`/api/user/checkin?month=${month}`, { headers });
+    const challengeResult=()=>({status:'interactive_challenge',failureCode:'managed_challenge',
+      reason:'签到接口返回 Cloudflare 浏览器验证页，并非登录失效；未提交签到',submissionAttempted:false,retryableLoginRecovery:false});
+    if(statusResponse.challenge)return challengeResult();
     // A refresh can race with another tab's rotation.  One fresh token is
     // enough; never re-submit the check-in action in this recovery branch.
     if ([401, 403].includes(statusResponse.status) && !accessToken) {
@@ -946,6 +952,7 @@ export async function tryNewApiCheckin(page) {
       }
     }
     if (statusResponse.status === 404) return null;
+    if(statusResponse.challenge)return challengeResult();
     const statusBody = statusResponse.body;
     if (!statusBody && statusResponse.status === 0) return null;
     if ([401, 403].includes(statusResponse.status)) {
@@ -985,6 +992,8 @@ export async function tryNewApiCheckin(page) {
         statusSignal:'checked_in_today',confirmedAt:new Date().toISOString()} };
 
     const checkinResponse = await request("/api/user/checkin", { method: "POST", headers });
+    if(checkinResponse.challenge)return {status:'needs_attention',failureCode:'submission_outcome_unknown',
+      reason:'签到提交后返回浏览器验证页，结果不明，先只读核验',submissionAttempted:true,retryable:false};
     const checkinBody = checkinResponse.body;
     if (!checkinBody && checkinResponse.status === 0) return null;
     if ([401, 403].includes(checkinResponse.status)) {

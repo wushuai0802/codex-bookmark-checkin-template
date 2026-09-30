@@ -21,6 +21,11 @@ test('PT transport preserves evidence identity and rejects future or conflicting
   assert.equal(projectPtSiteResult({...value,submissionOutcomeUnknown:true},origin).status,'needs_attention');
   assert.equal(projectPtSiteResult({...value,evidence:{...value.evidence,confirmedAt:'2026-09-30T02:00:00Z'}},origin).status,'unknown');
   assert.equal(projectPtSiteResult({...value,operationMode:'private-value'},origin).operationMode,undefined);
+  const failure=projectPtSiteResult({...value,status:'needs_attention',failureCode:'site_maintenance',retryCause:'upstream_unavailable',siteCondition:'site_maintenance',evidence:{source:'none',authoritative:false}},origin);
+  assert.equal(failure.failureCode,'site_maintenance');assert.equal(failure.retryCause,'upstream_unavailable');
+  assert.equal(projectPtSiteResult({...failure,failureCode:'secret-value'},origin).failureCode,undefined);
+  assert.equal(projectPtSiteResult({...value,status:'not_signed'},origin).status,'not_signed');
+  assert.equal(projectPtSiteResult({...value,status:'not_signed',evidence:{source:'none',authoritative:false}},origin).status,'unknown');
 });
 
 test('site execution requires one unified lease and keeps the result redacted',async t=>{

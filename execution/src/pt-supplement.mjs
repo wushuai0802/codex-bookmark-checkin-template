@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import {launchAutomationContext,processTarget,ptPageEvidence} from './browser.mjs';
+import {launchAutomationContext,processTarget} from './browser.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
-import {ptExecutionBinding,ptReadPolicy,installPtReadFirewall} from './pt-read-policy.mjs';
+import {ptExecutionBinding,ptReadPolicy,installPtReadFirewall,readPtPassivePage,readPtPublicAvailability} from './pt-read-policy.mjs';
+import {ptDiagnostic} from './pt-diagnostics.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
@@ -37,7 +38,7 @@ export function publicSupplementResult(origin,result,now=new Date()){
     dayAt(new Date(confirmedAt))===dayAt(now)&&
     (!result?.evidence?.businessDate||result.evidence.businessDate===dayAt(now))&&
     (!result?.startedAt||confirmedAt>=Date.parse(result.startedAt)-60_000);
-  const authoritative=terminal.has(claimed)&&result?.evidence?.authoritative===true&&
+  const authoritative=(terminal.has(claimed)||claimed==='not_signed')&&result?.evidence?.authoritative===true&&
     dated&&result?.failureCode!=='submission_outcome_unknown';
   const unavailable=result?.status==='not_available'&&result?.evidence?.authoritative===true&&
     dated;
@@ -47,8 +48,10 @@ export function publicSupplementResult(origin,result,now=new Date()){
     unavailable?'not_available':
     terminal.has(claimed)?'unknown':'needs_attention';
   const source=['api','page_text','usage_log','pt_page'].includes(result?.evidence?.source)?result.evidence.source:'none';
+  const diagnostic=ptDiagnostic(result);
   return {origin,status,observedAt:now.toISOString(),
-    ...(result?.retryCause==='harvest_waiting'&&result?.submissionAttempted===false?{retryCause:'harvest_waiting',
+    ...(!authoritative?{failureCode:diagnostic.failureCode,...(diagnostic.siteCondition?{siteCondition:diagnostic.siteCondition}:{})}:{}),
+    ...(diagnostic.retryCause?{retryCause:diagnostic.retryCause,
       ...(Number.isFinite(Date.parse(result.nextEligibleAt))?{nextEligibleAt:new Date(result.nextEligibleAt).toISOString()}:{} )}:{}),
     operationMode:result?.operationMode??'unknown',readSafety:result?.readSafety??'unknown',
     ...(result?.profileBinding?{profileBinding:result.profileBinding,accountKey:result.accountKey??'site-default'}:{}),
@@ -57,12 +60,11 @@ export function publicSupplementResult(origin,result,now=new Date()){
       ...(Number.isFinite(confirmedAt)?{confirmedAt:new Date(confirmedAt).toISOString()}:{}),
       ...(result?.evidence?.businessDate?{businessDate:result.evidence.businessDate}:{}),
       ...(result?.evidence?.statusSignal?{statusSignal:result.evidence.statusSignal}:{}),
-      ...(result?.evidence?.pagePath==='/index.php'?{pagePath:'/index.php'}:{}),
-      evidenceScope:'site_account_day',summary:authoritative?'执行层确认今日签到':
+      ...(['/index.php','/'].includes(result?.evidence?.pagePath)?{pagePath:result.evidence.pagePath}:{}),
+      evidenceScope:'site_account_day',summary:authoritative?(claimed==='not_signed'?'已登录首页确认今日尚未签到':'执行层确认今日签到'):
       terminal.has(claimed)&&result?.evidence?.statusSignal==='cumulative_reward'?'检测到签到已得，疑似已签到；尚缺今日回执':
       terminal.has(claimed)?'执行层返回完成状态，仍需权威证据复核':
-      status==='login_required'?'执行层会话需要登录':
-      result?.failureCode==='submission_outcome_unknown'?'提交结果不明，禁止自动重放':'执行层尚未确认签到结果'},
+      diagnostic.summary},
     ...(result?.failureCode==='submission_outcome_unknown'?{submissionOutcomeUnknown:true}:{}),
     ...(result?.submissionAttempted===true?{submissionAttempted:true}:{}),
     ...(result?.submissionAttempted===false?{submissionAttempted:false}:{})};
@@ -86,7 +88,7 @@ export async function readPtRewardCounter(context,origin,config){
 }
 
 export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,clock=()=>now?new Date(now):new Date(),
-  readOnly=false,validateScope=()=>{},
+  readOnly=false,verifyBeforeSubmit=false,validateScope=()=>{},
   launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
   acquire=acquireRunLock,release=releaseRunLock}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
@@ -110,7 +112,7 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   if((config.disabledAccountKeys??[]).includes(target.accountKey))throw Error('PT account disabled by execution configuration');
   const binding=ptExecutionBinding(config,legacyRoot,target);
   const profile=binding.profile;
-  const policy=readOnly?ptReadPolicy(target.origin,config):null;
+  const policy=readOnly||verifyBeforeSubmit?ptReadPolicy(target.origin,config):null;
   if(!fs.existsSync(path.join(profile,'Local State')))throw Error('execution browser profile is unavailable');
   const readRules=file=>{try{return JSON.parse(fs.readFileSync(path.join(legacyRoot,file),'utf8')).rules??[];}catch(error){if(error.code==='ENOENT')return [];throw error;}};
   const rules=[...readRules('config/qa-rules.json'),...readRules('config/qa-rules.local.json')];
@@ -121,21 +123,28 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   let context;
   try {
     await validateScope();
-    context=await launch(safeConfig);
+    if(readOnly&&policy.publicAvailabilityUrl){
+      const availability=await readPtPublicAvailability(target.origin,policy);
+      if(availability)return publicSupplementResult(target.origin,{...metadata,...availability,submissionAttempted:false},clock());
+    }
+    context=await launch({...safeConfig,ptPassiveReadOnly:readOnly||verifyBeforeSubmit});
     await validateScope();
-    if(readOnly){
+    if(readOnly||verifyBeforeSubmit){
       await installPtReadFirewall(context,policy);
       const readOnlyUrl=policy.url;
       const page=await context.newPage();
       try{
-        await page.goto(readOnlyUrl,{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)});
-        const bodyText=await page.locator(policy.selector).innerText({timeout:5000});
+        const response=await page.goto(readOnlyUrl,{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)});
         const observedAt=clock();
-        const evidence=page.url()===policy.url?ptPageEvidence({origin:target.origin,url:page.url(),
-          bodyText,status:'already_signed',now:observedAt,allowUndatedActionText:false}):null;
-        return publicSupplementResult(target.origin,{...metadata,status:evidence?'already_signed':'unknown',
-          submissionAttempted:false,evidence:evidence??{source:'none',authoritative:false}},observedAt);
+        const result=await readPtPassivePage(page,policy,{origin:target.origin,now:observedAt,httpStatus:response?.status?.()??200});
+        if(readOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)
+          return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},observedAt);
       }finally{await page.close().catch(()=>{});}
+      await context.close();context=null;
+      await validateScope();
+      if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed before submission');
+      context=await launch({...safeConfig,ptPassiveReadOnly:false});
+      metadata.operationMode='legacy_checkin';metadata.readSafety='attendance_page_risk';
     }
     const before=await readReward(context,target.origin,safeConfig);
     let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));

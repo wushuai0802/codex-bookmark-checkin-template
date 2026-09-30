@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { normalizeOrigin, redactText } from './contracts.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
+import {projectPtDiagnostic} from './pt-site-execution.mjs';
 
 export const PT_STATUS_VALUES = [
   'signed', 'already_signed', 'not_signed', 'unknown', 'login_required',
@@ -129,6 +130,7 @@ function normalizeObservation(input, {
   return {
     source,
     origin,
+    ...projectPtDiagnostic(input),
     displayName: displayName ?? displayNameFor(input, origin),
     accountRef,
     status,
@@ -210,6 +212,7 @@ function mergeSiteObservations(observations, target) {
     managedBy: [...new Set(ordered.map((item) => item.managedBy))].sort().join(' + '),
     effective: effective ? {
       source: effective.source, status: effective.status, observedAt: effective.observedAt,
+      ...projectPtDiagnostic(effective),
       fresh: effective.freshness.fresh, authoritative: effective.evidence.authoritative,
       evidence: effective.evidence
     } : {source:'v2-observer',status:'unknown',observedAt:null,fresh:false,authoritative:false,
@@ -220,6 +223,7 @@ function mergeSiteObservations(observations, target) {
     supplementAction: supplementCandidate ? 'manual_review_only' : 'none',
     observations: ordered.map((item) => ({
       source: item.source, status: item.status, observedAt: item.observedAt,
+      ...projectPtDiagnostic(item),
       fresh: item.freshness.fresh, authoritative: item.evidence.authoritative,
       evidence: item.evidence
     }))
@@ -228,7 +232,7 @@ function mergeSiteObservations(observations, target) {
 
 export function buildPtStatus({
   tasks = [], receipts = [], planTargets = [], externalReport = null, fallbackReport = null, monitorCatalog = null,
-  fallbackOnlyEnabled = false,
+  fallbackOnlyEnabled = false, recoveryReport = null,
   generatedAt = new Date().toISOString(), businessDate = null, maxAgeHours = 26
 } = {}) {
   const report = externalReport
@@ -317,6 +321,16 @@ export function buildPtStatus({
   }
   const sites = [...grouped.values()].map((items) => ({...mergeSiteObservations(items, targets.get(items[0].origin)),
     fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)})).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
+  if(recoveryReport?.businessDate===businessDate)for(const site of sites){
+    const recovery=recoveryReport.sites?.find(item=>item.origin===site.origin);
+    if(!recovery||!['prior_outcome_unknown','submission_outcome_unknown','unverified_prior_attempt'].includes(recovery.code))continue;
+    site.recovery={code:recovery.code,blockedSince:recovery.blockedSince,summary:redactText(recovery.summary)};
+    if(!['signed','already_signed'].includes(site.effective.status)){
+      const detail=site.effective.evidence.summary;
+      site.effective.evidence.summary=site.recovery.summary+
+        (detail&&/维护|登录|验证|验证码|暂时不可用/.test(detail)?`；${detail}`:'');
+    }
+  }
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;
   return {

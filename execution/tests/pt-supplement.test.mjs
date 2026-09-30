@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {ptSupplementTarget,publicSupplementResult,runPtSupplement,ptRewardCounter} from '../src/pt-supplement.mjs';
 import {ptPageEvidence} from '../src/browser.mjs';
-import {ptReadPolicy,installPtReadFirewall,ptExecutionBinding} from '../src/pt-read-policy.mjs';
+import {ptReadPolicy,installPtReadFirewall,ptExecutionBinding,classifyPtPassivePage,readPtPublicAvailability} from '../src/pt-read-policy.mjs';
 
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-site-fallback-'));
@@ -151,6 +151,57 @@ test('unverified completion and uncertain submission are never reported as succe
   assert.equal(publicSupplementResult('https://pt.example',{status:'signed',evidence:{source:'page_text',authoritative:true,confirmedAt:'2026-09-19T02:00:00Z'}},now).status,'unknown');
   const uncertain=publicSupplementResult('https://pt.example',{status:'needs_attention',failureCode:'submission_outcome_unknown'},now);
   assert.equal(uncertain.status,'needs_attention');assert.equal(uncertain.submissionOutcomeUnknown,true);
+});
+
+test('diagnostics preserve actionable safe codes but never raw page errors',()=>{
+  const result=publicSupplementResult('https://pt.example',{status:'deferred',retryCause:'upstream_unavailable',
+    reason:'private cookie=do-not-export',submissionAttempted:false});
+  assert.equal(result.failureCode,'upstream_unavailable');assert.equal(result.retryCause,'upstream_unavailable');
+  assert.equal(result.submissionAttempted,false);assert.doesNotMatch(JSON.stringify(result),/private|cookie|do-not-export/);
+  const maintenance=publicSupplementResult('https://pt.example',{status:'needs_attention',failureCode:'submission_outcome_unknown',
+    siteCondition:'site_maintenance',submissionAttempted:true});
+  assert.equal(maintenance.submissionOutcomeUnknown,true);assert.equal(maintenance.siteCondition,'site_maintenance');
+  assert.match(maintenance.evidence.summary,/维护/);
+});
+
+test('reviewed daily header needs a logged-in exact control; forum text cannot authorize recovery',()=>{
+  const origin='https://u2.dmhy.org',policy=ptReadPolicy(origin),now=new Date('2026-09-30T05:00:00Z');
+  const args={origin,policy,url:policy.url,now,bodyText:'立即簽到',authenticated:true,
+    controls:[{path:'/showup.php',text:'立即簽到'}]};
+  const result=classifyPtPassivePage(args);
+  assert.equal(result.status,'not_signed');assert.equal(result.evidence.statusSignal,'nexus_daily_header_unsigned');
+  for(const invalid of [{authenticated:false},{controls:[]},{url:origin+'/forums.php'},
+    {controls:[{path:'/showup.php',text:'立即簽到'},{path:'/showup.php',text:'已簽到'}]}])
+    assert.equal(classifyPtPassivePage({...args,...invalid}).status,'unknown');
+  assert.equal(classifyPtPassivePage({...args,controls:[{path:'/showup.php',text:'已簽到'}]}).status,'already_signed');
+  const cspt='https://cspt.top',csptPolicy=ptReadPolicy(cspt);
+  const reward={...args,origin:cspt,url:csptPolicy.url,policy:csptPolicy,bodyText:'签到已得1155',controls:[{path:'/attendance.php',text:'[签到已得1155]'}]};
+  assert.equal(classifyPtPassivePage(reward).status,'already_signed');
+  assert.equal(classifyPtPassivePage({...reward,controls:[]}).status,'unknown');
+  const star='https://pt.xingyungept.org',starPolicy=ptReadPolicy(star);
+  assert.equal(classifyPtPassivePage({...reward,origin:star,url:starPolicy.url,policy:starPolicy,
+    controls:[{path:'/attendance.php',text:'[签到已得70, 补签卡: 9]'}]}).status,'already_signed');
+});
+
+test('maintenance observation uses an unauthenticated GET and cannot establish account completion',async()=>{
+  const origin='https://ptsbao.club';
+  const result=await readPtPublicAvailability(origin,ptReadPolicy(origin),{fetchPage:async(url,options)=>{
+    assert.equal(url,origin+'/claim/');assert.equal(options.credentials,'omit');assert.equal(options.redirect,'manual');
+    assert.equal(options.method,'GET');assert.equal(options.headers,undefined);
+    return {status:200,text:async()=>'<h1>维护通知</h1>站点处于全量数据恢复与测试阶段,暂时无法访问。'};
+  }});
+  assert.equal(result.failureCode,'site_maintenance');assert.equal(result.evidence.authoritative,false);
+});
+
+test('guarded recovery repeats the passive read and never submits when state changed to signed',async t=>{
+  const args=fixture(t),origin='https://open.cd';
+  fs.writeFileSync(args.catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/index.php'}]}));
+  const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');
+  const result=await runPtSupplement({...args,origin,catalogHash,verifyBeforeSubmit:true,
+    launch:async c=>{assert.equal(c.ptPassiveReadOnly,true);return {route:async()=>{},newPage:async()=>({
+      goto:async()=>({status:()=>200}),url:()=>origin+'/index.php',locator:()=>({innerText:async()=> '今日已签到'}),close:async()=>{}}),close:async()=>{}};},
+    runTarget:async()=>{throw Error('must never repeat a completed check-in');}});
+  assert.equal(result.status,'already_signed');assert.equal(result.submissionAttempted,false);
 });
 
 test('catalog changes, daily owner and explicit disable stop before a browser launch',async t=>{

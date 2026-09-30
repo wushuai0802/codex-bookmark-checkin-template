@@ -6,7 +6,8 @@ import {loadRuntimeConfig} from './runtime-config.mjs';
 import {runLegacyEngine} from './legacy-engine.mjs';
 import {runPtSite,projectPtSiteResult} from './pt-site-execution.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
-import {ptAttemptId} from './pt-reconciliation.mjs';
+import {ptAttemptReconciled} from './pt-reconciliation.mjs';
+import {currentPassivePtResult,recordPtVerification} from './pt-verification.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
 const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:null;}catch{return null;}};
@@ -151,20 +152,24 @@ function unresolvedEarlierAttempt(root,candidate){
     const {state}=readAttemptState(root,match[1]);
     if(state.attempts.some((item,index)=>item.origin===candidate.origin&&
       (item.accountKey??'site-default')===candidate.accountKey&&
-      !state.reconciliations?.some(resolution=>resolution.attemptId===ptAttemptId(item,index)&&
-        (resolution.kind==='confirmed_external'||resolution.kind==='closed_manual'&&resolution.operatorConfirmed===true||
-         resolution.kind==='confirmed_not_submitted'&&resolution.submissionAttempted===false)&&resolution.businessDate===match[1]&&
-        resolution.origin===item.origin&&resolution.accountKey===(item.accountKey??'site-default'))&&
+      !ptAttemptReconciled(state,item,index)&&
       (['in_progress','outcome_unknown','completed_cross_day'].includes(item.state)||
        item.outcome?.submissionOutcomeUnknown===true||item.outcome?.failureCode==='submission_outcome_unknown')))return true;
   }
   return false;
 }
 
-export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={},now=new Date()}={}){
+function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
+  if(candidate.kind!=='fallback_only'||!readOnlyOrigins.includes(candidate.origin))return false;
+  const probes=(state.verifications??[]).filter(v=>v.origin===candidate.origin&&(v.accountKey??'site-default')===candidate.accountKey);
+  return probes.length<3&&probes.every(v=>now.getTime()-Date.parse(v.startedAt)>=30*60_000);
+}
+
+export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={},readOnlyOrigins=[],now=new Date()}={}){
   const {state}=readAttemptState(root,preview.businessDate);
-  return preview.eligible.filter(candidate=>!alreadyAttempted(state,candidate,recoveredAtByAccount,now)&&
-    !unresolvedEarlierAttempt(root,candidate));
+  return preview.eligible.filter(candidate=>candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin)
+    ?passiveVerificationDue(state,candidate,readOnlyOrigins,now)
+    :!alreadyAttempted(state,candidate,recoveredAtByAccount,now)&&!unresolvedEarlierAttempt(root,candidate));
 }
 
 function claimWorker(root) {
@@ -173,7 +178,7 @@ function claimWorker(root) {
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
-  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={}}={}) {
+  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[]}={}) {
   const preview=planHarvestFallback({harvest,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled});
   if(!execute)return {...preview,mode:'preview'};
   const runtime=loadRuntimeConfig(root);
@@ -190,8 +195,14 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   for(const candidate of preview.eligible){
     const candidateNow=clock();
     if(dayAt(candidateNow)!==preview.businessDate){outcomes.push({origin:candidate.origin,state:'business_day_changed'});break;}
-    if(alreadyAttempted(state,candidate,recoveredAtByAccount,candidateNow)){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
-    if(unresolvedEarlierAttempt(root,candidate)){outcomes.push({origin:candidate.origin,state:'prior_outcome_unknown'});continue;}
+    const attempted=alreadyAttempted(state,candidate,recoveredAtByAccount,candidateNow);
+    const historicalUnknown=unresolvedEarlierAttempt(root,candidate);
+    const canVerify=passiveVerificationDue(state,candidate,readOnlyOrigins,candidateNow);
+    if(candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin)&&!canVerify){
+      outcomes.push({origin:candidate.origin,state:'passive_verification_cooldown'});continue;
+    }
+    if(attempted&&!canVerify){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
+    if(historicalUnknown&&!canVerify){outcomes.push({origin:candidate.origin,state:'prior_outcome_unknown'});continue;}
     let currentSupplement=null;
     if(fs.existsSync(statusFile)){
       currentSupplement=JSON.parse(fs.readFileSync(statusFile,'utf8'));
@@ -222,15 +233,46 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         break;
       }
     }
-    // Persist before executing. An interrupted or uncertain attempt is not replayed.
+    let recoveryEvidence=null;
+    if(canVerify){
+      const verification={origin:candidate.origin,accountKey:candidate.accountKey,startedAt:clock().toISOString(),state:'in_progress'};
+      state.verifications??=[];state.verifications.push(verification);writeAtomic(stateFile,state);
+      try{
+        const checked=currentPassivePtResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash,readOnly:true}),clock());
+        if(checked.accountKey!==candidate.accountKey)throw Error('passive account mismatch');
+        verification.outcome=checked;verification.state='completed';verification.finishedAt=clock().toISOString();
+        recordPtVerification(root,checked,{now:clock(),lockHeld:true});writeAtomic(stateFile,state);
+        if(['signed','already_signed'].includes(checked.status)){
+          outcomes.push({origin:candidate.origin,state:'confirmed_by_passive_read',v1Status:checked.status});continue;
+        }
+        if(checked.status!=='not_signed'||checked.evidence?.authoritative!==true||
+          checked.evidence.statusSignal!=='nexus_daily_header_unsigned'){
+          outcomes.push({origin:candidate.origin,state:'passive_result_unverified',v1Status:checked.status});continue;
+        }
+        // This does not close or relabel historical uncertainty. A fresh, bound
+        // daily-state observation permits only this day's guarded attempt.
+        recoveryEvidence=checked;
+        if(state.attempts.filter(a=>a.origin===candidate.origin&&!['deferred_busy','deferred_preflight'].includes(a.state)).length>=3){
+          outcomes.push({origin:candidate.origin,state:'daily_attempt_limit'});continue;
+        }
+      }catch{
+        verification.state='unverified';verification.finishedAt=clock().toISOString();writeAtomic(stateFile,state);
+        outcomes.push({origin:candidate.origin,state:'passive_verification_unavailable'});continue;
+      }
+    }
+    if(canVerify&&dayAt(clock())!==preview.businessDate){outcomes.push({origin:candidate.origin,state:'business_day_changed'});break;}
+    // Persist before executing. No uncertain attempt is retried without a new
+    // authoritative read, followed by another read inside the executor lock.
     const attempt={attemptId:crypto.randomUUID(),origin:candidate.origin,accountKey:candidate.accountKey,businessDate:preview.businessDate,
       observedAt:candidate.observedAt,startedAt:candidateNow.toISOString(),state:'in_progress'};
+    if(recoveryEvidence)attempt.recoveryEvidence=recoveryEvidence;
     if(Number.isFinite(Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])))
       attempt.recoveredAt=recoveredAtByAccount[recoveryIdentity(candidate)];
     state.attempts.push(attempt);writeAtomic(stateFile,state);
     try{
       if(candidate.kind==='fallback_only'){
-        const result=projectPtSiteResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash}),candidate.origin);
+        const result=projectPtSiteResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash,
+          verifyBeforeSubmit:Boolean(recoveryEvidence)}),candidate.origin);
         const receivedAt=clock();
         // Keep the redacted receipt before later validation or publication.
         attempt.outcome=result;

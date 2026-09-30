@@ -7,6 +7,7 @@ import { buildSnapshot, writeSnapshot } from './bridge.mjs';
 import { appendLedgerRecord, createLedgerRecord } from './shadow-ledger.mjs';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {commitDashboardGeneration} from './dashboard-generation.mjs';
+import {loadPtRecoveryDiagnostics} from './pt-reconciliation.mjs';
 
 function parseArgs(argv) {
   const args = {};
@@ -80,6 +81,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
       ptStatusReport: livePtReport ?? cachedPtReport,
       ptFallbackReport: loadJsonReport(args.ptFallbackFile??(fs.existsSync(automaticFallbackFile)?automaticFallbackFile:null), 'PT fallback report'),
       ptFallbackOnlyEnabled:loadRuntimeConfig(projectRoot).ptFallbackOnlyEnabled,
+      ptRecoveryReport:loadPtRecoveryDiagnostics(projectRoot,businessDate),
       monitorCatalog: loadJsonReport(args.monitorCatalog, 'PT bookmark catalog'),
       identityReport: loadJsonReport(args.identityFile, 'display identity observations'),
       desiredPlan: loadJsonReport(args.desiredPlan,'desired task plan')

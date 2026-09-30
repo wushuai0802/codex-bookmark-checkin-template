@@ -21,6 +21,7 @@ import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompleti
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { pendingOpenCdSubmission, pendingQuotaClaim } from "./quota-claim-guard.mjs";
 import {verifiedPtObservation} from './pt-observation-receipt.mjs';
+import {observePendingVibeClaim} from './vibe-readonly.mjs';
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
   applyPreferredCandidates,
@@ -611,9 +612,15 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
-        const guardedQuotaClaim = verifiedPtObservation(rootDirectory,target,config)
+        let guardedQuotaClaim = verifiedPtObservation(rootDirectory,target,config)
           ?? pendingQuotaClaim(target, siteState, previousFinalReport, config)
           ?? pendingOpenCdSubmission(target, siteState, previousFinalReport);
+        if(target.origin==='https://new.sharedchat.cc'&&guardedQuotaClaim?.failureCode==='submission_outcome_unknown'){
+          await closeSharedContexts(sharedContexts,activeContexts);
+          const readConfig=configForOAuthExecutionAccount(configForOAuthSession(config,oauthSessionProfiles,target.origin),rootDirectory,target.origin);
+          const observed=await observePendingVibeClaim(readConfig,{launch:launchAutomationContext});
+          if(observed)guardedQuotaClaim={...guardedQuotaClaim,...observed};
+        }
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
         const targetResult = guardedQuotaClaim
           ? guardedQuotaClaim

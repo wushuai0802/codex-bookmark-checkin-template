@@ -17,6 +17,39 @@ export function listPtAttempts(root,businessDate){
     accountKey:item.accountKey??'site-default',state:item.state,startedAt:item.startedAt}));
 }
 
+export function ptAttemptReconciled(state,attempt,index){
+  return state.reconciliations?.some(r=>r.attemptId===ptAttemptId(attempt,index)&&r.businessDate===state.businessDate&&
+    r.origin===attempt.origin&&r.accountKey===(attempt.accountKey??'site-default')&&
+    (r.kind==='confirmed_external'||r.kind==='closed_manual'&&r.operatorConfirmed===true||
+      r.kind==='confirmed_not_submitted'&&r.submissionAttempted===false));
+}
+
+export function loadPtRecoveryDiagnostics(root,businessDate){
+  const directory=path.join(root,'outputs'),byOrigin=new Map();
+  if(!fs.existsSync(directory))return {businessDate,sites:[]};
+  for(const file of fs.readdirSync(directory).sort()){
+    const match=/^harvest-fallback-attempts-(\d{4}-\d{2}-\d{2})[.]json$/.exec(file);
+    if(!match||match[1]>businessDate)continue;
+    const state=JSON.parse(fs.readFileSync(path.join(directory,file),'utf8'));
+    if(state.businessDate!==match[1]||!Array.isArray(state.attempts))throw Error('invalid PT attempt journal');
+    for(const [index,attempt] of state.attempts.entries()){
+      if(ptAttemptReconciled(state,attempt,index))continue;
+      const unknown=['in_progress','outcome_unknown','completed_cross_day'].includes(attempt.state)||
+        attempt.outcome?.submissionOutcomeUnknown===true||attempt.outcome?.failureCode==='submission_outcome_unknown';
+      const unverified=match[1]===businessDate&&attempt.state==='completed'&&
+        ['needs_attention','unknown'].includes(attempt.v1Status)&&attempt.outcome?.submissionAttempted!==false;
+      if(!unknown&&!unverified)continue;
+      if(byOrigin.has(attempt.origin)&&!unverified)continue;
+      if(byOrigin.has(attempt.origin)&&byOrigin.get(attempt.origin).code==='prior_outcome_unknown')continue;
+      const code=unknown&&match[1]<businessDate?'prior_outcome_unknown':unknown?'submission_outcome_unknown':'unverified_prior_attempt';
+      byOrigin.set(attempt.origin,{origin:attempt.origin,code,blockedSince:match[1],
+        summary:code==='prior_outcome_unknown'?`${match[1]} 的补签结果尚未结案，须先只读核验当前状态`:
+          code==='unverified_prior_attempt'?'今日补签缺少明确结果和提交状态，须先只读核验':'今日提交结果不明，须先只读核验，禁止自动重放'});
+    }
+  }
+  return {businessDate,sites:[...byOrigin.values()]};
+}
+
 // Reconciliation is append-only evidence, never deletion or reset of attempts.
 // Old attempts without an exact profile binding require manual investigation.
 export function reconcilePtAttempt({root,businessDate,attemptId,receipt,kind='confirmed_external',acknowledgement=null,note='',now=new Date()}={}){

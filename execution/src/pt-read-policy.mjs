@@ -3,6 +3,13 @@ import path from 'node:path';
 import {configuredIsolatedOAuthSiteProfiles,configForIsolatedOAuthSite} from './isolated-site-profiles.mjs';
 import {configuredOAuthSessionProfiles,configForOAuthSession} from './oauth-session-profiles.mjs';
 import {configForOAuthExecutionAccount} from './oauth-execution-binding.mjs';
+import {ptPageEvidence,classifyPageText} from './detector.mjs';
+
+const dailyHeaders={
+  'https://cspt.top':{selector:'.menu-base-info',actionPath:'/attendance.php',unsignedText:'签到得金元宝',signedRewardControl:true},
+  'https://pt.xingyungept.org':{selector:'#info_block',actionPath:'/attendance.php',unsignedText:'签到得星焱',signedRewardControl:true},
+  'https://u2.dmhy.org':{selector:'#info_block',actionPath:'/showup.php',unsignedText:'立即簽到'}
+};
 
 export function ptExecutionBinding(config,root,target){
   if([config.isolatedOAuthSiteProfiles?.[target.origin],config.oauthSiteSessionBindings?.[target.origin],
@@ -32,7 +39,12 @@ export function ptExecutionBinding(config,root,target){
 // OpenCD index supplies the passive server-rendered header. CAPTCHA submission
 // stays in the formal runner. Bookmark folder names never grant capabilities.
 export function ptReadPolicy(origin,config={}){
-  const policy=config.ptReadOnlyPolicies?.[origin]??(origin==='https://open.cd'?{
+  const policy=config.ptReadOnlyPolicies?.[origin]??(dailyHeaders[origin]?{
+    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',...dailyHeaders[origin],dailyHeader:true
+  }:origin==='https://ptsbao.club'?{
+    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'body',
+    publicAvailabilityUrl:origin+'/claim/'
+  }:origin==='https://open.cd'?{
     reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'body',openCdHeader:true
   }:null);
   const unsafe=()=>{const e=Error('PT read-only capability is not reviewed for this site');e.code='PT_READONLY_UNSAFE';return e;};
@@ -43,6 +55,55 @@ export function ptReadPolicy(origin,config={}){
      /attendance|check[-_]?in|sign[_-]?(?:in|out)|logout|delete|submit|confirm|claim/i.test(decodeURIComponent(url.pathname))||
      [...url.searchParams].some(([key,value])=>!['id','page'].includes(key)||!/^\d{1,12}$/.test(value)))throw unsafe();
   return {...policy,url:url.href};
+}
+
+export async function readPtPublicAvailability(origin,policy,{fetchPage=fetch}={}){
+  // This published maintenance page is fetched without an authenticated browser
+  // or cookies. It can explain unavailability, never establish account status.
+  if(origin!=='https://ptsbao.club'||policy.publicAvailabilityUrl!==origin+'/claim/')return null;
+  try{
+    const response=await fetchPage(policy.publicAvailabilityUrl,{method:'GET',redirect:'manual',credentials:'omit',signal:AbortSignal.timeout(8000)});
+    if(response.status!==200)return null;
+    const text=(await response.text()).slice(0,100000).replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+    if(/维护通知/.test(text)&&/数据恢复与测试阶段.{0,20}暂时无法访问/.test(text))
+      return {status:'needs_attention',failureCode:'site_maintenance',siteCondition:'site_maintenance',
+        retryCause:'upstream_unavailable',evidence:{source:'page_text',authoritative:false}};
+  }catch{/* A failed public read says nothing about the account. */}
+  return null;
+}
+
+export function classifyPtPassivePage({origin,url,policy,bodyText,controls=[],authenticated=false,httpStatus=200,now=new Date()}){
+  const classification=classifyPageText({url,bodyText});
+  if(url!==policy.url||httpStatus!==200)return {status:'unknown',failureCode:'network_error'};
+  if(classification.status==='login_required')return {...classification,submissionAttempted:false};
+  if(classification.retryCause==='upstream_unavailable')return {...classification,
+    ...(/数据恢复|全量恢复|维护通知/.test(bodyText)?{failureCode:'site_maintenance'}:{}),submissionAttempted:false};
+  if(policy.dailyHeader){
+    if(!authenticated)return {status:'unknown',failureCode:'authoritative_status_unavailable'};
+    const actions=controls.filter(c=>c.path===policy.actionPath).map(c=>String(c.text).trim().replace(/^[\[【]|[\]】]$/g,''));
+    const unsigned=actions.includes(policy.unsignedText);
+    // On these reviewed headers the action itself switches from "签到得…"
+    // to "签到已得…" after success. A counter elsewhere is not this control.
+    const signed=actions.some(text=>/^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$/.test(text)||
+      policy.signedRewardControl===true&&/^(?:签到已得|簽到已得)[0-9,.]+(?:,\s*补签卡:\s*\d+)?$/.test(text));
+    if(unsigned&&signed)return {status:'unknown',failureCode:'authoritative_status_unavailable'};
+    if(unsigned||signed)return {status:unsigned?'not_signed':'already_signed',evidence:{source:'pt_page',authoritative:true,
+      confirmedAt:now.toISOString(),businessDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),
+      pagePath:new URL(policy.url).pathname,statusSignal:unsigned?'nexus_daily_header_unsigned':'nexus_daily_header_signed'}};
+  }
+  const evidence=ptPageEvidence({origin,url,bodyText,status:'already_signed',now,allowUndatedActionText:false});
+  return {status:evidence?'already_signed':'unknown',evidence:evidence?{...evidence,pagePath:new URL(policy.url).pathname}:undefined};
+}
+
+export async function readPtPassivePage(page,policy,{origin,now=new Date(),httpStatus=200}={}){
+  const bodyText=await page.locator(policy.selector).innerText({timeout:5000}).catch(()=> '');
+  let controls=[],authenticated=false;
+  if(policy.dailyHeader){
+    controls=await page.locator(policy.selector+' a').evaluateAll(links=>links.map(a=>({text:a.textContent.trim(),path:new URL(a.href).pathname}))).catch(()=>[]);
+    authenticated=await page.locator('a').evaluateAll(links=>links.some(a=>/\/(?:logout|logoff)\.php/.test(a.href))&&
+      links.some(a=>/\/usercp\.php/.test(a.href))&&links.some(a=>/\/userdetails\.php\?id=\d+/.test(a.href))).catch(()=>false);
+  }
+  return classifyPtPassivePage({origin,url:page.url(),policy,bodyText,controls,authenticated,httpStatus,now});
 }
 
 export async function installPtReadFirewall(context,policy){
