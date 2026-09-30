@@ -378,7 +378,7 @@ try {
         do {
             $last = Read-PageSnapshot $taskWindow
             $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $clicked -FormalVisit:(-not $ReadOnly -and $targetUri.AbsolutePath -match '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$')
-            if ($pageEvidence) {
+            if (Test-NativePageCompletion $last $originValue $pageEvidence) {
                 $result = [pscustomobject]@{
                     status = if ($clicked) { 'signed' } else { 'already_signed' }
                     reason = if ($clicked) { '主 Chrome 页面明确确认签到成功' } else { '主 Chrome 页面明确确认今日已签到' }

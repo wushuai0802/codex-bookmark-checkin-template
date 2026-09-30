@@ -2,6 +2,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import {conditionLabels} from './checkin-contract.generated.mjs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -159,6 +160,7 @@ function publicTask(task, receipt) {
     executionOwner: task.executionOwner,
     executionMode: task.executionMode,
     observedStatus: task.observedStatus ?? receipt?.status ?? null,
+    ...(Object.hasOwn(conditionLabels,task.condition??'')?{condition:task.condition}:{}),
     ...projectPtDiagnostic(task),
     ...(typeof task.submissionAttempted==='boolean'?{submissionAttempted:task.submissionAttempted}:{}),
     ...(['pt','service'].includes(task.taskKind)?{taskKind:task.taskKind}:{}),

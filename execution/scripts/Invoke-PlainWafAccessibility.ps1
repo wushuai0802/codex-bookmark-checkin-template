@@ -339,7 +339,7 @@ try {
             exit 2
         }
         $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked -FormalVisit:([bool]$PerformCheckin -and [bool]$last.attendanceEndpoint)
-        if ($pageEvidence) {
+        if (Test-NativePageCompletion $last $originValue $pageEvidence) {
             [pscustomobject]@{
                 status = 'signed'
                 reason = '无调试原生 Chrome 页面确认签到完成'

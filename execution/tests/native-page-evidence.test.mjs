@@ -15,6 +15,7 @@ test('native evidence is created only from same-site daily or action-confirmed p
   const cases=[
     {snapshot:base,expected:true},
     {snapshot:{...base,bodyText:'今日已簽到'},expected:true},
+    {snapshot:{...base,bodyText:'今日已簽到',success:false},expected:true},
     {snapshot:{...base,bodyText:'签到成功'},clicked:true,expected:true},
     {snapshot:{...base,currentUrl:'https://www.pt.example/attendance.php'},expected:true},
     {snapshot:{...base,bodyText:'签到成功'},expected:false},
@@ -45,6 +46,9 @@ test('native evidence is created only from same-site daily or action-confirmed p
 [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
 . '${quoted(scripts+'ResultContract.ps1')}'
 $cases='${quoted(JSON.stringify(cases))}' | ConvertFrom-Json
+$legacy=[pscustomobject]@{success=$true;sameOrigin=$true;waf=$false;securityVerification=$false;loginRoute=$false}
+if(-not (Test-NativePageCompletion $legacy 'https://service.example' $null)){throw 'non-PT completion behavior changed'}
+if(Test-NativePageCompletion $legacy 'https://ourbits.club' $null){throw 'PT completion without evidence was accepted'}
 $rows=@(foreach($c in $cases){
   $target=if($c.url){$c.url}else{'https://pt.example/attendance.php'}
   $proof=Get-ConfirmedNativePageEvidence $c.snapshot $target ([bool]$c.clicked) ([datetimeoffset]'2026-09-29T02:00:00Z') ([bool]$c.formalVisit)

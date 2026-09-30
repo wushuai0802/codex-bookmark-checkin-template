@@ -28,7 +28,7 @@ test("native readers recognize short NexusPHP completion messages", async () => 
     assert.match("今日已签到", new RegExp(pattern, "i"));
     assert.doesNotMatch("今日签到 尚未签到", new RegExp(pattern, "i"));
     assert.match(source, /\$pageEvidence = Get-ConfirmedNativePageEvidence \$last \$Url/);
-    assert.match(source, /if \(\$pageEvidence\)/);
+    assert.match(source, /if \(Test-NativePageCompletion \$last \$originValue \$pageEvidence\)/);
     assert.doesNotMatch(source, /if \(\$last\.success -and \$last\.siteBodyLoaded\)/);
   }
 });
