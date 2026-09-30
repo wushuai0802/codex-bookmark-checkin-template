@@ -17,7 +17,7 @@ try {
   const config=JSON.parse(fs.readFileSync(path.join(root,'config/config.json'),'utf8'));
   const validateScope=()=>{
     const bytes=fs.readFileSync(catalogFile);
-    if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash){const error=Error('PT catalog changed during execution');error.code='PT_PREFLIGHT';throw error;}
+    if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase()){const error=Error('PT catalog changed during execution');error.code='PT_PREFLIGHT';throw error;}
     return validateCurrentPtCatalog(JSON.parse(bytes),{bookmarksPath:config.bookmarksPath});
   };
   const result=await runPtSupplement({root,origin,catalogFile,catalogHash,readOnly:mode==='--read-only',validateScope});
