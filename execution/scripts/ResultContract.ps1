@@ -47,6 +47,11 @@ function Get-CheckinAttentionClass($Result) {
 function Get-NativeSuccessText([string]$BodyText) {
     $match = [regex]::Match($BodyText, '(?i)(?:今日|今天|当日|當日).{0,12}(?:已签到|已簽到|已经签到|已經簽到)|已完成今日签到|already checked[ -]?in today|checked in today|签到成功|簽到成功|本次(?:签到|簽到).{0,18}(?:获得|獲得)')
     if ($match.Success) { return $match.Value }
+    $short = [regex]::Match($BodyText, '已经签到|已經簽到|已签到|已簽到')
+    if ($short.Success) {
+        $start = [Math]::Max(0, $short.Index - 24)
+        return $BodyText.Substring($start, [Math]::Min(72, $BodyText.Length - $start))
+    }
     return ''
 }
 
@@ -61,14 +66,23 @@ function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$C
             ($expected.IdnHost.ToLowerInvariant() -replace '^www\.', '') -ne ($actual.IdnHost.ToLowerInvariant() -replace '^www\.', '')) { return $null }
     } catch { return $null }
     $headerOrigin = $expected.GetLeftPart([System.UriPartial]::Authority)
-    $header = $headerOrigin -in $CheckinNativePtHeaderOrigins -and $Snapshot.authenticated -eq $true -and
+    $reviewedHeader = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($headerOrigin -replace '^https://www\.', 'https://') }).Count -gt 0
+    $header = $reviewedHeader -and $Snapshot.authenticated -eq $true -and
         $actual.AbsolutePath -in @('/', '/index.php') -and -not $actual.Query -and
-        [string]$Snapshot.successControl -match '^(?:(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)|(?:签到已得|簽到已得)[0-9,.]+(?:,\s*补签卡:\s*\d+)?)$'
+        [string]$Snapshot.successControl -match '^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$'
     if (-not $header -and $actual.AbsolutePath -notmatch '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$') { return $null }
     $body = if ($Snapshot.successText) { [string]$Snapshot.successText } else { [string]$Snapshot.bodyText }
     $daily = $body -match '(?:今日|今天|当日|當日).{0,12}(?:已签到|已簽到|已经签到|已經簽到)|已完成今日签到|already checked[ -]?in today|checked in today'
     $action = ($Clicked -or $FormalVisit) -and $body -match '签到成功|簽到成功|本次(?:签到|簽到).{0,18}(?:获得|獲得)'
-    if (-not $header -and -not $daily -and -not $action) { return $null }
+    $shortDailyEndpoint = $FormalVisit -and $reviewedHeader -and
+        $actual.AbsolutePath -match '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$' -and
+        $body -match '已经签到|已經簽到|已签到|已簽到' -and
+        $body -notmatch '(?:昨天|昨日|上次|历史|歷史).{0,24}(?:已签到|已簽到|已经签到|已經簽到)'
+    if ($shortDailyEndpoint) {
+        $day=$Now.ToOffset([timespan]::FromHours(8)).ToString('yyyy-MM-dd')
+        foreach($date in [regex]::Matches($body,'\d{4}-\d{2}-\d{2}')) { if($date.Value -ne $day){$shortDailyEndpoint=$false} }
+    }
+    if (-not $header -and -not $daily -and -not $action -and -not $shortDailyEndpoint) { return $null }
     return [pscustomobject]@{
         source = 'page_text'
         authoritative = $true

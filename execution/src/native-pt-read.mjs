@@ -28,6 +28,15 @@ export async function inspectNativePtHeader({root,origin,url,execute=runFile}){
   }
   let value;try{value=JSON.parse(stdout.trim().replace(/^\uFEFF/,''));}catch{throw Error('Native PT read returned invalid JSON');}
   if(value.clicked===true||value.submissionAttempted===true)throw Error('Native PT read attempted a submission');
+  const inspected=value.inspection??{};
+  const diagnostic={origin,observedAt:new Date().toISOString(),status:value.status,failureCode:value.failureCode??null,
+    sameOrigin:inspected.sameOrigin===true,authenticated:inspected.authenticated===true,waf:inspected.waf===true,
+    loginRoute:inspected.loginRoute===true,siteBodyLoaded:inspected.siteBodyLoaded===true,
+    hasDailySignal:Boolean(inspected.successText),hasSignedControl:Boolean(inspected.successControl)};
+  try{
+    fs.mkdirSync(path.join(root,'logs'),{recursive:true});
+    fs.appendFileSync(path.join(root,'logs/native-pt-readback.jsonl'),JSON.stringify(diagnostic)+'\n',{mode:0o600});
+  }catch{/* A diagnostic write cannot discard a valid receipt. */}
   return {status:value.status,reason:value.reason,evidence:value.evidence,
     failureCode:value.failureCode,submissionAttempted:false};
 }

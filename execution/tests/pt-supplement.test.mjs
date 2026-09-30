@@ -145,6 +145,12 @@ test('unreviewed PT attendance pages cannot be treated as read-only',async t=>{
   await assert.rejects(()=>runPtSupplement({...args,readOnly:true,launch:never}),error=>error.code==='PT_READONLY_UNSAFE');
 });
 
+test('native passive binding accepts only the reviewed www alias, never an unrelated host',()=>{
+  const config={mainChromeFallbackUrls:['https://www.audiences.me/attendance.php']};
+  assert.equal(ptReadPolicy('https://audiences.me',config).nativeMainChrome,true);
+  assert.throws(()=>ptReadPolicy('https://other.audiences.me',config),e=>e.code==='PT_READONLY_UNSAFE');
+});
+
 test('configured native PT evidence repair binds the main profile and never launches a submit runner',async t=>{
   const args=fixture(t),origin='https://ourbits.club',sourceRoot=path.join(args.root,'main-browser');
   fs.mkdirSync(path.join(sourceRoot,'Default'),{recursive:true});fs.writeFileSync(path.join(sourceRoot,'Local State'),'fixture');

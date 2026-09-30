@@ -13,6 +13,9 @@ test('external conditions and unknown submissions have distinct labels and filte
   assert.equal(matchesTask(unknown,{status:'attention'}),false);
   assert.equal(matchesTask(external,{status:'attention'}),false);
   assert.equal(matchesTask(external,{status:'pending'}),true);
+  const recovered={...unknown,observedStatus:'already_signed'};
+  assert.equal(taskStatusLabel(recovered),'今日已完成');
+  assert.equal(matchesTask(recovered,{status:'verification'}),false);
 });
 
 test('task filters use non-overlapping business groups',()=>{

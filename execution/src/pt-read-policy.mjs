@@ -34,9 +34,10 @@ export function ptExecutionBinding(config,root,target){
 // OpenCD index supplies the passive server-rendered header. CAPTCHA submission
 // stays in the formal runner. Bookmark folder names never grant capabilities.
 export function ptReadPolicy(origin,config={}){
-  const nativeBound=nativePtHeaderOrigins.includes(origin)&&(config.mainChromeFallbackUrls??[]).some(entry=>{
-    try{return new URL(typeof entry==='string'?entry:entry.sourceOrigin??entry.url).origin===origin;}catch{return false;}
-  });
+  const nativeOrigin=value=>new URL(value).origin.replace(/^https:\/\/www\./,'https://');
+  // Registration is validated against the exact current bookmark catalog by
+  // the gateway. Passive index capability does not need the mutation allowlist.
+  const nativeBound=nativePtHeaderOrigins.some(value=>nativeOrigin(value)===nativeOrigin(origin));
   const policy=config.ptReadOnlyPolicies?.[origin]??(nativeBound?{
     reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'#info_block',nativeMainChrome:true
   }:ptReadPolicies[origin]?{

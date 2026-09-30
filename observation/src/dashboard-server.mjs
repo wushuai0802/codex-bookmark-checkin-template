@@ -385,6 +385,7 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
       merged.executionObservedStatus=merged.observedStatus;
       merged.observedStatus=pt.status;
       merged.observedAt=pt.observedAt;
+      delete merged.condition;
       merged.evidence={source:pt.evidence?.source??'none',authoritative:true,
         summary:redactText(pt.evidence?.summary??'当日 PT 页面已确认签到'),redacted:true,
         verification:'verified'};

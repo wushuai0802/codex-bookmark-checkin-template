@@ -1,6 +1,6 @@
 import {conditionLabels,statusLabels,externalRetryCauses} from './checkin-contract.generated.mjs';
 
-export function taskStatusLabel(task){return conditionLabels[task?.condition]??statusLabels[task?.observedStatus]??task?.observedStatus;}
+export function taskStatusLabel(task){return (!['signed','already_signed','not_available'].includes(task?.observedStatus)?conditionLabels[task?.condition]:null)??statusLabels[task?.observedStatus]??task?.observedStatus;}
 export function externalTask(task){return !['signed','already_signed','not_available'].includes(task?.observedStatus)&&
   [...externalRetryCauses,'site_maintenance','entitlement_expired'].includes(task?.condition);}
 
@@ -47,7 +47,7 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
     login_required: ['login_required'],
     unavailable: ['not_available'],
   };
-  const statusMatch = !status || (status==='external'?externalTask(task):status==='verification'?task.condition==='submission_outcome_unknown':
+  const statusMatch = !status || (status==='external'?externalTask(task):status==='verification'?!['signed','already_signed','not_available'].includes(value)&&task.condition==='submission_outcome_unknown':
     status==='attention'?statusGroups.attention.includes(value)&&!externalTask(task)&&task.condition!=='submission_outcome_unknown':
     statusGroups[status] ? statusGroups[status].includes(value) : value === status);
   const haystack = [task.origin, task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,

@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {runPtSite} from './pt-site-execution.mjs';
 import {recordPtVerification} from './pt-verification.mjs';
+import {boundMonitorCatalog} from './monitor-catalog.mjs';
+import {loadEffectiveConfig} from './effective-config.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
 
@@ -20,21 +22,36 @@ export function ptEvidenceCandidates(snapshot,catalog,state,now=new Date()){
   }).map(t=>t.origin).filter((origin,index,all)=>all.indexOf(origin)===index);
 }
 
-export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>new Date(),runSite=runPtSite,record=recordPtVerification}={}){
+export function refreshEvidenceCatalog(root,catalogFile,now=new Date()){
+  const runtime=read(path.join(root,'config/runtime.local.json')),config=loadEffectiveConfig(runtime.legacyRoot);
+  const previous=read(catalogFile);
+  const catalog=boundMonitorCatalog(config.bookmarksPath,previous.scope,now);
+  const file=path.join(root,'data/pt-evidence-catalog.json');
+  fs.mkdirSync(path.dirname(file),{recursive:true});
+  const temporary=file+'.'+process.pid+'.tmp';
+  try{fs.writeFileSync(temporary,JSON.stringify(catalog),{mode:0o600});fs.renameSync(temporary,file);}
+  finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
+  return file;
+}
+
+export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>new Date(),runSite=runPtSite,record=recordPtVerification,refreshCatalog=refreshEvidenceCatalog}={}){
   if(!Number.isInteger(maxSites)||maxSites<1||maxSites>4)throw Error('Evidence repair site limit must be 1..4');
   const lease=acquireExecutionLock(root,{name:'pt-evidence-repair.lock'});
   try {
-    const snapshot=read(path.join(root,'outputs/shadow-beta-snapshot.json')),catalog=read(catalogFile);
+    const snapshot=read(path.join(root,'outputs/shadow-beta-snapshot.json'));
+    if(snapshot.businessDate!==dayAt(clock()))return {businessDate:snapshot.businessDate,results:[]};
+    let currentCatalog=refreshCatalog(root,catalogFile,clock()),catalog=read(currentCatalog);
     const stateFile=path.join(root,'data/pt-evidence-repair.json');
     const state=fs.existsSync(stateFile)?read(stateFile):{schemaVersion:1,sites:{}};
     const now=clock(),candidates=ptEvidenceCandidates(snapshot,catalog,state,now).slice(0,maxSites),results=[];
-    const hash=crypto.createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
     for(const origin of candidates){
       if(dayAt(clock())!==snapshot.businessDate)break;
+      currentCatalog=refreshCatalog(root,catalogFile,clock());
+      const hash=crypto.createHash('sha256').update(fs.readFileSync(currentCatalog)).digest('hex');
       const old=state.sites[origin],attempts=old?.businessDate===snapshot.businessDate?old.attempts+1:1;
       let outcome='evidence_unavailable';
       try{
-        const result=await runSite({root,origin,catalogFile,catalogHash:hash,readOnly:true});
+        const result=await runSite({root,origin,catalogFile:currentCatalog,catalogHash:hash,readOnly:true});
         if(dayAt(clock())!==snapshot.businessDate)break;
         // A diagnostic cannot erase the already reported completion. Only a
         // current positive readback is published; other results stay in this audit.

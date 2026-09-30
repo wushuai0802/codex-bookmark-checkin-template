@@ -32,10 +32,13 @@ test('native evidence is created only from same-site daily or action-confirmed p
     {snapshot:{...base,loginRoute:true},expected:false},
     {snapshot:{...base,bodyText:'truncated page',successText:'今日已签到'},expected:true},
     {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',bodyText:'首页',authenticated:true,successControl:'已签到'},url:'https://ourbits.club/index.php',expected:true,signal:'nexus_daily_header_signed'},
-    {snapshot:{...base,currentUrl:'https://piggo.me/index.php',bodyText:'首页',authenticated:true,successControl:'签到已得25'},url:'https://piggo.me/index.php',expected:true,signal:'nexus_daily_header_signed'},
+    {snapshot:{...base,currentUrl:'https://piggo.me/index.php',bodyText:'首页',authenticated:true,successControl:'签到已得25'},url:'https://piggo.me/index.php',expected:false},
     {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',authenticated:false,successControl:'已签到'},url:'https://ourbits.club/index.php',expected:false},
     {snapshot:{...base,currentUrl:'https://pt.example/index.php',authenticated:true,successControl:'已签到'},url:'https://pt.example/index.php',expected:false},
     {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',authenticated:true,successControl:'历史签到已得250'},url:'https://ourbits.club/index.php',expected:false},
+    {snapshot:{...base,currentUrl:'https://ourbits.club/attendance.php',bodyText:'您已签到，请勿重复提交'},url:'https://ourbits.club/attendance.php',formalVisit:true,expected:true},
+    {snapshot:{...base,currentUrl:'https://ourbits.club/attendance.php',bodyText:'昨天已签到'},url:'https://ourbits.club/attendance.php',formalVisit:true,expected:false},
+    {snapshot:{...base,currentUrl:'https://ourbits.club/attendance.php',bodyText:'2026-09-28 已签到'},url:'https://ourbits.club/attendance.php',formalVisit:true,expected:false},
   ];
   const quoted=value=>String(value).replaceAll("'","''");
   const command=`[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
