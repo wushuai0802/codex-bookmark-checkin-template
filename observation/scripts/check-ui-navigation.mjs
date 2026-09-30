@@ -17,7 +17,8 @@ const snapshot = buildSnapshot({
 });
 const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
 snapshot.businessDate=today;
-snapshot.tasks=snapshot.tasks.map(task=>({...task,businessDate:today}));
+snapshot.tasks=snapshot.tasks.map(task=>({...task,businessDate:today,
+  ...(task.observedStatus==='needs_attention'?{condition:'upstream_unavailable'}:{})}));
 snapshot.ptStatus.businessDate=today;
 const ptSite = (host, status, authoritative) => ({
   origin: `https://${host}.example`, displayName: host, fallbackEnabled: true,
@@ -152,6 +153,9 @@ try {
       assert.equal((await(await fetch(`${base}/api/overview`)).json()).ledger.length,30);
       await page.locator('.calendar-day').first().click();
       assert.match(await page.locator('#calendar-detail').textContent(), /^\d{4}-\d{2}-01/);
+      // On the first of a month the first cell is already today. Move back
+      // before exercising the enabled Today action, including month crossing.
+      if(snapshot.businessDate.endsWith('-01'))await page.getByRole('button',{name:'前一天',exact:true}).click();
       assert.equal(await page.getByRole('button',{name:'回到今天'}).isEnabled(),true);
       await page.getByRole('button',{name:'回到今天'}).click();
       await page.locator(`.calendar-day[aria-label^="${snapshot.businessDate}"]`).click();

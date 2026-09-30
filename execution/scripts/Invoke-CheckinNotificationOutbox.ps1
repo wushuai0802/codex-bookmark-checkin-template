@@ -106,74 +106,10 @@ function Quarantine-OutboxFile([System.IO.FileInfo]$File) {
     catch { }
 }
 
-function ConvertTo-WindowsCommandLineArgument([string]$Value) {
-    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
-    $builder = [System.Text.StringBuilder]::new()
-    $quote = [char]34
-    $slash = [char]92
-    [void]$builder.Append($quote)
-    $backslashes = 0
-    foreach ($character in $Value.ToCharArray()) {
-        if ($character -eq $slash) {
-            $backslashes++
-            continue
-        }
-        if ($character -eq $quote) {
-            [void]$builder.Append((('\' * ($backslashes * 2 + 1)) -join ''))
-            [void]$builder.Append($quote)
-            $backslashes = 0
-            continue
-        }
-        if ($backslashes -gt 0) { [void]$builder.Append((('\' * $backslashes) -join '')) }
-        [void]$builder.Append($character)
-        $backslashes = 0
-    }
-    if ($backslashes -gt 0) { [void]$builder.Append((('\' * ($backslashes * 2)) -join '')) }
-    [void]$builder.Append($quote)
-    return $builder.ToString()
-}
+. (Join-Path $PSScriptRoot 'Invoke-BoundedCommand.ps1')
 
 function Invoke-NotificationCommand([string]$ExecutablePath, [string[]]$Arguments) {
-    $process = $null
-    try {
-        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = $ExecutablePath
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        if ($null -ne $startInfo.PSObject.Properties['ArgumentList']) {
-            foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add([string]$argument) }
-        }
-        else {
-            $startInfo.Arguments = (@($Arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument ([string]$_) })) -join ' '
-        }
-        $process = [System.Diagnostics.Process]::new()
-        $process.StartInfo = $startInfo
-        if (-not $process.Start()) { throw '通知进程未能启动。' }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $finished = $process.WaitForExit($TimeoutSeconds * 1000)
-        if (-not $finished) {
-            try { $process.Kill($true) } catch { try { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } catch { } }
-            [void]$process.WaitForExit(5000)
-            return [pscustomobject]@{
-                TimedOut = $true
-                ExitCode = 124
-                Output = @($stdoutTask.GetAwaiter().GetResult())
-                Error = @($stderrTask.GetAwaiter().GetResult())
-            }
-        }
-        return [pscustomobject]@{
-            TimedOut = $false
-            ExitCode = $process.ExitCode
-            Output = @($stdoutTask.GetAwaiter().GetResult())
-            Error = @($stderrTask.GetAwaiter().GetResult())
-        }
-    }
-    finally {
-        if ($null -ne $process) { $process.Dispose() }
-    }
+    Invoke-BoundedCommand $ExecutablePath $Arguments $TimeoutSeconds
 }
 
 function Get-OutboxLogicalScope([object]$Item) {

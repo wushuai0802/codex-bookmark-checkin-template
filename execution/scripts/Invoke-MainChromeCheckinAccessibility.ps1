@@ -2,13 +2,15 @@
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
     [Parameter(Mandatory = $true)][string]$Url,
-    [ValidateRange(10, 180)][int]$TimeoutSeconds = 90
+    [ValidateRange(10, 180)][int]$TimeoutSeconds = 90,
+    [switch]$ReadOnly,
+    [string]$RuntimeRoot
 )
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$root = Split-Path -Parent $PSScriptRoot
+$root = if ($RuntimeRoot) { [IO.Path]::GetFullPath($RuntimeRoot) } else { Split-Path -Parent $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $originUri = [uri]$Origin
@@ -50,6 +52,23 @@ if ($originUri.Scheme -ne 'https' -or $originUri.UserInfo -or
     throw '主 Chrome 回退地址无效。'
 }
 $allowedEntry = @($allowedEntries | Where-Object { $_.origin -eq $originValue -and $_.url -eq $targetUri.AbsoluteUri })
+if ($ReadOnly) {
+    $reviewedOrigin = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($originValue -replace '^https://www\.', 'https://') }).Count -gt 0
+    if (-not $reviewedOrigin -or $targetUri.GetLeftPart([System.UriPartial]::Authority) -ne $originValue -or
+        $targetUri.AbsolutePath -ne '/index.php' -or $targetUri.Query -or $targetUri.Fragment) { throw '只读核验仅允许已复核站点的首页。' }
+    $allowedEntry = @($allowedEntries | Where-Object { ($_.origin -replace '^https://www\.', 'https://') -eq ($originValue -replace '^https://www\.', 'https://') } | Select-Object -First 1)
+    if ($allowedEntry.Count -eq 0) {
+        # Read-only repair is also allowed for a registered single-account PT
+        # task. The parent gateway separately checks the live bookmark scope.
+        $planPath = Join-Path $root 'data/last-valid-bookmark-plan.json'
+        $plan = Get-Content -Raw -Encoding UTF8 -LiteralPath $planPath | ConvertFrom-Json
+        $registered = @($plan.targets | Where-Object {
+            ($_.origin -replace '^https://www\.', 'https://') -eq ($originValue -replace '^https://www\.', 'https://') -and
+            (-not $_.accountKey -or [string]$_.accountKey -eq 'site-default')
+        })
+        if ($registered.Count -eq 1) { $allowedEntry = @([pscustomobject]@{origin=$originValue;url=$Url;oauthProvider=''}) }
+    }
+}
 if ($allowedEntry.Count -ne 1) {
     throw "主 Chrome 回退地址不在明确白名单中：$($targetUri.AbsoluteUri)"
 }
@@ -154,6 +173,7 @@ function Test-EquivalentOrigin([uri]$ExpectedUri, [uri]$ActualUri) {
 function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window) {
     $elements = @(Get-WindowElements $Window)
     $names = @()
+    $controlNames = @()
     $nonAddressEdits = 0
     foreach ($element in $elements) {
         try {
@@ -162,6 +182,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
             if ($type -in @('ControlType.Text', 'ControlType.Hyperlink', 'ControlType.Button', 'ControlType.Document') -and $name) {
                 $names += $name
             }
+            if ($type -in @('ControlType.Hyperlink', 'ControlType.Button') -and $name) { $controlNames += $name }
             if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) {
                 $editName = [string]$element.Current.Name
                 $editId = [string]$element.Current.AutomationId
@@ -179,16 +200,23 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $cloudflareWaf = $bodyText -match '请稍候[.…]*\s*[^ ]+\s*正在进行安全验证|本网站使用安全服务防护恶意自动程序|Just a moment|Performing security verification|Verify you are human|Cloudflare.*performance and security'
     $securityVerification = $bodyText -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b'
     $success = $bodyText -match '签到成功|今日已签到|今天已签到|今天已经签到过|已经签到|已完成今日签到|(?:^|\s)已签到(?:\s|$)|Already checked in|Checked in today'
+    $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { $_ -match '^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$' } | Select-Object -Unique)
+    $normalizedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() })
+    $authenticated = @($normalizedControls | Where-Object { $_ -match '^(?:退出|退出登录|登出|注销|登出账号|登出帳號|Logout|Log out)$' }).Count -gt 0 -and
+        @($normalizedControls | Where-Object { $_ -match '^(?:控制面板|用户中心|用戶中心|个人资料|個人資料|设置|設定|Control Panel|User CP)$' }).Count -gt 0
     $loginRoute = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)'
     [pscustomobject]@{
         currentUrl = if ($currentUri) { $currentUri.AbsoluteUri } else { '' }
         bodyText = $bodyText.Substring(0, [Math]::Min(2000, $bodyText.Length))
+        successText = Get-NativeSuccessText $bodyText
+        successControl = if ($signedControls.Count -eq 1) { $signedControls[0] } else { '' }
+        authenticated = [bool]$authenticated
         sameOrigin = [bool]$sameOrigin
         waf = [bool]($leichiWaf -or $cloudflareWaf)
         leichiWaf = [bool]$leichiWaf
         cloudflareWaf = [bool]$cloudflareWaf
         securityVerification = [bool]$securityVerification
-        success = [bool]$success
+        success = [bool]($success -or $signedControls.Count -eq 1)
         loginRoute = [bool]$loginRoute
         nonAddressEdits = $nonAddressEdits
         siteBodyLoaded = [bool]($sameOrigin -and -not ($leichiWaf -or $cloudflareWaf) -and $bodyText.Length -gt 80)
@@ -349,12 +377,13 @@ try {
         $last = $null
         do {
             $last = Read-PageSnapshot $taskWindow
-            if ($last.success -and $last.sameOrigin -and -not $last.waf -and -not $last.securityVerification -and -not $last.loginRoute) {
+            $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $clicked -FormalVisit:(-not $ReadOnly -and $targetUri.AbsolutePath -match '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$')
+            if ($pageEvidence) {
                 $result = [pscustomobject]@{
                     status = if ($clicked) { 'signed' } else { 'already_signed' }
                     reason = if ($clicked) { '主 Chrome 页面明确确认签到成功' } else { '主 Chrome 页面明确确认今日已签到' }
                     clicked = $clicked
-                    evidence = Get-ConfirmedNativePageEvidence $last $Url $clicked
+                    evidence = $pageEvidence
                     inspection = $last
                 }
                 break
@@ -363,7 +392,7 @@ try {
             if ($last.currentUrl) {
                 try { $currentUri = [uri][string]$last.currentUrl } catch { }
             }
-            if ($oauthProvider -eq 'LinuxDO' -and $null -ne $currentUri -and
+            if (-not $ReadOnly -and $oauthProvider -eq 'LinuxDO' -and $null -ne $currentUri -and
                 $currentUri.Host -eq 'connect.linux.do') {
                 if (-not $oauthAuthorizeClicked) {
                     $authorize = Get-UniqueNamedControl $taskWindow @('授权', '允許', '允许', 'Authorize', 'Allow')
@@ -376,7 +405,7 @@ try {
                 Start-Sleep -Milliseconds 750
                 continue
             }
-            if ($oauthProvider -eq 'LinuxDO' -and $last.siteBodyLoaded -and -not $oauthLoginClicked) {
+            if (-not $ReadOnly -and $oauthProvider -eq 'LinuxDO' -and $last.siteBodyLoaded -and -not $oauthLoginClicked) {
                 $oauthLogin = Get-UniqueNamedControl $taskWindow @('登录', '登入', '使用 LinuxDO 登录', '使用 Linux DO 登录')
                 if ($oauthLogin -and (Invoke-Control $oauthLogin)) {
                     $oauthLoginClicked = $true
@@ -396,7 +425,7 @@ try {
                 }
                 break
             }
-            if (-not $last.waf -and $last.siteBodyLoaded -and ($last.loginRoute -or $last.nonAddressEdits -ge 2)) {
+            if (-not $last.waf -and $last.siteBodyLoaded -and -not $last.authenticated -and ($last.loginRoute -or $last.nonAddressEdits -ge 2)) {
                 $result = [pscustomobject]@{
                     status = 'login_required'
                     reason = '主 Chrome 登录状态不可用'
@@ -405,7 +434,7 @@ try {
                 }
                 break
             }
-            if (-not $clicked -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
+            if (-not $ReadOnly -and -not $last.success -and -not $clicked -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
                 $clicked = Invoke-UniqueCheckinButton $taskWindow
                 if ($clicked) { Start-Sleep -Seconds 2; continue }
             }

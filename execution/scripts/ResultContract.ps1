@@ -1,3 +1,5 @@
+﻿. (Join-Path $PSScriptRoot 'CheckinContract.generated.ps1')
+
 function Test-CheckinEvidenceTimestamp([object]$Value, [datetimeoffset]$Now) {
     $confirmedAt = [datetimeoffset]::MinValue
     if (-not [datetimeoffset]::TryParse([string]$Value, [ref]$confirmedAt)) { return $false }
@@ -8,12 +10,7 @@ function Test-FeatureDisabledEvidence($Evidence) {
     $source = [string]$Evidence.source
     if ($source -eq 'cached_confirmation') { $source = [string]$Evidence.originalSource }
     $outcome = [string]$Evidence.outcome
-    switch ($source) {
-        'bmapi_checkin_status' { return $outcome -eq 'enabled_false' }
-        'new_api_checkin_status' { return $outcome -eq 'message_not_enabled' }
-        'new_api_checkin_action' { return $outcome -eq 'message_not_enabled' }
-        default { return $false }
-    }
+    return $CheckinFeatureDisabledEvidence.ContainsKey($source) -and $outcome -in $CheckinFeatureDisabledEvidence[$source]
 }
 
 function Test-ConfirmedNotAvailableResult($Result, [datetimeoffset]$Now = [datetimeoffset]::Now) {
@@ -23,7 +20,7 @@ function Test-ConfirmedNotAvailableResult($Result, [datetimeoffset]$Now = [datet
     if ($null -eq $Result.evidence -or $Result.evidence.authoritative -ne $true -or
         -not (Test-CheckinEvidenceTimestamp $Result.evidence.confirmedAt $Now)) { return $false }
     if ($kind -eq 'task_disabled') {
-        return $Result.disabledByConfig -eq $true -and [string]$Result.evidence.source -eq 'configuration'
+        return ($Result.disabledByConfig -eq $true -or $Result.disabledByAccountConfig -eq $true) -and [string]$Result.evidence.source -eq 'configuration'
     }
     if ($kind -eq 'temporary_unavailable') {
         return $Result.temporarilyUnavailable -eq $true -and [string]$Result.evidence.source -eq 'operator_confirmation'
@@ -37,8 +34,28 @@ function Test-TerminalCheckinResult($Result) {
     return Test-ConfirmedNotAvailableResult $Result
 }
 
+function Get-CheckinAttentionClass($Result) {
+    if (Test-TerminalCheckinResult $Result) { return 'resolved' }
+    if ([string]$Result.failureCode -eq 'submission_outcome_unknown' -or $Result.submissionAttempted -eq $true) { return 'verification' }
+    if ([string]$Result.siteCondition -eq 'site_maintenance' -or [string]$Result.failureCode -eq 'site_maintenance') { return 'external' }
+    if ([string]$Result.retryCause -in $CheckinExternalRetryCauses) { return 'external' }
+    if ([string]$Result.evidence.source -eq 'vibe_entitlement_status' -and [string]$Result.evidence.outcome -in @('entitlement_expired','entitlement_inactive','claim_not_enabled','claim_not_configured')) { return 'external' }
+    return 'local'
+}
+
 # Pure readback contract: never click, navigate, or infer success from a loaded page.
-function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$Clicked = $false, [datetimeoffset]$Now = [datetimeoffset]::UtcNow) {
+function Get-NativeSuccessText([string]$BodyText) {
+    $match = [regex]::Match($BodyText, '(?i)(?:今日|今天|当日|當日).{0,12}(?:已签到|已簽到|已经签到|已經簽到)|已完成今日签到|already checked[ -]?in today|checked in today|签到成功|簽到成功|本次(?:签到|簽到).{0,18}(?:获得|獲得)')
+    if ($match.Success) { return $match.Value }
+    $short = [regex]::Match($BodyText, '已经签到|已經簽到|已签到|已簽到')
+    if ($short.Success) {
+        $start = [Math]::Max(0, $short.Index - 24)
+        return $BodyText.Substring($start, [Math]::Min(72, $BodyText.Length - $start))
+    }
+    return ''
+}
+
+function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$Clicked = $false, [datetimeoffset]$Now = [datetimeoffset]::UtcNow, [bool]$FormalVisit = $false) {
     if ($null -eq $Snapshot -or $Snapshot.success -ne $true -or $Snapshot.sameOrigin -ne $true -or
         $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute) { return $null }
     try {
@@ -46,19 +63,32 @@ function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$C
         $actual = [uri][string]$Snapshot.currentUrl
         if ($expected.Scheme -ne 'https' -or $actual.Scheme -ne 'https' -or $expected.UserInfo -or $actual.UserInfo -or
             $expected.Port -ne $actual.Port -or
-            ($expected.IdnHost.ToLowerInvariant() -replace '^www\.', '') -ne ($actual.IdnHost.ToLowerInvariant() -replace '^www\.', '') -or
-            $actual.AbsolutePath -notmatch '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$') { return $null }
+            ($expected.IdnHost.ToLowerInvariant() -replace '^www\.', '') -ne ($actual.IdnHost.ToLowerInvariant() -replace '^www\.', '')) { return $null }
     } catch { return $null }
-    $body = [string]$Snapshot.bodyText
+    $headerOrigin = $expected.GetLeftPart([System.UriPartial]::Authority)
+    $reviewedHeader = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($headerOrigin -replace '^https://www\.', 'https://') }).Count -gt 0
+    $header = $reviewedHeader -and $Snapshot.authenticated -eq $true -and
+        $actual.AbsolutePath -in @('/', '/index.php') -and -not $actual.Query -and
+        [string]$Snapshot.successControl -match '^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$'
+    if (-not $header -and $actual.AbsolutePath -notmatch '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$') { return $null }
+    $body = if ($Snapshot.successText) { [string]$Snapshot.successText } else { [string]$Snapshot.bodyText }
     $daily = $body -match '(?:今日|今天|当日|當日).{0,12}(?:已签到|已簽到|已经签到|已經簽到)|已完成今日签到|already checked[ -]?in today|checked in today'
-    $action = $Clicked -and $body -match '签到成功|簽到成功|本次(?:签到|簽到).{0,18}(?:获得|獲得)'
-    if (-not $daily -and -not $action) { return $null }
+    $action = ($Clicked -or $FormalVisit) -and $body -match '签到成功|簽到成功|本次(?:签到|簽到).{0,18}(?:获得|獲得)'
+    $shortDailyEndpoint = $FormalVisit -and $reviewedHeader -and
+        $actual.AbsolutePath -match '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$' -and
+        $body -match '已经签到|已經簽到|已签到|已簽到' -and
+        $body -notmatch '(?:昨天|昨日|上次|历史|歷史).{0,24}(?:已签到|已簽到|已经签到|已經簽到)'
+    if ($shortDailyEndpoint) {
+        $day=$Now.ToOffset([timespan]::FromHours(8)).ToString('yyyy-MM-dd')
+        foreach($date in [regex]::Matches($body,'\d{4}-\d{2}-\d{2}')) { if($date.Value -ne $day){$shortDailyEndpoint=$false} }
+    }
+    if (-not $header -and -not $daily -and -not $action -and -not $shortDailyEndpoint) { return $null }
     return [pscustomobject]@{
         source = 'page_text'
         authoritative = $true
         confirmedAt = $Now.ToUniversalTime().ToString('o')
         businessDate = $Now.ToOffset([timespan]::FromHours(8)).ToString('yyyy-MM-dd')
         pagePath = $actual.AbsolutePath
-        statusSignal = 'same_day_page_text'
+        statusSignal = if ($header) { 'nexus_daily_header_signed' } else { 'same_day_page_text' }
     }
 }

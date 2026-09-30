@@ -145,6 +145,28 @@ test('unreviewed PT attendance pages cannot be treated as read-only',async t=>{
   await assert.rejects(()=>runPtSupplement({...args,readOnly:true,launch:never}),error=>error.code==='PT_READONLY_UNSAFE');
 });
 
+test('native passive binding accepts only the reviewed www alias, never an unrelated host',()=>{
+  const config={mainChromeFallbackUrls:['https://www.audiences.me/attendance.php']};
+  assert.equal(ptReadPolicy('https://audiences.me',config).nativeMainChrome,true);
+  assert.throws(()=>ptReadPolicy('https://other.audiences.me',config),e=>e.code==='PT_READONLY_UNSAFE');
+});
+
+test('configured native PT evidence repair binds the main profile and never launches a submit runner',async t=>{
+  const args=fixture(t),origin='https://ourbits.club',sourceRoot=path.join(args.root,'main-browser');
+  fs.mkdirSync(path.join(sourceRoot,'Default'),{recursive:true});fs.writeFileSync(path.join(sourceRoot,'Local State'),'fixture');
+  const file=path.join(args.root,'config/config.json'),config=JSON.parse(fs.readFileSync(file));
+  Object.assign(config,{sourceUserDataDir:sourceRoot,bookmarksPath:path.join(sourceRoot,'Default/Bookmarks'),mainChromeFallbackUrls:[origin+'/attendance.php']});
+  fs.writeFileSync(file,JSON.stringify(config));
+  fs.writeFileSync(args.catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
+  const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');
+  const result=await runPtSupplement({...args,origin,catalogHash,readOnly:true,
+    launch:async()=>{throw Error('CDP browser must not launch');},runTarget:async()=>{throw Error('must not submit');},
+    inspectNative:async request=>{assert.equal(request.url,origin+'/index.php');return {status:'already_signed',submissionAttempted:false,
+      evidence:{source:'page_text',authoritative:true,confirmedAt:args.now.toISOString(),businessDate:'2026-09-20',statusSignal:'nexus_daily_header_signed',pagePath:'/index.php'}};}});
+  assert.equal(result.status,'already_signed');assert.equal(result.submissionAttempted,false);
+  assert.equal(result.evidence.evidenceScope,'site_account_day');assert.match(result.profileBinding,/^[a-f0-9]{64}$/);
+});
+
 test('unverified completion and uncertain submission are never reported as success',()=>{
   const now=new Date('2026-09-20T02:00:00Z');
   assert.equal(publicSupplementResult('https://pt.example',{status:'signed'},now).status,'unknown');

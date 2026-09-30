@@ -5,6 +5,7 @@ import {launchAutomationContext,processTarget} from './browser.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {ptExecutionBinding,ptReadPolicy,installPtReadFirewall,readPtPassivePage,readPtPublicAvailability} from './pt-read-policy.mjs';
 import {ptDiagnostic} from './pt-diagnostics.mjs';
+import {nativePtReadBinding,inspectNativePtHeader} from './native-pt-read.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
@@ -90,7 +91,7 @@ export async function readPtRewardCounter(context,origin,config){
 export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,clock=()=>now?new Date(now):new Date(),
   readOnly=false,verifyBeforeSubmit=false,validateScope=()=>{},
   launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
-  acquire=acquireRunLock,release=releaseRunLock}={}){
+  acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
   const bytes=fs.readFileSync(catalogFile);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase())throw Error('PT catalog changed');
@@ -110,10 +111,11 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   if(owners.length>1)throw Error('PT account binding is ambiguous');
   target.accountKey=owners[0]?.accountKey??'site-default';
   if((config.disabledAccountKeys??[]).includes(target.accountKey))throw Error('PT account disabled by execution configuration');
-  const binding=ptExecutionBinding(config,legacyRoot,target);
-  const profile=binding.profile;
   const policy=readOnly||verifyBeforeSubmit?ptReadPolicy(target.origin,config):null;
-  if(!fs.existsSync(path.join(profile,'Local State')))throw Error('execution browser profile is unavailable');
+  const nativeRead=readOnly&&policy?.nativeMainChrome===true;
+  const binding=nativeRead?nativePtReadBinding(config,target):ptExecutionBinding(config,legacyRoot,target);
+  const profile=binding.profile;
+  if(!nativeRead&&!fs.existsSync(path.join(profile,'Local State')))throw Error('execution browser profile is unavailable');
   const readRules=file=>{try{return JSON.parse(fs.readFileSync(path.join(legacyRoot,file),'utf8')).rules??[];}catch(error){if(error.code==='ENOENT')return [];throw error;}};
   const rules=[...readRules('config/qa-rules.json'),...readRules('config/qa-rules.local.json')];
   const safeConfig={...binding.config,retryCount:0,failureScreenshots:false,capturePtEvidence:true,ptPassiveReadOnly:readOnly};
@@ -123,6 +125,12 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   let context;
   try {
     await validateScope();
+    if(nativeRead){
+      const result=await inspectNative({root:legacyRoot,origin:target.origin,url:policy.url});
+      if(result.submissionAttempted!==false)throw Error('Native PT read did not prove submission was disabled');
+      if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
+      return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},clock());
+    }
     if(readOnly&&policy.publicAvailabilityUrl){
       const availability=await readPtPublicAvailability(target.origin,policy);
       if(availability)return publicSupplementResult(target.origin,{...metadata,...availability,submissionAttempted:false},clock());
@@ -137,6 +145,7 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
         const response=await page.goto(readOnlyUrl,{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)});
         const observedAt=clock();
         const result=await readPtPassivePage(page,policy,{origin:target.origin,now:observedAt,httpStatus:response?.status?.()??200});
+        if(dayAt(observedAt)!==dayAt(startedAt))throw Error('PT business day changed during readback');
         if(readOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)
           return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},observedAt);
       }finally{await page.close().catch(()=>{});}

@@ -128,13 +128,16 @@ $disabled = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'ta
 $temporarilyUnavailable = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'temporary_unavailable' }).Count
 $notAvailable = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq 'feature_disabled' }).Count
 $problems = @($reportingResults | Where-Object { -not (Test-TerminalCheckinResult $_) })
+$externalProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'external' })
+$verificationProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'verification' })
+$localProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'local' })
 $automaticRetryStatuses = @('error', 'failed', 'managed_challenge_timeout', 'no_action', 'deferred', 'not_available')
-$automaticRetryProblems = @($problems | Where-Object {
+$automaticRetryProblems = @($localProblems | Where-Object {
     $_.status -in $automaticRetryStatuses `
         -and $_.retryable -ne $false `
         -and $_.submissionAttempted -ne $true
 })
-$attentionProblems = @($problems | Where-Object { $_.status -notin $automaticRetryStatuses })
+$attentionProblems = @($localProblems | Where-Object { $_.status -notin $automaticRetryStatuses -or $_.retryable -eq $false })
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
@@ -142,6 +145,7 @@ elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses 
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'already_signed') { $status = 'already_done' }
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0) { $status = 'skipped' }
 elseif ($reportingResults.Count -gt 0 -and $attentionProblems.Count -gt 0) { $status = 'needs_attention' }
+elseif ($reportingResults.Count -gt 0 -and ($externalProblems.Count -gt 0 -or $verificationProblems.Count -gt 0)) { $status = 'unconfirmed' }
 elseif ($reportingResults.Count -gt 0 -and $automaticRetryProblems.Count -eq $problems.Count) { $status = 'retrying' }
 elseif ($reportingResults.Count -gt 0) { $status = 'unconfirmed' }
 elseif ($RunnerStatus -eq 'failed') { $status = 'failed' }
@@ -162,11 +166,31 @@ if ($accountResults.Count -gt 0) {
     $summary += "`n" + (($accountResults | ForEach-Object {
         $marker = if ($_.status -in @('signed', 'already_signed')) { '✅' } `
             elseif ($_.status -eq 'not_available' -and (Test-ConfirmedNotAvailableResult $_)) { '⏭️' } `
+            elseif ((Get-CheckinAttentionClass $_) -eq 'external') { '⏸️' } `
+            elseif ((Get-CheckinAttentionClass $_) -eq 'verification') { '❔' } `
             elseif ($_.status -in $automaticRetryStatuses) { '🔄' } `
             else { '❌' }
         $reward = if ($_.evidence.rewardAmount) { " `$$([decimal]$_.evidence.rewardAmount)" } else { '' }
         "- $marker $(Get-ResultDisplayName $_)$reward"
     }) -join "`n")
+}
+if ($externalProblems.Count -gt 0) {
+    $summary += "`n等待外部条件 $($externalProblems.Count) 个（非本地执行故障）："
+    foreach ($problem in $externalProblems) {
+        $reason = if ([string]$problem.siteCondition -eq 'site_maintenance' -or [string]$problem.failureCode -eq 'site_maintenance') {
+            '站点维护，今日不再自动提交，次日核验'
+        } elseif ([string]$problem.retryCause -eq 'harvest_waiting') { '等待 Harvest 完成，尚未发起补签' }
+        elseif ($problem.retryExhaustedForDay -eq $true) { '站点暂不可用，本日停止探测，次日再核验' }
+        elseif ($problem.nextEligibleAt) {
+            $at = try { ([datetimeoffset]$problem.nextEligibleAt).ToOffset([timespan]::FromHours(8)).ToString('MM-dd HH:mm') } catch { '冷却后' }
+            "$(if([string]$problem.retryCause -eq 'rate_limit'){'站点限频'}else{'上游暂不可用'})，$at 有限复核"
+        } else { '外部条件尚未满足，暂停自动提交' }
+        $summary += "`n- $(Get-ResultDisplayName $problem)：$reason"
+    }
+}
+if ($verificationProblems.Count -gt 0) {
+    $summary += "`n结果待核验 $($verificationProblems.Count) 个（不重复提交）："
+    foreach ($problem in $verificationProblems) { $summary += "`n- $(Get-ResultDisplayName $problem)：$(Compress-Text $problem.reason 80)" }
 }
 if ($automaticRetryProblems.Count -gt 0) {
     $summary += "`n待自动重试 $($automaticRetryProblems.Count) 个："
@@ -254,6 +278,8 @@ $payload = [ordered]@{
     summary = $summary
     siteCount = $reportingResults.Count
     problemCount = $problems.Count
+    externalPendingCount = $externalProblems.Count
+    verificationPendingCount = $verificationProblems.Count
     runState = $reportRunState
     plannedTotal = $logicalPlannedTotal
     processedTotal = $logicalProcessedTotal

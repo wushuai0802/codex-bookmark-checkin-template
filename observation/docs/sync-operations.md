@@ -28,6 +28,21 @@ Delivery requires both a zero command exit and an explicit `accepted` or
 supported. A failed acknowledgement retains the queue and uses bounded backoff;
 it never changes synchronization retry state or restarts check-in execution.
 
+Notification commands use the execution layer's shared `Invoke-BoundedCommand.ps1`
+and honor the configured timeout. The scheduler passes completed, failed, timed-out
+and start-failed child outcomes to `Set-SyncAttemptOutcome`, then persists the sync
+state before sending notifications. Timeout uses exit code 124 and the same alert
+and bounded retry path as other sync failures.
+
+`Invoke-PtEvidenceRepair.ps1 -CatalogFile <current-catalog>` can run from the same
+existing probe. It defaults to one reviewed PT page per probe (`-MaxSites` permits
+1–4 sequential reads) and twice per site
+per business day, only for reported completions whose evidence is missing. It
+holds execution locks, never calls a submission path, publishes only authoritative
+positive readbacks, and leaves original completion reports intact when a read fails.
+Native browser fallback is limited to configured single-account profiles and the
+reviewed index pages in the shared contract. No new scheduled task is needed.
+
 `Invoke-SyncRemoteCommand` captures SSH stderr and returns an exit code plus a
 safe failure category. Pass `-o ConnectTimeout=15 -o ServerAliveInterval=15
 -o ServerAliveCountMax=2` to bound a disconnected SSH session. For tar uploads,

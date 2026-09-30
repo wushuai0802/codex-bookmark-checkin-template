@@ -155,6 +155,13 @@ test('a same-account same-day authoritative PT readback supersedes an earlier ru
     assert.equal(first.observedStatus,'already_signed');
     assert.equal(first.executionObservedStatus,'failed');
     assert.equal(first.evidence.authoritative,true);
+    task.observedStatus='signed';
+    snapshot.receipts.find(r=>r.taskId===task.taskId).evidence={source:'none',authoritative:false,verification:'missing_evidence',summary:'reported completion'};
+    fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+    const repaired=(await(await fetch(base+'/api/overview')).json()).tasks[0];
+    assert.equal(repaired.evidence.authoritative,true);
+    assert.equal(repaired.evidence.verification,'verified');
+    task.observedStatus='failed';
     snapshot.ptStatus.sites[0].accountRef='acct_ffffffffffffffff';
     fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
     assert.equal((await(await fetch(base+'/api/overview')).json()).tasks[0].observedStatus,'failed');
