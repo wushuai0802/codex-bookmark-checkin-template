@@ -33,11 +33,18 @@ snapshot.ptStatus.counts = { ...snapshot.ptStatus.counts, sites: 3, externalOnly
   status: { ...snapshot.ptStatus.counts.status, signed: 2, unknown: 1 } };
 fs.writeFileSync(path.join(dataDir, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
 const baseRecord=createLedgerRecord(snapshot),dayMs=86_400_000;
+// Real installations have dozens of receipts; small counts hide phone clipping.
+const calendarTasks=Array.from({length:48},(_,index)=>({...baseRecord.taskSummaries[0],
+  taskId:`task_calendar_${index}`,origin:`https://calendar-${index}.example`,
+  displayName:index>=44?`待核验站点 ${index} · 较长名称与回执说明布局检查`:`日历站点 ${index}`,
+  observedStatus:index<40?'signed':index<44?'not_available':'needs_attention',
+  evidence:{source:'page_text',authoritative:index<44,summary:'站点回执需要核验，请查看上次访问结果及后续状态。'}}));
 const historical=Array.from({length:36},(_,index)=>{
   const businessDate=new Date(Date.parse(`${snapshot.businessDate}T00:00:00Z`)-(36-index)*dayMs).toISOString().slice(0,10);
   return {...baseRecord,businessDate,recordedAt:`${businessDate}T12:00:00Z`,
     recordId:`ledger_${(index+1).toString(16).padStart(24,'0')}`,
-    taskSummaries:baseRecord.taskSummaries.map(task=>({...task,businessDate}))};
+    counts:{executionUnits:48,status:{signed:40,not_available:4,needs_attention:4}},ptSummaries:[],
+    taskSummaries:calendarTasks.map(task=>({...task,businessDate}))};
 });
 fs.writeFileSync(path.join(dataDir,'shadow-ledger.jsonl'),
   [...historical,baseRecord].map(record=>JSON.stringify(record)).join('\n')+'\n');
@@ -47,7 +54,8 @@ try {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ headless: true, channel: process.env.FABRIC_UI_BROWSER ?? 'chrome' });
-  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 768, height: 1024 },
+    { width: 700, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
     fs.writeFileSync(path.join(dataDir, 'control-state.json'), JSON.stringify({ schemaVersion: 1, sites: {}, audit: [] }));
     fs.writeFileSync(path.join(dataDir,'operation-requests.json'),JSON.stringify({schemaVersion:1,requests:[],worker:{lastSeenAt:new Date().toISOString()}}));
     const context = await browser.newContext({ viewport, timezoneId: 'Asia/Shanghai' });
@@ -176,10 +184,44 @@ try {
       await choosePeriod('calendar-month','选择月份',`${Number(pastMonth.slice(5))} 月`);
       assert.ok(await page.locator('.calendar-day.warn, .calendar-day.success').count()>0);
       await page.getByRole('button', {name:'回到今天'}).click();
+      await page.getByRole('button', {name:'前一天',exact:true}).click();
+      assert.equal(await page.locator('.calendar-day.selected .calendar-day-count').textContent(),'40/48');
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),4);
+      const calendarLayout=await page.evaluate(()=>{
+        const rect=node=>node.getBoundingClientRect();
+        const controls=[...document.querySelectorAll('#calendar-nav .ui-select-trigger, #calendar-nav .calendar-nav-btn')].map(rect);
+        const cells=[...document.querySelectorAll('.calendar-day-count')];
+        const counterOverflow=cells.flatMap(node=>{
+          const range=document.createRange();range.selectNodeContents(node);
+          const text=range.getBoundingClientRect(),cell=rect(node.closest('button'));
+          return !node.textContent||text.left>=cell.left+1&&text.right<=cell.right-1?[]:
+            [{text:node.textContent,textWidth:text.width,cellWidth:cell.width,font:getComputedStyle(node).font}];
+        });
+        const filtersFit=[...document.querySelectorAll('.calendar-filters button')].every(node=>node.scrollWidth<=node.clientWidth+1);
+        const statsFit=[...document.querySelectorAll('.calendar-stat-label,.calendar-stat-value')].every(node=>{
+          const box=rect(node),parent=rect(node.parentElement);return box.left>=parent.left-1&&box.right<=parent.right+1;
+        });
+        const rowsFit=[...document.querySelectorAll('.calendar-receipt-row')].every(row=>
+          rect(row.querySelector('.calendar-receipt-identity')).right<=rect(row.querySelector('.status-chip')).left);
+        return {countersFit:!counterOverflow.length,counterOverflow,filtersFit,statsFit,rowsFit,heights:controls.map(box=>box.height),
+          rows:new Set(controls.map(box=>Math.round(box.top))).size};
+      });
+      for(const key of ['countersFit','filtersFit','statsFit','rowsFit'])assert.ok(calendarLayout[key],
+        `calendar ${key} at ${viewport.width}px: ${JSON.stringify(calendarLayout)}`);
+      assert.ok(calendarLayout.heights.every(height=>height>=40&&Math.abs(height-calendarLayout.heights[0])<=1),
+        `calendar controls need consistent touch heights at ${viewport.width}px`);
+      assert.equal(calendarLayout.rows,mobile?2:1,`calendar toolbar rows at ${viewport.width}px`);
       assert.equal(await page.locator('[data-top-view="calendar"]').count(), 1);
       assert.ok(await page.locator('#page-title').textContent());
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.screenshot({ path: path.join(artifacts, `calendar-${viewport.width}.png`), fullPage: true });
+      if(viewport.width===390){
+        await page.emulateMedia({colorScheme:'dark'});
+        await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
+        await page.screenshot({path:path.join(artifacts,'calendar-390-dark.png'),fullPage:true,animations:'disabled'});
+        await page.emulateMedia({colorScheme:'light'});
+        await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');
+      }
       await page.goBack();
       await page.waitForFunction(() => location.hash === '#overview'
         && document.querySelector('#view-overview').classList.contains('active-view'));
