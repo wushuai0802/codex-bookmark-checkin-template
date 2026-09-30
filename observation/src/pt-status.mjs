@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { normalizeOrigin, redactText } from './contracts.mjs';
+import {siteIdentityIndex} from './site-identity-index.mjs';
 
 export const PT_STATUS_VALUES = [
   'signed', 'already_signed', 'not_signed', 'unknown', 'login_required',
@@ -91,6 +92,11 @@ function evidenceFor(input, status) {
     authoritative,
     summary,
     redacted: true,
+    ...(Number.isFinite(Date.parse(evidence.confirmedAt))?{confirmedAt:new Date(evidence.confirmedAt).toISOString()}:{}),
+    ...(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(evidence.businessDate??'')?{businessDate:evidence.businessDate}:{}),
+    ...(evidence.evidenceScope==='site_account_day'?{evidenceScope:evidence.evidenceScope}:{}),
+    ...(/^[a-z0-9_]{1,80}$/.test(evidence.statusSignal??'')?{statusSignal:evidence.statusSignal}:{}),
+    ...(/^[a-f0-9]{64}$/.test(evidence.profileBinding??input?.profileBinding??'')?{profileBinding:evidence.profileBinding??input.profileBinding}:{}),
     statusVerified: authoritative && ['signed', 'already_signed', 'not_signed'].includes(status)
   };
 }
@@ -104,11 +110,6 @@ function displayNameFor(target, origin) {
   const candidate = target?.displayName ?? target?.title ?? target?.name;
   if (typeof candidate === 'string' && candidate.trim()) return redactText(candidate).slice(0, 80);
   return origin.replace(/^https:\/\//, '');
-}
-
-function isPtTarget(target) {
-  const folders = Array.isArray(target?.folderNames) ? target.folderNames : [];
-  return folders.some((folder) => typeof folder === 'string' && /pt/i.test(folder));
 }
 
 function normalizeObservation(input, {
@@ -239,15 +240,13 @@ export function buildPtStatus({
   if(supplemental && (supplemental.source!=='execution-supplement'||supplemental.businessDate!==businessDate))throw Error('PT fallback report has the wrong source or date');
   const targets = new Map();
   const stableFallbackAt = businessDate ? `${businessDate}T00:00:00.000Z` : generatedAt;
-  const monitorOrigins = new Set((monitorCatalog?.sites ?? []).map(site => {
-    try { return normalizeOriginForStatus(site.origin); } catch { return null; }
-  }).filter(Boolean));
+  const siteIndex=siteIdentityIndex({catalog:monitorCatalog,planTargets});
   for (const target of planTargets) {
     try {
       const origin = normalizeOriginForStatus(target.origin);
       // A monitored PT site may be explicitly configured under another
       // execution folder (OpenCD is currently labelled 公益站).
-      if (!isPtTarget(target) && !monitorOrigins.has(origin)) continue;
+      if (siteIndex.get(origin)?.kind!=='pt') continue;
       targets.set(origin, { ...target, origin });
     } catch { /* Invalid bookmark targets are handled by the main bridge. */ }
   }

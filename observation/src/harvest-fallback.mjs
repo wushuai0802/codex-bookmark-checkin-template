@@ -1,8 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {runLegacyEngine} from './legacy-engine.mjs';
 import {runPtSite,projectPtSiteResult} from './pt-site-execution.mjs';
+import {siteIdentityIndex} from './site-identity-index.mjs';
+import {ptAttemptId} from './pt-reconciliation.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
 const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:null;}catch{return null;}};
@@ -37,11 +41,8 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     catalogByOrigin.set(origin,site);
   }
   const catalogOrigins=new Set(catalogByOrigin.keys());
-  const registered=plan.targets.filter(target=>{
-    const folderMatch=(target.folderNames??[]).some(folder=>typeof folder==='string'&&/pt/i.test(folder));
-    let origin=null;try{origin=originOf(target.origin);}catch{}
-    return folderMatch||(origin&&catalogOrigins.has(origin));
-  });
+  const siteIndex=siteIdentityIndex({catalog,planTargets:plan.targets});
+  const registered=plan.targets.filter(target=>siteIndex.get(originOf(target.origin))?.kind==='pt');
   const observations=new Map(),assessments=[];
   const block=(origin,reason)=>{blocked.push({origin,reason});assessments.push({origin,state:'blocked',reason});};
   for(const site of harvest.sites){
@@ -136,8 +137,9 @@ const alreadyAttempted=(state,candidate,recoveredAtByAccount={},now=new Date())=
   if(attempts.filter(item=>!['deferred_busy','deferred_preflight'].includes(item.state)).length>=3)return true;
   return attempts.some(item=>item.origin===candidate.origin&&
   (item.accountKey??'site-default')===candidate.accountKey&&
-  !['deferred_busy','deferred_preflight'].includes(item.state)&&
-  !retryableWithoutSubmission(item,candidate,recoveredAtByAccount,now));
+  (['deferred_busy','deferred_preflight'].includes(item.state)?
+    Date.parse(item.nextEligibleAt??'')>now.getTime():
+    !retryableWithoutSubmission(item,candidate,recoveredAtByAccount,now)));
 };
 
 function unresolvedEarlierAttempt(root,candidate){
@@ -147,10 +149,14 @@ function unresolvedEarlierAttempt(root,candidate){
     const match=/^harvest-fallback-attempts-([0-9]{4}-[0-9]{2}-[0-9]{2})[.]json$/.exec(name);
     if(!match||match[1]>=candidate.businessDate)continue;
     const {state}=readAttemptState(root,match[1]);
-    if(state.attempts.some(item=>item.origin===candidate.origin&&
+    if(state.attempts.some((item,index)=>item.origin===candidate.origin&&
       (item.accountKey??'site-default')===candidate.accountKey&&
+      !state.reconciliations?.some(resolution=>resolution.attemptId===ptAttemptId(item,index)&&
+        (resolution.kind==='confirmed_external'||resolution.kind==='closed_manual'&&resolution.operatorConfirmed===true||
+         resolution.kind==='confirmed_not_submitted'&&resolution.submissionAttempted===false)&&resolution.businessDate===match[1]&&
+        resolution.origin===item.origin&&resolution.accountKey===(item.accountKey??'site-default'))&&
       (['in_progress','outcome_unknown','completed_cross_day'].includes(item.state)||
-       item.outcome?.submissionOutcomeUnknown===true)))return true;
+       item.outcome?.submissionOutcomeUnknown===true||item.outcome?.failureCode==='submission_outcome_unknown')))return true;
   }
   return false;
 }
@@ -162,17 +168,7 @@ export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccoun
 }
 
 function claimWorker(root) {
-  const file=path.join(root,'data/harvest-fallback.lock');fs.mkdirSync(path.dirname(file),{recursive:true});
-  for(let attempt=0;attempt<2;attempt++){
-    try{fs.writeFileSync(file,JSON.stringify({pid:process.pid,createdAt:new Date().toISOString()}),{flag:'wx'});return file;}
-    catch(error){
-      if(error.code!=='EEXIST')throw error;
-      let old;try{old=JSON.parse(fs.readFileSync(file,'utf8'));}catch{throw Error('Harvest fallback lock is unreadable');}
-      try{process.kill(old.pid,0);}catch(e){if(e.code==='ESRCH'){fs.rmSync(file,{force:true});continue;}}
-      throw Error('Harvest fallback worker is already active');
-    }
-  }
-  throw Error('Harvest fallback lock unavailable');
+  return acquireExecutionLock(root,{name:'harvest-fallback.lock'});
 }
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
@@ -227,7 +223,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
       }
     }
     // Persist before executing. An interrupted or uncertain attempt is not replayed.
-    const attempt={origin:candidate.origin,accountKey:candidate.accountKey,businessDate:preview.businessDate,
+    const attempt={attemptId:crypto.randomUUID(),origin:candidate.origin,accountKey:candidate.accountKey,businessDate:preview.businessDate,
       observedAt:candidate.observedAt,startedAt:candidateNow.toISOString(),state:'in_progress'};
     if(Number.isFinite(Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])))
       attempt.recoveredAt=recoveredAtByAccount[recoveryIdentity(candidate)];
@@ -242,6 +238,10 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         attempt.resultObservedAt=result.observedAt;
         attempt.resultBusinessDate=dayAt(new Date(result.observedAt));
         attempt.v1Status=result.status;
+        if(result.retryCause==='harvest_waiting'&&result.submissionAttempted===false){
+          attempt.state='deferred_preflight';attempt.submissionState='not_submitted';
+          attempt.nextEligibleAt=result.nextEligibleAt??new Date(receivedAt.getTime()+30*60_000).toISOString();
+        }
         writeAtomic(stateFile,state);
         if(Date.parse(result.observedAt)>receivedAt.getTime()+60_000||
            Date.parse(result.observedAt)<Date.parse(attempt.startedAt)-60_000)
@@ -267,15 +267,19 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
           attempt.recoveryEligible=true;
         }
       }else{
-        const report=await runEngine({root,mode:'execute',origins:[candidate.origin],notify:false});
+        const report=await runEngine({root,mode:'execute',origins:[candidate.origin],accountKeys:[candidate.accountKey],notify:false});
         attempt.finishedAt=clock().toISOString();
         attempt.runId=report.runId??null;
         const result=report.results?.find(r=>r.origin===candidate.origin&&(r.accountKey??'site-default')===candidate.accountKey);
         attempt.outcome=result?{origin:candidate.origin,accountKey:candidate.accountKey,
           status:result.status,submissionAttempted:result.submissionAttempted??null,
-          failureCode:result.failureCode??null}:null;
+          failureCode:result.failureCode??null,evidence:result.evidence??null}:null;
         writeAtomic(stateFile,state);
         attempt.v1Status=result?.status??'unknown';
+        if(result?.retryCause==='harvest_waiting'&&result.submissionAttempted===false){
+          attempt.state='deferred_preflight';attempt.submissionState='not_submitted';
+          attempt.nextEligibleAt=result.nextEligibleAt??new Date(Date.parse(attempt.finishedAt)+30*60_000).toISOString();
+        }
         if(dayAt(new Date(attempt.finishedAt))!==preview.businessDate){
           attempt.state='completed_cross_day';
           attempt.reason='Engine report preserved; read-only reconciliation required after business-day change';
@@ -289,7 +293,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         }
       }
       attempt.finishedAt??=clock().toISOString();
-      attempt.state='completed';
+      if(attempt.state==='in_progress')attempt.state='completed';
     }catch(error){
       attempt.finishedAt??=clock().toISOString();
       attempt.state=error.code==='PT_PREFLIGHT'?'deferred_preflight':error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
@@ -299,7 +303,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     outcomes.push({origin:candidate.origin,state:attempt.state,v1Status:attempt.v1Status??null});
   }
   return {...preview,mode:'executed',outcomes};
-  }finally{try{const owner=JSON.parse(fs.readFileSync(workerLock,'utf8'));if(owner.pid===process.pid)fs.rmSync(workerLock,{force:true});}catch{}}
+  }finally{releaseExecutionLock(workerLock);}
 }
 
 export function loadHarvestFallbackInputs({root,reportFile,catalogFile}={}) {

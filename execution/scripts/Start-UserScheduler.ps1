@@ -280,7 +280,7 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
         })
         $missingCount = [Math]::Max(0, $plannedTotal - $processedTotal)
         $nowOffset = [datetimeoffset]$now
-        $deferredWakeups = @($problems | Where-Object { $_.status -eq 'deferred' -and $_.nextEligibleAt } | ForEach-Object {
+        $deferredWakeups = @($problems | Where-Object { $_.status -eq 'deferred' -and $_.nextEligibleAt -and $_.submissionAttempted -ne $true -and $_.failureCode -ne 'submission_outcome_unknown' } | ForEach-Object {
             $next = try { [datetimeoffset]$_.nextEligibleAt } catch { return }
             $identity = Get-CanonicalResultIdentity $_
             $sequence = [Math]::Max(0, [int]$_.retrySequence)
@@ -288,6 +288,9 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
                 Identity = $identity
                 NextEligibleAt = $next
                 RetrySequence = $sequence
+                LateRetryPending = $_.lateRetryPending -eq $true
+                RetryCause = [string]$_.retryCause
+                SubmissionAttempted = $_.submissionAttempted
                 RetryExhaustedForDay = $_.retryExhaustedForDay -eq $true
                 Token = "$identity|$($next.ToUniversalTime().ToString('o'))|$sequence|$([string]$_.retryCause)"
             }
@@ -323,7 +326,7 @@ function Get-UnclaimedDeferredWakeups($state, $reportState, [datetime]$now, $con
     return @($reportState.DeferredWakeups | Where-Object {
         $_.NextEligibleAt -le $nowOffset `
             -and $_.RetryExhaustedForDay -ne $true `
-            -and [int]$_.RetrySequence -lt $perIdentityLimit `
+            -and ([int]$_.RetrySequence -lt $perIdentityLimit -or ($_.LateRetryPending -eq $true -and $_.RetryCause -eq 'upstream_unavailable') -or ($_.RetryCause -eq 'harvest_waiting' -and $_.SubmissionAttempted -eq $false)) `
             -and $claimed -notcontains [string]$_.Token
     })
 }
@@ -338,9 +341,14 @@ function Test-SchedulerWaiting($state, [datetime]$now, $config, [object[]]$defer
     if ($attemptedToday -and $hasAttempt -and $automaticRetryCount -eq 0 -and -not $hasDeferredWakeups) { return $true }
     $maxAttempts = if ($null -ne $config.schedulerMaxDailyAttempts) { [int]$config.schedulerMaxDailyAttempts } else { 3 }
     $maxAttempts = [Math]::Max(1, [Math]::Min(6, $maxAttempts))
-    # schedulerMaxDailyAttempts is a hard whole-process ceiling. A per-site
-    # wakeup may bypass time cooldowns, but never the global process budget.
-    if ($attemptedToday -and [int]$state.attemptsToday -ge $maxAttempts) { return $true }
+    # Ordinary retries and due site wakeups have separate bounded budgets.
+    # This preserves reserved late probes without unbounded process launches.
+    $maxWakeups = if ($null -ne $config.schedulerMaxDailyWakeups) { [int]$config.schedulerMaxDailyWakeups } else { 48 }
+    $maxWakeups = [Math]::Max(1, [Math]::Min(96, $maxWakeups))
+    $wakeCount = if ([string]$state.deferredWakeDate -eq $today) { @($state.deferredWakeTokens | Where-Object { $_ }).Count } else { 0 }
+    if ($hasDeferredWakeups) {
+        if ($wakeCount -ge $maxWakeups -or ($attemptedToday -and [int]$state.attemptsToday -ge ($maxAttempts + $maxWakeups))) { return $true }
+    } elseif ($attemptedToday -and [int]$state.attemptsToday -ge $maxAttempts) { return $true }
     if ([string]$state.phase -eq 'running' -and $state.lastAttemptStartedAt) {
         $claimMaxAge = (if ($null -ne $config.taskTimeoutMinutes) { [int]$config.taskTimeoutMinutes } else { 25 }) + 15
         try {

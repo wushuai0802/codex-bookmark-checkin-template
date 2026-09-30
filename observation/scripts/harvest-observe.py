@@ -36,6 +36,15 @@ def completed_daily_task(conn, now, day):
         ).fetchone()
         if not row:
             return None
+        active = conn.execute(
+            "SELECT COUNT(*) FROM harvest_schedule_result WHERE task_name=? "
+            "AND UPPER(status) IN ('PENDING','STARTED','RECEIVED','PROGRESS','RETRY')",
+            (tasks[0][0],)
+        ).fetchone()[0]
+        if active:
+            return {'resultId': row[0], 'status': 'running', 'startedAt': row[2],
+                    'completedAt': None, 'activeTaskCount': active,
+                    'activityCoverage': 'recorded_results'}
         started = datetime.datetime.fromisoformat(row[2])
         ended = datetime.datetime.fromisoformat(row[3])
         if started.tzinfo is None:
@@ -47,6 +56,7 @@ def completed_daily_task(conn, now, day):
                 or ended < started or ended > now):
             return None
         return {'resultId': row[0], 'status': 'completed' if row[1] == 'SUCCESS' else 'failed',
+                'activeTaskCount': 0, 'activityCoverage': 'recorded_results',
                 'startedAt': started.isoformat(), 'completedAt': ended.isoformat()}
     except (sqlite3.OperationalError, ValueError, TypeError, AttributeError):
         return None

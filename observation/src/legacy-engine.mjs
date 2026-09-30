@@ -5,6 +5,9 @@ import {loadRuntimeConfig} from './runtime-config.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {buildSnapshot,writeSnapshot} from './bridge.mjs';
 import {redactText} from './contracts.mjs';
+import {normalizeEvidence} from './evidence-contract.mjs';
+import {createLedgerRecord,appendLedgerRecord} from './shadow-ledger.mjs';
+import {commitDashboardGeneration} from './dashboard-generation.mjs';
 
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const canonical=value=>path.resolve(value).toLowerCase();
@@ -53,23 +56,57 @@ export function readLegacyHealth({root,legacyRoot,spawnHealth=spawnSync}={}) {
 export function publishEngineReport({root,legacyRoot,exitCode=null,requireFreshSince=null,now=new Date()}={}) {
   const latest=read(path.join(legacyRoot,'logs/latest.json'));
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),stamp=day.replaceAll('-','');
-  if(!String(latest.runId).startsWith(stamp+'-')||!Array.isArray(latest.results))throw Error('engine report is not from current business date');
+  if(!Array.isArray(latest.results)||!Number.isFinite(Date.parse(latest.finishedAt)))throw Error('invalid engine report');
+  const sourceDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(latest.finishedAt));
+  if(Date.parse(latest.finishedAt)>now.getTime()+60_000)throw Error('engine report has a future completion time');
+  const crossDay=!String(latest.runId).startsWith(stamp+'-');
+  if(crossDay&&(!requireFreshSince||sourceDate!==day||Date.parse(latest.finishedAt)>now.getTime()+60_000))throw Error('engine report is not from current business date');
   if(requireFreshSince&&Date.parse(latest.finishedAt)<Date.parse(requireFreshSince)-2000)throw Error('engine did not produce a fresh report');
   const currentHealth=readLegacyHealth({root,legacyRoot});
-  const snapshot=buildSnapshot({legacyRoot,generatedAt:now.toISOString(),...(currentHealth?{healthReport:currentHealth}:{})});
-  for(const task of snapshot.tasks){task.executionOwner='v2-worker';task.executionMode='v1_engine';}
   const results=latest.results.map(r=>({origin:new URL(r.origin).origin,accountKey:r.accountKey??'site-default',status:r.status,reason:redactText(r.reason??''),availabilityKind:r.availabilityKind??null,
     ...(r.failureCode?{failureCode:String(r.failureCode).slice(0,80)}:{}),
     ...(r.submissionAttempted===true?{submissionAttempted:true}:{}),
     ...(r.submissionAttempted===false?{submissionAttempted:false}:{}),
     ...(r.retryable===false?{retryable:false}:{}),
+    ...(r.retryCause==='harvest_waiting'&&r.submissionAttempted===false?{retryCause:'harvest_waiting',
+      ...(Number.isFinite(Date.parse(r.nextEligibleAt))?{nextEligibleAt:new Date(r.nextEligibleAt).toISOString()}:{})}:{}),
+    ...(/^[a-f0-9]{64}$/.test(r.profileBinding??'')?{profileBinding:r.profileBinding}:{}),
+    ...(['legacy_checkin','formal_visit_checkin','safe_history_page','safe_status_endpoint'].includes(r.operationMode)?{operationMode:r.operationMode}:{}),
+    ...(['reviewed_passive','attendance_page_risk'].includes(r.readSafety)?{readSafety:r.readSafety}:{}),
+    evidence:{...normalizeEvidence(r,{businessDate:sourceDate,referenceAt:latest.finishedAt,expectedId:r.accountId}),
+      ...(Number.isFinite(Date.parse(r.evidence?.confirmedAt??r.evidence?.createdAt))?{confirmedAt:new Date(r.evidence.confirmedAt??r.evidence.createdAt).toISOString()}:{}),
+      ...(r.evidence?.businessDate===sourceDate?{businessDate:sourceDate}:{}),
+      ...(/^[a-z0-9_]{1,80}$/.test(r.evidence?.statusSignal??'')?{statusSignal:r.evidence.statusSignal}:{})},
   }));
   const counts={completed:0,unavailable:0,unresolved:0};
   for(const r of results){if(['signed','already_signed'].includes(r.status))counts.completed++;else if(r.status==='not_available'&&r.availabilityKind!=='task_disabled')counts.unavailable++;else counts.unresolved++;}
   const report={schemaVersion:1,mode:'v2_v1_engine',executionEngine:'v1',businessDate:day,runId:latest.runId,sourceFinishedAt:latest.finishedAt,observedAt:now.toISOString(),healthCheckedAt:currentHealth?.checkedAt??null,plannedTotal:latest.plannedTotal,processedTotal:latest.processedTotal,executionComplete:latest.isComplete===true,businessComplete:latest.isComplete===true&&counts.unresolved===0,exitCode,counts,results};
-  writeSnapshot(snapshot,path.join(root,'outputs/shadow-beta-snapshot.json'),legacyRoot);
+  if(crossDay){report.completedCrossDay=true;report.businessComplete=false;}
   writeAtomic(path.join(root,'outputs',`engine-daily-${day}.json`),report);
   writeAtomic(path.join(root,'outputs/engine-latest.json'),report);
+  if(crossDay)return report; // Preserve the receipt; do not publish it as a new-day complete plan.
+  let monitorCatalog;
+  try{const integration=read(path.join(legacyRoot,'data/v2-integration.json'));
+    if(integration.harvestPtGate?.catalogFile)monitorCatalog=read(integration.harvestPtGate.catalogFile);}catch{}
+  // Cached Harvest evidence is display-only. Preserve its original times;
+  // execution gates always query live Harvest state independently.
+  let ptStatusReport,ptFallbackReport;
+  for(const file of ['shadow-beta-snapshot.json','dashboard-generation.previous.json']){
+    try{const saved=read(path.join(root,'outputs',file)),previous=saved.snapshot??saved;
+      if(previous.businessDate!==day)continue;
+      const sites=(previous.ptStatus?.sites??[]).flatMap(site=>(site.observations??[])
+        .filter(item=>item.source==='harvest').map(item=>({origin:site.origin,displayName:site.displayName,
+          accountRef:site.accountRef,source:'harvest',status:item.status,observedAt:item.observedAt,evidence:item.evidence})));
+      if(sites.length){ptStatusReport={schemaVersion:1,source:'harvest',businessDate:day,generatedAt:previous.generatedAt,sites};break;}
+    }catch{}
+  }
+  try{ptFallbackReport=read(path.join(root,'outputs','pt-fallback-results-'+day+'.json'));}catch{}
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:now.toISOString(),monitorCatalog,ptStatusReport,ptFallbackReport,
+    ...(currentHealth?{healthReport:currentHealth}:{})});
+  for(const task of snapshot.tasks){task.executionOwner='v2-worker';task.executionMode='v1_engine';}
+  appendLedgerRecord(path.join(root,'outputs/shadow-ledger.jsonl'),createLedgerRecord(snapshot,{recordedAt:now.toISOString()}),{legacyRoot});
+  writeSnapshot(snapshot,path.join(root,'outputs/shadow-beta-snapshot.json'),legacyRoot);
+  commitDashboardGeneration({snapshot,snapshotFile:path.join(root,'outputs/shadow-beta-snapshot.json'),ledgerFile:path.join(root,'outputs/shadow-ledger.jsonl')});
   // The main snapshot now contains engine results. Retired canary receipts
   // must not overlay failures/successes from the previous execution backend.
   writeAtomic(path.join(root,'outputs/dashboard-runtime.json'),{schemaVersion:1,generatedAt:now.toISOString(),executionEngine:'v1',owners:[],results:[]});

@@ -6,13 +6,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {ptSupplementTarget,publicSupplementResult,runPtSupplement,ptRewardCounter} from '../src/pt-supplement.mjs';
 import {ptPageEvidence} from '../src/browser.mjs';
+import {ptReadPolicy,installPtReadFirewall,ptExecutionBinding} from '../src/pt-read-policy.mjs';
 
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-site-fallback-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  for(const dir of ['config','data','browser'])fs.mkdirSync(path.join(root,dir));
-  fs.writeFileSync(path.join(root,'browser/Local State'),'fixture');
-  fs.writeFileSync(path.join(root,'config/config.json'),JSON.stringify({automationUserDataDir:path.join(root,'browser'),retryCount:3,failureScreenshots:true}));
+  for(const dir of ['config','data','data/browser'])fs.mkdirSync(path.join(root,dir));
+  fs.writeFileSync(path.join(root,'data/browser/Local State'),'fixture');
+  fs.writeFileSync(path.join(root,'config/config.json'),JSON.stringify({automationUserDataDir:path.join(root,'data/browser'),retryCount:3,failureScreenshots:true}));
   fs.writeFileSync(path.join(root,'config/qa-rules.json'),JSON.stringify({rules:[]}));
   fs.writeFileSync(path.join(root,'data/last-valid-bookmark-plan.json'),JSON.stringify({targets:[]}));
   const catalogFile=path.join(root,'catalog.json');
@@ -73,8 +74,8 @@ test('supplement holds the V1 lock and uses its browser flow once without alteri
 
 test('read-only PT verification uses the selected profile and never calls a submit path',async t=>{
   const args=fixture(t),origin='https://open.cd',now=new Date('2026-09-29T00:46:00Z');
-  const catalog={sites:[{origin,entryUrl:'https://open.cd/index.php'},
-    {origin:'https://pt.example',entryUrl:'https://pt.example/attendance'}]};
+  const catalog={sites:[{origin,entryUrl:'https://open.cd/index.php',operationMode:'formal_visit_checkin',readSafety:'attendance_page_risk'},
+    {origin:'https://pt.example',entryUrl:'https://pt.example/attendance',operationMode:'safe_history_page',readSafety:'safe_history_page',readOnlyUrl:'https://pt.example/userdetails.php?id=7'}]};
   fs.writeFileSync(args.catalogFile,JSON.stringify(catalog));
   fs.writeFileSync(path.join(args.root,'data/last-valid-bookmark-plan.json'),JSON.stringify({targets:[{origin}]}));
   const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');
@@ -82,16 +83,66 @@ test('read-only PT verification uses the selected profile and never calls a subm
   const visited=[];
   const result=await runPtSupplement({...args,origin,catalogHash,now,readOnly:true,
     acquire:async()=>({owner:{nonce:'fixture'}}),release:async()=>{},
-    launch:async()=>({newPage:async()=>({goto:async url=>{visited.push(url);},url:()=>args.origin.replace('pt.example','open.cd')+'/index.php',locator:()=>({innerText:async()=>body}),close:async()=>{}}),close:async()=>{}}),
+    launch:async config=>{assert.equal(config.ptPassiveReadOnly,true);return {route:async()=>{},newPage:async()=>({goto:async url=>{visited.push(url);},url:()=>origin+'/index.php',locator:()=>({innerText:async()=>body}),close:async()=>{}}),close:async()=>{}};},
     readReward:async()=>{throw Error('read-only mode cannot visit rewards');},
-    runTarget:async()=>{throw Error('read-only mode cannot submit a check-in');}});
+    runTarget:async()=>{throw Error('read-only must never upgrade to a mutation');}});
   assert.deepEqual(visited,['https://open.cd/index.php']);
   assert.equal(result.status,'already_signed');
   assert.equal(result.evidence.authoritative,true);
+  assert.equal(result.operationMode,'safe_history_page');
+  const configFile=path.join(args.root,'config/config.json'),config=JSON.parse(fs.readFileSync(configFile));
+  config.ptReadOnlyPolicies={'https://pt.example':{reviewed:true,mode:'safe_history_page',url:'https://pt.example/userdetails.php?id=7',selector:'#attendance-summary'}};
+  fs.writeFileSync(configFile,JSON.stringify(config));
   const generic=await runPtSupplement({...args,catalogHash,origin:'https://pt.example',readOnly:true,
-    launch:async()=>({newPage:async()=>({goto:async()=>{},url:()=>args.origin+'/attendance',locator:()=>({innerText:async()=> '今日已签到'}),close:async()=>{}}),close:async()=>{}})});
+    launch:async()=>({route:async()=>{},newPage:async()=>({goto:async url=>{visited.push(url);},url:()=>args.origin+'/userdetails.php?id=7',locator:()=>({innerText:async()=> '今日已签到'}),close:async()=>{}}),close:async()=>{}})});
   assert.equal(generic.status,'already_signed');
   assert.equal(generic.evidence.authoritative,true);
+  assert.equal(generic.submissionAttempted,false);
+});
+
+test('passive firewall allows only one reviewed main-document GET, not action GET or POST',async()=>{
+  const policy=ptReadPolicy('https://open.cd'),allowed=[],blocked=[];let handler;
+  await installPtReadFirewall({route:async(_pattern,fn)=>{handler=fn;}},policy);
+  const frame={page:()=>({mainFrame:()=>frame})};
+  const request=async(url,method='GET',type='document')=>handler({
+    request:()=>({url:()=>url,method:()=>method,resourceType:()=>type,isNavigationRequest:()=>type==='document',frame:()=>frame}),
+    continue:async()=>allowed.push(url),abort:async()=>blocked.push(url)});
+  await request('https://open.cd/attendance.php');
+  await request(policy.url,'POST');
+  await request(policy.url,'GET','script');
+  await request('https://foreign.example/');
+  await request(policy.url);
+  await request(policy.url);
+  assert.deepEqual(allowed,[policy.url]);assert.equal(blocked.length,5);
+  for(const url of ['https://pt.example/attendance.php','https://pt.example/userdetails.php?action=sign','https://other.example/index.php']){
+    assert.throws(()=>ptReadPolicy('https://pt.example',{ptReadOnlyPolicies:{'https://pt.example':{reviewed:true,mode:'safe_history_page',selector:'#status',url}}}),e=>e.code==='PT_READONLY_UNSAFE');
+  }
+});
+
+test('slow receipt is sampled after completion; future and wrong-day evidence cannot confirm',async t=>{
+  const args=fixture(t),finished=new Date(args.now.getTime()+8*60_000);let current=args.now;
+  const result=await runPtSupplement({...args,clock:()=>current,readReward:async()=>null,
+    acquire:async()=>({}),release:async()=>{},launch:async()=>({close:async()=>{}}),
+    runTarget:async()=>{current=finished;return {status:'signed',submissionAttempted:true,evidence:{source:'page_text',authoritative:true,confirmedAt:finished.toISOString(),businessDate:'2026-09-20'}};}});
+  assert.equal(result.status,'signed');assert.equal(result.observedAt,finished.toISOString());assert.equal(result.submissionAttempted,true);
+  assert.match(result.profileBinding,/^[a-f0-9]{64}$/);
+  for(const evidence of [{confirmedAt:new Date(finished.getTime()+120_000).toISOString()},{confirmedAt:finished.toISOString(),businessDate:'2026-09-19'}]){
+    assert.equal(publicSupplementResult(args.origin,{status:'signed',evidence:{source:'page_text',authoritative:true,...evidence}},finished).status,'unknown');
+  }
+});
+
+test('single PT account reuses its configured isolated profile without copying browser state',async t=>{
+  const args=fixture(t),config=JSON.parse(fs.readFileSync(path.join(args.root,'config/config.json')));
+  const isolated=path.join(args.root,'data/isolated');
+  config.isolatedOAuthSiteProfiles={[args.origin]:isolated};
+  const binding=ptExecutionBinding(config,args.root,{origin:args.origin,accountKey:'site-default'});
+  assert.equal(binding.profile,isolated);
+  assert.throws(()=>ptExecutionBinding({...config,oauthSiteSessionBindings:{[args.origin]:'missing'}},args.root,{origin:args.origin}),/conflicting/);
+});
+
+test('unreviewed PT attendance pages cannot be treated as read-only',async t=>{
+  const args=fixture(t),never=async()=>{throw Error('browser must not launch');};
+  await assert.rejects(()=>runPtSupplement({...args,readOnly:true,launch:never}),error=>error.code==='PT_READONLY_UNSAFE');
 });
 
 test('unverified completion and uncertain submission are never reported as success',()=>{

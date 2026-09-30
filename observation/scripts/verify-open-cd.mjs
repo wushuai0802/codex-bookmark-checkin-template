@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runPtSite} from '../src/pt-site-execution.mjs';
+import {acquireExecutionLock,releaseExecutionLock} from '../src/execution-lock.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const businessDay=at=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(at);
@@ -11,8 +12,16 @@ const origin='https://open.cd';
 export function recordReadOnlyOpenCd(rootDirectory,result,now=new Date()){
   const businessDate=businessDay(now),observed=Date.parse(result?.observedAt??'');
   if(result?.origin!==origin||result.status!=='already_signed'||result.evidence?.source!=='pt_page'||
+    result.operationMode!=='safe_history_page'||result.readSafety!=='reviewed_passive'||
+    result.submissionAttempted!==false||result.submissionOutcomeUnknown===true||
+    !/^[a-f0-9]{64}$/.test(result.profileBinding??'')||result.accountKey!=='site-default'||
+    result.businessDate!==businessDate||result.evidence.businessDate!==businessDate||
+    !Number.isFinite(Date.parse(result.evidence.confirmedAt))||Date.parse(result.evidence.confirmedAt)>observed+60_000||
+    businessDay(new Date(result.evidence.confirmedAt))!==businessDate||
     result.evidence.authoritative!==true||!Number.isFinite(observed)||businessDay(new Date(observed))!==businessDate||
     observed>now.getTime()+60_000)throw Error('OpenCD read-only receipt is not authoritative for today');
+  const lease=acquireExecutionLock(rootDirectory,{name:'harvest-fallback.lock'});
+  try{
   const file=path.join(rootDirectory,'outputs',`pt-fallback-results-${businessDate}.json`);
   let report={schemaVersion:1,source:'execution-supplement',businessDate,generatedAt:now.toISOString(),sites:[]};
   if(fs.existsSync(file)){
@@ -20,6 +29,7 @@ export function recordReadOnlyOpenCd(rootDirectory,result,now=new Date()){
     report=JSON.parse(fs.readFileSync(file,'utf8'));
     if(report.source!=='execution-supplement'||report.businessDate!==businessDate||!Array.isArray(report.sites))
       throw Error('existing PT report cannot be updated');
+    if(report.sites.some(site=>site.origin===origin&&Date.parse(site.observedAt)>observed))throw Error('newer PT evidence already exists');
   }
   report.generatedAt=now.toISOString();
   report.sites=report.sites.filter(site=>site.origin!==origin).concat(result);
@@ -28,6 +38,7 @@ export function recordReadOnlyOpenCd(rootDirectory,result,now=new Date()){
   try{fs.writeFileSync(temp,JSON.stringify(report,null,2),{encoding:'utf8',mode:0o600});fs.renameSync(temp,file);}
   finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}
   return {file,businessDate,siteCount:report.sites.length};
+  }finally{releaseExecutionLock(lease);}
 }
 
 if(process.argv[1]&&path.resolve(process.argv[1])===path.resolve(fileURLToPath(import.meta.url))){

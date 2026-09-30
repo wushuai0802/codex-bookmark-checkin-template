@@ -10,7 +10,11 @@ test('only a same-day read-only OpenCD receipt enters the separate PT report',t=
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const now=new Date('2026-09-29T00:46:00Z');
   const result={origin:'https://open.cd',status:'already_signed',observedAt:now.toISOString(),
-    evidence:{source:'pt_page',authoritative:true,summary:'site control confirmed'}};
+    operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+    profileBinding:'a'.repeat(64),accountKey:'site-default',businessDate:'2026-09-29',
+    evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-29',confirmedAt:now.toISOString(),summary:'site control confirmed'}};
+  assert.throws(()=>recordReadOnlyOpenCd(root,{...result,submissionAttempted:true},now),/not authoritative/);
+  assert.throws(()=>recordReadOnlyOpenCd(root,{...result,profileBinding:null},now),/not authoritative/);
   assert.throws(()=>recordReadOnlyOpenCd(root,{...result,observedAt:'2026-09-28T00:46:00Z'},now),/not authoritative/);
   assert.throws(()=>recordReadOnlyOpenCd(root,{...result,evidence:{source:'none',authoritative:false}},now),/not authoritative/);
   const first=recordReadOnlyOpenCd(root,result,now);

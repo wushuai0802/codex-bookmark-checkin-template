@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { configuredExecutionAccount } from "./oauth-execution-binding.mjs";
 
+// The observation gateway names an unlabelled single account site-default.
+// Resolve that selector without changing historical result/plan identities.
+export function accountKeyForSelection(value) {
+  return String(value?.accountKey ?? '').trim() || 'site-default';
+}
+
 export function resultIdentity(value) {
   const origin = new URL(String(value?.origin ?? "")).origin;
   const accountKey = String(value?.accountKey ?? "").trim();

@@ -20,6 +20,7 @@ import {
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { pendingOpenCdSubmission, pendingQuotaClaim } from "./quota-claim-guard.mjs";
+import {verifiedPtObservation} from './pt-observation-receipt.mjs';
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
   applyPreferredCandidates,
@@ -36,6 +37,7 @@ import {
 } from "./preflight-policy.mjs";
 import {
   accountMetadataForOrigin,
+  accountKeyForSelection,
   compatiblePriorResult,
   planFingerprint,
   resultIdentity,
@@ -329,7 +331,7 @@ try {
       }
     }
     if (selectedAccountKeys) {
-      const configuredAccountKeys = new Set(plannedTargets.map((target) => String(target.accountKey || "").trim()).filter(Boolean));
+      const configuredAccountKeys = new Set(plannedTargets.map(accountKeyForSelection));
       for (const accountKey of selectedAccountKeys) {
         if (!configuredAccountKeys.has(accountKey)) throw new Error(`定向续跑账号不存在：${accountKey}`);
       }
@@ -349,7 +351,7 @@ try {
       ? resumeTargets.filter((target) => selectedOrigins.has(target.origin))
       : resumeTargets;
     const accountFilteredTargets = selectedAccountKeys
-      ? originFilteredTargets.filter((target) => selectedAccountKeys.has(String(target.accountKey || "").trim()))
+      ? originFilteredTargets.filter((target) => selectedAccountKeys.has(accountKeyForSelection(target)))
       : originFilteredTargets;
     const selectedPlanTargets = limit
       ? accountFilteredTargets.slice(offset, offset + limit)
@@ -609,7 +611,8 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
-        const guardedQuotaClaim = pendingQuotaClaim(target, siteState, previousFinalReport, config)
+        const guardedQuotaClaim = verifiedPtObservation(rootDirectory,target,config)
+          ?? pendingQuotaClaim(target, siteState, previousFinalReport, config)
           ?? pendingOpenCdSubmission(target, siteState, previousFinalReport);
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
         const targetResult = guardedQuotaClaim

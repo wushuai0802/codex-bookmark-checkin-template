@@ -71,6 +71,9 @@ function safeTerminalDailyCheckin(value) {
     const endpoint = String(rawEvidence.endpoint ?? "").trim();
     if (endpoint && endpoint.startsWith("/") && endpoint.length <= 160 && !/[\s?#]/.test(endpoint)) evidence.endpoint = endpoint;
     if (rawEvidence.authoritative === true) evidence.authoritative = true;
+    if (rawEvidence.authoritative === false) evidence.authoritative = false;
+    if (rawEvidence.requestMethod === 'POST') evidence.requestMethod = 'POST';
+    if (rawEvidence.actionType === 'daily_entitlement_claim') evidence.actionType = rawEvidence.actionType;
   }
   return {
     status,

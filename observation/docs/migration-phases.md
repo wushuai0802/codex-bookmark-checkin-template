@@ -93,3 +93,51 @@ path before enrolling the target. There is no cross-process transaction with
 Harvest; a new Harvest task can still start after the last read. The next
 natural scheduler run must verify intended PT deferrals and identity-bound
 receipts without replaying completed actions.
+
+## Reliability boundaries: 2026-09-30
+
+Passive PT verification now requires an explicitly reviewed status/history
+capability, the existing account/profile binding, current bookmark bytes and
+exclusive leases. The OpenCD index header is a passive evidence source; its
+mature OCR submission remains a formal execution path. Bookmark metadata
+cannot upgrade a read-only request into a mutation.
+
+Harvest waiting has no submission retry cost. Scheduled, identity-scoped
+wakeups have a separate bounded process budget; reserved late upstream probes
+survive the ordinary retry ceiling. OCR/form submissions recheck the gate at
+the action boundary. Unknown outcomes do not refresh a challenge and resubmit.
+
+Engine receipts preserve normalized evidence and cross-day outcomes before
+publication. Ledger publication precedes atomic snapshot replacement. Readers
+match a valid historical generation and keep a stale-marked last complete
+generation during interrupted uploads. A final atomic generation manifest
+embeds the redacted snapshot and hashes the exact ledger prefix, so later
+appends cannot change its calendar. A validated previous manifest also survives
+dashboard restarts. This is not a distributed transaction
+with Harvest and does not replace natural-cycle acceptance.
+
+No account, browser profile, bookmark scope or PT capability is removed.
+Historical uncertain attempts remain blocked until case-specific read-only
+reconciliation; a recovery wake-up timestamp is not proof of successful login.
+
+The execution layer may consume a same-day passive PT receipt only when its
+origin, account, profile hash, reviewed page path and evidence contract match.
+This appends a confirmed-external result to the normal report and closes an
+OpenCD quarantine without navigating to the site. Republishing an old,
+unverified failure cannot override a dated authoritative PT completion.
+
+PT planning and display share a site identity index; a compatibility folder
+name does not classify a monitored PT as a public API service. The default
+account selector preserves legacy origin-only identities. Vibe claim evidence
+requires the claim method, action semantics and response account, and the
+login helper retains these typed fields.
+
+Harvest's observer additionally rejects recorded concurrent active results,
+including an older running task behind a newer success. This signal covers
+the database's recorded tasks, not an unrecorded queue job. The final
+execution-side SSH check is bounded to eight seconds; the coordinator's
+longer precheck precedes the execution lease. No external transaction or
+guarantee about an unobservable Harvest job is implied.
+
+See [PT recovery and evidence](reliability-operations.md) for operator commands,
+the three reconciliation outcomes and the generation publication order.

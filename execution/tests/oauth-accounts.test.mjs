@@ -497,7 +497,7 @@ test("同域多账号支持按 accountKey 精确续跑并绕过该账号冷却",
   assert.match(source, /process\.argv\.indexOf\("--account-keys"\)/);
   assert.match(source, /const selectedAccountKeys = accountKeysIndex >= 0/);
   assert.match(source, /const explicitSelection = Boolean\(selectedOrigins \|\| selectedAccountKeys\)/);
-  assert.match(source, /selectedAccountKeys\.has\(String\(target\.accountKey \|\| ""\)\.trim\(\)\)/);
+  assert.match(source, /selectedAccountKeys\.has\(accountKeyForSelection\(target\)\)/);
   assert.match(source, /定向续跑账号不存在/);
   assert.match(source, /explicitSelection && prior && isTerminalResult\(prior\)/);
 });

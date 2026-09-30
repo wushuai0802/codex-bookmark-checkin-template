@@ -16,6 +16,7 @@ import {migrationReadiness} from './adapter-registry.mjs';
 import {publicCanaryResults} from './canary-report-view.mjs';
 import {readDashboardRuntime} from './dashboard-runtime.mjs';
 import {activeSiteControls,pauseExpiresAt} from './attention-controls.mjs';
+import {readDashboardGeneration} from './dashboard-generation.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -131,7 +132,7 @@ function latestLedger(dataDir, configuredFile) {
 
 function assertMatchingGeneration(snapshot,records){
   if(!snapshot||!records.length)return;
-  const newest=records.at(-1);
+  const newest=records.findLast(record=>record?.snapshotId===snapshot.snapshotId);
   if(newest?.snapshotId!==snapshot.snapshotId||
      newest?.businessDate!==snapshot.businessDate||
      newest?.planHash!==snapshot.planHash){
@@ -342,7 +343,7 @@ function confirmedPtByTask(snapshot){
     const current=site?.effective,at=Date.parse(current?.observedAt??'');
     if(!['signed','already_signed'].includes(current?.status)||current?.authoritative!==true||
        current?.evidence?.authoritative!==true||
-       current?.fresh!==true||!Number.isFinite(at)||
+       current?.fresh!==true||!Number.isFinite(at)||at>Date.parse(snapshot.generatedAt)+60_000||
        new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(at))!==snapshot.businessDate)continue;
     if(!site.accountRef&&counts.get(site.origin)!==1)continue;
     verified.set(site.origin+'|'+(site.accountRef??'site-default'),current);
@@ -366,6 +367,8 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
     }
     const pt=ptByTask.get(task.origin+'|'+(task.accountRef??'site-default'));
     if(pt&&task.businessDate===snapshot.businessDate&&
+       (merged.evidence?.authoritative!==true||!Number.isFinite(Date.parse(merged.observedAt))||Date.parse(pt.observedAt)>=Date.parse(merged.observedAt))&&
+       merged.evidence?.verification!=='identity_conflict'&&
        !['signed','already_signed'].includes(merged.observedStatus)){
       merged.executionObservedStatus=merged.observedStatus;
       merged.observedStatus=pt.status;
@@ -551,12 +554,28 @@ export function createDashboardServer({
     return previous.count > rateLimitPerMinute;
   }
 
+  let lastCompleteGeneration=null;
+  function readGeneration(){
+    try{
+      if(!snapshotFile&&!ledgerFile){
+        const committed=readDashboardGeneration(root);
+        if(committed){lastCompleteGeneration=committed;return committed;}
+      }
+      const current=latestSnapshot(root,snapshotFile),ledger=latestLedger(root,ledgerFile);
+      if(current.file&&!current.snapshot)throw Error('snapshot is incomplete');
+      assertMatchingGeneration(current.snapshot,ledger.records);
+      const committed=ledger.records.findLast(record=>record.snapshotId===current.snapshot?.snapshotId);
+      const cutoff=Math.max(Date.parse(current.snapshot?.generatedAt),Date.parse(committed?.recordedAt??current.snapshot?.generatedAt));
+      if(Number.isFinite(cutoff))ledger.records=ledger.records.filter(record=>Date.parse(record.recordedAt)<=cutoff);
+      lastCompleteGeneration={current,ledger,stale:false};
+      return lastCompleteGeneration;
+    }catch(error){
+      if(lastCompleteGeneration)return {...lastCompleteGeneration,stale:true};
+      throw error;
+    }
+  }
   function loadView() {
-    const current = latestSnapshot(root, snapshotFile);
-    const ledger = latestLedger(root, ledgerFile);
-    // The two files are replaced independently. An in-flight upload or a
-    // failed second rename must not mix today's snapshot with another ledger.
-    assertMatchingGeneration(current.snapshot,ledger.records);
+    const {current,ledger,stale}=readGeneration();
     const canaryResults=publicCanaryResults(root);
     const runtime=readDashboardRuntime(root);
     const view = buildView(current.snapshot, ledger.records, canaryResults, runtime);
@@ -565,7 +584,7 @@ export function createDashboardServer({
     catch{view.adapterObservations=null;}
     view.migrationReadiness=migrationReadiness({snapshot:view.snapshot,acceptance:view.readiness,adapterObservations:view.adapterObservations});
     const shanghaiToday=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
-    view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), fresh: timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) && current.snapshot?.businessDate===shanghaiToday };
+    view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), generationStale:stale, fresh: !stale&&timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) && current.snapshot?.businessDate===shanghaiToday };
     view.controls = activeSiteControls(readControlState(controlFile).sites);
     view.tasks = view.tasks.map(task => {
       const control = view.controls[task.origin];
@@ -634,10 +653,8 @@ export function createDashboardServer({
       if (!authorized(request, response)) return;
       if (requestUrl.pathname === '/api/calendar') {
         try {
-          const current=latestSnapshot(root,snapshotFile);
-          const ledger=latestLedger(root,ledgerFile);
-          assertMatchingGeneration(current.snapshot,ledger.records);
-          sendJson(response, 200, calendarHistory(ledger.records));
+          const {ledger,stale}=readGeneration();
+          sendJson(response, 200, {...calendarHistory(ledger.records),generationStale:stale});
         }
         catch { sendError(response, 500, 'data_error', 'calendar history could not be read'); }
         return;

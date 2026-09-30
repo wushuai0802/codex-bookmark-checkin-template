@@ -141,7 +141,7 @@ test('attempt is durable before execution, never blindly repeated and busy can r
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-fallback-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
   const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
-  let calls=0;const success=async options=>{calls++;assert.deepEqual(options.origins,['https://ourbits.club']);return {runId:'today',results:[{origin:'https://ourbits.club',accountKey:'site-default',status:'signed'}]};};
+  let calls=0;const success=async options=>{calls++;assert.deepEqual(options.origins,['https://ourbits.club']);assert.deepEqual(options.accountKeys,['site-default']);return {runId:'today',results:[{origin:'https://ourbits.club',accountKey:'site-default',status:'signed'}]};};
   assert.equal((await runHarvestFallback({...f,root,execute:true,runEngine:success})).outcomes[0].v1Status,'signed');
   assert.equal((await runHarvestFallback({...f,root,execute:true,runEngine:success})).outcomes[0].state,'already_attempted');
   assert.equal(calls,1);
@@ -185,6 +185,24 @@ test('a proven pre-browser catalog failure may retry after a corrected input',as
   assert.equal(failedAttempt.outcomes[0].state,'deferred_preflight');
   const retried=await runHarvestFallback({...args,runSite:async()=>({origin:'https://external.example',status:'login_required',observedAt:f.now.toISOString(),evidence:{source:'none',authoritative:false}})});
   assert.equal(retried.outcomes[0].state,'completed');assert.equal(retried.outcomes[0].v1Status,'login_required');
+});
+
+test('Harvest gate deferrals preserve a cooldown without consuming submission attempts',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-wait-budget-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];f.catalog.sites=f.catalog.sites.slice(0,2);f.latest.results[0].status='already_signed';
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  let current=f.now;
+  const args={...f,root,execute:true,catalogFile,catalogHash:'a'.repeat(64),clock:()=>current,
+    runSite:async()=>({origin:'https://external.example',status:'unknown',observedAt:current.toISOString(),submissionAttempted:false,
+      retryCause:'harvest_waiting',nextEligibleAt:new Date(current.getTime()+30*60_000).toISOString(),evidence:{source:'none',authoritative:false}})};
+  const preview=planHarvestFallback(f);
+  for(let index=0;index<4;index++){
+    assert.equal((await runHarvestFallback(args)).outcomes[0].state,'deferred_preflight');
+    assert.equal(pendingHarvestFallbackAttempts(root,preview,{now:current}).length,0);
+    current=new Date(current.getTime()+31*60_000);
+    assert.equal(pendingHarvestFallbackAttempts(root,preview,{now:current}).length,1);
+  }
 });
 
 test('a login-only attempt can resume only after a newer account recovery',async t=>{

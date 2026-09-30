@@ -7,17 +7,38 @@ import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 
 const statuses=new Set(['signed','already_signed','unknown','login_required','needs_attention','not_available']);
 const sources=new Set(['api','page_text','usage_log','pt_page','none']);
+const modes=new Set(['legacy_checkin','formal_visit_checkin','safe_status_endpoint','safe_history_page','unknown']);
+const safety=new Set(['reviewed_passive','attendance_page_risk','unknown']);
+const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 
 export function projectPtSiteResult(value,origin){
   if(value?.origin!==origin||!statuses.has(value.status)||!Number.isFinite(Date.parse(value.observedAt)))throw Error('invalid PT site result');
   const evidence=value.evidence??{};
+  const observed=Date.parse(value.observedAt),confirmed=Date.parse(evidence.confirmedAt??'');
+  const dated=(!evidence.confirmedAt||(Number.isFinite(confirmed)&&confirmed<=observed+60_000&&
+    dayAt(confirmed)===dayAt(observed)))&&(!evidence.businessDate||evidence.businessDate===dayAt(observed));
+  const authoritative=evidence.authoritative===true&&dated&&sources.has(evidence.source)&&evidence.source!=='none'&&value.submissionOutcomeUnknown!==true;
   const status=value.submissionOutcomeUnknown===true?'needs_attention':
-    ['signed','already_signed'].includes(value.status)&&evidence.authoritative!==true?'unknown':value.status;
+    ['signed','already_signed','not_available'].includes(value.status)&&!authoritative?'unknown':value.status;
   return {origin,status,observedAt:new Date(value.observedAt).toISOString(),
-    evidence:{source:sources.has(evidence.source)?evidence.source:'none',authoritative:evidence.authoritative===true,
+    ...(value.retryCause==='harvest_waiting'&&value.submissionAttempted===false?{retryCause:'harvest_waiting',
+      ...(Number.isFinite(Date.parse(value.nextEligibleAt))?{nextEligibleAt:new Date(value.nextEligibleAt).toISOString()}:{})}:{}),
+    ...(modes.has(value.operationMode)?{operationMode:value.operationMode}:{}),
+    ...(safety.has(value.readSafety)?{readSafety:value.readSafety}:{}),
+    ...(/^[a-f0-9]{64}$/.test(value.profileBinding??'')?{profileBinding:value.profileBinding}:{}),
+    ...(/^[A-Za-z0-9._-]{1,80}$/.test(value.accountKey??'')?{accountKey:value.accountKey}:{}),
+    ...(value.businessDate===dayAt(observed)?{businessDate:value.businessDate}:{}),
+    ...(Number.isFinite(Date.parse(value.startedAt))?{startedAt:new Date(value.startedAt).toISOString()}:{}),
+    evidence:{source:sources.has(evidence.source)?evidence.source:'none',authoritative,
+      ...(Number.isFinite(confirmed)?{confirmedAt:new Date(confirmed).toISOString()}:{}),
+      ...(evidence.businessDate===dayAt(observed)?{businessDate:evidence.businessDate}:{}),
+      ...(/^[a-z0-9_]{1,80}$/.test(evidence.statusSignal??'')?{statusSignal:evidence.statusSignal}:{}),
+      ...(evidence.evidenceScope==='site_account_day'?{evidenceScope:evidence.evidenceScope}:{}),
+      ...(evidence.pagePath==='/index.php'?{pagePath:'/index.php'}:{}),
       summary:typeof evidence.summary==='string'?evidence.summary.slice(0,160):''},
     ...(value.submissionOutcomeUnknown===true?{submissionOutcomeUnknown:true}:{}),
-    ...(status==='login_required'&&value.submissionAttempted===false?{submissionAttempted:false}:{})};
+    ...(value.submissionAttempted===true?{submissionAttempted:true}:{}),
+    ...(value.submissionAttempted===false&&value.submissionOutcomeUnknown!==true?{submissionAttempted:false}:{})};
 }
 
 export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,spawnChild=spawn,timeoutMs=600_000}){
@@ -36,7 +57,7 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
     child.stdout.on('data',chunk=>{stdout=append(stdout,chunk.toString('utf8'));});
     child.stderr.on('data',chunk=>{stderr=append(stderr,chunk.toString('utf8'));});
     child.once('error',error=>{clearTimeout(timer);reject(error);});
-    child.once('exit',(code,signal)=>{clearTimeout(timer);if(code===3){reject(Error('V2 runner is already active'));return;}if(signal||code!==0){reject(Error('PT site execution failed'));return;}resolve(stdout);});
+    child.once('exit',(code,signal)=>{clearTimeout(timer);if(code===3){reject(Error('V2 runner is already active'));return;}if(code===4){const e=Error('PT preflight prevented browser submission');e.code='PT_PREFLIGHT';reject(e);return;}if(signal||code!==0){reject(Error('PT site execution failed'));return;}resolve(stdout);});
   });
   const line=output.trim().split(/\r?\n/).at(-1);
   return projectPtSiteResult(JSON.parse(line),origin);
@@ -50,6 +71,7 @@ export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catal
     const error=Error('PT catalog missing or changed before execution');error.code='PT_PREFLIGHT';throw error;
   }
   const runtime=loadRuntimeConfig(root);
+  if(!readOnly&&!runtime.ptFallbackOnlyEnabled){const error=Error('PT fallback is not enabled in private runtime configuration');error.code='PT_PREFLIGHT';throw error;}
   if(runtime.executionEngine!=='v1'||!runtime.legacyRoot)throw Error('PT site fallback requires the execution layer');
   const integration=JSON.parse(fs.readFileSync(path.join(runtime.legacyRoot,'data/v2-integration.json'),'utf8'));
   if(integration.executionEngine!=='v1'||path.resolve(integration.v2ProjectRoot).toLowerCase()!==path.resolve(root).toLowerCase())throw Error('PT site gateway binding mismatch');

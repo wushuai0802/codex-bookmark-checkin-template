@@ -170,7 +170,7 @@ test("延迟站点用身份和时间窗令牌获得有界补跑机会", async ()
   assert.match(scheduler, /deferredWakeDate/);
   assert.match(scheduler, /deferredWakeTokens/);
   assert.match(scheduler, /Write-SchedulerClaim\s+\$runStartedAt\s+\$deferredWakeups/);
-  assert.match(scheduler, /schedulerMaxDailyAttempts is a hard whole-process ceiling/i);
+  assert.match(scheduler, /Ordinary retries and due site wakeups have separate bounded budgets/i);
   assert.match(scheduler, /\$attemptedToday\s*-and\s+\[int\]\$state\.attemptsToday\s+-ge\s+\$maxAttempts\)\s*\{\s*return\s+\$true/);
   assert.match(scheduler, /\$wakeTokens\s*=\s*@\(\s*@\(\s*@\(\$wakeTokens\)\s*@\(\$deferredWakeups/);
   assert.doesNotMatch(scheduler, /\$wakeTokens\s*\+\s*@\(\$deferredWakeups/);
@@ -243,7 +243,7 @@ $scriptPath = Join-Path $env:CHECKIN_TEST_ROOT 'scripts\Start-UserScheduler.ps1'
 $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
-foreach ($name in @('Test-SchedulerWaiting', 'Test-SchedulerShouldRun')) {
+foreach ($name in @('Test-SchedulerWaiting', 'Test-SchedulerShouldRun', 'Get-UnclaimedDeferredWakeups', 'Get-NormalizedDeferredWakeTokens')) {
   $functionAst = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true) | Select-Object -First 1
   Invoke-Expression $functionAst.Extent.Text
 }
@@ -261,10 +261,21 @@ $due = [pscustomobject]@{ Identity = 'https://example.com'; NextEligibleAt = $no
 $blockedAtGlobalLimit = Test-SchedulerShouldRun $state $now $config @($due) $false $scheduledToday
 $state.attemptsToday = 2
 $allowedBelowGlobalLimit = Test-SchedulerShouldRun $state $now $config @($due) $false $scheduledToday
+$state.attemptsToday = 100
+$blockedAtAbsoluteLimit = Test-SchedulerShouldRun $state $now $config @($due) $false $scheduledToday
+$wakeState=[pscustomobject]@{deferredWakeDate='2026-09-03';deferredWakeTokens=@()}
+$wakeReport=[pscustomobject]@{Valid=$true;DeferredWakeups=@(
+  [pscustomobject]@{Token='late';NextEligibleAt=([datetimeoffset]$now);RetrySequence=5;RetryExhaustedForDay=$false;LateRetryPending=$true;RetryCause='upstream_unavailable'},
+  [pscustomobject]@{Token='exhausted';NextEligibleAt=([datetimeoffset]$now);RetrySequence=5;RetryExhaustedForDay=$false;LateRetryPending=$false;RetryCause='upstream_unavailable'},
+  [pscustomobject]@{Token='harvest';NextEligibleAt=([datetimeoffset]$now);RetrySequence=0;RetryExhaustedForDay=$false;LateRetryPending=$false;RetryCause='harvest_waiting'}
+)}
+$eligibleTokens=@(Get-UnclaimedDeferredWakeups $wakeState $wakeReport $now $config | ForEach-Object {$_.Token})
 [ordered]@{
   blocked = [bool]$blocked
   blockedAtGlobalLimit = [bool]$blockedAtGlobalLimit
   allowedBelowGlobalLimit = [bool]$allowedBelowGlobalLimit
+  blockedAtAbsoluteLimit = [bool]$blockedAtAbsoluteLimit
+  eligibleTokens = $eligibleTokens
 } | ConvertTo-Json -Compress
 `;
   const { stdout } = await execFileAsync(powershell, ["-NoProfile", "-NonInteractive", "-Command", command], {
@@ -274,8 +285,10 @@ $allowedBelowGlobalLimit = Test-SchedulerShouldRun $state $now $config @($due) $
   });
   const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
   assert.equal(result.blocked, false);
-  assert.equal(result.blockedAtGlobalLimit, false);
+  assert.equal(result.blockedAtGlobalLimit, true);
   assert.equal(result.allowedBelowGlobalLimit, true);
+  assert.equal(result.blockedAtAbsoluteLimit, false);
+  assert.deepEqual(result.eligibleTokens,['late','harvest']);
 });
 
 test("调度状态分别记录执行完成与业务完成", async () => {

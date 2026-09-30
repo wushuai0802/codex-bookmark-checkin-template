@@ -45,7 +45,7 @@ function businessDateFrom(value, fallback = new Date()) {
 }
 
 function observedAt(result, fallback) {
-  const candidate = result?.evidence?.createdAt ?? result?.evidence?.confirmedAt ?? result?.confirmedAt ?? result?.lastConfirmedAt ?? fallback;
+  const candidate = result?.evidence?.createdAt ?? result?.evidence?.confirmedAt ?? result?.confirmedAt ?? result?.lastConfirmedAt ?? result?.observedAt ?? fallback;
   const date = new Date(candidate);
   return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
 }
@@ -277,15 +277,17 @@ function assertNoSensitiveKeys(value, location = '$') {
 }
 
 export function writeSnapshot(snapshot, outFile, legacyRoot) {
-  const destination = path.resolve(outFile);
+  const finalDestination = path.resolve(outFile);
+  const destination = finalDestination+'.'+crypto.randomUUID()+'.tmp';
   const root = path.resolve(legacyRoot);
-  if (destination === root || destination.startsWith(`${root}${path.sep}`)) {
+  if (finalDestination === root || finalDestination.startsWith(root+path.sep)) {
     throw new Error('refusing to write inside the legacy project');
   }
   assertNoSensitiveKeys(snapshot);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
-  return destination;
+  fs.renameSync(destination,finalDestination);
+  return finalDestination;
 }
 
 function parseArgs(argv) {

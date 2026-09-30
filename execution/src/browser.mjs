@@ -16,7 +16,8 @@ import { tryNewApiCaptchaCheckin, tryNewApiSignIn } from "./new-api-signin.mjs";
 import { isTerminalResult } from "./result-contract.mjs";
 import { applyOptionalBaiduSecondOpinion } from "./baidu-ocr.mjs";
 import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
-import { checkHarvestPtBeforeWrite } from "./harvest-pt-gate.mjs";
+import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
+import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -501,18 +502,23 @@ export async function waitForQuotaRequestField(page, timeoutMs = 10000) {
 
 // The Vibe frontend confirms a claim only when code=1 and data.claimed=true.
 // HTTP success or a visible "领取" button is not a claim receipt.
-export function classifyVibeClaimResponse(value, httpStatus = 200, now = new Date()) {
+export function classifyVibeClaimResponse(value, httpStatus = 200, now = new Date(), {expectedAccountId} = {}) {
   if (httpStatus !== 200 || value?.code !== 1) return null;
   if (value?.data?.claimed === true) {
     const businessDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now);
     const accountId = value?.data?.accountId ?? value?.data?.userId;
+    if(expectedAccountId!=null&&accountId!=null&&String(expectedAccountId)!==String(accountId))
+      return {status:'needs_attention',reason:'权益响应账号与执行账号不一致',failureCode:'account_mismatch',submissionAttempted:true,retryable:false};
     return {
       status: "signed",
       reason: "Codex 权益接口确认今日领取成功",
+      submissionAttempted: true,
       evidence: {
         source: "vibe_claim_response",
-        authoritative: true,
+        authoritative: accountId!=null&&/^[0-9]{1,32}$/.test(String(accountId)),
         endpoint: VIBE_CLAIM_PATH,
+        requestMethod: 'POST',
+        actionType: 'daily_entitlement_claim',
         businessDate,
         statusSignal: "claimed_true",
         confirmedAt: now.toISOString(),
@@ -577,7 +583,8 @@ export async function tryQuotaRequestFlow(page, activeOrigin, config, { waitForF
     const response = await claimResponse;
     if (response) {
       const payload = await response.json().catch(() => null);
-      claimResult = classifyVibeClaimResponse(payload, response.status());
+      claimResult = classifyVibeClaimResponse(payload, response.status(),new Date(),
+        {expectedAccountId:config.oauthAccountIdentities?.[activeOrigin]?.accountId});
     }
   }
   if (claimResult) return claimResult;
@@ -674,7 +681,7 @@ async function findMatchingQaRule(page, rules, origin) {
   }) ?? null;
 }
 
-async function applyQaRule(page, rule) {
+async function applyQaRule(page, rule, config = {}) {
   if (!rule?.answerText || !rule?.submitText) return false;
   const answerText = normalizeText(rule.answerText);
   const radioOptions = await page.locator('input[type="radio"]').evaluateAll((elements) => elements.map((element, index) => {
@@ -702,10 +709,12 @@ async function applyQaRule(page, rule) {
   })));
   const matchingSubmits = submitInputs.filter((option) => option.text === submitText);
   if (matchingSubmits.length === 1) {
+    config.beforePtSubmit?.();
     await page.locator('input[type="submit"], button[type="submit"]').nth(matchingSubmits[0].index).click();
   } else {
     const submit = page.getByText(submitText, { exact: true });
     if (await submit.count() !== 1) return false;
+    config.beforePtSubmit?.();
     await submit.click();
   }
   return true;
@@ -793,7 +802,7 @@ async function tryQaFlow(page, rules, origin, config) {
     }
 
     if (rule) {
-      const applied = await applyQaRule(page, rule);
+      const applied = await applyQaRule(page, rule, config);
       if (!applied) {
         return { status: "interactive_challenge", reason: "已找到问答答案，但页面选项结构无法安全提交" };
       }
@@ -1045,6 +1054,7 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
     return { status: "interactive_challenge", reason: "OpenCD 六位验证码本地识别置信度不足，未提交可疑答案" };
   }
   await input.fill(candidateCode);
+  config.beforePtSubmit?.();
   await submit.click();
   await sleep(2000);
   const responseText = String(await frame.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -1170,6 +1180,7 @@ export async function tryNexusImageCaptcha(page, config = {}, {
     }
     submittedChallenges.add(challengeKey);
     await input.fill(recognition.code);
+    config.beforePtSubmit?.();
     await submit.click();
     await sleep(3000);
     const state = await snapshotState(page);
@@ -1188,6 +1199,7 @@ export async function tryNexusImageCaptcha(page, config = {}, {
       if (attempt === maxAttempts) return {
         status: "needs_attention",
         reason: "NexusPHP 图片验证码连续被站点拒绝，已停止本轮提交",
+        captchaRejected: true,
         failureCode: "captcha_ocr_exhausted",
         submissionAttempted: true,
         retryable: false,
@@ -1218,15 +1230,13 @@ export async function tryNexusImageCaptcha(page, config = {}, {
         retryable: false,
       };
     }
-    if (attempt === maxAttempts) return {
+    return {
       status: "needs_attention",
-      reason: "NexusPHP 图片验证码提交后仍显示验证控件，已停止本轮提交",
-      failureCode: "captcha_ocr_exhausted",
+      reason: "NexusPHP 图片验证码提交后没有明确成功或拒绝回执，已停止本轮提交",
+      failureCode: "submission_outcome_unknown",
       submissionAttempted: true,
       retryable: false,
     };
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
-    await sleep(750);
   }
   return { status: "interactive_challenge", reason: "NexusPHP 图片验证码未能完成" };
 }
@@ -1261,6 +1271,7 @@ async function tryU2Captcha(page, expectedOrigin, config) {
   await message.fill(String(config.u2Message || "今日天气不错"));
   const chosen = page.locator(`input[type="submit"][name="${solution.answer.name}"]`);
   if (await chosen.count() !== 1) return { status: "interactive_challenge", reason: "U2 识别答案不属于当前题目" };
+  config.beforePtSubmit?.();
   await chosen.click();
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
   const bodyText = String(await page.locator("body").innerText()).replace(/\s+/g, " ").trim();
@@ -1270,10 +1281,17 @@ async function tryU2Captcha(page, expectedOrigin, config) {
       reason: `U2 图片题识别正确：${solution.answer.text}`,
     };
   }
-  return { status: "interactive_challenge", reason: "U2 答案已提交，但页面未显示签到成功" };
+  return { status: "needs_attention", reason: "U2 答案已提交，但页面未显示签到成功",
+    submissionAttempted: true, failureCode: 'submission_outcome_unknown', retryable: false };
 }
 
 async function processCandidate(page, target, candidateUrl, config, qaRules) {
+  if(!isPtExecutionTarget(target,{root:rootDirectory}))return processCandidateBody(page,target,candidateUrl,config,qaRules);
+  return guardPtSubmission(beforePtSubmit=>processCandidateBody(page,target,candidateUrl,{...config,beforePtSubmit},qaRules),
+    ()=>checkHarvestPtBeforeWrite(target,{root:rootDirectory}));
+}
+
+async function processCandidateBody(page, target, candidateUrl, config, qaRules) {
   const checkPt=()=>checkHarvestPtBeforeWrite(target,{root:rootDirectory});
   const beforeVisit=checkPt();
   if(beforeVisit)return beforeVisit;
@@ -1285,6 +1303,7 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     ? await tryAnyRouterApiCheckin(page, config, target.origin)
     : null;
   if (anyRouterResult) return { ...anyRouterResult, url: safeLogUrl(destination) };
+  if(/attendance|check[-_]?in|showup/i.test(new URL(destination).pathname))config.beforePtSubmit?.();
   await page.goto(destination, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
   if (useExtendedDiscovery) {
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
@@ -1431,6 +1450,9 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
   if (action) {
     const beforeClick=checkPt();
     if(beforeClick)return beforeClick;
+    // OpenCD's first control opens its CAPTCHA dialog; the actual form
+    // submission is guarded inside tryOpenCdCaptcha after OCR succeeds.
+    if(!knownPtDialogOpener(activeOrigin,action))config.beforePtSubmit?.();
     await clickCandidate(page, action);
     await sleep(config.actionWaitMs);
     activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
@@ -1462,6 +1484,7 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
     if (secondAction) {
       const beforeSecondClick=checkPt();
       if(beforeSecondClick)return beforeSecondClick;
+      config.beforePtSubmit?.();
       await clickCandidate(page, secondAction);
       await sleep(/转动|轉動/.test(secondAction.text) ? Math.max(config.actionWaitMs, 8000) : config.actionWaitMs);
       activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
@@ -1593,7 +1616,8 @@ export async function launchAutomationContext(config) {
     timezoneId: "Asia/Shanghai",
     viewport: config.headless ? { width: 1365, height: 900 } : null,
     acceptDownloads: false,
-    serviceWorkers: "allow",
+    serviceWorkers: config.ptPassiveReadOnly === true ? "block" : "allow",
+    javaScriptEnabled: config.ptPassiveReadOnly !== true,
     args: [
       "--profile-directory=Default",
       "--no-first-run",

@@ -27,6 +27,7 @@ test("only the matching authoritative dated claim receipt clears the quarantine"
   const state = updateSiteState({ sites: {} }, [unknown], day, config);
   const receipt = { origin, status: "signed", evidence: {
     source: "vibe_claim_response", authoritative: true,
+    accountId:'7',requestMethod:'POST',actionType:'daily_entitlement_claim',
     endpoint: "/frontend-api/vibe-code/codex/claim", statusSignal: "claimed_true",
     businessDate: "2026-09-29", confirmedAt: "2026-09-29T02:00:00Z",
   } };

@@ -103,6 +103,10 @@ test("Vibe claim requires the exact claimed receipt", () => {
   assert.equal(claimed.evidence.source, "vibe_claim_response");
   assert.equal(claimed.evidence.endpoint, "/frontend-api/vibe-code/codex/claim");
   assert.equal(claimed.evidence.businessDate, "2026-09-28");
+  assert.equal(claimed.evidence.authoritative,false);
+  const bound={code:1,data:{claimed:true,accountId:'7'}};
+  assert.equal(classifyVibeClaimResponse(bound,200,now,{expectedAccountId:'7'}).evidence.authoritative,true);
+  assert.equal(classifyVibeClaimResponse(bound,200,now,{expectedAccountId:'8'}).failureCode,'account_mismatch');
   assert.equal(classifyVibeClaimResponse({ code: 1, data: { claimed: false } }, 200, now).retryable, false);
   assert.equal(classifyVibeClaimResponse({ code: 1, data: { claimed: true } }, 502, now), null);
   assert.equal(classifyVibeClaimResponse({ code: "1", data: { claimed: true } }, 200, now), null);

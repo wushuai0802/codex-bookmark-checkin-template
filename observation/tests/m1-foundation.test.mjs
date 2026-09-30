@@ -108,6 +108,7 @@ test('new execution evidence sources require their account/day signal',()=>{
    outcome:'budele_enabled_false',confirmedAt:'2026-09-02T01:00:00Z'}},context);
  assert.equal(moved.verification,'feature_unavailable');
  const vibe=normalizeEvidence({status:'signed',evidence:{source:'vibe_claim_response',authoritative:true,
+   accountId:'7',requestMethod:'POST',actionType:'daily_entitlement_claim',
    endpoint:'/frontend-api/vibe-code/codex/claim',businessDate:'2026-09-02',statusSignal:'claimed_true',
    confirmedAt:'2026-09-02T01:00:00Z'}},context);
  assert.equal(vibe.verification,'verified');

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { shortLabel } from './display-identity.mjs';
 
 export function bookmarkCatalog(bookmarks, { folderId, parentId }) {
@@ -36,4 +37,22 @@ export function bookmarkCatalog(bookmarks, { folderId, parentId }) {
 
 export function readMonitorCatalog(bookmarksPath, scope) {
   return bookmarkCatalog(JSON.parse(fs.readFileSync(bookmarksPath, 'utf8')), scope);
+}
+
+export function boundMonitorCatalog(bookmarksPath,scope,now=new Date()){
+  const bytes=fs.readFileSync(bookmarksPath);
+  return {...bookmarkCatalog(JSON.parse(bytes),scope),schemaVersion:1,generatedAt:now.toISOString(),
+    scope:{folderId:String(scope.folderId),parentId:String(scope.parentId)},
+    sourceHash:crypto.createHash('sha256').update(bytes).digest('hex')};
+}
+
+export function validateCurrentPtCatalog(catalog,{bookmarksPath,now=new Date()}={}){
+  try{
+    const at=Date.parse(catalog.generatedAt);
+    if(!Number.isFinite(at)||at>now.getTime()+60_000||now.getTime()-at>30*60_000||
+      !catalog.scope?.folderId||!catalog.scope?.parentId)throw Error('stale scope');
+    const current=boundMonitorCatalog(bookmarksPath,catalog.scope,now);
+    if(current.sourceHash!==catalog.sourceHash||JSON.stringify(current.sites)!==JSON.stringify(catalog.sites))throw Error('scope changed');
+    return true;
+  }catch{const e=Error('PT current bookmark scope is missing, stale or changed');e.code='PT_PREFLIGHT';throw e;}
 }

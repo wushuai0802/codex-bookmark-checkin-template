@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { buildSnapshot, writeSnapshot } from './bridge.mjs';
 import { appendLedgerRecord, createLedgerRecord } from './shadow-ledger.mjs';
 import {loadRuntimeConfig} from './runtime-config.mjs';
+import {commitDashboardGeneration} from './dashboard-generation.mjs';
 
 function parseArgs(argv) {
   const args = {};
@@ -85,8 +86,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     });
     const previous = loadSnapshot(args.previous);
     const record = createLedgerRecord(snapshot, { previousSnapshot: previous, recordedAt: args.generatedAt });
-    if (args.out) writeSnapshot(snapshot, args.out, legacyRoot);
     if (args.ledger) appendLedgerRecord(args.ledger, record, { legacyRoot });
+    // Commit the ledger before its snapshot: readers can retain the prior
+    // complete generation until the atomic snapshot rename succeeds.
+    if (args.out) writeSnapshot(snapshot, args.out, legacyRoot);
+    if(args.out&&args.ledger)commitDashboardGeneration({snapshot,snapshotFile:args.out,ledgerFile:args.ledger});
     console.log(JSON.stringify({
       snapshotId: snapshot.snapshotId,
       planHash: snapshot.planHash,

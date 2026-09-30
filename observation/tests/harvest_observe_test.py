@@ -1,15 +1,14 @@
+import datetime
 import importlib.util
-import pathlib
+from pathlib import Path
 import sqlite3
 import tempfile
-import datetime
-from unittest.mock import patch
 import unittest
+from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('observer', pathlib.Path(__file__).parents[1] / 'scripts' / 'harvest-observe.py')
+spec = importlib.util.spec_from_file_location("harvest_observe", Path(__file__).parents[1] / "scripts" / "harvest-observe.py")
 observer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observer)
-
 
 class HarvestEvidenceTest(unittest.TestCase):
     def test_success_requires_explicit_positive_evidence(self):
@@ -26,7 +25,7 @@ class HarvestEvidenceTest(unittest.TestCase):
         shanghai = datetime.timezone(datetime.timedelta(hours=8))
         now = datetime.datetime(2026, 9, 20, 9, 0, tzinfo=shanghai)
         with tempfile.TemporaryDirectory() as folder:
-            database = pathlib.Path(folder) / 'harvest.sqlite'
+            database = Path(folder) / 'harvest.sqlite'
             conn = sqlite3.connect(database)
             conn.execute('CREATE TABLE mysite_mysite(mirror TEXT, nickname TEXT, user_id TEXT, username TEXT, sign_info TEXT)')
             conn.execute('CREATE TABLE harvest_schedule_task(task TEXT, enabled INTEGER)')
@@ -50,6 +49,37 @@ class HarvestEvidenceTest(unittest.TestCase):
         self.assertEqual(result['taskCompletion']['status'], 'completed')
         self.assertEqual(result['taskCompletion']['resultId'], 5)
 
+class HarvestActivityTests(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.execute("CREATE TABLE harvest_schedule_task(task TEXT,enabled INTEGER)")
+        self.db.execute("CREATE TABLE harvest_schedule_result(id INTEGER,status TEXT,date_created TEXT,date_done TEXT,task_name TEXT)")
+        self.db.execute("INSERT INTO harvest_schedule_task VALUES ('每日签到',1)")
+        self.db.execute("INSERT INTO harvest_schedule_result VALUES (3,'SUCCESS','2026-09-30T09:00:00+08:00','2026-09-30T09:10:00+08:00','每日签到')")
+        shanghai = datetime.timezone(datetime.timedelta(hours=8))
+        self.timezone_patch = patch.object(observer, "ZoneInfo", return_value=shanghai)
+        self.timezone_patch.start()
+        self.now = datetime.datetime(2026,9,30,10,tzinfo=shanghai)
+    def tearDown(self):
+        self.db.close()
+        self.timezone_patch.stop()
+    def result(self):
+        return observer.completed_daily_task(self.db,self.now,"2026-09-30")
+    def test_completed(self):
+        self.assertEqual(self.result()["status"],"completed")
+        self.assertEqual(self.result()["activeTaskCount"],0)
+    def test_older_concurrent_task_blocks_newer_success(self):
+        self.db.execute("INSERT INTO harvest_schedule_result VALUES (2,'STARTED','2026-09-30T08:00:00+08:00',NULL,'每日签到')")
+        self.assertEqual(self.result()["status"],"running")
+    def test_new_pending_task_blocks_previous_success(self):
+        self.db.execute("INSERT INTO harvest_schedule_result VALUES (4,'PENDING','2026-09-30T09:30:00+08:00',NULL,'每日签到')")
+        self.assertEqual(self.result()["status"],"running")
+    def test_unrelated_task_does_not_block(self):
+        self.db.execute("INSERT INTO harvest_schedule_result VALUES (4,'PENDING','2026-09-30T09:30:00+08:00',NULL,'下载任务')")
+        self.assertEqual(self.result()["status"],"completed")
+    def test_ambiguous_schedule_is_unknown(self):
+        self.db.execute("INSERT INTO harvest_schedule_task VALUES ('另一签到',1)")
+        self.assertIsNone(self.result())
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

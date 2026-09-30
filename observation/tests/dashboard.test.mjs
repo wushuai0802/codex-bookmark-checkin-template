@@ -131,6 +131,12 @@ test('dashboard never combines a new snapshot with a stale ledger generation',as
     fs.writeFileSync(path.join(root,'shadow-ledger.jsonl'),JSON.stringify({...record,snapshotId:snapshot.snapshotId})+'\n');
     assert.equal((await fetch(base+'/api/overview')).status,200);
     assert.equal((await fetch(base+'/api/calendar')).status,200);
+    fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),'{');
+    const previous=await(await fetch(base+'/api/overview')).json();
+    assert.equal(previous.snapshot.snapshotId,snapshot.snapshotId);
+    assert.equal(previous.snapshotMeta.generationStale,true);
+    assert.equal(previous.snapshotMeta.fresh,false);
+    assert.equal((await(await fetch(base+'/api/calendar')).json()).generationStale,true);
   }finally{await close(instance);}
 });
 

@@ -305,6 +305,11 @@ export function withRetrySchedule(result, config = {}, now = new Date()) {
 
 export function advanceDeferredRetry(result, previous, config = {}, now = new Date()) {
   if (result?.status !== "deferred") return result;
+  // Waiting for Harvest does not contact the PT site and is not a failed
+  // submission. Scheduler wake tokens still bound these status polls.
+  if (result.retryCause === 'harvest_waiting' && result.submissionAttempted === false) {
+    return { ...result, retrySequence: 0, retrySequenceDate: localRunDate(now), retryExhaustedForDay: false };
+  }
   const sameCause = previous?.status === "deferred"
     && String(previous.retryCause || "") === String(result.retryCause || "");
   const currentDate = localRunDate(now);

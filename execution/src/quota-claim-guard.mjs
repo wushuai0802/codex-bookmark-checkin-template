@@ -12,6 +12,8 @@ function confirmedClaim(result) {
   if (evidence.source === "vibe_claim_response") {
     const at = Date.parse(evidence.confirmedAt ?? "");
     return evidence.endpoint === "/frontend-api/vibe-code/codex/claim"
+      && Boolean(evidence.accountId||evidence.userId)
+      && evidence.requestMethod === 'POST' && evidence.actionType === 'daily_entitlement_claim'
       && evidence.statusSignal === "claimed_true" && Number.isFinite(at)
       && new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(at)) === evidence.businessDate;
   }
@@ -41,6 +43,7 @@ export function pendingQuotaClaim(target, state, previousReport, config = {}) {
     failureCode: "submission_outcome_unknown",
     submissionAttempted: true,
     retryable: false,
+    ...(Number.isFinite(Date.parse(persisted??''))?{observedAt:persisted}:{}),
     ...(prior?.candidateHistory ? { candidateHistory: prior.candidateHistory } : {}),
   };
 }
@@ -81,6 +84,7 @@ export function pendingOpenCdSubmission(target, state, previousReport) {
   return {
     status: "needs_attention",
     reason: "OpenCD 验证码提交结果不明，先核验今日签到记录",
+    ...(Number.isFinite(Date.parse(persisted??''))?{observedAt:persisted}:{}),
     failureCode: "submission_outcome_unknown",
     submissionAttempted: true,
     retryable: false,
