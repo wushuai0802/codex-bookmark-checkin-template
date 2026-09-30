@@ -1,4 +1,4 @@
-. (Join-Path $PSScriptRoot 'CheckinContract.generated.ps1')
+﻿. (Join-Path $PSScriptRoot 'CheckinContract.generated.ps1')
 
 function Test-CheckinEvidenceTimestamp([object]$Value, [datetimeoffset]$Now) {
     $confirmedAt = [datetimeoffset]::MinValue

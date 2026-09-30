@@ -41,7 +41,8 @@ test('native evidence is created only from same-site daily or action-confirmed p
     {snapshot:{...base,currentUrl:'https://ourbits.club/attendance.php',bodyText:'2026-09-28 已签到'},url:'https://ourbits.club/attendance.php',formalVisit:true,expected:false},
   ];
   const quoted=value=>String(value).replaceAll("'","''");
-  const command=`[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
+  const command=`$ProgressPreference='SilentlyContinue'
+[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
 . '${quoted(scripts+'ResultContract.ps1')}'
 $cases='${quoted(JSON.stringify(cases))}' | ConvertFrom-Json
 $rows=@(foreach($c in $cases){
@@ -50,7 +51,8 @@ $rows=@(foreach($c in $cases){
   [pscustomobject]@{evidence=$proof}
 })
 ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
-  const {stdout}=await execFileAsync(process.platform==='win32'?'pwsh.exe':'pwsh',
+  for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pwsh']){
+  const {stdout}=await execFileAsync(shell,
     ['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(command,'utf16le').toString('base64')],
     {encoding:'utf8',timeout:20000});
   const results=JSON.parse(stdout.trim());
@@ -67,6 +69,7 @@ ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
     assert.equal(recovered.dailyCheckin.evidence.authoritative,true);
     assert.equal(recovered.dailyCheckin.evidence.businessDate,'2026-09-29');
   });
+  }
 });
 
 test('native producers and all confirmed preflight branches preserve structured evidence',async()=>{
