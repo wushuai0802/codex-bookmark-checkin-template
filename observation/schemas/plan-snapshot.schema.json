@@ -314,11 +314,13 @@
           "const": "daily"
         },
         "executionOwner": {
-          "const": "legacy-checkin"
+          "enum": ["legacy-checkin", "v2-worker"]
         },
         "executionMode": {
-          "const": "observe_only"
+          "enum": ["observe_only", "v1_engine"]
         },
+        "failureCode": {"type": "string", "pattern": "^[a-z_]{1,80}$"},
+        "submissionAttempted": {"type": "boolean"},
         "observedStatus": {
           "type": "string"
         },

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {execFileSync} from 'node:child_process';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -33,15 +34,19 @@ fs.rmSync(output, { recursive: true, force: true });
 fs.mkdirSync(output, { recursive: true });
 for (const name of ['Dockerfile', 'compose.nas.yaml', 'compose.worker.yaml', '.dockerignore', 'package.json', 'package-lock.json']) copyRequired(path.join(projectRoot, name), path.join(output, name));
 for (const directory of ['src', 'public']) copyRequired(path.join(projectRoot, directory), path.join(output, directory));
+let revision=null;try{revision=execFileSync('git',['rev-parse','HEAD'],{cwd:projectRoot,encoding:'utf8'}).trim();}catch{}
+fs.writeFileSync(path.join(output,'release.json'),JSON.stringify({version:JSON.parse(fs.readFileSync(path.join(projectRoot,'package.json'),'utf8')).version,revision,deployedAt:new Date().toISOString()}));
 fs.mkdirSync(path.join(output, 'nas-data'), { recursive: true });
 fs.writeFileSync(path.join(output, 'nas-data', '.gitkeep'), '', 'utf8');
 fs.mkdirSync(path.join(output, 'secrets'), { recursive: true });
 copyRequired(path.join(projectRoot, 'secrets', 'README.md'), path.join(output, 'secrets', 'README.md'));
 fs.writeFileSync(path.join(output, 'TRANSFER-MANIFEST.txt'), [
-  'codex-checkin-fabric-v2 NAS bundle',
+  'Check-in Fabric NAS bundle',
   'Contains only application source and empty data/secret directories.',
   'compose.worker.yaml is included as an opt-in transport overlay; it does not enable execution by itself.',
-  'Copy redacted shadow-beta-snapshot.json (including optional ptStatus) and shadow-ledger.jsonl into nas-data/.',
+  'Publish shadow-ledger.jsonl first, then shadow-beta-snapshot.json, and dashboard-generation.json last.',
+  'Retain dashboard-generation.previous.json; all generation files must refer to the same ledger prefix.',
+  'release.json identifies this code bundle and contains no private runtime paths.',
   'Create secrets/fabric_admin_token.txt on the NAS; never copy credentials or browser profiles.',
   ''
 ].join('\n'), 'utf8');

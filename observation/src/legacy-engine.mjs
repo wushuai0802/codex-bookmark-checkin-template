@@ -8,6 +8,7 @@ import {redactText} from './contracts.mjs';
 import {normalizeEvidence} from './evidence-contract.mjs';
 import {createLedgerRecord,appendLedgerRecord} from './shadow-ledger.mjs';
 import {commitDashboardGeneration} from './dashboard-generation.mjs';
+import {loadPtRecoveryDiagnostics} from './pt-reconciliation.mjs';
 
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const canonical=value=>path.resolve(value).toLowerCase();
@@ -102,6 +103,7 @@ export function publishEngineReport({root,legacyRoot,exitCode=null,requireFreshS
   }
   try{ptFallbackReport=read(path.join(root,'outputs','pt-fallback-results-'+day+'.json'));}catch{}
   const snapshot=buildSnapshot({legacyRoot,generatedAt:now.toISOString(),monitorCatalog,ptStatusReport,ptFallbackReport,
+    ptFallbackOnlyEnabled:loadRuntimeConfig(root).ptFallbackOnlyEnabled,ptRecoveryReport:loadPtRecoveryDiagnostics(root,day),
     ...(currentHealth?{healthReport:currentHealth}:{})});
   for(const task of snapshot.tasks){task.executionOwner='v2-worker';task.executionMode='v1_engine';}
   appendLedgerRecord(path.join(root,'outputs/shadow-ledger.jsonl'),createLedgerRecord(snapshot,{recordedAt:now.toISOString()}),{legacyRoot});

@@ -4,12 +4,7 @@ import {configuredIsolatedOAuthSiteProfiles,configForIsolatedOAuthSite} from './
 import {configuredOAuthSessionProfiles,configForOAuthSession} from './oauth-session-profiles.mjs';
 import {configForOAuthExecutionAccount} from './oauth-execution-binding.mjs';
 import {ptPageEvidence,classifyPageText} from './detector.mjs';
-
-const dailyHeaders={
-  'https://cspt.top':{selector:'.menu-base-info',actionPath:'/attendance.php',unsignedText:'签到得金元宝',signedRewardControl:true},
-  'https://pt.xingyungept.org':{selector:'#info_block',actionPath:'/attendance.php',unsignedText:'签到得星焱',signedRewardControl:true},
-  'https://u2.dmhy.org':{selector:'#info_block',actionPath:'/showup.php',unsignedText:'立即簽到'}
-};
+import {ptReadPolicies} from './checkin-contract.generated.mjs';
 
 export function ptExecutionBinding(config,root,target){
   if([config.isolatedOAuthSiteProfiles?.[target.origin],config.oauthSiteSessionBindings?.[target.origin],
@@ -39,13 +34,8 @@ export function ptExecutionBinding(config,root,target){
 // OpenCD index supplies the passive server-rendered header. CAPTCHA submission
 // stays in the formal runner. Bookmark folder names never grant capabilities.
 export function ptReadPolicy(origin,config={}){
-  const policy=config.ptReadOnlyPolicies?.[origin]??(dailyHeaders[origin]?{
-    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',...dailyHeaders[origin],dailyHeader:true
-  }:origin==='https://ptsbao.club'?{
-    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'body',
-    publicAvailabilityUrl:origin+'/claim/'
-  }:origin==='https://open.cd'?{
-    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'body',openCdHeader:true
+  const policy=config.ptReadOnlyPolicies?.[origin]??(ptReadPolicies[origin]?{
+    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',...ptReadPolicies[origin]
   }:null);
   const unsafe=()=>{const e=Error('PT read-only capability is not reviewed for this site');e.code='PT_READONLY_UNSAFE';return e;};
   if(!policy||policy.reviewed!==true||policy.mode!=='safe_history_page'||typeof policy.selector!=='string'||

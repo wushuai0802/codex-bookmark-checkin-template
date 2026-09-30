@@ -181,6 +181,8 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
       executionMode: unifiedEngine?'v1_engine':'observe_only',
       observedStatus: status
     };
+    if(typeof entry.submissionAttempted==='boolean')task.submissionAttempted=entry.submissionAttempted;
+    if(/^[a-z_]{1,80}$/.test(entry.failureCode??''))task.failureCode=entry.failureCode;
     tasks.push(task);
     receipts.push(evidenceReceipt(entry, identity.taskId, fallbackAt, businessDate));
     if (!logicalSites.has(origin)) {

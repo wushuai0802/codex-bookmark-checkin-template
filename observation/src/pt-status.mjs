@@ -2,11 +2,8 @@ import crypto from 'node:crypto';
 import { normalizeOrigin, redactText } from './contracts.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
-
-export const PT_STATUS_VALUES = [
-  'signed', 'already_signed', 'not_signed', 'unknown', 'login_required',
-  'unreachable', 'needs_attention', 'not_available', 'failed'
-];
+import {ptStatuses} from './checkin-contract.generated.mjs';
+export const PT_STATUS_VALUES=ptStatuses;
 
 const SOURCE_VALUES = new Set(['harvest', 'legacy-checkin', 'execution-supplement', 'manual', 'v2-observer', 'other']);
 const EVIDENCE_VALUES = new Set(['api', 'page_text', 'pt_page', 'usage_log', 'user_confirmation', 'manual', 'health_cache', 'harvest', 'none']);

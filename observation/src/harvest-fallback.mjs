@@ -182,8 +182,12 @@ function claimWorker(root) {
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
-  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[]}={}) {
-  const preview=planHarvestFallback({harvest,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled});
+  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[],onlyOrigins=null}={}) {
+  let preview=planHarvestFallback({harvest,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled});
+  if(onlyOrigins){
+    if(!Array.isArray(onlyOrigins)||onlyOrigins.length!==1||!catalog.sites.some(s=>s.origin===onlyOrigins[0]))throw Error('invalid selected PT scope');
+    preview={...preview,eligible:preview.eligible.filter(c=>onlyOrigins.includes(c.origin)),blocked:preview.blocked.filter(c=>onlyOrigins.includes(c.origin))};
+  }
   if(!execute)return {...preview,mode:'preview'};
   const runtime=loadRuntimeConfig(root);
   if(runtime.executionEngine!=='v1'||!runtime.legacyRoot)throw Error('Harvest fallback requires the V1 execution engine');

@@ -12,8 +12,8 @@ test('CI, package metadata and Docker share the supported Node 24 runtime', () =
   assert.equal(manifest.engines.node, '>=24.0.0 <25');
   assert.deepEqual(JSON.parse(read('package-lock.json')).packages[''].engines, manifest.engines);
   assert.match(read('Dockerfile'), /^FROM node:24-alpine/m);
-  const workflow = read('.github/workflows/v2-checks.yml');
-  assert.match(workflow, /node-version-file: \.node-version/);
+  const workflow = read('../.github/workflows/unified.yml');
+  assert.match(workflow, /node-version: 24/);
   assert.match(workflow, /ubuntu-latest/);
   assert.match(workflow, /windows-latest/);
 });

@@ -6,6 +6,7 @@ import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
 import { createNoticeState, pausedNotices, attentionPreview } from './notice-state.mjs';
 import {dailyRecords, monthCells, moveMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
 import { enhanceSelect, closeSelectMenu } from './select-menu.mjs';
+import {statusLabels as STATUS_LABELS} from './checkin-contract.generated.mjs';
 
 const notices = createNoticeState();
 let attentionScrollUntil = 0;
@@ -28,12 +29,6 @@ let navigation = null;
 let hasRenderedData = false;
 let recentViews = [];
 try { recentViews = JSON.parse(localStorage.getItem('fabricRecentViews') ?? '[]'); } catch { /* Navigation works with blocked storage. */ }
-
-const STATUS_LABELS = {
-  signed: '已签到', already_signed: '今日已完成', not_available: '未开放',
-  not_signed: '未签到（已确认）', needs_attention: '需关注', deferred: '已延迟', login_required: '需登录',
-  unreachable: '不可访问', failed: '失败', unknown: '未知', not_started:'未执行（缺少回执）'
-};
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -267,6 +262,33 @@ function taskDetails(task) {
   navigation.openOverlay('task', task.taskId);
 }
 
+function operationControls(target){
+  const wrapper=el('div','operation-actions');
+  const accountRef=target.accountRef??null;
+  const capability=state.data?.operationTargets?.find(t=>t.origin===target.origin&&(t.accountRef??null)===accountRef);
+  const latest=state.data?.operations?.requests?.find(r=>r.origin===target.origin&&(r.accountRef??null)===accountRef);
+  const labels={verify:'只读核验',retry:'补签未完成项',login:'打开登录窗口',resume:'登录后继续'};
+  for(const action of ['verify','retry','login','resume']){
+    if(!capability?.actions?.[action])continue;
+    const button=el('button','link-button',labels[action]);button.type='button';
+    button.disabled=['queued','running'].includes(latest?.status);
+    button.addEventListener('click',async()=>{
+      button.disabled=true;
+      try{
+        const result=await api('/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({origin:target.origin,accountRef,action})});
+        showFeedback(result.duplicate?'该请求已登记，请查看下方结果':'请求已排队，由执行电脑处理');
+        await loadData();
+      }catch(error){button.disabled=false;showFeedback(error.message,'error');}
+    });wrapper.append(button);
+  }
+  if(latest){
+    const label={queued:'已排队',running:'执行中',completed:'已处理',waiting_login:'等待登录',blocked:'待处理',expired:'已过期',interrupted:'需核验'}[latest.status]??latest.status;
+    wrapper.append(el('span','subtext operation-note',`${label} · ${latest.message??(state.data.operations.worker.online?'等待执行器处理':'等待执行电脑上线')}`));
+  }
+  return wrapper;
+}
+
 function renderTaskDetails(task) {
   const previousFocus = document.activeElement;
   const dialog = el('dialog', 'task-drawer');
@@ -283,6 +305,7 @@ function renderTaskDetails(task) {
     ['执行所有者', task.executionOwner], ['任务 ID', task.taskId]]) {
     const row = el('div', 'detail-row'); append(row, el('span', 'muted', label), el('strong', null, value)); dialog.append(row);
   }
+  dialog.append(operationControls(task));
   mountDialog(dialog, previousFocus);
 }
 
@@ -515,6 +538,7 @@ function renderPtStatus(data) {
     else if (category==='unavailable') append(actionCell,el('span',null,'功能未开放'));
     else if(category==='reported')append(actionCell,el('span',null,'补录当日证据'),el('span','subtext','不重复提交签到'));
     else append(actionCell,statusChip('needs_attention'),el('span','subtext',effective.evidence?.summary || site.recovery?.summary || '待执行层核验'));
+    actionCell.append(operationControls(site));
     if(site.inLegacyPlan && state.data?.sites?.some(item=>item.origin===site.origin)){
       const manage=el('button','link-button','管理标记');manage.type='button';manage.addEventListener('click',()=>openSiteControls(site.origin));actionCell.append(manage);
     }
@@ -688,7 +712,9 @@ function renderLedgerDetails(record) {
 function renderCalendar(data) {
   const view=$('#checkin-calendar'),summary=$('#calendar-summary'),detail=$('#calendar-detail'),nav=$('#calendar-nav');if(!view||!summary||!detail||!nav)return;
   const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
-  const records=dailyRecords({ledger:state.calendarHistory??data?.ledger,snapshot:data?.snapshot,tasks:data?.tasks});
+  state.calendarScope??='all';
+  const records=dailyRecords({ledger:state.calendarHistory??data?.ledger,snapshot:data?.snapshot,tasks:data?.tasks,
+    ptStatus:data?.ptStatus,scope:state.calendarScope});
   state.calendarMonth ??= today.slice(0,7);
   state.calendarDate = state.calendarDate?.startsWith(state.calendarMonth + '-') ? state.calendarDate
     : state.calendarMonth === today.slice(0,7) ? today : null;
@@ -719,7 +745,12 @@ function renderCalendar(data) {
   next.addEventListener('click',()=>{state.calendarMonth=moveMonth(state.calendarMonth,1);state.calendarDate=null;state.calendarFilter=null;renderCalendar(data);});
   const todayButton=el('button','calendar-nav-btn today-btn','今天');todayButton.type='button';todayButton.setAttribute('aria-label','回到今天');todayButton.disabled=state.calendarMonth===today.slice(0,7)&&state.calendarDate===today;
   todayButton.addEventListener('click',()=>{state.calendarMonth=today.slice(0,7);state.calendarDate=today;state.calendarFilter=null;renderCalendar(data);});
-  append(buttons,previous,todayButton,next);append(nav,heading,buttons);
+  const scope=el('select');scope.id='calendar-scope';scope.setAttribute('aria-label','日历范围');
+  for(const [value,label] of [['all','全部任务'],['regular','常规任务'],['pt','PT 站点']]){
+    const option=el('option',null,label);option.value=value;option.selected=state.calendarScope===value;scope.append(option);
+  }
+  scope.addEventListener('change',()=>{state.calendarScope=scope.value;state.calendarFilter=null;renderCalendar(data);});
+  append(buttons,scope,previous,todayButton,next);append(nav,heading,buttons);enhanceSelect(scope);
   view.replaceChildren();for(const label of labels)view.append(el('span','calendar-weekday',label));for(let i=0;i<offset;i++)view.append(el('span','calendar-empty',''));
   const stateOf=entry=>{if(!entry)return 'none';const totals=dayTotals(entry);if(totals.pending>0)return 'warn';if(totals.completed>0)return 'success';if(totals.unavailable>0)return 'done';return 'observe';};
   for(let day=1;day<=days;day++){
@@ -749,6 +780,8 @@ function renderCalendar(data) {
   const selected=records.get(state.calendarDate),totals=dayTotals(selected);detail.replaceChildren();
   const header=el('div','calendar-detail-header');append(header,el('strong',null,state.calendarDate??'日期明细'),el('span','muted',selected?`更新于 ${formatTime(selected.recordedAt)}`:''));detail.append(header);
   if(!selected){detail.append(el('p','calendar-empty-state',state.calendarDate?'当日暂无执行回执':'本月暂无选定回执'));return;}
+  if(state.calendarScope!=='regular'&&selected.ptRecorded===false)
+    detail.append(el('p','calendar-history-note','该日期的 PT 历史记录不完整，仅展示已有回执。'));
   detail.append(el('p','calendar-detail-totals',`${totals.completed} 项完成 · ${totals.unavailable} 项未开放 · ${totals.pending} 项待处理`));
   if(!Array.isArray(selected.tasks)||!selected.tasks.length){detail.append(el('p','calendar-empty-state','仅有当日汇总，未保存逐站回执'));return;}
   state.calendarFilter??=totals.pending?'pending':'all';
@@ -776,9 +809,11 @@ function renderSettings(data) {
   const snapshot = data?.snapshot ?? {};
   const content = $('#settings-content'); content.replaceChildren();
   const rows = [
+    ['项目版本',data?.release?.version??'—'],['部署提交',data?.release?.revision?.slice(0,12)??'源码运行'],
     ['系统角色', '执行层签到 · 观测层对账与面板'], ['今日执行', `${snapshot.counts?.executionUnits??0} 个账号任务 · ${(data?.status?.signed??0) + (data?.status?.already_signed??0)} 项已完成`],
-    ['Harvest 对账', '每日任务完成后复核登记的 PT 站点'], ['补签规则', '仅由执行层按站点原有流程补签一次'],
-    ['人工控制', '站点标记、暂缓提醒、复核备注可操作'], ['计划来源', snapshot.source?.system === 'legacy-checkin' ? '书签签到计划' : snapshot.source?.system ?? '书签签到计划'],
+    ['Harvest 对账', '每日任务完成后复核登记的 PT 站点'], ['补签规则', '先核验今日状态，再由执行层受限补签'],
+    ['人工控制', '只读核验、受限补签、绑定登录和续跑'],['执行电脑',data?.operations?.worker?.online?'在线':'等待连接'],
+    ['计划来源', snapshot.source?.system === 'legacy-checkin' ? '书签签到计划' : snapshot.source?.system ?? '书签签到计划'],
     ['认证状态', data?.authConfigured ? '已配置' : '仅回环访问'], ['数据目录', '服务端已配置（路径不展示）']
   ];
   for (const [label, value] of rows) { const row = el('div', 'setting-row'); append(row, el('span', null, label), el('strong', null, value)); content.append(row); }
@@ -795,7 +830,7 @@ function renderSettings(data) {
     }
     content.append(section);
   }
-  const note = el('div', 'alert', '面板上的站点操作只影响提醒与复核标记，不会修改账号、Cookie 或站点签到规则。需要真正补签时，由执行层按原登记流程接手。'); note.style.marginTop = '18px'; content.append(note);
+  const note = el('div', 'alert', '站点操作由执行电脑按现有账号绑定处理。已完成的任务不重复提交；登录窗口在执行电脑打开，完成后请关闭窗口再继续。'); note.style.marginTop = '18px'; content.append(note);
 }
 
 function renderAll() {

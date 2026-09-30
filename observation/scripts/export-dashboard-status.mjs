@@ -11,5 +11,7 @@ let executionEngine='v1';try{executionEngine=loadRuntimeConfig(root).executionEn
 const data={schemaVersion:1,generatedAt:new Date().toISOString(),
   owners:executionEngine==='v1'?[]:runtimeOwners(path.join(root,'outputs')),
   results:executionEngine==='v1'?[]:publicCanaryResults(path.join(root,'outputs'),{useBundle:false})};
-fs.writeFileSync(output,JSON.stringify({...data,executionEngine}),'utf8');
+const temporary=output+'.'+process.pid+'.tmp';
+try{fs.writeFileSync(temporary,JSON.stringify({...data,executionEngine}),'utf8');fs.renameSync(temporary,output);}
+finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
 console.log(`Dashboard status exported: ${data.owners.length} owners, ${data.results.length} receipts`);

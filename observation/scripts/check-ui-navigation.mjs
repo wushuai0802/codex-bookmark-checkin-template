@@ -28,6 +28,7 @@ const ptSite = (host, status, authoritative) => ({
   sourceStatuses: [], observations: []
 });
 snapshot.ptStatus.sites = [ptSite('confirmed','signed',true),ptSite('reported','signed',false),ptSite('unknown','unknown',false)];
+snapshot.ptStatus.sites[0].origin='https://cspt.top';
 snapshot.ptStatus.counts = { ...snapshot.ptStatus.counts, sites: 3, externalOnly: 3, fallbackOnly: 3,
   status: { ...snapshot.ptStatus.counts.status, signed: 2, unknown: 1 } };
 fs.writeFileSync(path.join(dataDir, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
@@ -48,6 +49,7 @@ try {
   browser = await chromium.launch({ headless: true, channel: process.env.FABRIC_UI_BROWSER ?? 'chrome' });
   for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
     fs.writeFileSync(path.join(dataDir, 'control-state.json'), JSON.stringify({ schemaVersion: 1, sites: {}, audit: [] }));
+    fs.writeFileSync(path.join(dataDir,'operation-requests.json'),JSON.stringify({schemaVersion:1,requests:[],worker:{lastSeenAt:new Date().toISOString()}}));
     const context = await browser.newContext({ viewport, timezoneId: 'Asia/Shanghai' });
     try {
       const page = await context.newPage();
@@ -130,7 +132,7 @@ try {
       await page.getByRole('button',{name:'回到今天'}).click();
       await page.locator(`.calendar-day[aria-label^="${snapshot.businessDate}"]`).click();
       assert.match(await page.locator('#calendar-detail').textContent(), /项完成/);
-      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),1);
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),2);
       if(mobile)assert.ok(await page.evaluate(()=>{
         const filters=document.querySelector('.calendar-filters'),right=filters.getBoundingClientRect().right;
         return [...filters.querySelectorAll('button')].every(button=>button.getBoundingClientRect().right<=right+1&&
@@ -143,8 +145,16 @@ try {
           `${snapshot.businessDate.slice(0,8)}${String(selectedDay-1).padStart(2,'0')}`);
       }
       await page.locator('.calendar-filters').getByRole('button',{name:/全部/}).click();
-      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),snapshot.tasks.length);
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),snapshot.tasks.length+snapshot.ptStatus.sites.length);
       assert.equal(await page.locator('.calendar-filters button:focus').getAttribute('aria-pressed'),'true');
+      await page.locator('.ui-select[data-for="calendar-scope"] .ui-select-trigger').click();
+      await page.getByRole('listbox',{name:'日历范围'}).getByRole('option',{name:'PT 站点'}).click();
+      await page.locator('.calendar-filters').getByRole('button',{name:/全部/}).click();
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),snapshot.ptStatus.sites.length);
+      await page.locator('.ui-select[data-for="calendar-scope"] .ui-select-trigger').click();
+      await page.getByRole('listbox',{name:'日历范围'}).getByRole('option',{name:'常规任务'}).click();
+      await page.locator('.calendar-filters').getByRole('button',{name:/全部/}).click();
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),snapshot.tasks.length);
       await page.getByRole('button',{name:'上个月'}).click();
       assert.ok(await page.locator('.calendar-day.warn, .calendar-day.success').count()>0);
       await page.getByRole('button', {name:'回到今天'}).click();
@@ -212,6 +222,11 @@ try {
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
       assert.match(await page.locator('#pt-status-body').textContent(),/unknown\.example/);
       await page.locator('#pt-kpis .kpi').filter({hasText:'PT 站点'}).click();
+      await page.locator('#pt-status-body tr').filter({hasText:'https://cspt.top'}).getByRole('button',{name:'只读核验',exact:true}).click();
+      await page.waitForFunction(()=>document.querySelector('#pt-status-body').textContent.includes('已排队'));
+      const queued=await(await fetch(base+'/api/operations')).json();
+      assert.equal(queued.requests.length,1);assert.equal(queued.requests[0].action,'verify');
+      assert.equal(queued.requests[0].status,'queued');
       if(mobile)assert.ok(await page.evaluate(()=>{
         const wrap=document.querySelector('#view-pt-status .table-wrap');
         return wrap.querySelector('table').scrollWidth<=wrap.clientWidth+1;

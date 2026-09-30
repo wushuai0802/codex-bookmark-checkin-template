@@ -56,7 +56,7 @@ function request(address, host, path, { sessionValue = "", requestHeaders = {}, 
   });
 }
 
-function cookieJar(cookies = []) {
+export function cookieJar(cookies = []) {
   const values = new Map();
   for (const cookie of cookies) values.set(cookie.name, cookie.value);
   return {
@@ -95,11 +95,11 @@ function solveEsaChallenge(body) {
   return match ? { name: match[1], value: match[2] } : null;
 }
 
-function parseJson(response) {
+export function parseJson(response) {
   try { return JSON.parse(response.body); } catch { return null; }
 }
 
-async function requestWithChallenge(address, host, path, options, policy, jar) {
+export async function requestWithChallenge(address, host, path, options, policy, jar) {
   let response = await request(address, host, path, { ...options, sessionValue: jar.header() }, policy.timeoutMs);
   jar.update(response.setCookie);
   const allowChallengeRetry = String(options.method || "GET").toUpperCase() !== "POST";

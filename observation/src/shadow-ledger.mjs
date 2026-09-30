@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { planHash, planUnitIdentity, assertUniqueTaskOwners, redactText } from './contracts.mjs';
 import { displayIdentity, shortLabel } from './display-identity.mjs';
+import {ptCalendarSummaries} from './calendar-records.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -128,7 +129,8 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
   }
   const summarize = (task, source) => {
     const receipt = source.receipts?.find(item => item.taskId === task.taskId);
-    return { taskId: task.taskId, origin: task.origin, displayName: shortLabel(task.displayName),
+    return { taskId: task.taskId, origin: task.origin, accountRef:task.accountRef??null,
+      taskKind:source.ptStatus?.sites?.some(site=>site.origin===task.origin)?'pt':'service',displayName: shortLabel(task.displayName),
       identity: displayIdentity(task.identity), observedStatus: task.observedStatus,
       observedAt: receipt?.observedAt ?? null, evidence: receipt?.evidence ? {
         source: receipt.evidence.source, authoritative: receipt.evidence.authoritative === true,
@@ -142,7 +144,7 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
   for (const [kind, ids, source] of [['added', drift.addedTaskIds, snapshot], ['removed', drift.removedTaskIds, previousSnapshot], ['changed', drift.changedTaskIds, snapshot]]) {
     for (const id of ids) { const task = source?.tasks.find(task => task.taskId === id); if (task) changes.push({ kind, task: summarize(task, source) }); }
   }
-  const recordId = `ledger_${crypto.createHash('sha256').update(`${snapshot.snapshotId}|task-details-v1`, 'utf8').digest('hex').slice(0, 24)}`;
+  const recordId = `ledger_${crypto.createHash('sha256').update(`${snapshot.snapshotId}|task-details-v2`, 'utf8').digest('hex').slice(0, 24)}`;
   const record = {
     schemaVersion: 1,
     recordId,
@@ -154,6 +156,7 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
     mode: 'shadow_read_only',
     counts: snapshot.counts,
     taskSummaries,
+    ptSummaries:ptCalendarSummaries(snapshot.ptStatus),
     changes,
     drift,
     health: snapshot.health

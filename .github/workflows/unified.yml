@@ -48,8 +48,12 @@ jobs:
       - name: Scan public files
         shell: pwsh
         run: ./execution/scripts/Scan-PublicSafety.ps1 -Root .
-      - run: npm audit --prefix execution --omit=dev
-      - run: npm audit --prefix observation --omit=dev
+      - name: Audit execution dependencies
+        run: ./scripts/Invoke-NpmAuditWithRetry.ps1
+        working-directory: execution
+      - name: Audit observation dependencies
+        run: ../execution/scripts/Invoke-NpmAuditWithRetry.ps1
+        working-directory: observation
 
   dashboard-ui:
     runs-on: ubuntu-latest

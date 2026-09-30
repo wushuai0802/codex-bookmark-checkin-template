@@ -32,3 +32,28 @@ test('calendar month navigation handles leap year and Monday offset',()=>{
   assert.equal(moveMonth('2026-12',1),'2027-01');
   assert.throws(()=>monthCells('2026-13'),/invalid month/);
 });
+
+test('calendar combines all PT receipts without counting a regular PT account twice',()=>{
+  const at='2026-09-30T06:00:00Z',day='2026-09-30';
+  const tasks=[{taskId:'regular-a',origin:'https://pt.example',accountRef:'acct_a',observedStatus:'unknown'},
+    {taskId:'regular-b',origin:'https://api.example',observedStatus:'signed'}];
+  const ptSummaries=[{origin:'https://pt.example',accountRef:'acct_a',inLegacyPlan:true,observedStatus:'signed'},
+    {origin:'https://fallback.example',inLegacyPlan:false,observedStatus:'already_signed'}];
+  const ledger=[{businessDate:day,recordedAt:at,counts:{executionUnits:2,status:{signed:1,unknown:1}},taskSummaries:tasks,ptSummaries}];
+  const all=dailyRecords({ledger}).get(day),regular=dailyRecords({ledger,scope:'regular'}).get(day),pt=dailyRecords({ledger,scope:'pt'}).get(day);
+  assert.deepEqual(dayTotals(all),{total:3,completed:3,unavailable:0,pending:0});
+  assert.equal(dayTotals(regular).total,2);assert.equal(dayTotals(regular).pending,1);
+  assert.equal(dayTotals(pt).total,2);assert.equal(all.tasks[0].taskId,'regular-a');assert.equal(all.ptRecorded,true);
+  assert.equal(ledger[0].taskSummaries[0].observedStatus,'unknown');
+});
+
+test('missing historical PT detail is explicit and multiple regular accounts stay distinct',()=>{
+  const day='2026-09-29',counts={executionUnits:2,status:{signed:2}},tasks=[
+    {origin:'https://pt.example',accountRef:'a',observedStatus:'signed'},
+    {origin:'https://pt.example',accountRef:'b',observedStatus:'signed'}];
+  const record={businessDate:day,recordedAt:day+'T06:00:00Z',counts,taskSummaries:tasks};
+  assert.equal(dailyRecords({ledger:[record]}).get(day).ptRecorded,false);
+  assert.equal(dailyRecords({ledger:[record],scope:'pt'}).get(day).tasks.length,0);
+  const merged=dailyRecords({ledger:[{...record,ptSummaries:[{origin:'https://pt.example',inLegacyPlan:true,observedStatus:'unknown'}]}]}).get(day);
+  assert.equal(merged.tasks.length,2);assert.equal(dayTotals(merged).completed,2);
+});

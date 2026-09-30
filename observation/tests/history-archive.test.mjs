@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {planHistoryArchive,applyHistoryArchive,verifyHistoryArchive,restoreHistoryArchive} from '../src/history-archive.mjs';
+test('history archive leaves active generations and uncertain attempts intact and can restore closed journals',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'history-drill-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.writeFileSync(root+'/harvest-fallback-attempts-2026-08-01.json',JSON.stringify({attempts:[{state:'outcome_unknown'}]}));
+  const closed='harvest-fallback-attempts-2026-08-02.json';fs.writeFileSync(root+'/'+closed,JSON.stringify({attempts:[{state:'completed',v1Status:'signed'}]}));
+  fs.writeFileSync(root+'/pt-fallback-results-2026-09-01.json','{}');
+  const ledger=JSON.stringify({businessDate:'2026-08-02',snapshotId:'old'})+'\n';fs.writeFileSync(root+'/shadow-ledger.jsonl',ledger);
+  fs.writeFileSync(root+'/dashboard-generation.json','active marker');
+  const plan=planHistoryArchive(root,'2026-09',{now:new Date('2026-09-30T06:00:00Z')});
+  assert.equal(plan.files.length,1);assert.equal(plan.retained.length,1);
+  const archived=applyHistoryArchive(plan,root+'/archive');assert.equal(verifyHistoryArchive(archived.directory).monthly.length,1);
+  assert.equal(fs.readFileSync(root+'/shadow-ledger.jsonl','utf8'),ledger);assert.equal(fs.readFileSync(root+'/dashboard-generation.json','utf8'),'active marker');
+  assert.equal(fs.existsSync(root+'/'+closed),false);restoreHistoryArchive(archived.directory,root);assert.equal(fs.existsSync(root+'/'+closed),true);
+  assert.equal(verifyHistoryArchive(archived.directory).moved.length,1);
+});

@@ -36,14 +36,14 @@ test("公开默认配置不启用外部通知", async () => {
 });
 
 test("CI 使用最小权限、固定 Action 提交并扫描 Git 历史", async () => {
-  const workflow = await fs.readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const workflow = await fs.readFile(new URL("../../.github/workflows/unified.yml", import.meta.url), "utf8");
   const auditScript = await fs.readFile(new URL("../scripts/Invoke-NpmAuditWithRetry.ps1", import.meta.url), "utf8");
   assert.match(workflow, /permissions:\s*\r?\n\s+contents:\s*read/);
   assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
   assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/);
   assert.match(workflow, /gitleaks_\$\{version\}_windows_x64\.zip/);
   assert.match(workflow, /Get-FileHash -Algorithm SHA256/);
-  assert.match(workflow, /gitleaks git --config \.gitleaks\.toml --redact --no-banner --exit-code 1/);
+  assert.match(workflow, /gitleaks git --config execution\/\.gitleaks\.toml --redact --no-banner --exit-code 1/);
   assert.match(workflow, /fetch-depth:\s*0/);
   assert.match(workflow, /Invoke-NpmAuditWithRetry\.ps1/);
   assert.doesNotMatch(workflow, /run:\s*npm audit --omit=dev\s*$/m);
