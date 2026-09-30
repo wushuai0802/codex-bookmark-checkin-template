@@ -214,7 +214,7 @@ function mergeSiteObservations(observations, target) {
       source: effective.source, status: effective.status, observedAt: effective.observedAt,
       ...projectPtDiagnostic(effective),
       fresh: effective.freshness.fresh, authoritative: effective.evidence.authoritative,
-      evidence: effective.evidence
+      evidence: {...effective.evidence}
     } : {source:'v2-observer',status:'unknown',observedAt:null,fresh:false,authoritative:false,
       evidence:{source:'none',authoritative:false,summary:'尚无今日确认回执',redacted:true,statusVerified:false}},
     sourceStatuses,
@@ -330,6 +330,14 @@ export function buildPtStatus({
       site.effective.evidence.summary=site.recovery.summary+
         (detail&&/维护|登录|验证|验证码|暂时不可用/.test(detail)?`；${detail}`:'');
     }
+  }
+  for(const site of sites){
+    if(['signed','already_signed'].includes(site.effective.status))continue;
+    const maintenance=site.observations.find(item=>item.fresh&&item.siteCondition==='site_maintenance');
+    if(!maintenance)continue;
+    site.effective.siteCondition='site_maintenance';
+    if(!/维护|恢复数据/.test(site.effective.evidence.summary))
+      site.effective.evidence.summary=redactText(`${site.effective.evidence.summary}；最近只读检查确认站点维护，等待恢复`);
   }
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;

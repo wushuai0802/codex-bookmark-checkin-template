@@ -6,6 +6,7 @@ import path from 'node:path';
 import {currentPassivePtResult,recordPtVerification} from '../src/pt-verification.mjs';
 import {loadPtRecoveryDiagnostics} from '../src/pt-reconciliation.mjs';
 import {buildPtStatus} from '../src/pt-status.mjs';
+import {publicPtStatus} from '../src/dashboard-server.mjs';
 const now=new Date('2026-09-30T05:00:00Z'),origin='https://pt.example';
 const receipt=(status='not_signed')=>({origin,status,observedAt:now.toISOString(),businessDate:'2026-09-30',
   profileBinding:'a'.repeat(64),accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
@@ -36,4 +37,22 @@ test('old unresolved attempts expose their actual blocking day without changing 
   assert.equal(unknown.effective.authoritative,false);assert.equal(fs.readFileSync(file,'utf8'),before);
   const confirmed=buildPtStatus({...args,fallbackReport:{source:'execution-supplement',businessDate:'2026-09-30',sites:[receipt('already_signed')]}}).sites[0];
   assert.equal(confirmed.effective.status,'already_signed');assert.equal(confirmed.effective.authoritative,true);
+});
+
+test('a newer generic failure cannot hide maintenance diagnostics in the actual dashboard API',()=>{
+  const current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current);
+  const earlier=new Date(current.getTime()-1000).toISOString();
+  const report=buildPtStatus({businessDate:day,generatedAt:current.toISOString(),monitorCatalog:{sites:[{origin}]},
+    planTargets:[{origin}],tasks:[{taskId:'task',origin,observedStatus:'needs_attention'}],
+    receipts:[{taskId:'task',observedAt:current.toISOString(),evidence:{source:'none',authoritative:false,summary:'提交结果不明'}}],
+    fallbackReport:{source:'execution-supplement',businessDate:day,sites:[{origin,observedAt:earlier,status:'needs_attention',
+      failureCode:'site_maintenance',siteCondition:'site_maintenance',evidence:{source:'page_text',authoritative:false,summary:'站点维护'}}]},
+    recoveryReport:{businessDate:day,sites:[{origin,code:'prior_outcome_unknown',blockedSince:'2026-09-21',summary:'旧记录待核验'}]}});
+  assert.equal(report.sites[0].observations[0].evidence.summary,'提交结果不明');
+  const published=publicPtStatus(report).sites[0];
+  assert.equal(published.effective.siteCondition,'site_maintenance');
+  assert.match(published.effective.evidence.summary,/维护/);
+  assert.equal(published.recovery.blockedSince,'2026-09-21');
+  assert.equal(published.effective.authoritative,false);
+  assert.equal(published.observations.find(o=>o.source==='execution-supplement').failureCode,'site_maintenance');
 });

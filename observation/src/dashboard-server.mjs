@@ -17,6 +17,7 @@ import {publicCanaryResults} from './canary-report-view.mjs';
 import {readDashboardRuntime} from './dashboard-runtime.mjs';
 import {activeSiteControls,pauseExpiresAt} from './attention-controls.mjs';
 import {readDashboardGeneration} from './dashboard-generation.mjs';
+import {projectPtDiagnostic} from './pt-site-execution.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -198,7 +199,7 @@ function publicPtEvidence(evidence) {
   };
 }
 
-function publicPtStatus(ptStatus) {
+export function publicPtStatus(ptStatus) {
   if (!ptStatus || typeof ptStatus !== 'object' || Array.isArray(ptStatus)) return null;
   const now = new Date().toISOString();
   const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' });
@@ -216,7 +217,7 @@ function publicPtStatus(ptStatus) {
       const observations = (Array.isArray(site.observations) ? site.observations : []).flatMap((item) => {
         const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
         if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
-        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence) }];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence),...projectPtDiagnostic(item) }];
       });
       return [{
         siteRef: typeof site.siteRef === 'string' && /^pt_[a-f0-9]{16}$/.test(site.siteRef) ? site.siteRef : null,
@@ -225,9 +226,13 @@ function publicPtStatus(ptStatus) {
         accountRef: typeof site.accountRef === 'string' && /^acct_[a-f0-9]{16}$/.test(site.accountRef) ? site.accountRef : null,
         inLegacyPlan: site.inLegacyPlan === true,
         fallbackEnabled: site.fallbackEnabled === true,
+        ...(['prior_outcome_unknown','submission_outcome_unknown','unverified_prior_attempt'].includes(site.recovery?.code)&&
+          /^\d{4}-\d{2}-\d{2}$/.test(site.recovery?.blockedSince??'')?{recovery:{code:site.recovery.code,
+            blockedSince:site.recovery.blockedSince,summary:redactText(site.recovery.summary)}}:{}),
         managedBy: typeof site.managedBy === 'string' ? site.managedBy.slice(0, 80) : 'other',
         effective: effective && typeof effective.source === 'string' ? {
           source: effective.source.slice(0, 40),
+          ...projectPtDiagnostic(effective),
           status: PT_STATUS_VALUES.has(effective.status) ? effective.status : 'unknown',
           observedAt: typeof effective.observedAt === 'string' ? effective.observedAt.slice(0, 64) : null,
           fresh: effective.fresh === true && freshPt(effective.observedAt),
