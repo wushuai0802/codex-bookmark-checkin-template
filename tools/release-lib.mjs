@@ -57,23 +57,31 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
       const from=safeFile(plan.source,entry.file),to=destination(plan.roots,entry.file);
       if(fileHash(from)!==entry.afterHash||fileHash(to)!==entry.beforeHash)throw Error('release drift: '+entry.file);
       return {...entry,to,bytes:fs.readFileSync(from)};
+    }).sort((a,b)=>{
+      const order=entry=>entry.file.includes('/scripts/')?2:entry.beforeHash===null?0:1;
+      return order(a)-order(b)||a.file.localeCompare(b.file);
     });
     for(const p of plan.protections)if(fileHash(p.file)!==p.hash)throw Error('protected configuration drift');
     fs.mkdirSync(backup,{recursive:true});
     for(const entry of prepared)if(entry.beforeHash){const to=safeFile(backup,entry.file);fs.mkdirSync(path.dirname(to),{recursive:true});fs.copyFileSync(entry.to,to);}
     const markers=Object.fromEntries(Object.entries(plan.roots).map(([layer,root])=>[layer,fs.existsSync(marker(root))?fs.readFileSync(marker(root),'utf8'):null]));
     const release={...plan,appliedAt:new Date().toISOString(),markers};
+    const markerBytes=JSON.stringify({version:plan.version,revision:plan.revision,deployedAt:release.appliedAt});
     atomic(path.join(backup,'manifest.json'),JSON.stringify(release,null,2));
     const modified=[];
     try{
-      for(const entry of prepared){atomic(entry.to,entry.bytes);modified.push(entry);}
+      for(const entry of prepared)if(entry.beforeHash!==entry.afterHash){atomic(entry.to,entry.bytes);modified.push(entry);}
       for(const p of plan.protections)if(fileHash(p.file)!==p.hash)throw Error('protected configuration changed during deployment');
-      for(const root of Object.values(plan.roots))atomic(marker(root),JSON.stringify({version:plan.version,revision:plan.revision,deployedAt:release.appliedAt}));
+      for(const root of Object.values(plan.roots))atomic(marker(root),markerBytes);
     }catch(error){
       for(const entry of modified.reverse()){
         if(fileHash(entry.to)!==entry.afterHash)continue;
         if(entry.beforeHash)atomic(entry.to,fs.readFileSync(safeFile(backup,entry.file)));
         else {const saved=safeFile(backup,'retired/'+entry.file);fs.mkdirSync(path.dirname(saved),{recursive:true});fs.renameSync(entry.to,saved);}
+      }
+      for(const [layer,root] of Object.entries(plan.roots))if(fs.existsSync(marker(root))&&fs.readFileSync(marker(root),'utf8')===markerBytes){
+        if(markers[layer]!=null)atomic(marker(root),markers[layer]);
+        else fs.renameSync(marker(root),path.join(backup,layer+'-failed-release.json'));
       }
       throw error;
     }
@@ -88,7 +96,7 @@ export async function rollbackRelease(backup,{lock=withRuntimeLocks}={}){
       if(fileHash(destination(plan.roots,entry.file))!==entry.afterHash)throw Error('runtime drift prevents rollback: '+entry.file);
       if(entry.beforeHash&&fileHash(safeFile(backup,entry.file))!==entry.beforeHash)throw Error('backup hash mismatch');
     }
-    for(const entry of plan.files){const to=destination(plan.roots,entry.file);
+    for(const entry of [...plan.files].sort((a,b)=>Number(Boolean(b.beforeHash))-Number(Boolean(a.beforeHash)))){const to=destination(plan.roots,entry.file);
       if(entry.beforeHash)atomic(to,fs.readFileSync(safeFile(backup,entry.file)));
       else{const saved=safeFile(backup,'retired/'+entry.file);fs.mkdirSync(path.dirname(saved),{recursive:true});fs.renameSync(to,saved);}
     }
