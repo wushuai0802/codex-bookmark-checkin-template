@@ -68,8 +68,22 @@ test("a 401/403 is not disguised as feature disabled", async () => {
   for (const status of [401, 403]) {
     const { result, requests } = await probe(status, { success: false, message: "未启用" });
     assert.equal(result.status, "login_required");
+    assert.equal(result.submissionAttempted, false);
     assert.equal(requests, 3);
   }
+});
+
+test('Cloudflare HTML at the status endpoint is a challenge, not expired login or a submission',async()=>{
+  const requests=[],storage={length:1,key:()=> 'user',getItem:()=> '{"id":123}'};
+  const sandbox={localStorage:storage,sessionStorage:storage,Date,document:{},fetch:async(url,options={})=>{
+    requests.push({url,method:options.method??'GET'});
+    return {status:403,text:async()=> '<html><title>Just a moment...</title><script src="/cdn-cgi/challenge-platform/"></script></html>'};
+  }};
+  const result=await tryNewApiCheckin({evaluate:fn=>vm.runInNewContext('('+fn.toString()+')()',sandbox)});
+  assert.equal(result.status,'interactive_challenge');assert.equal(result.failureCode,'managed_challenge');
+  assert.equal(result.submissionAttempted,false);assert.equal(result.retryableLoginRecovery,false);
+  assert.equal(requests.filter(r=>r.url==='/api/user/checkin'&&r.method==='POST').length,0);
+  assert.equal(requests.filter(r=>r.url==='/api/user/auth/refresh').length,1);
 });
 
 test("verified disabled result is returned before generic login-page classification", async () => {

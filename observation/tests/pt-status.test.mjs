@@ -34,6 +34,21 @@ test('PT status merges legacy plan sites with Harvest-only observations', () => 
   assert.equal(legacy.effective.status, 'signed');
 });
 
+test('a monitored PT site is joined to the full execution plan across a non-PT folder label',()=>{
+  const result=buildPtStatus({
+    generatedAt:'2026-09-04T04:00:00.000Z',businessDate:'2026-09-04',
+    planTargets:[{origin:'https://open.cd',title:'OpenCD',folderNames:['公益站']}],
+    tasks:[{taskId:'open-task',origin:'https://open.cd/index.php',accountRef:null,observedStatus:'signed'}],
+    receipts:[{taskId:'open-task',observedAt:'2026-09-04T03:00:00.000Z',evidence:{source:'page_text',authoritative:true,summary:'今日已签到'}}],
+    monitorCatalog:{sites:[{origin:'https://open.cd',displayName:'OpenCD'}]},
+    externalReport:{source:'harvest',businessDate:'2026-09-04',sites:[{origin:'https://open.cd',status:'unknown',observedAt:null}]}
+  });
+  assert.equal(result.counts.inLegacyPlan,1);
+  assert.equal(result.sites[0].origin,'https://open.cd');
+  assert.equal(result.sites[0].effective.status,'signed');
+  assert.equal(result.sites[0].effective.source,'legacy-checkin');
+});
+
 test('conflicting sources are visible and stale observations are never supplement candidates', () => {
   const result = buildPtStatus({
     generatedAt: '2026-09-04T04:00:00.000Z', businessDate: '2026-09-04',
@@ -47,7 +62,7 @@ test('conflicting sources are visible and stale observations are never supplemen
     }
   });
   const site = result.sites[0];
-  assert.equal(site.discrepancy, true);
+  assert.equal(site.discrepancy, false);
   assert.equal(site.supplementCandidate, false);
   assert.equal(site.effective.fresh, true);
   assert.equal(site.sourceStatuses.length, 2);
@@ -75,6 +90,19 @@ test('a later unverified unknown cannot hide same-day authoritative V1 completio
   assert.equal(conflict.discrepancy, true);
 });
 
+test('a newer non-authoritative execution failure cannot hide an authoritative OpenCD read-only receipt',()=>{
+  const result=buildPtStatus({generatedAt:'2026-09-29T03:00:00Z',businessDate:'2026-09-29',
+    planTargets:[{origin:'https://open.cd',folderNames:['公益站']}],
+    tasks:[{taskId:'open',origin:'https://open.cd',accountRef:null,observedStatus:'failed'}],
+    receipts:[{taskId:'open',observedAt:'2026-09-29T02:55:00Z',evidence:{source:'none',authoritative:false,summary:'提交结果不明'}}],
+    monitorCatalog:{sites:[{origin:'https://open.cd'}]},
+    fallbackReport:{source:'execution-supplement',businessDate:'2026-09-29',sites:[{origin:'https://open.cd',status:'already_signed',observedAt:'2026-09-29T02:00:00Z',evidence:{source:'pt_page',authoritative:true,summary:'顶部显示查看签到记录'}}]},
+  });
+  assert.equal(result.sites[0].effective.status,'already_signed');
+  assert.equal(result.sites[0].effective.source,'execution-supplement');
+  assert.equal(result.sites[0].discrepancy,false);
+});
+
 test('PT status rejects credential-bearing reports and normalizes safe aliases', () => {
   assert.throws(() => normalizePtStatusReport({ source: 'harvest', sites: [{ origin: 'https://example.com', status: 'signed', password: 'TEST' }] }), /sensitive field/);
   const report = normalizePtStatusReport({ generatedAt: '2026-09-04T04:00:00.000Z', source: 'harvest', sites: [{ origin: 'https://example.com', status: 'checked_in', observedAt: '2026-09-04T03:00:00.000Z', evidence: { source: 'api', authoritative: true, summary: 'ok' } }] });
@@ -93,4 +121,22 @@ test('same-day site supplement is visible without adding a daily task',()=>{
   assert.equal(pt.sites[0].effective.source,'execution-supplement');
   assert.throws(()=>buildPtStatus({generatedAt,businessDate:'2026-09-20',monitorCatalog:{sites:[{origin}]},
     fallbackReport:{source:'execution-supplement',businessDate:'2026-09-19',sites:[]}}),/wrong source or date/);
+});
+
+test('yesterday completion stays in source history but cannot count as today completed',()=>{
+  const origin='https://pt.example',base={generatedAt:'2026-09-30T00:55:00+08:00',businessDate:'2026-09-30',
+    planTargets:[{origin,folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef:null,observedStatus:'signed'}],
+    receipts:[{taskId,observedAt:'2026-09-29T10:00:00+08:00',evidence:{source:'page_text',authoritative:true,summary:'昨日已签到'}}],
+    monitorCatalog:{sites:[{origin}]}};
+  const before=buildPtStatus(base);
+  assert.equal(before.counts.status.signed,0);
+  assert.equal(before.counts.status.unknown,1);
+  assert.equal(before.sites[0].sourceStatuses[0].status,'signed');
+  assert.equal(before.sites[0].sourceStatuses[0].fresh,false);
+  const after=buildPtStatus({...base,externalReport:{source:'harvest',businessDate:'2026-09-30',sites:[
+    {origin,status:'signed',observedAt:'2026-09-30T09:50:00+08:00',evidence:{source:'harvest',authoritative:true}}
+  ]},generatedAt:'2026-09-30T10:00:00+08:00'});
+  assert.equal(after.counts.status.signed,1);
+  assert.equal(after.sites[0].effective.source,'harvest');
 });

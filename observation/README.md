@@ -17,6 +17,14 @@ Monitoring-only sites write a separate PT report without changing the daily
 execution plan. See [PT status and fallback](docs/pt-status.md)
 and [repository ownership](docs/repository-ownership.md).
 
+After a user restores a site login, a site-bound fallback may be retried only
+when its prior attempt explicitly recorded `submissionState: not_submitted`.
+The manual `scripts/harvest-fallback.mjs --apply` entry accepts
+`--login-recovered-origin` and, for a named account, `--login-recovered-account`
+alongside the current day's hashed Harvest/catalog inputs. The supplied login
+signal is checked against the recorded attempt and account. A prior result
+with unknown submission state remains quarantined.
+
 The existing Windows task calls the observation gateway through `scripts/run-v1-engine.mjs` and
 retains its schedule. For a quiet manual acceptance pass from this project:
 

@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
+import { isConfirmedNotAvailable } from "../src/result-contract.mjs";
 import {
   classifyNewApiCaptchaObservation,
   configuredNewApiCaptchaRule,
@@ -47,6 +49,34 @@ test("New API 图片验证码提交后必须再次确认当日状态", async () 
   assert.equal(result.status, "signed");
   assert.equal(result.evidence.quotaAwarded, 5000000);
   assert.equal(observations.length, 0);
+});
+
+test("迁移到游乐中心后仅查询同源开关，不向旧签到接口提交", async () => {
+  for (const enabled of [false, true, undefined]) {
+    const calls = [];
+    const page = { evaluate: async (fn, activeRule) => vm.runInNewContext(`(${fn.toString()})(activeRule)`, {
+      activeRule, URL, fetch: async (url, options) => {
+        calls.push({ url, method: options.method || "GET" });
+        return { ok: true, json: async () => ({ success: true, data: { budele_enabled: enabled } }) };
+      },
+    }) };
+    const result = await tryNewApiCaptchaCheckin(page, "https://captcha.example",
+      { newApiCaptchaRules: { "https://captcha.example": { migratedPlayClub: true } } },
+      async () => { throw new Error("no OCR or legacy POST"); });
+    assert.equal(result.status, enabled === false ? "not_available" : "unconfirmed");
+    assert.equal(isConfirmedNotAvailable(result), enabled === false);
+    assert.deepEqual(calls, [{ url: "https://captcha.example/api/status", method: "GET" }]);
+  }
+});
+
+test("旧接口报告已迁移时只读确认明确禁用结论", async () => {
+  const observations = [{ state: "ready", userId: "7" },
+    { state: "failed", message: "daily check-in has moved to the play club" }, true];
+  const result = await tryNewApiCaptchaCheckin({ evaluate: async () => observations.shift() },
+    "https://captcha.example", { newApiCaptchaRules: { "https://captcha.example": {} } },
+    async () => { throw new Error("no OCR"); });
+  assert.equal(result.status, "not_available");
+  assert.equal(isConfirmedNotAvailable(result), true);
 });
 
 const origin = "https://anyrouter.top";

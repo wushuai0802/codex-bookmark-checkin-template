@@ -71,6 +71,9 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
   if (/(操作过于频繁|操作過於頻繁|请求过于频繁|請求過於頻繁|too many requests|rate limit|try again later|请稍后再试|請稍後再試)/i.test(text)) {
     return { status: "deferred", retryCause: "rate_limit", reason: "站点触发频率限制，请稍后重试" };
   }
+  if (/维护通知/.test(text) && /数据恢复与测试阶段.{0,16}暂时无法访问/.test(text)) {
+    return { status: "deferred", retryCause: "upstream_unavailable", reason: "站点公告正在恢复数据，暂时无法访问，等待站点恢复后重试" };
+  }
   if (/(connection timed out|error code\s*52[0-9]|host error|origin (?:is )?unreachable|bad gateway|service unavailable|scheduled maintenance|服务暂时不可用|服務暫時不可用|(?:正在|系统|系統).{0,8}(?:维护|維護)|(?:维护|維護).{0,8}(?:进行中|進行中)|号池用尽)/i.test(text)) {
     return { status: "deferred", retryCause: "upstream_unavailable", reason: "站点服务器暂时不可用，已安排自动重试" };
   }
@@ -98,8 +101,26 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
 
 export function ptPageEvidence({origin,url,bodyText,status,now=new Date(),allowUndatedActionText=true}={}) {
   if(!['signed','already_signed'].includes(status))return null;
-  try{if(new URL(url).origin!==origin)return null;}catch{return null;}
+  let observedUrl;
+  try{observedUrl=new URL(url);if(observedUrl.origin!==origin)return null;}catch{return null;}
   const text=String(bodyText??'').slice(0,30000);
+  // OpenCD exposes its daily state as a live control next to the site's clock.
+  // Require the authenticated header, exact page, near-current site time and
+  // the signed control; a historical forum mention never qualifies.
+  if(origin==='https://open.cd'&&observedUrl.pathname==='/index.php'){
+    const header=text.slice(0,700),clock=header.match(/(?:当前时间|當前時間)\s*[:：]\s*(\d{1,2}):(\d{2})/);
+    const shanghai=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);
+    const [hour,minute]=shanghai.split(':').map(Number);
+    const siteMinutes=clock?Number(clock[1])*60+Number(clock[2]):NaN;
+    const signedControl=clock&&/^\s*\[(?:已签到|已簽到|查看签到记录|查看簽到記錄)\]\s*\[\d{1,2}(?:点|點)\]/.test(header.slice(clock.index+clock[0].length));
+    if(Number.isFinite(siteMinutes)&&siteMinutes>=0&&siteMinutes<1440&&hour!==0&&
+       Math.abs(siteMinutes-hour*60-minute)<=10&&signedControl&&
+       /(?:欢迎回来|歡迎回來)/.test(header)&&/\[(?:退出|登出)\]/.test(header)){
+      return {source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),
+        businessDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),
+        pagePath:'/index.php',statusSignal:'open_cd_daily_record_entry'};
+    }
+  }
   const positive=/(?:今日|今天|当日).{0,18}(?:已签到|已簽到|已经签到|已經簽到|签到成功|簽到成功)|(?:已签到|已簽到|已经签到|已經簽到|签到成功|簽到成功).{0,18}(?:今日|今天|当日)|本次(?:签到|簽到).{0,18}(?:获得|獲得)|already checked[ -]?in today|checked in today/gi;
   const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
   const [year,month,day]=date.split('-');

@@ -19,6 +19,9 @@ import {
 } from "./login-recovery.mjs";
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
+import { pendingOpenCdSubmission, pendingQuotaClaim } from "./quota-claim-guard.mjs";
+import {verifiedPtObservation} from './pt-observation-receipt.mjs';
+import {observePendingVibeClaim} from './vibe-readonly.mjs';
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
   applyPreferredCandidates,
@@ -35,6 +38,7 @@ import {
 } from "./preflight-policy.mjs";
 import {
   accountMetadataForOrigin,
+  accountKeyForSelection,
   compatiblePriorResult,
   planFingerprint,
   resultIdentity,
@@ -301,6 +305,13 @@ try {
     const runLog = await createRunLog(logsRoot);
     const startedAt = new Date();
     const siteState = await loadSiteState(siteStatePath);
+    let previousFinalReport = null;
+    try {
+      const latest = JSON.parse(await fs.readFile(path.join(logsRoot, "latest.json"), "utf8"));
+      if (latest.runState === "final" && latest.isComplete === true && Array.isArray(latest.results)) {
+        previousFinalReport = latest;
+      }
+    } catch { /* a persisted pending claim still blocks when latest is unreadable */ }
     const qaCache = await loadQaCache(qaCachePath);
     const qaRules = [
       ...(qaConfig.rules ?? []),
@@ -321,7 +332,7 @@ try {
       }
     }
     if (selectedAccountKeys) {
-      const configuredAccountKeys = new Set(plannedTargets.map((target) => String(target.accountKey || "").trim()).filter(Boolean));
+      const configuredAccountKeys = new Set(plannedTargets.map(accountKeyForSelection));
       for (const accountKey of selectedAccountKeys) {
         if (!configuredAccountKeys.has(accountKey)) throw new Error(`定向续跑账号不存在：${accountKey}`);
       }
@@ -341,7 +352,7 @@ try {
       ? resumeTargets.filter((target) => selectedOrigins.has(target.origin))
       : resumeTargets;
     const accountFilteredTargets = selectedAccountKeys
-      ? originFilteredTargets.filter((target) => selectedAccountKeys.has(String(target.accountKey || "").trim()))
+      ? originFilteredTargets.filter((target) => selectedAccountKeys.has(accountKeyForSelection(target)))
       : originFilteredTargets;
     const selectedPlanTargets = limit
       ? accountFilteredTargets.slice(offset, offset + limit)
@@ -601,8 +612,19 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
+        let guardedQuotaClaim = verifiedPtObservation(rootDirectory,target,config)
+          ?? pendingQuotaClaim(target, siteState, previousFinalReport, config)
+          ?? pendingOpenCdSubmission(target, siteState, previousFinalReport);
+        if(target.origin==='https://new.sharedchat.cc'&&guardedQuotaClaim?.failureCode==='submission_outcome_unknown'){
+          await closeSharedContexts(sharedContexts,activeContexts);
+          const readConfig=configForOAuthExecutionAccount(configForOAuthSession(config,oauthSessionProfiles,target.origin),rootDirectory,target.origin);
+          const observed=await observePendingVibeClaim(readConfig,{launch:launchAutomationContext});
+          if(observed)guardedQuotaClaim={...guardedQuotaClaim,...observed};
+        }
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
-        const targetResult = explicitSelection && prior && isTerminalResult(prior)
+        const targetResult = guardedQuotaClaim
+          ? guardedQuotaClaim
+          : explicitSelection && prior && isTerminalResult(prior)
           && !reenabledTerminal
           ? prior
           : isolatedPrimaryByIdentity.has(resultIdentity(target))
@@ -993,7 +1015,7 @@ try {
     });
     const primaryResults = [...results, ...manualConfirmedResults, ...temporarilyUnavailableResults]
       .filter((result) => result.supplementalAccount !== true);
-    await writeSiteState(siteStatePath, updateSiteState(siteState, primaryResults, finishedAt));
+    await writeSiteState(siteStatePath, updateSiteState(siteState, primaryResults, finishedAt, config));
     await writeQaCache(qaCachePath, updateQaCache(qaCache, results, finishedAt));
     await fs.rm(nativeWafPreflightPath, { force: true }).catch(() => {});
     console.log(JSON.stringify({ resultPath, summary }, null, 2));

@@ -72,6 +72,7 @@ export function configuredNewApiCaptchaRule(origin, config = {}) {
   return {
     origin: expectedOrigin,
     checkinUrl: sameOriginHttpsUrl(expectedOrigin, raw.checkinPath || DEFAULT_CHECKIN_PATH, "checkinPath"),
+    migratedPlayClub: raw.migratedPlayClub === true,
     captchaUrl: sameOriginHttpsUrl(expectedOrigin, raw.captchaPath || DEFAULT_CAPTCHA_PATH, "captchaPath"),
     maxAttempts,
   };
@@ -79,6 +80,7 @@ export function configuredNewApiCaptchaRule(origin, config = {}) {
 
 export function classifyNewApiCaptchaObservation(observed) {
   if (!observed) return { status: "unconfirmed", reason: "New API 验证码签到没有返回可验证结果" };
+  if (observed.state === "feature_disabled") return { status: "not_available", availabilityKind: "feature_disabled", reason: "每日签到已迁移至游乐中心，但站点尚未开放该功能", evidence: { source: "new_api_status", authoritative: true, outcome: "budele_enabled_false", confirmedAt: new Date().toISOString() } };
   if (observed.state === "user_id_missing") return { status: "login_required", reason: "站点页面没有可用的登录用户状态，需要重新登录" };
   if (observed.state === "user_id_ambiguous") return { status: "unconfirmed", reason: "站点页面存在多个用户标识，已拒绝发送签到请求" };
   if (observed.state === "unauthorized") return { status: "login_required", reason: "站点签到接口确认会话已失效，需要重新登录" };
@@ -103,6 +105,12 @@ export async function tryNewApiCaptchaCheckin(page, origin, config = {}, solveCa
   if (typeof solveCaptcha !== "function") throw new Error("New API captcha 缺少本地识别器");
 
   const session = await page.evaluate(async (activeRule) => {
+    if (activeRule.migratedPlayClub) {
+      const response = await fetch(new URL("/api/status", activeRule.checkinUrl).href, { credentials: "include", redirect: "error" }).catch(() => null);
+      const body = await response?.json().catch(() => null);
+      if (response?.ok && body?.success === true && body?.data?.budele_enabled === false) return { state: "feature_disabled" };
+      return { state: "verification_failed", message: "签到已迁移至游乐中心，需核验新流程，未调用旧签到接口" };
+    }
     const ids = [];
     const extract = (value) => value?.id ?? value?.user?.id ?? value?.state?.user?.id ?? value?.data?.id ?? value?.data?.user?.id ?? null;
     for (const storage of [localStorage, sessionStorage]) {
@@ -125,6 +133,12 @@ export async function tryNewApiCaptchaCheckin(page, origin, config = {}, solveCa
     if (!response) return { state: "verification_failed" };
     if ([401, 403].includes(response.status)) return { state: "unauthorized" };
     const body = await response.json().catch(() => null);
+    if (/check-in has moved to the play club/i.test(String(body?.message || ""))) {
+      const statusResponse = await fetch(new URL("/api/status", activeRule.checkinUrl).href, { credentials: "include", headers, redirect: "error" }).catch(() => null);
+      const status = await statusResponse?.json().catch(() => null);
+      if (statusResponse?.ok && status?.success === true && status?.data?.budele_enabled === false) return { state: "feature_disabled" };
+      return { state: "verification_failed", message: "站点已迁移签到入口，尚未确认新入口状态，未提交签到" };
+    }
     if (body?.success === true && Boolean(body?.data?.stats?.checked_in_today ?? body?.data?.checked_in_today)) {
       return { state: "already_signed", userId: uniqueIds[0] };
     }
@@ -148,6 +162,14 @@ export async function tryNewApiCaptchaCheckin(page, origin, config = {}, solveCa
       if (body?.success !== true || !id || !image) return { state: "failed", message: body?.message };
       return { state: "ready", id: String(id), image: String(image) };
     }, { activeRule: rule, userId: session.userId });
+    if (/check-in has moved to the play club/i.test(String(challenge.message || ""))) {
+      const disabled = await page.evaluate(async (origin) => {
+        const response = await fetch(new URL("/api/status", origin).href, { credentials: "include", redirect: "error" }).catch(() => null);
+        const body = await response?.json().catch(() => null);
+        return response?.ok === true && body?.success === true && body?.data?.budele_enabled === false;
+      }, origin);
+      if (disabled) return classifyNewApiCaptchaObservation({ state: "feature_disabled" });
+    }
     if (challenge.state !== "ready") return classifyNewApiCaptchaObservation(challenge);
     const match = challenge.image.match(/^data:image\/[a-z0-9.+-]+;base64,([A-Za-z0-9+/=]+)$/i);
     if (!match) return classifyNewApiCaptchaObservation({ state: "failed", message: "站点返回的验证码图片格式无效" });

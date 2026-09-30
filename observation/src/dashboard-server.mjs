@@ -16,6 +16,8 @@ import {migrationReadiness} from './adapter-registry.mjs';
 import {publicCanaryResults} from './canary-report-view.mjs';
 import {readDashboardRuntime} from './dashboard-runtime.mjs';
 import {activeSiteControls,pauseExpiresAt} from './attention-controls.mjs';
+import {readDashboardGeneration} from './dashboard-generation.mjs';
+import {projectPtDiagnostic} from './pt-site-execution.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -129,6 +131,16 @@ function latestLedger(dataDir, configuredFile) {
   return found ? { file: found.file, records: readLedger(found.file) } : { file: null, records: [] };
 }
 
+function assertMatchingGeneration(snapshot,records){
+  if(!snapshot||!records.length)return;
+  const newest=records.findLast(record=>record?.snapshotId===snapshot.snapshotId);
+  if(newest?.snapshotId!==snapshot.snapshotId||
+     newest?.businessDate!==snapshot.businessDate||
+     newest?.planHash!==snapshot.planHash){
+    throw Error('snapshot and ledger generations disagree');
+  }
+}
+
 function publicTask(task, receipt) {
   return {
     taskId: task.taskId,
@@ -187,7 +199,7 @@ function publicPtEvidence(evidence) {
   };
 }
 
-function publicPtStatus(ptStatus) {
+export function publicPtStatus(ptStatus) {
   if (!ptStatus || typeof ptStatus !== 'object' || Array.isArray(ptStatus)) return null;
   const now = new Date().toISOString();
   const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' });
@@ -205,7 +217,7 @@ function publicPtStatus(ptStatus) {
       const observations = (Array.isArray(site.observations) ? site.observations : []).flatMap((item) => {
         const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
         if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
-        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence) }];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence),...projectPtDiagnostic(item) }];
       });
       return [{
         siteRef: typeof site.siteRef === 'string' && /^pt_[a-f0-9]{16}$/.test(site.siteRef) ? site.siteRef : null,
@@ -214,9 +226,13 @@ function publicPtStatus(ptStatus) {
         accountRef: typeof site.accountRef === 'string' && /^acct_[a-f0-9]{16}$/.test(site.accountRef) ? site.accountRef : null,
         inLegacyPlan: site.inLegacyPlan === true,
         fallbackEnabled: site.fallbackEnabled === true,
+        ...(['prior_outcome_unknown','submission_outcome_unknown','unverified_prior_attempt'].includes(site.recovery?.code)&&
+          /^\d{4}-\d{2}-\d{2}$/.test(site.recovery?.blockedSince??'')?{recovery:{code:site.recovery.code,
+            blockedSince:site.recovery.blockedSince,summary:redactText(site.recovery.summary)}}:{}),
         managedBy: typeof site.managedBy === 'string' ? site.managedBy.slice(0, 80) : 'other',
         effective: effective && typeof effective.source === 'string' ? {
           source: effective.source.slice(0, 40),
+          ...projectPtDiagnostic(effective),
           status: PT_STATUS_VALUES.has(effective.status) ? effective.status : 'unknown',
           observedAt: typeof effective.observedAt === 'string' ? effective.observedAt.slice(0, 64) : null,
           fresh: effective.fresh === true && freshPt(effective.observedAt),
@@ -323,9 +339,27 @@ function mergeCanaryTask(task, receipt, canary){
 
 function liveCanaryByTask(canaryResults){const map=new Map();for(const item of canaryResults??[])if(item?.taskId)map.set(item.taskId,chooseCanaryResult(map.get(item.taskId),item));return map;}
 
+function confirmedPtByTask(snapshot){
+  if(snapshot?.ptStatus?.businessDate!==snapshot?.businessDate)return new Map();
+  const counts=new Map();
+  for(const task of snapshot?.tasks??[])counts.set(task.origin,(counts.get(task.origin)??0)+1);
+  const verified=new Map();
+  for(const site of snapshot?.ptStatus?.sites??[]){
+    const current=site?.effective,at=Date.parse(current?.observedAt??'');
+    if(!['signed','already_signed'].includes(current?.status)||current?.authoritative!==true||
+       current?.evidence?.authoritative!==true||
+       current?.fresh!==true||!Number.isFinite(at)||at>Date.parse(snapshot.generatedAt)+60_000||
+       new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(at))!==snapshot.businessDate)continue;
+    if(!site.accountRef&&counts.get(site.origin)!==1)continue;
+    verified.set(site.origin+'|'+(site.accountRef??'site-default'),current);
+  }
+  return verified;
+}
+
 function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   const receiptByTask = new Map((snapshot?.receipts ?? []).map((receipt) => [receipt.taskId, receipt]));
   const canaryByTask=liveCanaryByTask(canaryResults);
+  const ptByTask=confirmedPtByTask(snapshot);
   const tasks = (snapshot?.tasks ?? []).map((task) => {
     const merged=mergeCanaryTask(task, receiptByTask.get(task.taskId), canaryByTask.get(task.taskId));
     if(runtime?.owners.some(item=>item.origin===task.origin&&item.accountRef===task.accountRef)) {
@@ -335,6 +369,18 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
         merged.observedStatus='not_started';merged.observedAt=null;merged.executionMode='execute';
         merged.evidence={source:'none',authoritative:false,summary:'账号已由 V2 执行，尚未收到本业务日的执行回执',redacted:true,verification:'not_started'};
       }
+    }
+    const pt=ptByTask.get(task.origin+'|'+(task.accountRef??'site-default'));
+    if(pt&&task.businessDate===snapshot.businessDate&&
+       (merged.evidence?.authoritative!==true||!Number.isFinite(Date.parse(merged.observedAt))||Date.parse(pt.observedAt)>=Date.parse(merged.observedAt))&&
+       merged.evidence?.verification!=='identity_conflict'&&
+       !['signed','already_signed'].includes(merged.observedStatus)){
+      merged.executionObservedStatus=merged.observedStatus;
+      merged.observedStatus=pt.status;
+      merged.observedAt=pt.observedAt;
+      merged.evidence={source:pt.evidence?.source??'none',authoritative:true,
+        summary:redactText(pt.evidence?.summary??'当日 PT 页面已确认签到'),redacted:true,
+        verification:'verified'};
     }
     return merged;
   });
@@ -513,9 +559,28 @@ export function createDashboardServer({
     return previous.count > rateLimitPerMinute;
   }
 
+  let lastCompleteGeneration=null;
+  function readGeneration(){
+    try{
+      if(!snapshotFile&&!ledgerFile){
+        const committed=readDashboardGeneration(root);
+        if(committed){lastCompleteGeneration=committed;return committed;}
+      }
+      const current=latestSnapshot(root,snapshotFile),ledger=latestLedger(root,ledgerFile);
+      if(current.file&&!current.snapshot)throw Error('snapshot is incomplete');
+      assertMatchingGeneration(current.snapshot,ledger.records);
+      const committed=ledger.records.findLast(record=>record.snapshotId===current.snapshot?.snapshotId);
+      const cutoff=Math.max(Date.parse(current.snapshot?.generatedAt),Date.parse(committed?.recordedAt??current.snapshot?.generatedAt));
+      if(Number.isFinite(cutoff))ledger.records=ledger.records.filter(record=>Date.parse(record.recordedAt)<=cutoff);
+      lastCompleteGeneration={current,ledger,stale:false};
+      return lastCompleteGeneration;
+    }catch(error){
+      if(lastCompleteGeneration)return {...lastCompleteGeneration,stale:true};
+      throw error;
+    }
+  }
   function loadView() {
-    const current = latestSnapshot(root, snapshotFile);
-    const ledger = latestLedger(root, ledgerFile);
+    const {current,ledger,stale}=readGeneration();
     const canaryResults=publicCanaryResults(root);
     const runtime=readDashboardRuntime(root);
     const view = buildView(current.snapshot, ledger.records, canaryResults, runtime);
@@ -524,7 +589,7 @@ export function createDashboardServer({
     catch{view.adapterObservations=null;}
     view.migrationReadiness=migrationReadiness({snapshot:view.snapshot,acceptance:view.readiness,adapterObservations:view.adapterObservations});
     const shanghaiToday=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
-    view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), fresh: timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) && current.snapshot?.businessDate===shanghaiToday };
+    view.snapshotMeta = { receivedAt: fileMtime(current.file), available: Boolean(current.snapshot), generationStale:stale, fresh: !stale&&timestampFresh(current.snapshot?.generatedAt, new Date().toISOString()) && current.snapshot?.businessDate===shanghaiToday };
     view.controls = activeSiteControls(readControlState(controlFile).sites);
     view.tasks = view.tasks.map(task => {
       const control = view.controls[task.origin];
@@ -592,7 +657,10 @@ export function createDashboardServer({
     if (requestUrl.pathname.startsWith('/api/')) {
       if (!authorized(request, response)) return;
       if (requestUrl.pathname === '/api/calendar') {
-        try { sendJson(response, 200, calendarHistory(latestLedger(root, ledgerFile).records)); }
+        try {
+          const {ledger,stale}=readGeneration();
+          sendJson(response, 200, {...calendarHistory(ledger.records),generationStale:stale});
+        }
         catch { sendError(response, 500, 'data_error', 'calendar history could not be read'); }
         return;
       }

@@ -45,7 +45,7 @@ function businessDateFrom(value, fallback = new Date()) {
 }
 
 function observedAt(result, fallback) {
-  const candidate = result?.evidence?.createdAt ?? result?.evidence?.confirmedAt ?? result?.confirmedAt ?? result?.lastConfirmedAt ?? fallback;
+  const candidate = result?.evidence?.createdAt ?? result?.evidence?.confirmedAt ?? result?.confirmedAt ?? result?.lastConfirmedAt ?? result?.observedAt ?? fallback;
   const date = new Date(candidate);
   return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
 }
@@ -119,7 +119,7 @@ function healthSnapshot(health, generatedAt, maxAgeHours = 26) {
  * Read and redact the legacy runner's latest state. This function performs no
  * writes and has no browser, network, or notification side effects.
  */
-export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26, healthReport, ptStatusReport, ptFallbackReport, ptStatusMaxAgeHours = 26, monitorCatalog, ptFallbackOnlyEnabled = false, identityReport, desiredPlan } = {}) {
+export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26, healthReport, ptStatusReport, ptFallbackReport, ptRecoveryReport, ptStatusMaxAgeHours = 26, monitorCatalog, ptFallbackOnlyEnabled = false, identityReport, desiredPlan } = {}) {
   if (!legacyRoot) throw new Error('legacyRoot is required');
   const root = path.resolve(legacyRoot);
   const engineIntegration=readJson(path.join(root,'data','v2-integration.json'),{required:false});
@@ -217,6 +217,7 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     planTargets: expected,
     externalReport: ptStatusReport,
     fallbackReport: ptFallbackReport,
+    recoveryReport: ptRecoveryReport,
     fallbackOnlyEnabled: ptFallbackOnlyEnabled,
     monitorCatalog,
     generatedAt,
@@ -277,15 +278,17 @@ function assertNoSensitiveKeys(value, location = '$') {
 }
 
 export function writeSnapshot(snapshot, outFile, legacyRoot) {
-  const destination = path.resolve(outFile);
+  const finalDestination = path.resolve(outFile);
+  const destination = finalDestination+'.'+crypto.randomUUID()+'.tmp';
   const root = path.resolve(legacyRoot);
-  if (destination === root || destination.startsWith(`${root}${path.sep}`)) {
+  if (finalDestination === root || finalDestination.startsWith(root+path.sep)) {
     throw new Error('refusing to write inside the legacy project');
   }
   assertNoSensitiveKeys(snapshot);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
-  return destination;
+  fs.renameSync(destination,finalDestination);
+  return finalDestination;
 }
 
 function parseArgs(argv) {

@@ -329,6 +329,7 @@ foreach ($item in $items) {
             status = if ($confirmed) { [string]$checkinInspection.status } elseif ($twoFactorRequired -or $submissionAttempted) { 'needs_attention' } else { 'unconfirmed' }
             reason = if ($confirmed) { [string]$checkinInspection.reason } elseif ($checkinInspection) { [string]$checkinInspection.reason } else { '无调试原生 Chrome 未取得签到终态' }
             inspectionStatus = if ($checkinInspection) { [string]$checkinInspection.status } else { 'unavailable' }
+            evidence = if ($confirmed) { $checkinInspection.evidence } else { $null }
             diagnosticStage = if ($checkinInspection) { [string]$checkinInspection.diagnosticStage } else { 'child_result' }
             failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($submissionAttempted) { 'submission_outcome_unknown' } elseif ($checkinInspection) { [string]$checkinInspection.failureCode } else { 'accessibility_unavailable' }
             submissionAttempted = $submissionAttempted
@@ -355,6 +356,7 @@ foreach ($item in $items) {
                 status = if ($mainConfirmed) { 'signed' } elseif ($mainTwoFactorRequired -or $mainSubmissionAttempted) { 'needs_attention' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
                 reason = if ($mainInspection) { [string]$mainInspection.reason } else { '主 Chrome 回退未取得明确签到终态' }
                 inspectionStatus = if ($mainInspection) { [string]$mainInspection.status } else { 'unavailable' }
+                evidence = if ($mainConfirmed) { $mainInspection.evidence } else { $null }
                 cleanupFailureCode = [string]$mainInspection.cleanupFailureCode
                 cleanupWarning = [string]$mainInspection.cleanupWarning
                 failureCode = if ($mainInspection) { [string]$mainInspection.failureCode } else { 'accessibility_unavailable' }
@@ -455,6 +457,7 @@ foreach ($item in $items) {
                     status = if ($mainConfirmed) { [string]$mainInspection.status } elseif ($mainTwoFactorRequired -or $mainSubmissionAttempted) { 'needs_attention' } elseif ([string]$mainInspection.status -eq 'managed_challenge') { 'managed_challenge' } else { 'unconfirmed' }
                     reason = if ($mainInspection) { [string]$mainInspection.reason } else { '主 Chrome 回退未取得明确签到终态' }
                     inspectionStatus = if ($mainInspection) { [string]$mainInspection.status } else { 'unavailable' }
+                    evidence = if ($mainConfirmed) { $mainInspection.evidence } else { $null }
                     cleanupFailureCode = [string]$mainInspection.cleanupFailureCode
                     cleanupWarning = [string]$mainInspection.cleanupWarning
                     failureCode = if ($mainInspection) { [string]$mainInspection.failureCode } else { 'accessibility_unavailable' }
@@ -500,6 +503,7 @@ foreach ($item in $items) {
                 if ($passiveInspection.reason) { [string]$passiveInspection.reason } else { '原生 Chrome 未取得明确签到终态' }
             }
             inspectionStatus = if ($passiveInspection) { [string]$passiveInspection.status } else { 'unconfirmed' }
+            evidence = if ($explicitlyConfirmed) { $passiveInspection.evidence } else { $null }
             diagnosticStage = if ($passiveInspection) { [string]$passiveInspection.diagnosticStage } else { 'child_result' }
             failureCode = if ($passiveTwoFactorRequired) { 'two_factor_required' } elseif ($passiveInspection) { [string]$passiveInspection.failureCode } else { 'accessibility_unavailable' }
             attentionKind = if ($passiveTwoFactorRequired) { 'trusted_device_initialization' } else { $null }

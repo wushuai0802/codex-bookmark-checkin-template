@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { normalizeOrigin, redactText } from './contracts.mjs';
+import {siteIdentityIndex} from './site-identity-index.mjs';
+import {projectPtDiagnostic} from './pt-site-execution.mjs';
 
 export const PT_STATUS_VALUES = [
   'signed', 'already_signed', 'not_signed', 'unknown', 'login_required',
@@ -91,6 +93,11 @@ function evidenceFor(input, status) {
     authoritative,
     summary,
     redacted: true,
+    ...(Number.isFinite(Date.parse(evidence.confirmedAt))?{confirmedAt:new Date(evidence.confirmedAt).toISOString()}:{}),
+    ...(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(evidence.businessDate??'')?{businessDate:evidence.businessDate}:{}),
+    ...(evidence.evidenceScope==='site_account_day'?{evidenceScope:evidence.evidenceScope}:{}),
+    ...(/^[a-z0-9_]{1,80}$/.test(evidence.statusSignal??'')?{statusSignal:evidence.statusSignal}:{}),
+    ...(/^[a-f0-9]{64}$/.test(evidence.profileBinding??input?.profileBinding??'')?{profileBinding:evidence.profileBinding??input.profileBinding}:{}),
     statusVerified: authoritative && ['signed', 'already_signed', 'not_signed'].includes(status)
   };
 }
@@ -104,11 +111,6 @@ function displayNameFor(target, origin) {
   const candidate = target?.displayName ?? target?.title ?? target?.name;
   if (typeof candidate === 'string' && candidate.trim()) return redactText(candidate).slice(0, 80);
   return origin.replace(/^https:\/\//, '');
-}
-
-function isPtTarget(target) {
-  const folders = Array.isArray(target?.folderNames) ? target.folderNames : [];
-  return folders.some((folder) => typeof folder === 'string' && /pt/i.test(folder));
 }
 
 function normalizeObservation(input, {
@@ -128,6 +130,7 @@ function normalizeObservation(input, {
   return {
     source,
     origin,
+    ...projectPtDiagnostic(input),
     displayName: displayName ?? displayNameFor(input, origin),
     accountRef,
     status,
@@ -174,8 +177,12 @@ export function normalizePtStatusReport(report, {
 function betterObservation(a, b) {
   const confirmedCompletion = item => item.freshness.fresh && item.evidence.authoritative
     && ['signed', 'already_signed'].includes(item.status);
+  const unconfirmedNegative = item => !item.evidence.authoritative
+    && ['failed', 'not_signed', 'unknown', 'needs_attention', 'interactive_challenge'].includes(item.status);
   if (a.status === 'unknown' && !a.evidence.authoritative && confirmedCompletion(b)) return b;
   if (b.status === 'unknown' && !b.evidence.authoritative && confirmedCompletion(a)) return a;
+  if (confirmedCompletion(a) && unconfirmedNegative(b)) return a;
+  if (confirmedCompletion(b) && unconfirmedNegative(a)) return b;
   const time = new Date(a.observedAt) - new Date(b.observedAt);
   if (time !== 0) return time > 0 ? a : b;
   return (SOURCE_PRIORITY.get(a.source) ?? 0) >= (SOURCE_PRIORITY.get(b.source) ?? 0) ? a : b;
@@ -183,7 +190,8 @@ function betterObservation(a, b) {
 
 function mergeSiteObservations(observations, target) {
   const ordered = [...observations].sort((a, b) => new Date(b.observedAt) - new Date(a.observedAt));
-  const effective = ordered.reduce((current, item) => current ? betterObservation(current, item) : item, null);
+  const effective = ordered.filter(item=>item.freshness.fresh)
+    .reduce((current, item) => current ? betterObservation(current, item) : item, null);
   const bySource = new Map();
   for (const item of ordered) {
     const previous = bySource.get(item.source);
@@ -193,7 +201,7 @@ function mergeSiteObservations(observations, target) {
     source: item.source, status: item.status, observedAt: item.observedAt,
     fresh: item.freshness.fresh, authoritative: item.evidence.authoritative
   }));
-  const distinctStatuses = new Set(sourceStatuses.filter((item) => item.authoritative).map((item) => item.status));
+  const distinctStatuses = new Set(sourceStatuses.filter((item) => item.authoritative&&item.fresh).map((item) => item.status));
   const supplementCandidate = distinctStatuses.size <= 1 && effective?.supplementCandidate === true;
   return {
     siteRef: stableSiteRef(ordered[0].origin, ordered[0].accountRef),
@@ -204,15 +212,18 @@ function mergeSiteObservations(observations, target) {
     managedBy: [...new Set(ordered.map((item) => item.managedBy))].sort().join(' + '),
     effective: effective ? {
       source: effective.source, status: effective.status, observedAt: effective.observedAt,
+      ...projectPtDiagnostic(effective),
       fresh: effective.freshness.fresh, authoritative: effective.evidence.authoritative,
-      evidence: effective.evidence
-    } : null,
+      evidence: {...effective.evidence}
+    } : {source:'v2-observer',status:'unknown',observedAt:null,fresh:false,authoritative:false,
+      evidence:{source:'none',authoritative:false,summary:'尚无今日确认回执',redacted:true,statusVerified:false}},
     sourceStatuses,
     discrepancy: distinctStatuses.size > 1,
     supplementCandidate,
     supplementAction: supplementCandidate ? 'manual_review_only' : 'none',
     observations: ordered.map((item) => ({
       source: item.source, status: item.status, observedAt: item.observedAt,
+      ...projectPtDiagnostic(item),
       fresh: item.freshness.fresh, authoritative: item.evidence.authoritative,
       evidence: item.evidence
     }))
@@ -221,7 +232,7 @@ function mergeSiteObservations(observations, target) {
 
 export function buildPtStatus({
   tasks = [], receipts = [], planTargets = [], externalReport = null, fallbackReport = null, monitorCatalog = null,
-  fallbackOnlyEnabled = false,
+  fallbackOnlyEnabled = false, recoveryReport = null,
   generatedAt = new Date().toISOString(), businessDate = null, maxAgeHours = 26
 } = {}) {
   const report = externalReport
@@ -233,10 +244,13 @@ export function buildPtStatus({
   if(supplemental && (supplemental.source!=='execution-supplement'||supplemental.businessDate!==businessDate))throw Error('PT fallback report has the wrong source or date');
   const targets = new Map();
   const stableFallbackAt = businessDate ? `${businessDate}T00:00:00.000Z` : generatedAt;
+  const siteIndex=siteIdentityIndex({catalog:monitorCatalog,planTargets});
   for (const target of planTargets) {
-    if (!isPtTarget(target)) continue;
     try {
       const origin = normalizeOriginForStatus(target.origin);
+      // A monitored PT site may be explicitly configured under another
+      // execution folder (OpenCD is currently labelled 公益站).
+      if (siteIndex.get(origin)?.kind!=='pt') continue;
       targets.set(origin, { ...target, origin });
     } catch { /* Invalid bookmark targets are handled by the main bridge. */ }
   }
@@ -249,10 +263,12 @@ export function buildPtStatus({
     grouped.set(key, list);
   };
   for (const task of tasks) {
-    if (!targets.has(task.origin)) continue;
+    let taskOrigin;
+    try { taskOrigin = normalizeOriginForStatus(task.origin); } catch { continue; }
+    if (!targets.has(taskOrigin)) continue;
     const receipt = receiptByTask.get(task.taskId);
     add(normalizeObservation({
-      origin: task.origin,
+      origin: taskOrigin,
       accountRef: task.accountRef,
       status: task.observedStatus,
       observedAt: task.observedStatus === 'not_started' ? null : receipt?.observedAt ?? generatedAt,
@@ -260,7 +276,7 @@ export function buildPtStatus({
       managedBy: 'legacy-checkin',
       inLegacyPlan: true,
       evidence: receipt?.evidence ?? { source: 'none', authoritative: false, summary: '' }
-    }, { generatedAt, maxAgeHours, inLegacyPlan: true, fallbackObservedAt: stableFallbackAt, displayName: displayNameFor(targets.get(task.origin), task.origin) }));
+    }, { generatedAt, maxAgeHours, inLegacyPlan: true, fallbackObservedAt: stableFallbackAt, displayName: displayNameFor(targets.get(taskOrigin), taskOrigin) }));
   }
   for (const [origin, target] of targets) {
     if ([...grouped.keys()].some((key) => key.startsWith(`${origin}|`))) continue;
@@ -273,14 +289,18 @@ export function buildPtStatus({
   const monitorSites = new Map((monitorCatalog?.sites ?? []).map(site => [normalizeOriginForStatus(site.origin), site]));
   for (const item of report?.sites ?? []) {
     if (monitorCatalog && !monitorSites.has(item.origin) && !targets.has(item.origin)) continue;
-    const matches = tasks.filter(task => task.origin === item.origin);
+    const matches = tasks.filter(task => {
+      try { return normalizeOriginForStatus(task.origin) === item.origin; } catch { return false; }
+    });
     // An external default-account observation may join only a single known account.
     if (!item.accountRef && matches.length === 1) item.accountRef = matches[0].accountRef;
     add(item);
   }
   for(const item of supplemental?.sites??[]){
     if(!monitorSites.has(item.origin) && !targets.has(item.origin))continue;
-    const matches=tasks.filter(task=>task.origin===item.origin);
+    const matches=tasks.filter(task=>{
+      try { return normalizeOriginForStatus(task.origin) === item.origin; } catch { return false; }
+    });
     if(!item.accountRef&&matches.length===1)item.accountRef=matches[0].accountRef;
     add(item);
   }
@@ -301,6 +321,24 @@ export function buildPtStatus({
   }
   const sites = [...grouped.values()].map((items) => ({...mergeSiteObservations(items, targets.get(items[0].origin)),
     fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)})).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
+  if(recoveryReport?.businessDate===businessDate)for(const site of sites){
+    const recovery=recoveryReport.sites?.find(item=>item.origin===site.origin);
+    if(!recovery||!['prior_outcome_unknown','submission_outcome_unknown','unverified_prior_attempt'].includes(recovery.code))continue;
+    site.recovery={code:recovery.code,blockedSince:recovery.blockedSince,summary:redactText(recovery.summary)};
+    if(!['signed','already_signed'].includes(site.effective.status)){
+      const detail=site.effective.evidence.summary;
+      site.effective.evidence.summary=site.recovery.summary+
+        (detail&&/维护|登录|验证|验证码|暂时不可用/.test(detail)?`；${detail}`:'');
+    }
+  }
+  for(const site of sites){
+    if(['signed','already_signed'].includes(site.effective.status))continue;
+    const maintenance=site.observations.find(item=>item.fresh&&item.siteCondition==='site_maintenance');
+    if(!maintenance)continue;
+    site.effective.siteCondition='site_maintenance';
+    if(!/维护|恢复数据/.test(site.effective.evidence.summary))
+      site.effective.evidence.summary=redactText(`${site.effective.evidence.summary}；最近只读检查确认站点维护，等待恢复`);
+  }
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;
   return {

@@ -70,6 +70,9 @@ test("重新启用账号后不会沿用昨日配置停用状态", () => {
   const target={origin:"https://pt.example",accountKey:"account-a"};
   const prior={...target,status:"not_available",disabledByAccountConfig:true};
   assert.equal(terminalResultReenabled(prior,target,{disabledAccountKeys:["account-a"]}),false);
+  assert.equal(terminalResultReenabled(prior,target,{
+    disabledAccountBindings:[{origin:target.origin,accountKey:target.accountKey}],
+  }),false);
   assert.equal(terminalResultReenabled(prior,target,{disabledAccountKeys:[]}),true);
 });
 
@@ -150,6 +153,58 @@ test("上游站点上午达到探测上限后保留一次晚间恢复机会", ()
   assert.equal(exhausted.retrySequence, 4);
   assert.equal(exhausted.retryExhaustedForDay, true);
   assert.equal(exhausted.nextEligibleAt, "2026-07-24T00:05:00.000Z");
+});
+
+test("组合重试策略保留晚间窗口，只有真正尝试才在失败后结束当天重试", () => {
+  const config = {
+    upstreamUnavailableMaxDailyAttempts: 3,
+    upstreamFailureGroupMaxDailyAttempts: 3,
+    upstreamUnavailableLateRetryTime: "21:05",
+    schedule: "08:05",
+  };
+  const morning = new Date("2026-09-29T02:00:00Z");
+  const origin = "https://retry.example";
+  const prior = {
+    origin, status: "deferred", retryCause: "upstream_unavailable",
+    retrySequence: 2, retrySequenceDate: "20260929",
+    nextEligibleAt: "2026-09-29T02:00:00.000Z",
+  };
+  const current = { origin, status: "deferred", retryCause: "upstream_unavailable" };
+  const [reserved] = advanceAttemptedDeferredRetries([current], new Set([origin]), [prior], config, morning);
+  assert.equal(reserved.retrySequence, 3);
+  assert.equal(reserved.lateRetryPending, true);
+  assert.equal(reserved.retryExhaustedForDay, false);
+  assert.equal(reserved.nextEligibleAt, "2026-09-29T13:05:00.000Z");
+  const [unchanged] = advanceAttemptedDeferredRetries([reserved], new Set(), [reserved], config, new Date("2026-09-29T11:00:00Z"));
+  assert.deepEqual(unchanged, reserved);
+  const [exhausted] = advanceAttemptedDeferredRetries([
+    { ...current, reason: "站点仍不可用" },
+  ], new Set([origin]), [reserved], config, new Date("2026-09-29T13:05:00Z"));
+  assert.equal(exhausted.retrySequence, 4);
+  assert.equal(exhausted.lateRetryPending, false);
+  assert.equal(exhausted.retryExhaustedForDay, true);
+  assert.equal(exhausted.nextEligibleAt, "2026-09-30T00:05:00.000Z");
+  const [stillExhausted] = advanceAttemptedDeferredRetries([exhausted], new Set(), [exhausted], config, new Date("2026-09-29T14:00:00Z"));
+  assert.equal(stillExhausted.retrySequence, 4);
+  assert.equal(stillExhausted.nextEligibleAt, exhausted.nextEligibleAt);
+  assert.equal(stillExhausted.reason, exhausted.reason);
+});
+
+test("共享上游仅保留一个晚间探测，稳定归属具体账号", () => {
+  const now = new Date("2026-09-29T02:00:00Z");
+  const config = { upstreamFailureGroupMaxDailyAttempts: 3, upstreamUnavailableLateRetryTime: "21:05" };
+  const members = ["secondary", "primary", "third"].map((accountKey) => ({
+    origin: "https://accounts.example", accountKey, status: "deferred",
+    retryCause: "upstream_unavailable", retrySequence: 1,
+    retrySequenceDate: "20260929", retryGroup: "shared-upstream",
+  }));
+  const first = applyUpstreamGroupCircuitBreakers(members, config, now);
+  assert.deepEqual(first.filter((result) => result.lateRetryPending).map((result) => result.accountKey), ["primary"]);
+  assert.equal(first.filter((result) => result.upstreamCircuitOpen).length, 2);
+  const second = applyUpstreamGroupCircuitBreakers([...first].reverse(), config, now);
+  assert.deepEqual(second.filter((result) => result.lateRetryPending).map((result) => result.accountKey), ["primary"]);
+  assert.equal(second.find((result) => result.accountKey === "primary").nextEligibleAt, "2026-09-29T13:05:00.000Z");
+  assert.equal(second.every((result) => result.reason === first.find((item) => item.accountKey === result.accountKey).reason), true);
 });
 
 test("同一 OAuth 上游故障按组熔断且不伪装成无签到功能", () => {

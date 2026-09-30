@@ -2,9 +2,9 @@ import {classifyEvidence,redactText} from './contracts.mjs';
 
 const typedSources=new Set([
   'page_text','api','usage_log','new_api_checkin_calendar','new_api_checkin_status',
-  'new_api_checkin_action','new_api_captcha','oauth_api_status','oauth_api_action',
+  'new_api_checkin_action','new_api_captcha','new_api_status','oauth_api_status','oauth_api_action',
   'oauth_api_action_status','oauth_reward_log','pt_page','anyrouter_status',
-  'anyrouter_log','vibe_entitlement_status','sign_in_response','v2_canary',
+  'anyrouter_log','vibe_entitlement_status','vibe_claim_response','sign_in_response','v2_canary',
   'sign_in_already_claimed_contract'
 ]);
 
@@ -25,6 +25,9 @@ function hasStructuredEvidence(raw,source,businessDate){
   if(source==='pt_page')return Boolean((raw.accountId||raw.userId)&&dayMatches&&raw.statusSignal);
   if(['anyrouter_status','anyrouter_log'].includes(source))return Boolean(raw.accountId&&dayMatches&&(raw.statusSignal||Number.isFinite(Number(raw.rewardAmount))));
   if(source==='vibe_entitlement_status')return Boolean((raw.accountId||raw.userId)&&dayMatches&&(raw.outcome||raw.claimDate||raw.dailyRewardVerified===true));
+  if(source==='vibe_claim_response')return Boolean(raw.endpoint==='/frontend-api/vibe-code/codex/claim'
+    &&dayMatches&&raw.statusSignal==='claimed_true'&&(raw.accountId||raw.userId)
+    &&raw.requestMethod==='POST'&&raw.actionType==='daily_entitlement_claim');
   if(source==='sign_in_already_claimed_contract')return Boolean(dayMatches||raw.rewardAmount!=null);
   if(source==='v2_canary')return Boolean(dayMatches&&raw.confirmedAt&&
     ['new_api_checkin_calendar','new_api_checkin_status','new_api_checkin_action'].includes(raw.originalSource));
@@ -34,7 +37,11 @@ function hasStructuredEvidence(raw,source,businessDate){
 export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={}){
   const raw=result?.evidence&&typeof result.evidence==='object'?result.evidence:{};
   const source=classifyEvidence(result),rawSource=typeof raw.source==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(raw.source)?raw.source:'none';
-  const success=['signed','already_signed'].includes(result?.status),structuredLegacy=hasStructuredEvidence(raw,rawSource,businessDate),legacySignedResponse=rawSource==='sign_in_response'&&raw.authoritative===true;
+  const success=['signed','already_signed'].includes(result?.status),
+    openCdDailyControl=result?.origin==='https://open.cd'&&rawSource==='pt_page'&&
+      raw.statusSignal==='open_cd_daily_record_entry'&&raw.pagePath==='/index.php'&&raw.businessDate===businessDate,
+    structuredLegacy=hasStructuredEvidence(raw,rawSource,businessDate)||openCdDailyControl,
+    legacySignedResponse=rawSource==='sign_in_response'&&raw.authoritative===true;
   const inferredAuthority=success&&raw.authoritative!==false&&(
     rawSource==='usage_log'&&structuredLegacy&&Number.isFinite(Number(raw.rewardAmount))&&Number(raw.rewardAmount)>0||
     rawSource==='new_api_captcha'&&Number.isInteger(Number(raw.attempts))&&Number(raw.attempts)>0&&
@@ -44,6 +51,7 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
   const day=Number.isFinite(parsed)?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(parsed)):null,account=raw.accountId??raw.userId??result?.accountId,conflict=expectedId&&account&&String(expectedId)!==String(account);
   let verification='not_applicable';
   if(result?.missingResult)verification='not_started';
+  else if(result?.failureCode==='submission_outcome_unknown'||result?.submissionOutcomeUnknown===true)verification='submission_outcome_unknown';
   else if(result?.reconciliationConflict)verification='identity_conflict';
   else if(!raw.source)verification='missing_evidence';
   else if(source==='none')verification='unsupported_evidence';
@@ -57,11 +65,20 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
   else if(result?.status==='not_available'){
     const original=rawSource==='cached_confirmation'?raw.originalSource:rawSource;
     const feature=['new_api_checkin_status','new_api_checkin_action'].includes(original)&&raw.outcome==='message_not_enabled'
+      ||original==='new_api_status'&&raw.outcome==='budele_enabled_false'
       ||original==='vibe_entitlement_status'&&['claim_not_enabled','claim_not_configured','entitlement_active'].includes(raw.outcome)
       ||original==='pt_page'&&raw.statusSignal==='maintenance';
     const validTime=Number.isFinite(parsed)&&Number.isFinite(reference)&&parsed<=reference+60_000;
     const cachedAgeOk=rawSource!=='cached_confirmation'||(raw.confirmedAt&&reference-parsed<=168*3600000);
     verification=raw.authoritative===true&&feature&&(validTime||validDay(raw.businessDate))&&cachedAgeOk?'feature_unavailable':'unverified_unavailable';
   }
-  return {source,rawSource,originalSource:typeof raw.originalSource==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(raw.originalSource)?raw.originalSource:null,authoritative:verification==='verified'||verification==='feature_unavailable',verification,summary:redactText(result?.reason??''),redacted:true};
+  return {source,rawSource,originalSource:typeof raw.originalSource==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(raw.originalSource)?raw.originalSource:null,authoritative:verification==='verified'||verification==='feature_unavailable',verification,summary:redactText(result?.reason??''),redacted:true,
+    ...(Number.isFinite(parsed)&&(raw.createdAt||raw.confirmedAt||result?.confirmedAt)?{confirmedAt:new Date(parsed).toISOString()}:{}),
+    ...(validDay(raw.businessDate)?{businessDate:raw.businessDate}:{}),
+    ...(/^[a-z0-9_]{1,80}$/.test(raw.statusSignal??'')?{statusSignal:raw.statusSignal}:{}),
+    ...(raw.evidenceScope==='site_account_day'?{evidenceScope:raw.evidenceScope}:{}),
+    ...(raw.pagePath==='/index.php'?{pagePath:raw.pagePath}:{}),
+    ...(/^[a-f0-9]{64}$/.test(result?.profileBinding??'')?{profileBinding:result.profileBinding}:{}),
+    ...(['legacy_checkin','formal_visit_checkin','safe_history_page','safe_status_endpoint'].includes(result?.operationMode)?{operationMode:result.operationMode}:{}),
+    ...(['reviewed_passive','attendance_page_risk'].includes(result?.readSafety)?{readSafety:result.readSafety}:{})};
 }

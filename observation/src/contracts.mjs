@@ -95,9 +95,9 @@ export function classifyEvidence(result) {
   };
   const apiSources = [
     'new_api_checkin_calendar', 'new_api_checkin_status', 'new_api_checkin_action',
-    'new_api_captcha', 'oauth_api_status', 'oauth_api_action', 'oauth_api_action_status',
+    'new_api_captcha', 'new_api_status', 'oauth_api_status', 'oauth_api_action', 'oauth_api_action_status',
     'oauth_callback', 'oauth_reward_log', 'pt_page', 'anyrouter_status', 'anyrouter_log',
-    'vibe_entitlement_status', 'sign_in_response', 'sign_in_already_claimed_contract'
+    'vibe_entitlement_status', 'vibe_claim_response', 'sign_in_response', 'sign_in_already_claimed_contract'
   ];
   if (source === 'cached_confirmation') return 'health_cache';
   if (source === 'configuration' || source === 'operator_confirmation') return 'user_confirmation';

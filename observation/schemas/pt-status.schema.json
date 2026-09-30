@@ -74,6 +74,7 @@
           "type": "integer",
           "minimum": 0
         },
+        "fallbackOnly": { "type": "integer", "minimum": 0 },
         "fresh": {
           "type": "integer",
           "minimum": 0
@@ -121,7 +122,12 @@
         },
         "statusVerified": {
           "type": "boolean"
-        }
+        },
+        "confirmedAt": { "type": "string", "format": "date-time" },
+        "businessDate": { "type": "string", "format": "date" },
+        "evidenceScope": { "const": "site_account_day" },
+        "statusSignal": { "type": "string", "pattern": "^[a-z0-9_]{1,80}$" },
+        "profileBinding": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       },
       "additionalProperties": false
     },
@@ -212,7 +218,10 @@
         },
         "evidence": {
           "$ref": "#/$defs/evidence"
-        }
+        },
+        "failureCode": { "type": "string", "pattern": "^[a-z0-9_]{1,80}$" },
+        "retryCause": { "enum": ["upstream_unavailable", "rate_limit", "login_required", "harvest_waiting"] },
+        "siteCondition": { "const": "site_maintenance" }
       },
       "additionalProperties": false
     },
@@ -258,6 +267,17 @@
         "managedBy": {
           "type": "string",
           "maxLength": 80
+        },
+        "fallbackEnabled": { "type": "boolean" },
+        "recovery": {
+          "type": "object",
+          "required": ["code", "blockedSince", "summary"],
+          "properties": {
+            "code": { "enum": ["prior_outcome_unknown", "submission_outcome_unknown", "unverified_prior_attempt"] },
+            "blockedSince": { "type": "string", "format": "date" },
+            "summary": { "type": "string", "maxLength": 240 }
+          },
+          "additionalProperties": false
         },
         "effective": {
           "$ref": "#/$defs/effective"
