@@ -277,7 +277,7 @@ function operationControls(target){
       try{
         const result=await api('/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({origin:target.origin,accountRef,action})});
-        showFeedback(result.duplicate?'该请求已在处理':'请求已排队，由执行电脑处理');
+        showFeedback(result.duplicate?'该请求已登记，请查看下方结果':'请求已排队，由执行电脑处理');
         await loadData();
       }catch(error){button.disabled=false;showFeedback(error.message,'error');}
     });wrapper.append(button);

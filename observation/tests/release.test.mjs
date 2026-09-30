@@ -25,4 +25,5 @@ test('release and rollback refuse drift instead of overwriting unrelated changes
   await assert.rejects(()=>rollbackRelease(out.backup,{lock}),/drift/);
   assert.equal(fs.readFileSync(f.executionRoot+'/src/runner.mjs','utf8'),'later user edit');
   assert.throws(()=>planRelease({...f,files:['execution/config/config.json']}),/scope/);
+  if(process.platform==='win32')assert.throws(()=>planRelease({...f,observationRoot:f.executionRoot.toUpperCase()}),/distinct/);
 });

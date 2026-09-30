@@ -50,6 +50,8 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
       fallbackReport:fs.existsSync(fallbackFile)?read(fallbackFile):null,fallbackOnlyEnabled:runtime.ptFallbackOnlyEnabled,
       readOnlyOrigins:[target.origin],onlyOrigins:[target.origin]});
     const outcome=result.outcomes?.find(o=>o.origin===target.origin);
+    if(!outcome&&result.assessments?.some(a=>a.origin===target.origin&&['confirmed_by_harvest','confirmed_by_executor','confirmed_by_executor_supplement'].includes(a.state)))
+      return {status:'completed',message:'最新回执已确认今日完成，无需补签',resultStatus:'already_signed'};
     if(['signed','already_signed'].includes(outcome?.v1Status)||['already_confirmed','confirmed_by_passive_read'].includes(outcome?.state))
       return {status:'completed',message:'执行层已确认今日签到完成',resultStatus:outcome.v1Status??'already_signed'};
     if(['passive_verification_cooldown','deferred_busy','deferred_preflight'].includes(outcome?.state))return {status:'queued',message:'等待执行器空闲或既有冷却结束',nextEligibleAt:new Date(Date.now()+5*60_000).toISOString()};

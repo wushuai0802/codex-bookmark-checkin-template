@@ -9,13 +9,14 @@ function atomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});co
 export async function configureRuntime({executionRoot,observationRoot,lock=withRuntimeLocks}={}){
   if(!executionRoot||!observationRoot)throw Error('both runtime roots are required');
   const execution=path.resolve(executionRoot),observation=path.resolve(observationRoot);
-  if(execution===observation||[execution,observation].some(root=>root===path.parse(root).root))throw Error('invalid runtime roots');
+  const canonical=value=>process.platform==='win32'?value.toLowerCase():value;
+  if(canonical(execution)===canonical(observation)||[execution,observation].some(root=>root===path.parse(root).root))throw Error('invalid runtime roots');
   if(!fs.existsSync(path.join(execution,'config/config.json'))||!fs.existsSync(path.join(execution,'data/last-valid-bookmark-plan.json')))
     throw Error('initialize and dry-run the execution layer first');
   const file=path.join(observation,'config/runtime.local.json'),bindingFile=path.join(execution,'data/v2-integration.json');
   const runtime=read(file),binding=read(bindingFile);
   if(runtime.executionEngine&&runtime.executionEngine!=='v1'||binding.executionEngine&&binding.executionEngine!=='v1')throw Error('existing execution ownership needs review');
-  if(runtime.legacyRoot&&path.resolve(runtime.legacyRoot)!==execution||binding.v2ProjectRoot&&path.resolve(binding.v2ProjectRoot)!==observation)throw Error('existing runtime binding differs');
+  if(runtime.legacyRoot&&canonical(path.resolve(runtime.legacyRoot))!==canonical(execution)||binding.v2ProjectRoot&&canonical(path.resolve(binding.v2ProjectRoot))!==canonical(observation))throw Error('existing runtime binding differs');
   return lock({source,roots:{execution,observation}},async()=>{
     const prior={runtime:fs.existsSync(file)?fs.readFileSync(file,'utf8'):null,binding:fs.existsSync(bindingFile)?fs.readFileSync(bindingFile,'utf8'):null};
     const backup=path.join(observation,'outputs','runtime-binding-before-'+Date.now()+'.json');atomic(backup,prior);

@@ -25,7 +25,8 @@ function atomic(file,bytes){fs.mkdirSync(path.dirname(file),{recursive:true});co
 export function planRelease({source,executionRoot,observationRoot,files,revision,version}={}){
   const roots={execution:path.resolve(executionRoot),observation:path.resolve(observationRoot)};
   for(const root of Object.values(roots))if(root===path.parse(root).root)throw Error('runtime root cannot be a drive root');
-  if(roots.execution===roots.observation)throw Error('execution and observation roots must be distinct');
+  const canonical=value=>process.platform==='win32'?value.toLowerCase():value;
+  if(canonical(roots.execution)===canonical(roots.observation))throw Error('execution and observation roots must be distinct');
   source=path.resolve(source);
   files??=execFileSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:source,encoding:'utf8'}).trim().split(/\r?\n/).filter(file=>managed.test(file));
   const entries=[...new Set(files)].sort().map(file=>{
