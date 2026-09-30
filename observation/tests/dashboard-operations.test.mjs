@@ -82,3 +82,21 @@ test('Windows verification dispatch stays read-only and records the exact accoun
   assert.equal(result.status,'completed');assert.equal(calls,1);
   assert.equal(JSON.parse(fs.readFileSync(root+'/outputs/pt-fallback-results-'+day+'.json')).sites[0].status,'already_signed');
 });
+
+test('login and continuation retain the named account and refuse a changed unknown submission',async t=>{
+  const root=workspace(t),current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current),legacy=path.join(root,'legacy');
+  for(const dir of ['config','outputs','legacy/config'])fs.mkdirSync(path.join(root,dir),{recursive:true});
+  fs.writeFileSync(root+'/config/runtime.local.json',JSON.stringify({executionEngine:'v1',legacyRoot:legacy}));fs.writeFileSync(legacy+'/config/config.json','{}');
+  const accountRef='acct_'+('c'.repeat(16)),target={origin:'https://login.example',accountRef,accountKey:'named-account',observedStatus:'login_required',submissionAttempted:false};
+  const snapshot={businessDate:day,generatedAt:current.toISOString(),planHash:'a'.repeat(64),tasks:[target],ptStatus:{sites:[]}};
+  const file=root+'/outputs/shadow-beta-snapshot.json';fs.writeFileSync(file,JSON.stringify(snapshot));
+  const request={id:'op_'+('c'.repeat(32)),origin:target.origin,accountRef,businessDate:day,planHash:snapshot.planHash,expiresAt:new Date(current.getTime()+600000).toISOString()};
+  let opened=0,runs=0;
+  assert.equal((await executeDashboardOperation(root,{...request,action:'login'},{openLogin:async args=>{opened++;assert.equal(args.target.accountKey,'named-account');}})).status,'waiting_login');
+  assert.equal((await executeDashboardOperation(root,{...request,action:'resume'},{runEngine:async args=>{
+    runs++;assert.deepEqual(args.accountKeys,['named-account']);assert.deepEqual(args.origins,[target.origin]);assert.equal(args.notify,false);
+    return {results:[{origin:target.origin,accountKey:'named-account',status:'already_signed'}]};}})).status,'completed');
+  assert.equal(opened,1);assert.equal(runs,1);
+  target.failureCode='submission_outcome_unknown';target.observedStatus='needs_attention';target.submissionAttempted=true;fs.writeFileSync(file,JSON.stringify(snapshot));
+  await assert.rejects(()=>executeDashboardOperation(root,{...request,action:'resume'},{runEngine:async()=>{throw Error('must not run');}}),/not authorized/);
+});
