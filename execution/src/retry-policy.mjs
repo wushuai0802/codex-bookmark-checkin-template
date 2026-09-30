@@ -242,6 +242,7 @@ export function applyUpstreamGroupCircuitBreakers(results, config = {}, now = ne
     .map((value) => String(value ?? ""))
     .find((value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value)) || "08:05";
   return annotated.map((result) => {
+    if(result.siteCondition==='site_maintenance'||result.failureCode==='site_maintenance')return result;
     const attempts = result.retryGroup ? groups.get(result.retryGroup) ?? 0 : 0;
     if (!result.retryGroup || attempts < limit) return result;
     // Keep one bounded late-day recovery window.  This prevents a transient
@@ -284,6 +285,11 @@ function stripUpstreamRetrySuffix(reason) {
 
 export function withRetrySchedule(result, config = {}, now = new Date()) {
   if (result?.status !== "deferred") return result;
+  if(result.siteCondition==='site_maintenance'||result.failureCode==='site_maintenance')return {
+    ...result,siteCondition:'site_maintenance',retryExhaustedForDay:true,
+    nextEligibleAt:nextShanghaiTimeNextDay(config.schedule??'08:05',now),
+    reason:'站点公告维护中，今日暂停自动提交，次日再核验'
+  };
   const existing = Date.parse(result.nextEligibleAt ?? "");
   if (Number.isFinite(existing)) return result;
   const requestedTime = String(result.reason ?? "").match(/(?:要求|需在)\s*([0-2]\d:[0-5]\d)\s*后/)?.[1];
@@ -305,6 +311,9 @@ export function withRetrySchedule(result, config = {}, now = new Date()) {
 
 export function advanceDeferredRetry(result, previous, config = {}, now = new Date()) {
   if (result?.status !== "deferred") return result;
+  if(result.siteCondition==='site_maintenance'||result.failureCode==='site_maintenance')return {
+    ...withRetrySchedule(result,config,now),retrySequenceDate:localRunDate(now),retrySequence:Math.max(1,Number(previous?.retrySequence)||1)
+  };
   // Waiting for Harvest does not contact the PT site and is not a failed
   // submission. Scheduler wake tokens still bound these status polls.
   if (result.retryCause === 'harvest_waiting' && result.submissionAttempted === false) {

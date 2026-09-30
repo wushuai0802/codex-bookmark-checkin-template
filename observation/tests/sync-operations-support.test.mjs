@@ -13,8 +13,11 @@ for(const shell of ['powershell.exe','pwsh.exe'])test(`sync recovery, acknowledg
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-sync-support-'));
     t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     fs.mkdirSync(path.join(root,'config'));
+    fs.mkdirSync(path.join(root,'scripts'));
+    fs.copyFileSync(fileURLToPath(new URL('../../execution/scripts/Invoke-BoundedCommand.ps1',import.meta.url)),path.join(root,'scripts/Invoke-BoundedCommand.ps1'));
     const seen=path.join(root,'seen.json'),notifier=path.join(root,'notifier.cjs');
     fs.writeFileSync(notifier,`require('fs').writeFileSync(${JSON.stringify(seen)},JSON.stringify(process.argv.slice(2))); console.log(JSON.stringify({accepted:true},null,2));`);
+    const slow=path.join(root,'slow.cjs');fs.writeFileSync(slow,'setTimeout(()=>console.log(JSON.stringify({accepted:true})),4000);');
     fs.writeFileSync(path.join(root,'config/config.json'),JSON.stringify({notification:{mode:'command',executable:process.execPath,
       arguments:[notifier,'{status}']}}));
     fs.writeFileSync(path.join(root,'config/config.local.json'),JSON.stringify({notification:{
@@ -30,6 +33,12 @@ Assert-Sync (Send-SyncNotification ${quote(root)} 'completed' 'V2 影子同步�
 $sent=Get-Content -Raw -Encoding UTF8 ${quote(seen)} | ConvertFrom-Json
 Assert-Sync ($sent[0] -eq 'success' -and $sent[1] -eq '签到面板数据同步' -and $sent[2] -eq 'checkin-fabric') 'invalid public notification fields'
 Assert-Sync ($sent[3] -eq $key -and $sent[4] -notmatch '(?i)\bV[12]\b') 'event key or old labels changed incorrectly'
+$slowConfig=@{notification=@{timeoutSeconds=1;arguments=@(${quote(slow)})}}|ConvertTo-Json -Depth 4
+[IO.File]::WriteAllText(${quote(path.join(root,'config/config.local.json'))},$slowConfig)
+$timer=[Diagnostics.Stopwatch]::StartNew()
+$slowAccepted=Send-SyncNotification ${quote(root)} 'success' 'fixture' 'timeout-fixture'
+$timer.Stop()
+Assert-Sync (-not $slowAccepted -and $timer.ElapsedMilliseconds -lt 3800 -and $script:lastLog -match 'notifier_timeout') 'configured notification timeout was ignored'
 Assert-Sync (Test-SyncNotificationAcknowledgement @('log prefix','{"accepted":false,"duplicate":true}') 0) 'duplicate acknowledgement lost'
 Assert-Sync (-not (Test-SyncNotificationAcknowledgement @('{"accepted":true}') 2)) 'nonzero exit accepted'
 Assert-Sync (-not (Test-SyncNotificationAcknowledgement @('{"accepted":"true"}') 0)) 'nonboolean acknowledgement accepted'
@@ -62,6 +71,15 @@ $success=Invoke-SyncRemoteCommand $child @('-e',${quote(stderrCode('warning only
 Assert-Sync ($success.exitCode -eq 0 -and $null -eq $success.failure) 'successful remote command misclassified'
 $missing=Invoke-SyncRemoteCommand ${quote(path.join(root,'missing.exe'))} @() 'nas_commit'
 Assert-Sync ($missing.exitCode -eq -1 -and $missing.failure -match 'executable_missing') 'missing executable treated as success'
+$previous=[pscustomobject]@{failureCount=0;lastSuccessAt='previous-success';lastSourceFingerprint='previous-source'}
+$syncState=[ordered]@{lastSuccessAt='previous-success';lastSourceFingerprint='previous-source';pendingNotification=$null}
+Set-SyncAttemptOutcome $syncState $previous 124 $now '15:30' 'unpublished' '' 'sync_timeout'
+Assert-Sync ($syncState.failureCount -eq 1 -and $syncState.lastExitCode -eq 124 -and $syncState.lastFailureCause -eq 'sync_timeout') 'timeout lost failure state'
+Assert-Sync ([datetime]$syncState.nextRetryAt -eq $now.AddMinutes(15) -and $syncState.pendingNotification.status -eq 'failed') 'timeout lost alert or backoff'
+Assert-Sync ($syncState.lastSuccessAt -eq 'previous-success' -and $syncState.lastSourceFingerprint -eq 'previous-source') 'failure advanced successful sync state'
+$previous=[pscustomobject]@{failureCount=1}
+Set-SyncAttemptOutcome $syncState $previous 0 $now.AddMinutes(15) '15:30' 'published' 'fingerprint'
+Assert-Sync ($syncState.failureCount -eq 0 -and $null -eq $syncState.nextRetryAt -and $syncState.pendingNotification.status -eq 'success') 'recovery did not clear backoff or enqueue success'
 'verified'
 `;
     const scriptFile=path.join(root,'verify.ps1');fs.writeFileSync(scriptFile,'\uFEFF'+script);

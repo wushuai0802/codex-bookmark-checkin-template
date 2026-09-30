@@ -4,7 +4,7 @@ import {configuredIsolatedOAuthSiteProfiles,configForIsolatedOAuthSite} from './
 import {configuredOAuthSessionProfiles,configForOAuthSession} from './oauth-session-profiles.mjs';
 import {configForOAuthExecutionAccount} from './oauth-execution-binding.mjs';
 import {ptPageEvidence,classifyPageText} from './detector.mjs';
-import {ptReadPolicies} from './checkin-contract.generated.mjs';
+import {ptReadPolicies,nativePtHeaderOrigins} from './checkin-contract.generated.mjs';
 
 export function ptExecutionBinding(config,root,target){
   if([config.isolatedOAuthSiteProfiles?.[target.origin],config.oauthSiteSessionBindings?.[target.origin],
@@ -34,7 +34,12 @@ export function ptExecutionBinding(config,root,target){
 // OpenCD index supplies the passive server-rendered header. CAPTCHA submission
 // stays in the formal runner. Bookmark folder names never grant capabilities.
 export function ptReadPolicy(origin,config={}){
-  const policy=config.ptReadOnlyPolicies?.[origin]??(ptReadPolicies[origin]?{
+  const nativeBound=nativePtHeaderOrigins.includes(origin)&&(config.mainChromeFallbackUrls??[]).some(entry=>{
+    try{return new URL(typeof entry==='string'?entry:entry.sourceOrigin??entry.url).origin===origin;}catch{return false;}
+  });
+  const policy=config.ptReadOnlyPolicies?.[origin]??(nativeBound?{
+    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'#info_block',nativeMainChrome:true
+  }:ptReadPolicies[origin]?{
     reviewed:true,mode:'safe_history_page',url:origin+'/index.php',...ptReadPolicies[origin]
   }:null);
   const unsafe=()=>{const e=Error('PT read-only capability is not reviewed for this site');e.code='PT_READONLY_UNSAFE';return e;};

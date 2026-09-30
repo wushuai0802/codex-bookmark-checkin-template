@@ -381,7 +381,7 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
     if(pt&&task.businessDate===snapshot.businessDate&&
        (merged.evidence?.authoritative!==true||!Number.isFinite(Date.parse(merged.observedAt))||Date.parse(pt.observedAt)>=Date.parse(merged.observedAt))&&
        merged.evidence?.verification!=='identity_conflict'&&
-       !['signed','already_signed'].includes(merged.observedStatus)){
+       (!['signed','already_signed'].includes(merged.observedStatus)||merged.evidence?.authoritative!==true)){
       merged.executionObservedStatus=merged.observedStatus;
       merged.observedStatus=pt.status;
       merged.observedAt=pt.observedAt;

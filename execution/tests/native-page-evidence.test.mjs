@@ -18,6 +18,7 @@ test('native evidence is created only from same-site daily or action-confirmed p
     {snapshot:{...base,bodyText:'签到成功'},clicked:true,expected:true},
     {snapshot:{...base,currentUrl:'https://www.pt.example/attendance.php'},expected:true},
     {snapshot:{...base,bodyText:'签到成功'},expected:false},
+    {snapshot:{...base,bodyText:'签到成功'},formalVisit:true,expected:true},
     {snapshot:{...base,bodyText:'欢迎回来，累计签到 100 次'},expected:false},
     {snapshot:{...base,bodyText:'昨天已签到'},expected:false},
     {snapshot:{...base,bodyText:'今日尚未签到'},expected:false},
@@ -29,13 +30,20 @@ test('native evidence is created only from same-site daily or action-confirmed p
     {snapshot:{...base,waf:true},expected:false},
     {snapshot:{...base,securityVerification:true},expected:false},
     {snapshot:{...base,loginRoute:true},expected:false},
+    {snapshot:{...base,bodyText:'truncated page',successText:'今日已签到'},expected:true},
+    {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',bodyText:'首页',authenticated:true,successControl:'已签到'},url:'https://ourbits.club/index.php',expected:true,signal:'nexus_daily_header_signed'},
+    {snapshot:{...base,currentUrl:'https://piggo.me/index.php',bodyText:'首页',authenticated:true,successControl:'签到已得25'},url:'https://piggo.me/index.php',expected:true,signal:'nexus_daily_header_signed'},
+    {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',authenticated:false,successControl:'已签到'},url:'https://ourbits.club/index.php',expected:false},
+    {snapshot:{...base,currentUrl:'https://pt.example/index.php',authenticated:true,successControl:'已签到'},url:'https://pt.example/index.php',expected:false},
+    {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',authenticated:true,successControl:'历史签到已得250'},url:'https://ourbits.club/index.php',expected:false},
   ];
   const quoted=value=>String(value).replaceAll("'","''");
   const command=`[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
 . '${quoted(scripts+'ResultContract.ps1')}'
 $cases='${quoted(JSON.stringify(cases))}' | ConvertFrom-Json
 $rows=@(foreach($c in $cases){
-  $proof=Get-ConfirmedNativePageEvidence $c.snapshot 'https://pt.example/attendance.php' ([bool]$c.clicked) ([datetimeoffset]'2026-09-29T02:00:00Z')
+  $target=if($c.url){$c.url}else{'https://pt.example/attendance.php'}
+  $proof=Get-ConfirmedNativePageEvidence $c.snapshot $target ([bool]$c.clicked) ([datetimeoffset]'2026-09-29T02:00:00Z') ([bool]$c.formalVisit)
   [pscustomobject]@{evidence=$proof}
 })
 ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
@@ -50,7 +58,7 @@ ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
     if(!item.expected)return;
     assert.equal(evidence.businessDate,'2026-09-29');
     assert.equal(evidence.source,'page_text');
-    assert.equal(evidence.statusSignal,'same_day_page_text');
+    assert.equal(evidence.statusSignal,item.signal??'same_day_page_text');
     assert.equal('bodyText' in evidence,false);
     const recovered=loginHelperOutcome(JSON.stringify({status:'logged_in',dailyCheckin:{status:'already_signed',evidence}}));
     assert.equal(recovered.dailyCheckin.evidence.authoritative,true);
@@ -62,7 +70,8 @@ test('native producers and all confirmed preflight branches preserve structured 
   for(const file of ['Invoke-MainChromeCheckinAccessibility.ps1','Invoke-PlainWafAccessibility.ps1']){
     const source=await fs.readFile(scripts+file,'utf8');
     assert.ok(source.includes("Join-Path $PSScriptRoot 'ResultContract.ps1'"));
-    assert.ok(source.includes('evidence = Get-ConfirmedNativePageEvidence $last $Url'));
+    assert.ok(source.includes('$pageEvidence = Get-ConfirmedNativePageEvidence $last $Url'));
+    assert.ok(source.includes('evidence = $pageEvidence'));
   }
   const preflight=await fs.readFile(scripts+'Prepare-NativeWafSession.ps1','utf8');
   assert.equal(preflight.split('evidence = if ($mainConfirmed) { $mainInspection.evidence }').length-1,2);

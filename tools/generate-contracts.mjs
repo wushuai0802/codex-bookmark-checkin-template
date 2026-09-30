@@ -12,4 +12,14 @@ for(const file of files){
     if(!fs.existsSync(target)||fs.readFileSync(target,'utf8').replaceAll('\r','')!==text)throw Error('generated contract drift: '+file);
   }else fs.writeFileSync(target,text);
 }
+const psQuote=value=>"'"+value.replaceAll("'","''")+"'";
+const powershell='# Generated from shared/checkin-contract.json. Run npm run contracts; do not edit.\n'+
+  '$CheckinFeatureDisabledEvidence = @{\n'+Object.entries(contract.featureDisabledEvidence).map(([source,outcomes])=>
+    `    ${psQuote(source)} = @(${outcomes.map(psQuote).join(', ')})`).join('\n')+'\n}\n'+
+  '$CheckinExternalRetryCauses = @('+contract.externalRetryCauses.map(psQuote).join(', ')+')\n'+
+  '$CheckinNativePtHeaderOrigins = @('+contract.nativePtHeaderOrigins.map(psQuote).join(', ')+')\n';
+const psFile=path.join(root,'execution/scripts/CheckinContract.generated.ps1');
+if(process.argv.includes('--check')){
+  if(!fs.existsSync(psFile)||fs.readFileSync(psFile,'utf8').replaceAll('\r','')!==powershell)throw Error('generated PowerShell contract drift');
+}else fs.writeFileSync(psFile,powershell);
 console.log('Shared check-in contracts '+(process.argv.includes('--check')?'verified':'generated'));

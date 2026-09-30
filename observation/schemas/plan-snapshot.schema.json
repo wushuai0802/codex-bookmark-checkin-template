@@ -320,6 +320,7 @@
           "enum": ["observe_only", "v1_engine"]
         },
         "failureCode": {"type": "string", "pattern": "^[a-z_]{1,80}$"},
+        "condition": {"enum": ["site_maintenance", "upstream_unavailable", "rate_limit", "harvest_waiting", "submission_outcome_unknown", "entitlement_expired"]},
         "submissionAttempted": {"type": "boolean"},
         "observedStatus": {
           "type": "string"

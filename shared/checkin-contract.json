@@ -1,4 +1,20 @@
 {
+  "featureDisabledEvidence": {
+    "new_api_status": ["budele_enabled_false"],
+    "bmapi_checkin_status": ["enabled_false"],
+    "new_api_checkin_status": ["message_not_enabled"],
+    "new_api_checkin_action": ["message_not_enabled"]
+  },
+  "externalRetryCauses": ["upstream_unavailable", "rate_limit", "harvest_waiting"],
+  "nativePtHeaderOrigins": ["https://audiences.me", "https://ourbits.club", "https://piggo.me", "https://www.hdkyl.in"],
+  "conditionLabels": {
+    "site_maintenance": "站点维护",
+    "upstream_unavailable": "等待站点恢复",
+    "rate_limit": "等待限频恢复",
+    "harvest_waiting": "等待 Harvest",
+    "submission_outcome_unknown": "结果待核验",
+    "entitlement_expired": "权益已失效"
+  },
   "taskStatuses": ["signed", "already_signed", "not_available", "needs_attention", "deferred", "login_required", "failed", "not_started"],
   "ptStatuses": ["signed", "already_signed", "not_signed", "unknown", "login_required", "unreachable", "needs_attention", "not_available", "failed"],
   "ptResultStatuses": ["signed", "already_signed", "not_signed", "unknown", "login_required", "needs_attention", "not_available"],
@@ -11,7 +27,7 @@
   "ptFailureMessages": {
     "submission_outcome_unknown": "提交结果不明，先只读核验，禁止自动重放",
     "site_maintenance": "站点公告正在维护或恢复数据，等待恢复后核验",
-    "upstream_unavailable": "站点服务暂时不可用，等待恢复后重试",
+    "upstream_unavailable": "站点服务暂时不可用，等待恢复后有限复核",
     "rate_limit": "站点触发频率限制，等待冷却后重试",
     "login_required": "执行会话需要重新登录",
     "upstream_login_required": "上游登录已失效，需要恢复登录",

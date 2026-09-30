@@ -1,3 +1,9 @@
+import {conditionLabels,statusLabels,externalRetryCauses} from './checkin-contract.generated.mjs';
+
+export function taskStatusLabel(task){return conditionLabels[task?.condition]??statusLabels[task?.observedStatus]??task?.observedStatus;}
+export function externalTask(task){return !['signed','already_signed','not_available'].includes(task?.observedStatus)&&
+  [...externalRetryCauses,'site_maintenance','entitlement_expired'].includes(task?.condition);}
+
 export function identityTitle(item) {
   const identity = item.identity ?? {};
   return identity.username || identity.label || (identity.userId ? `ID ${identity.userId}` : '默认账号（身份待采集）');
@@ -20,6 +26,8 @@ export const TASK_FILTERS = [
   ['', '全部任务'],
   ['completed', '已完成'],
   ['pending', '尚未完成'],
+  ['external', '等待外部条件'],
+  ['verification', '结果待核验'],
   ['unavailable', '未开放'],
   ['attention', '需关注'],
   ['deferred', '已延迟'],
@@ -39,7 +47,9 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
     login_required: ['login_required'],
     unavailable: ['not_available'],
   };
-  const statusMatch = !status || (statusGroups[status] ? statusGroups[status].includes(value) : value === status);
+  const statusMatch = !status || (status==='external'?externalTask(task):status==='verification'?task.condition==='submission_outcome_unknown':
+    status==='attention'?statusGroups.attention.includes(value)&&!externalTask(task)&&task.condition!=='submission_outcome_unknown':
+    statusGroups[status] ? statusGroups[status].includes(value) : value === status);
   const haystack = [task.origin, task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
     task.identity?.username, task.identity?.userId, task.identity?.label].join(' ').toLowerCase();
   return statusMatch && haystack.includes(query.trim().toLowerCase());

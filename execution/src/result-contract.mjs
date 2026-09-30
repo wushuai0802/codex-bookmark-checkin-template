@@ -1,3 +1,5 @@
+import {featureDisabledEvidence} from './checkin-contract.generated.mjs';
+
 const AVAILABILITY_KINDS = new Set([
   "feature_disabled",
   "task_disabled",
@@ -5,12 +7,7 @@ const AVAILABILITY_KINDS = new Set([
 ]);
 
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
-const FEATURE_DISABLED_EVIDENCE = new Map([
-  ["new_api_status", new Set(["budele_enabled_false"])],
-  ["bmapi_checkin_status", new Set(["enabled_false"])],
-  ["new_api_checkin_status", new Set(["message_not_enabled"])],
-  ["new_api_checkin_action", new Set(["message_not_enabled"])],
-]);
+const FEATURE_DISABLED_EVIDENCE = new Map(Object.entries(featureDisabledEvidence).map(([source,outcomes])=>[source,new Set(outcomes)]));
 
 function validEvidenceTimestamp(value, now) {
   const timestamp = Date.parse(String(value ?? ""));

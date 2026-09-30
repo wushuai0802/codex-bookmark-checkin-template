@@ -233,7 +233,7 @@ test("cleanup warning preserves confirmed checkin but remains visible", async ()
   assert.notEqual(warning.eventKey, clean.eventKey);
 });
 
-test("站点故障在通知中显示为自动重试而不是人工关注", async () => {
+test("站点故障单列外部条件，保留有限复核时间而不误报本地失败", async () => {
   const report = await previewReport({
     runId: "20260723-120004",
     runState: "final",
@@ -248,10 +248,21 @@ test("站点故障在通知中显示为自动重试而不是人工关注", async
     }],
   });
 
-  assert.equal(report.status, "retrying");
-  assert.match(report.summary, /待自动重试 1 个：/);
-  assert.match(report.summary, /offline\.example\.test：站点暂时不可用，计划/);
-  assert.doesNotMatch(report.summary, /需关注/);
+  assert.equal(report.status, "unconfirmed");
+  assert.equal(report.externalPendingCount,1);
+  assert.match(report.summary, /等待外部条件 1 个/);
+  assert.match(report.summary, /offline\.example\.test：上游暂不可用/);
+  assert.match(report.summary, /有限复核/);
+  assert.doesNotMatch(report.summary, /需关注|待自动重试|❌/);
+});
+
+test('unknown submissions stay in verification even if the site is under maintenance',async()=>{
+  const report=await previewReport({runId:'20260930-review',runState:'final',plannedTotal:1,processedTotal:1,isComplete:true,
+    results:[{origin:'https://review.example.test',status:'needs_attention',failureCode:'submission_outcome_unknown',
+      submissionAttempted:true,siteCondition:'site_maintenance',reason:'站点维护，之前提交结果不明'}]});
+  assert.equal(report.externalPendingCount,0);assert.equal(report.verificationPendingCount,1);
+  assert.match(report.summary,/结果待核验 1 个（不重复提交）/);
+  assert.doesNotMatch(report.summary,/待自动重试|❌/);
 });
 
 test("动作结果未知转为关注，只有可恢复异常进入自动重试", async () => {

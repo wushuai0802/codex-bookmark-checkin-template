@@ -493,6 +493,17 @@ test("用户确认站点维护会结束当天重试但不伪报签到成功", ()
   });
 });
 
+test('a maintenance notice waits until the next business day instead of repeated same-day probes',()=>{
+  const now=new Date('2026-09-30T02:00:00Z');
+  const value={origin:'https://maintenance.example',status:'deferred',retryCause:'upstream_unavailable',failureCode:'site_maintenance',siteCondition:'site_maintenance'};
+  const scheduled=withRetrySchedule(value,{schedule:'08:05'},now);
+  assert.equal(scheduled.status,'deferred');assert.equal(scheduled.nextEligibleAt,'2026-10-01T00:05:00.000Z');
+  assert.equal(isRetryEligible(scheduled,now),false);
+  const advanced=advanceDeferredRetry(scheduled,{...scheduled,retrySequence:4,retrySequenceDate:'20260930'},{schedule:'08:05'},now);
+  const grouped=applyUpstreamGroupCircuitBreakers([advanced],{upstreamFailureGroupMaxDailyAttempts:1,upstreamUnavailableLateRetryTime:'21:05'},now)[0];
+  assert.equal(grouped.nextEligibleAt,'2026-10-01T00:05:00.000Z');assert.equal(grouped.retryExhaustedForDay,true);
+});
+
 test("暂不可用的当日终态在次日会重新进入目标计划", () => {
   const selected = resumeSelectedOrigins(
     [{ origin: "https://offline.example" }],

@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesPt,ptStatusCategory,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS} from '../public/dashboard-model.mjs';
+import {matchesPt,ptStatusCategory,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS,taskStatusLabel} from '../public/dashboard-model.mjs';
+
+test('external conditions and unknown submissions have distinct labels and filters',()=>{
+  const external={origin:'https://site.test',observedStatus:'deferred',condition:'upstream_unavailable'};
+  const unknown={...external,observedStatus:'needs_attention',condition:'submission_outcome_unknown'};
+  assert.equal(taskStatusLabel(external),'等待站点恢复');
+  assert.equal(matchesTask(external,{status:'external'}),true);
+  assert.equal(matchesTask(external,{status:'verification'}),false);
+  assert.equal(matchesTask(unknown,{status:'external'}),false);
+  assert.equal(matchesTask(unknown,{status:'verification'}),true);
+  assert.equal(matchesTask(unknown,{status:'attention'}),false);
+  assert.equal(matchesTask(external,{status:'attention'}),false);
+  assert.equal(matchesTask(external,{status:'pending'}),true);
+});
 
 test('task filters use non-overlapping business groups',()=>{
   const task=status=>({observedStatus:status,origin:'https://example.test'});

@@ -16,6 +16,7 @@ import { observedIdentity } from './identity-observations.mjs';
 import {loadEffectiveConfig} from './effective-config.mjs';
 import {desiredTargets,reconcilePlan} from './desired-plan.mjs';
 import {normalizeEvidence} from './evidence-contract.mjs';
+import {externalRetryCauses} from './checkin-contract.generated.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -183,6 +184,13 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     };
     if(typeof entry.submissionAttempted==='boolean')task.submissionAttempted=entry.submissionAttempted;
     if(/^[a-z_]{1,80}$/.test(entry.failureCode??''))task.failureCode=entry.failureCode;
+    if(!['signed','already_signed','not_available'].includes(status)){
+      const condition=entry.failureCode==='submission_outcome_unknown'||entry.submissionAttempted===true?'submission_outcome_unknown':
+        entry.siteCondition==='site_maintenance'||entry.failureCode==='site_maintenance'?'site_maintenance':
+        externalRetryCauses.includes(entry.retryCause)?entry.retryCause:
+        entry.evidence?.source==='vibe_entitlement_status'&&entry.evidence?.statusSignal==='expired_subscription'?'entitlement_expired':null;
+      if(condition)task.condition=condition;
+    }
     tasks.push(task);
     receipts.push(evidenceReceipt(entry, identity.taskId, fallbackAt, businessDate));
     if (!logicalSites.has(origin)) {

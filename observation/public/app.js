@@ -1,5 +1,5 @@
 import { overviewMetrics, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, matchesLedger, ledgerPendingCount, TASK_FILTERS } from './dashboard-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, matchesLedger, ledgerPendingCount, TASK_FILTERS, taskStatusLabel, externalTask } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
@@ -58,8 +58,8 @@ function formatHash(value) {
   return value ? `${String(value).slice(0, 10)}…${String(value).slice(-6)}` : '—';
 }
 
-function statusChip(status) {
-  return el('span', `status-chip ${status ?? ''}`, STATUS_LABELS[status] ?? text(status));
+function statusChip(status,task=null) {
+  return el('span', `status-chip ${externalTask(task)?'deferred':status ?? ''}`, task?taskStatusLabel(task):STATUS_LABELS[status] ?? text(status));
 }
 
 function evidenceLabel(task) {
@@ -300,7 +300,7 @@ function renderTaskDetails(task) {
   for (const [label, value] of [['账户', identityTitle(task)], ['身份标识', identityCaption(task)],
     ['身份来源', {result:'执行回执',harvest:'Harvest 账号资料',configuration:'配置中的预期账号', 'user-self':'身份接口核验', 'browser-cache':'本站登录缓存，尚未通过在线核验'}[task.identity?.source]],
     ['身份采集时间', formatTime(task.identity?.observedAt)], ['原始证据类型',task.evidence?.rawSource], ['缓存原证据',task.evidence?.originalSource],
-    ['登录方式', task.identity?.provider], ['状态', STATUS_LABELS[task.observedStatus]], ['业务日期', task.businessDate],
+    ['登录方式', task.identity?.provider], ['状态', taskStatusLabel(task)], ['业务日期', task.businessDate],
     ['观察时间', formatTime(task.observedAt)], ['判定依据', evidenceLabel(task)], ['结果说明', task.evidence?.summary],
     ['执行所有者', task.executionOwner], ['任务 ID', task.taskId]]) {
     const row = el('div', 'detail-row'); append(row, el('span', 'muted', label), el('strong', null, value)); dialog.append(row);
@@ -418,7 +418,7 @@ function renderAttention(tasks) {
     row.classList.toggle('is-read', group.tasks.every(item => notices.isRead(item)));
     const top = el('div', 'attention-top');
     let host; try { host = new URL(task.origin).host; } catch { host = task.origin; }
-    append(top, el('strong', null, group.tasks.length > 1 ? `${host} · ${group.tasks.length} 个账号` : host), statusChip(task.observedStatus));
+    append(top, el('strong', null, group.tasks.length > 1 ? `${host} · ${group.tasks.length} 个账号` : host), statusChip(task.observedStatus,task));
     const reason = el('p', 'attention-reason', task.evidence?.summary || '本次尚未取得明确结果。');
     reason.title = reason.textContent;
     const foot = el('div', 'attention-foot');
@@ -467,7 +467,7 @@ function renderTasks(tasks) {
     taskCell.append(detail);
     const siteCell = el('td'); append(siteCell, el('span', 'origin', siteTitle(task)), el('span', 'subtext', task.origin));
     const accountCell = el('td'); append(accountCell, el('span', 'origin', identityTitle(task)), el('span', 'subtext', identityCaption(task)));
-    const statusCell = el('td'); append(statusCell, statusChip(task.observedStatus),
+    const statusCell = el('td'); append(statusCell, statusChip(task.observedStatus,task),
       task.attention?.pausedUntil ? el('span', 'subtext', `暂缓关注至 ${formatTime(task.attention.pausedUntil)}`) : null);
     const evidenceCell = el('td'); append(evidenceCell, el('span', null, evidenceLabel(task)), el('span', 'subtext evidence-summary', task.evidence?.summary ?? '无详细证据'), el('span', 'subtext', task.observedAt ? formatTime(task.observedAt) : '—'));
     const observedCell = el('td'); append(observedCell, el('span', null, task.observedAt ? formatTime(task.observedAt) : '—'), el('span', 'subtext', task.businessDate));
@@ -476,7 +476,7 @@ function renderTasks(tasks) {
     const heading = el('div', 'mobile-task-head');
     const identity = el('div', 'mobile-task-identity');
     append(identity, el('strong', null, siteTitle(task)), el('span', 'subtext', identityTitle(task)));
-    append(heading, identity, statusChip(task.observedStatus));
+    append(heading, identity, statusChip(task.observedStatus,task));
     const explanation = el('p', 'mobile-task-evidence', task.evidence?.summary || evidenceLabel(task));
     const footer = el('div', 'mobile-task-foot');
     const timestamp = el('span', 'muted', task.attention?.pausedUntil ? `暂缓关注至 ${formatTime(task.attention.pausedUntil)}` : task.observedAt ? formatTime(task.observedAt) : task.businessDate);
@@ -521,7 +521,9 @@ function renderPtStatus(data) {
     const effective = site.effective ?? {};
     const category = ptStatusCategory(site);
     const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? category === 'confirmed' ? '今日已确认，无需补签' : 'Harvest 未完成后复核' : '不在补签范围'));
-    const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown');
+    const ptCondition=site.recovery?.code==='prior_outcome_unknown'||effective.failureCode==='submission_outcome_unknown'?'submission_outcome_unknown':
+      effective.siteCondition==='site_maintenance'?'site_maintenance':effective.retryCause;
+    const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown',{observedStatus:effective.status??'unknown',condition:ptCondition});
     const likelySigned = effective.status === 'unknown' && effective.fresh && !effective.authoritative &&
       effective.evidence?.source === 'pt_page' && effective.evidence?.summary?.startsWith('检测到签到已得');
     if (likelySigned) chip.textContent = '疑似已签到';
@@ -629,7 +631,7 @@ function renderAccountDetails(account) {
   if(!tasks.length)today.append(el('p','muted','本次快照暂无该账号的任务回执。'));
   for(const task of tasks){
     const row=el('div','account-result');
-    append(row,el('strong',null,siteTitle(task)),statusChip(task.observedStatus));
+    append(row,el('strong',null,siteTitle(task)),statusChip(task.observedStatus,task));
     append(today,row,el('p','account-evidence',task.evidence?.summary??'尚无详细证据'),
       el('p','muted',`${evidenceLabel(task)} · ${task.observedAt?formatTime(task.observedAt):'未记录时间'}`));
   }
@@ -701,7 +703,7 @@ function renderLedgerDetails(record) {
   for (const task of record.taskSummaries ?? []) {
     const item = el('section', 'ledger-task');
     append(item, el('h3', null, siteTitle(task)), el('p', 'muted', `${identityTitle(task)} · ${identityCaption(task)}`),
-      statusChip(task.observedStatus), el('p', null, task.evidence?.summary || '未保存详细证据'), el('span', 'muted', formatTime(task.observedAt)));
+      statusChip(task.observedStatus,task), el('p', null, task.evidence?.summary || '未保存详细证据'), el('span', 'muted', formatTime(task.observedAt)));
     dialog.append(item);
   }
   const technical = el('details', 'ledger-technical');
@@ -827,7 +829,7 @@ function renderCalendar(data) {
   for(const task of tasks){
     const row=el('div','calendar-receipt-row'),identity=el('div','calendar-receipt-identity');
     append(identity,el('strong',null,siteTitle(task)),el('span','subtext',identityTitle(task)));
-    append(row,identity,statusChip(task.observedStatus),el('span','calendar-receipt-evidence',
+    append(row,identity,statusChip(task.observedStatus,task),el('span','calendar-receipt-evidence',
       state.calendarFilter==='pending'?task.evidence?.summary||evidenceLabel(task):evidenceLabel(task)));
     list.append(row);
   }

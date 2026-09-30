@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {
   isConfirmedNotAvailable,
   isTerminalResult,
@@ -73,4 +75,20 @@ test("缓存证据必须保留受信任的原始来源和 outcome", () => {
   };
   assert.equal(isConfirmedNotAvailable(unavailable({ evidence })), true);
   assert.equal(isConfirmedNotAvailable(unavailable({ evidence: { ...evidence, originalSource: "arbitrary_claim" } })), false);
+});
+
+test('JavaScript and PowerShell agree on disabled-feature evidence and account-scoped opt-outs',()=>{
+  const now=new Date('2026-09-30T04:00:00Z');
+  const records=[
+    unavailable({evidence:{source:'new_api_status',outcome:'budele_enabled_false',authoritative:true,confirmedAt:now.toISOString()}}),
+    unavailable({evidence:{source:'cached_confirmation',originalSource:'new_api_status',outcome:'budele_enabled_false',authoritative:true,confirmedAt:now.toISOString()}}),
+    unavailable({evidence:{source:'new_api_status',outcome:'other',authoritative:true,confirmedAt:now.toISOString()}}),
+    unavailable({availabilityKind:'task_disabled',disabledByAccountConfig:true,evidence:{source:'configuration',authoritative:true,confirmedAt:now.toISOString()}}),
+  ];
+  const source=fileURLToPath(new URL('../scripts/ResultContract.ps1',import.meta.url)).replaceAll("'","''");
+  const command=`$ProgressPreference='SilentlyContinue'; . '${source}'; $rows='${JSON.stringify(records).replaceAll("'","''")}'|ConvertFrom-Json; ConvertTo-Json -Compress -InputObject @(foreach($row in $rows){Test-ConfirmedNotAvailableResult $row ([datetimeoffset]'${now.toISOString()}')})`;
+  for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pwsh']){
+    const output=execFileSync(shell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(command,'utf16le').toString('base64')],{encoding:'utf8'});
+    assert.deepEqual(JSON.parse(output),records.map(r=>isConfirmedNotAvailable(r,now)));
+  }
 });

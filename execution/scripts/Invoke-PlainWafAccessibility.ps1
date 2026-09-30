@@ -175,6 +175,7 @@ function Read-PageSnapshot {
     [pscustomobject]@{
         currentUrl = if ($currentUri) { $currentUri.AbsoluteUri } else { '' }
         bodyText = $bodyText.Substring(0, [Math]::Min(2000, $bodyText.Length))
+        successText = Get-NativeSuccessText $bodyText
         document = (@($documents | Select-Object -Unique) -join ' ').Substring(0, [Math]::Min(500, (@($documents | Select-Object -Unique) -join ' ').Length))
         waf = [bool]$waf
         leichiWaf = [bool]$leichiWaf
@@ -337,11 +338,12 @@ try {
             } | ConvertTo-Json -Depth 8
             exit 2
         }
-        if ($last.success -and $last.sameOrigin -and -not $last.waf -and -not $last.securityVerification -and -not $last.loginRoute) {
+        $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked -FormalVisit:([bool]$PerformCheckin -and [bool]$last.attendanceEndpoint)
+        if ($pageEvidence) {
             [pscustomobject]@{
                 status = 'signed'
                 reason = '无调试原生 Chrome 页面确认签到完成'
-                evidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked
+                evidence = $pageEvidence
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 cloudflareChallengeClicked = $cloudflareChallengeClicked
@@ -399,7 +401,7 @@ try {
                 continue
             }
         }
-        if ($PerformCheckin -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and
+        if ($PerformCheckin -and -not $last.success -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and
             -not $last.success -and -not $checkinClickAttempted) {
             $checkinClickAttempted = $true
             $checkinClicked = Invoke-NativeCheckinAction

@@ -17,7 +17,8 @@ const snapshot = buildSnapshot({
 });
 const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
 snapshot.businessDate=today;
-snapshot.tasks=snapshot.tasks.map(task=>({...task,businessDate:today}));
+snapshot.tasks=snapshot.tasks.map(task=>({...task,businessDate:today,
+  ...(task.observedStatus==='needs_attention'?{condition:'upstream_unavailable'}:{})}));
 snapshot.ptStatus.businessDate=today;
 const ptSite = (host, status, authoritative) => ({
   origin: `https://${host}.example`, displayName: host, fallbackEnabled: true,

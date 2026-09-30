@@ -132,6 +132,7 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
     return { taskId: task.taskId, origin: task.origin, accountRef:task.accountRef??null,
       taskKind:source.ptStatus?.sites?.some(site=>site.origin===task.origin)?'pt':'service',displayName: shortLabel(task.displayName),
       identity: displayIdentity(task.identity), observedStatus: task.observedStatus,
+      ...(task.condition?{condition:task.condition}:{}),
       observedAt: receipt?.observedAt ?? null, evidence: receipt?.evidence ? {
         source: receipt.evidence.source, authoritative: receipt.evidence.authoritative === true,
         summary: redactText(receipt.evidence.summary), redacted: true,

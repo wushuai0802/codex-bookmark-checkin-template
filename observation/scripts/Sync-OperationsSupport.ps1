@@ -55,13 +55,15 @@ function Send-SyncNotification([string]$LegacyRoot, [string]$Status, [string]$Su
             foreach ($entry in $values.GetEnumerator()) { $value = $value.Replace("{$($entry.Key)}", [string]$entry.Value) }
             $value
         })
-        $ErrorActionPreference = 'Continue'
-        $PSNativeCommandUseErrorActionPreference = $false
-        $output = @(& $executable @arguments 2>&1)
-        $code = $LASTEXITCODE
+        . (Join-Path $LegacyRoot 'scripts/Invoke-BoundedCommand.ps1')
+        $timeoutSeconds = if ($legacyConfig.notification.timeoutSeconds) { [int]$legacyConfig.notification.timeoutSeconds } else { 60 }
+        $timeoutSeconds = [Math]::Max(1, [Math]::Min(600, $timeoutSeconds))
+        $command = Invoke-BoundedCommand $executable $arguments $timeoutSeconds
+        $output = @($command.Output)
+        $code = $command.ExitCode
         $accepted = Test-SyncNotificationAcknowledgement $output $code
         if (-not $accepted) {
-            $cause = if ($code -eq 0) { 'acknowledgement_missing_or_rejected' } else { 'notifier_command_failed' }
+            $cause = if ($command.TimedOut) { 'notifier_timeout' } elseif ($code -eq 0) { 'acknowledgement_missing_or_rejected' } else { 'notifier_command_failed' }
             Write-SchedulerLog "Notification not acknowledged (event=$EventKey; exit=$code; cause=$cause)."
         }
         return $accepted
@@ -81,6 +83,38 @@ function New-PendingNotification([string]$Status, [string]$Summary, [string]$Eve
         queuedAt = $Now.ToString('o')
         attemptCount = 0
         nextAttemptAt = $Now.ToString('o')
+    }
+}
+
+function Set-SyncAttemptOutcome([System.Collections.IDictionary]$State, $Previous, [int]$ExitCode, [datetime]$Finished,
+    [string]$DailyTime, [string]$SourceFingerprint, [string]$V2Fingerprint, [string]$FailureCause = '') {
+    $State['lastAttemptAt'] = $Finished.ToString('o')
+    $State['lastExitCode'] = $ExitCode
+    $State['lastFailureCause'] = if ($ExitCode -eq 0) { $null } else { $FailureCause }
+    if ($ExitCode -eq 0) {
+        $State['lastSuccessAt'] = $Finished.ToString('o')
+        $State['lastSuccessDate'] = $Finished.ToString('yyyy-MM-dd')
+        $State['failureCount'] = 0
+        $State['nextRetryAt'] = $null
+        $State['lastSourceFingerprint'] = $SourceFingerprint
+        $State['lastV2Fingerprint'] = $V2Fingerprint
+        Write-SchedulerLog 'Scheduled panel sync succeeded.'
+        if ([int]$Previous.failureCount -gt 0) {
+            $State['pendingNotification'] = New-PendingNotification 'success' '面板数据同步已恢复，签到状态与日历已更新。' "fabric-sync-recovered-$($Finished.ToString('yyyyMMdd-HHmmssfff'))" $Finished
+        }
+        return
+    }
+    $failureCount = [Math]::Min(8, [int]$Previous.failureCount + 1)
+    $delayMinutes = [Math]::Min(240, 15 * [Math]::Pow(2, [Math]::Max(0, $failureCount - 1)))
+    $nextRetry = $Finished.AddMinutes($delayMinutes)
+    if ($failureCount -ge 8) {
+        $nextRetry = [datetime]::ParseExact("$($Finished.Date.AddDays(1).ToString('yyyy-MM-dd')) $DailyTime", 'yyyy-MM-dd HH:mm', $null)
+    }
+    $State['failureCount'] = $failureCount
+    $State['nextRetryAt'] = $nextRetry.ToString('o')
+    Write-SchedulerLog "Scheduled panel sync failed (exit=$ExitCode; cause=$FailureCause); next probe=$($nextRetry.ToString('o'))."
+    if ($failureCount -eq 1) {
+        $State['pendingNotification'] = New-PendingNotification 'failed' '面板数据同步暂时失败，后台将自动重试；签到执行任务继续按原计划运行。' "fabric-sync-failed-$($Finished.ToString('yyyyMMdd-HHmmssfff'))" $Finished
     }
 }
 
