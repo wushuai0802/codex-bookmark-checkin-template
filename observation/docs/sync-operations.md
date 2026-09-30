@@ -35,7 +35,8 @@ state before sending notifications. Timeout uses exit code 124 and the same aler
 and bounded retry path as other sync failures.
 
 `Invoke-PtEvidenceRepair.ps1 -CatalogFile <current-catalog>` can run from the same
-existing probe. It reads at most one reviewed PT page per probe and twice per site
+existing probe. It defaults to one reviewed PT page per probe (`-MaxSites` permits
+1–4 sequential reads) and twice per site
 per business day, only for reported completions whose evidence is missing. It
 holds execution locks, never calls a submission path, publishes only authoritative
 positive readbacks, and leaves original completion reports intact when a read fails.
