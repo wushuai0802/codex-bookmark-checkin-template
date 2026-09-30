@@ -1,9 +1,5 @@
 import crypto from 'node:crypto';
-
-export const STATUS_VALUES = [
-  'signed', 'already_signed', 'not_available', 'needs_attention',
-  'deferred', 'login_required', 'failed', 'not_started'
-];
+export {taskStatuses as STATUS_VALUES} from './checkin-contract.generated.mjs';
 
 // The all-zero value is reserved as a missing-plan sentinel and must never
 // cross an execution boundary as if it were a real fingerprint.

@@ -21,11 +21,15 @@ contents of `outputs/nas-bundle/`:
   unless separately configured and authorized)
 - `package.json`
 - `package-lock.json`
+- `release.json`
 - `src/`
 - `public/`
 
 Create `nas-data/` with the latest redacted `shadow-beta-snapshot.json` and
-`shadow-ledger.jsonl`. The snapshot may include the optional `ptStatus` catalog
+`shadow-ledger.jsonl`, `dashboard-generation.json` and, when present,
+`dashboard-generation.previous.json`. Publish ledger first, snapshot second,
+and the current generation manifest last. Its ledger prefix must match.
+The snapshot may include the optional `ptStatus` catalog
 from a Harvest or other read-only observer. Do not copy the old project's `data/credentials`, Chrome
 profiles, cookies, tokens, screenshots, or full logs. Create
 `secrets/fabric_admin_token.txt` with a random 32+ character value and protect
@@ -61,10 +65,11 @@ scoped rebuild or health check fails. Inspect the remote backup path printed
 after deployment. Without this parameter, the original full-bundle deployment
 behavior remains in effect.
 
-The script keeps the existing dry transport overlay enabled by default and
-preflights `transport-config/worker-registry.json` plus `transport-data/`.
-For a dashboard-only deployment, pass `-UseWorkerTransport:$false`; this does
-not delete an existing overlay or transport data.
+The default deployment needs only the dashboard. Installations using the
+optional transport overlay explicitly pass `-UseWorkerTransport:$true`;
+then `transport-config/worker-registry.json` and `transport-data/` are checked.
+Existing compose files are preserved unless `-ReplaceCompose` is selected.
+No transport data is deleted.
 
 ## Start
 
@@ -94,9 +99,12 @@ the token secret.
 
 The Windows operations wrapper should first run V1's read-only health command,
 pass its JSON through `--health-file`, and then copy only the generated
-redacted snapshot and ledger into NAS `nas-data/`. Trigger a refresh when the
+redacted ledger, snapshot and generation manifests into NAS `nas-data/` in
+that order. Trigger a refresh when the
 final V1 report changes and keep a fixed daily refresh as a fallback. The
-dashboard does not poll Windows, launch Chrome, or send Telegram notifications.
+dashboard does not launch Chrome or send Telegram notifications. Typed manual
+requests are picked up by the Windows operation worker over existing SSH;
+only the execution layer can act on a bound site.
 A stale snapshot is shown as stale in the UI.
 
 ## Rollback

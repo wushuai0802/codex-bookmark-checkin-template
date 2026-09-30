@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem without private account data
+description: Report a reproducible problem without private account data or credentials
 title: "[Bug]: "
 labels: ["bug"]
 body:

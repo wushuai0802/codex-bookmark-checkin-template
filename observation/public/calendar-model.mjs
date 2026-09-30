@@ -1,23 +1,47 @@
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-export function dailyRecords({ledger = [], snapshot = null, tasks = []} = {}) {
+function scopedEntry(entry,scope){
+  const regular=entry.tasks??[],pt=entry.ptSummaries;
+  if(scope==='regular'||!Array.isArray(pt)&&scope==='all')return {...entry,ptRecorded:Array.isArray(pt)};
+  let selected=scope==='pt'?(Array.isArray(pt)?pt:regular.filter(t=>t.taskKind==='pt')):[...regular];
+  if(scope==='all')for(const item of pt??[]){
+    const matches=selected.map((task,index)=>({task,index})).filter(({task})=>task.origin===item.origin&&
+      (!item.accountRef||!task.accountRef||task.accountRef===item.accountRef));
+    if(matches.length===1){
+      const {task,index}=matches[0];selected[index]={...task,taskKind:'pt',observedStatus:item.observedStatus,
+        observedAt:item.observedAt,evidence:item.evidence};
+    }else if(!item.inLegacyPlan)selected.push(item);
+  }
+  const status={};for(const task of selected)status[task.observedStatus]=(status[task.observedStatus]??0)+1;
+  return {...entry,tasks:selected,counts:{executionUnits:selected.length,status},ptRecorded:Array.isArray(pt)};
+}
+
+export function calendarPtSummaries(ptStatus){
+  if(!Array.isArray(ptStatus?.sites))return null;
+  return ptStatus.sites.map(site=>({taskId:site.siteRef,origin:site.origin,accountRef:site.accountRef??null,
+    displayName:site.displayName,taskKind:'pt',inLegacyPlan:site.inLegacyPlan===true,
+    observedStatus:site.effective?.fresh?site.effective.status:'unknown',observedAt:site.effective?.observedAt??null,
+    evidence:site.effective?.evidence??null}));
+}
+
+export function dailyRecords({ledger = [], snapshot = null, tasks = [],ptStatus=snapshot?.ptStatus,scope='all'} = {}) {
   const days = new Map();
   for (const record of ledger) {
     if (!DAY.test(record?.businessDate ?? '')) continue;
     const previous = days.get(record.businessDate);
     if (!previous || Date.parse(record.recordedAt) > Date.parse(previous.recordedAt)) {
       days.set(record.businessDate, {recordedAt:record.recordedAt, counts:record.counts,
-        tasks:record.taskSummaries, source:'ledger'});
+        tasks:record.taskSummaries,ptSummaries:record.ptSummaries, source:'ledger'});
     }
   }
   if (DAY.test(snapshot?.businessDate ?? '') && Array.isArray(tasks) && tasks.length) {
     const previous = days.get(snapshot.businessDate);
     if (!previous || Date.parse(snapshot.generatedAt) >= Date.parse(previous.recordedAt)) {
       days.set(snapshot.businessDate, {recordedAt:snapshot.generatedAt, counts:snapshot.counts,
-        tasks, source:'current'});
+        tasks,ptSummaries:calendarPtSummaries(ptStatus), source:'current'});
     }
   }
-  return days;
+  return new Map([...days].map(([day,entry])=>[day,scopedEntry(entry,scope)]));
 }
 
 export function monthCells(month) {

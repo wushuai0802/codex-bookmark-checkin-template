@@ -9,7 +9,7 @@ function processIsAlive(pid) {
 }
 
 function lockFile(root,name) {
-  if(!['v2-run.lock','harvest-fallback.lock'].includes(name))throw Error('invalid execution lock name');
+  if(!['v2-run.lock','harvest-fallback.lock','dashboard-operations.lock','dashboard-operation-worker.lock'].includes(name))throw Error('invalid execution lock name');
   return path.join(path.resolve(root),'data',name);
 }
 

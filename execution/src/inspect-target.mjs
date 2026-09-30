@@ -113,7 +113,8 @@ try {
           })
           .filter(Boolean)
           .slice(0, 100);
-        return { bodyText, controls, pageFunctions, frames, specialHtml, showupHtml, visibleSurfaces };
+        const challengeMarkers = [...document.querySelectorAll('iframe[src*="captcha" i], iframe[src*="turnstile" i], iframe[src*="challenge" i], .cf-turnstile, .h-captcha, .g-recaptcha, cap-widget, [data-cap-api-endpoint], [class*="captcha" i], input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]')].slice(0, 20).map(element => ({tag: element.tagName, type: element.getAttribute("type"), className: element.getAttribute("class"), name: element.getAttribute("name"), visible: element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0, responsePresent: /response/.test(element.getAttribute("name") || "") && Boolean(element.value)}));
+        return { bodyText, controls, pageFunctions, frames, specialHtml, showupHtml, visibleSurfaces, challengeMarkers };
       });
       const screenshotPath = path.join(rootDirectory, "tmp", `inspect-${new URL(target.origin).hostname.replace(/[^a-z0-9.-]/gi, "_")}.png`);
       await page.screenshot({ path: screenshotPath, fullPage: true });

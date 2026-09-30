@@ -16,8 +16,10 @@ import {migrationReadiness} from './adapter-registry.mjs';
 import {publicCanaryResults} from './canary-report-view.mjs';
 import {readDashboardRuntime} from './dashboard-runtime.mjs';
 import {activeSiteControls,pauseExpiresAt} from './attention-controls.mjs';
-import {readDashboardGeneration} from './dashboard-generation.mjs';
+import {createDashboardGenerationReader} from './dashboard-generation.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
+import {releaseInfo} from './release-info.mjs';
+import {operationTargets,enqueueOperation,operationView} from './dashboard-operations.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -157,6 +159,10 @@ function publicTask(task, receipt) {
     executionOwner: task.executionOwner,
     executionMode: task.executionMode,
     observedStatus: task.observedStatus ?? receipt?.status ?? null,
+    ...projectPtDiagnostic(task),
+    ...(typeof task.submissionAttempted==='boolean'?{submissionAttempted:task.submissionAttempted}:{}),
+    ...(['pt','service'].includes(task.taskKind)?{taskKind:task.taskKind}:{}),
+    ...(typeof task.inLegacyPlan==='boolean'?{inLegacyPlan:task.inLegacyPlan}:{}),
     observedAt: receipt?.observedAt ?? null,
     evidence: receipt?.evidence ? {
       source: receipt.evidence.source,
@@ -184,7 +190,8 @@ export function calendarHistory(records, {limit=180,now=new Date()}={}) {
   return {days:recent.map(record=>({businessDate:record.businessDate,recordedAt:record.recordedAt,
     counts:{executionUnits:record.counts.executionUnits,status:Object.fromEntries(statuses.map(key=>[
       key,Number.isInteger(record.counts.status?.[key])&&record.counts.status[key]>=0?record.counts.status[key]:0]))},
-    taskSummaries:Array.isArray(record.taskSummaries)?record.taskSummaries.slice(0,200).map(task=>publicTask(task,task)):null})),
+    taskSummaries:Array.isArray(record.taskSummaries)?record.taskSummaries.slice(0,200).map(task=>publicTask(task,task)):null,
+    ptSummaries:Array.isArray(record.ptSummaries)?record.ptSummaries.slice(0,500).map(task=>publicTask(task,task)):null})),
     truncated:latest.size>limit,oldestBusinessDate:recent[0]?.businessDate??null};
 }
 
@@ -537,6 +544,7 @@ export function createDashboardServer({
   if (authRequired && !adminToken) throw new Error('FABRIC_ADMIN_TOKEN is required when dashboard is not loopback-only');
   const hits = new Map();
   const headers = securityHeaders({ trustProxyTls });
+  const release=releaseInfo();
 
   function authorized(request, response) {
     if (!authRequired) return true;
@@ -560,10 +568,11 @@ export function createDashboardServer({
   }
 
   let lastCompleteGeneration=null;
+  const readCommittedGeneration=createDashboardGenerationReader();
   function readGeneration(){
     try{
       if(!snapshotFile&&!ledgerFile){
-        const committed=readDashboardGeneration(root);
+        const committed=readCommittedGeneration(root);
         if(committed){lastCompleteGeneration=committed;return committed;}
       }
       const current=latestSnapshot(root,snapshotFile),ledger=latestLedger(root,ledgerFile);
@@ -584,6 +593,9 @@ export function createDashboardServer({
     const canaryResults=publicCanaryResults(root);
     const runtime=readDashboardRuntime(root);
     const view = buildView(current.snapshot, ledger.records, canaryResults, runtime);
+    view.release=release;
+    try{view.operations=operationView(root);}catch{view.operations={worker:{online:false},requests:[],unavailable:true};}
+    view.operationTargets=operationTargets({...view.snapshot,tasks:view.tasks,ptStatus:view.ptStatus}).map(target=>({origin:target.origin,accountRef:target.accountRef??null,actions:target.actions}));
     const observationsFile=path.join(root,'adapter-observations.json');
     try{view.adapterObservations=fs.statSync(observationsFile).size<=1_000_000?publicAdapterObservations(JSON.parse(fs.readFileSync(observationsFile,'utf8'))):null;}
     catch{view.adapterObservations=null;}
@@ -649,13 +661,24 @@ export function createDashboardServer({
       });
       return;
     }
-    if (request.method === 'POST' && requestUrl.pathname !== '/api/controls/sites') {
+    if (request.method === 'POST' && !['/api/controls/sites','/api/operations'].includes(requestUrl.pathname)) {
       response.setHeader('Allow', 'GET, HEAD');
       sendError(response, 405, 'method_not_allowed', 'POST is only available for site control state');
       return;
     }
     if (requestUrl.pathname.startsWith('/api/')) {
       if (!authorized(request, response)) return;
+      if(requestUrl.pathname==='/api/operations'){
+        if(request.method==='GET'){try{sendJson(response,200,operationView(root));}catch{sendError(response,503,'queue_unavailable','操作记录暂不可读，签到调度独立运行');}return;}
+        if(request.method!=='POST'||!String(request.headers['content-type']??'').startsWith('application/json')){sendError(response,415,'invalid_body','operation requires JSON');return;}
+        try{
+          if(request.headers.origin&&new URL(request.headers.origin).host!==request.headers.host)throw Error('origin mismatch');
+          const body=await readRequestBody(request),generation=readGeneration();
+          if(generation.stale)throw Error('published state is stale');
+          sendJson(response,202,enqueueOperation(root,body,generation.current.snapshot));
+        }catch{sendError(response,409,'operation_unavailable','当前状态不允许此操作，请刷新后查看站点状态');}
+        return;
+      }
       if (requestUrl.pathname === '/api/calendar') {
         try {
           const {ledger,stale}=readGeneration();

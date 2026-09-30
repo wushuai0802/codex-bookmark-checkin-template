@@ -132,6 +132,8 @@
 #calendar-nav { margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .calendar-month-title { margin:0; font-size:16px; }
 .calendar-nav-buttons { display:flex; gap:6px; flex-shrink:0; }
+.operation-actions { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; margin-top:6px; }
+.operation-note { flex-basis:100%; overflow-wrap:anywhere; }
 .calendar-nav-btn { border:1px solid var(--line); background:var(--surface); color:var(--text); min-height:34px; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:600; }
 .calendar-nav-btn.month-step { width:34px; padding:0; font-size:22px; line-height:1; }
 .calendar-nav-btn:hover:not(:disabled) { background:var(--surface-2); border-color:var(--blue); }

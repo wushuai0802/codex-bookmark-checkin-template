@@ -4,14 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
+import {ptFailureMessages,ptRetryCauses,ptResultStatuses} from './checkin-contract.generated.mjs';
 
-const statuses=new Set(['signed','already_signed','not_signed','unknown','login_required','needs_attention','not_available']);
-const diagnosticCodes=new Set(['submission_outcome_unknown','site_maintenance','upstream_unavailable','rate_limit',
-  'login_required','upstream_login_required','two_factor_required','interactive_challenge','managed_challenge','captcha_ocr_exhausted',
-  'account_mismatch','harvest_waiting','network_error','authoritative_status_unavailable']);
+const statuses=new Set(ptResultStatuses);
+const diagnosticCodes=new Set(Object.keys(ptFailureMessages));
 export function projectPtDiagnostic(value={}){
   return {...(diagnosticCodes.has(value.failureCode)?{failureCode:value.failureCode}:{}),
-    ...(['upstream_unavailable','rate_limit','login_required','harvest_waiting'].includes(value.retryCause)?{retryCause:value.retryCause}:{}),
+    ...(ptRetryCauses.includes(value.retryCause)?{retryCause:value.retryCause}:{}),
     ...(value.siteCondition==='site_maintenance'?{siteCondition:'site_maintenance'}:{})};
 }
 const sources=new Set(['api','page_text','usage_log','pt_page','none']);

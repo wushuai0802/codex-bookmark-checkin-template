@@ -1,4 +1,4 @@
-name: V2 checks
+name: archived-standalone-observation
 
 on:
   push:

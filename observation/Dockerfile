@@ -8,7 +8,7 @@ ENV NODE_ENV=production \
     FABRIC_TRUST_PROXY_TLS=1
 
 WORKDIR /app
-COPY package.json ./
+COPY package.json release.json ./
 COPY src ./src
 COPY public ./public
 

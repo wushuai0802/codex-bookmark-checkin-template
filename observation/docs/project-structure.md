@@ -16,13 +16,15 @@ After Harvest's daily task reports completion, `src/harvest-fallback.mjs`
 compares its observations with the exact PT monitoring bookmarks and same-day
 execution results. Completed sites remain status-only. Daily-plan PT tasks use
 the existing gateway; the other monitored sites use `execution/src/pt-supplement.mjs`
-only after private opt-in, with one URL, no automatic retry and both execution
-locks. Their redacted results remain separate from the daily plan and appear on
-the next dashboard sync. An uncertain prior submission is never replayed.
+only after private opt-in and both execution locks. Reviewed passive daily
+state can permit bounded recovery; busy/preflight deferrals have a separate
+budget. The calendar deduplicates PT receipts against the regular plan.
+Uncertain submissions are never blindly replayed.
 
-The dashboard can change a site's reminder policy and note. It cannot submit a
-browser check-in, change a login or register a Harvest-only site. Those actions
-require the execution layer's account binding and identity checks.
+The dashboard can change reminders and queue typed operation requests.
+Windows rechecks scope, account, business day, evidence and locks before using
+the existing executor. The NAS cannot submit a browser check-in or accept an
+arbitrary URL or command. Interrupted operations retain their original intent.
 
 Historical standalone adapter, migration and dry-worker modules remain in the
 source tree only for audit and rollback tests, not in the scheduled production

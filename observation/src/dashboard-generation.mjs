@@ -22,11 +22,11 @@ function validate(value,directory,file){
   const ledgerFile=path.join(directory,anchor.file),bytes=fs.readFileSync(ledgerFile);
   if(bytes.length<anchor.byteLength||digest(bytes.subarray(0,anchor.byteLength))!==anchor.sha256)throw Error('generation ledger prefix mismatch');
   const records=bytes.subarray(0,anchor.byteLength).toString('utf8').split(String.fromCharCode(10)).filter(line=>line.trim()).map(line=>JSON.parse(line));
-  if(!records.some(record=>record.schemaVersion===1&&record.snapshotId===snapshot.snapshotId&&
+  const snapshotRecord=records.findLastIndex(record=>record.schemaVersion===1&&record.snapshotId===snapshot.snapshotId&&
     record.businessDate===snapshot.businessDate&&record.planHash===snapshot.planHash&&
-    Number.isFinite(Date.parse(record.recordedAt))&&Date.parse(record.recordedAt)<=Date.parse(snapshot.generatedAt)+60_000))
-    throw Error('generation has no matching ledger receipt');
-  return {current:{file,snapshot},ledger:{file:ledgerFile,records},stale:false};
+    Number.isFinite(Date.parse(record.recordedAt))&&Date.parse(record.recordedAt)<=Date.parse(snapshot.generatedAt)+60_000);
+  if(snapshotRecord<0)throw Error('generation has no matching ledger receipt');
+  return {current:{file,snapshot},ledger:{file:ledgerFile,records:records.slice(0,snapshotRecord+1)},stale:false};
 }
 
 export function commitDashboardGeneration({snapshot,snapshotFile,ledgerFile}){
@@ -58,4 +58,18 @@ export function readDashboardGeneration(directory){
     }catch{/* use only a complete validated generation */}
   }
   throw Error('no complete published dashboard generation');
+}
+
+export function createDashboardGenerationReader({read=readDashboardGeneration}={}){
+  let key=null,value=null;
+  const stamp=file=>{try{const s=fs.statSync(file,{bigint:true});return [s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');}catch{return 'missing';}};
+  return directory=>{
+    const absolute=path.resolve(directory);
+    const signature=()=>absolute+'|'+[name,previousName,'shadow-ledger.jsonl','ledger.jsonl'].map(file=>stamp(path.join(absolute,file))).join('|');
+    const before=signature();
+    if(before===key)return structuredClone(value);
+    const current=read(absolute),after=signature();
+    if(before===after){key=after;value=current;}else{key=null;value=null;}
+    return structuredClone(current);
+  };
 }

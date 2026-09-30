@@ -1,6 +1,15 @@
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$SshTarget='nas-checkin',[string]$NasDataDir='/volume3/docker/checkin-fabric-v2/nas-data')
+param([string]$SshTarget='',[string]$NasDataDir='/volume3/docker/checkin-fabric-v2/nas-data')
 $ErrorActionPreference='Stop';$root=Split-Path -Parent $PSScriptRoot
+if(-not $SshTarget){
+  $SshTarget=$env:CHECKIN_NAS_SSH_TARGET
+  if(-not $SshTarget){try{
+    $runtime=Get-Content -Raw -LiteralPath (Join-Path $root 'config/runtime.local.json')|ConvertFrom-Json
+    $binding=Get-Content -Raw -LiteralPath (Join-Path $runtime.legacyRoot 'data/v2-integration.json')|ConvertFrom-Json
+    $SshTarget=[string]$binding.harvestPtGate.sshTarget
+  }catch{}}
+  if(-not $SshTarget){$SshTarget='nas-checkin'}
+}
 if($SshTarget -notmatch '^[A-Za-z0-9_.-]+$'){throw 'SshTarget is invalid'}
 if($NasDataDir -notmatch '^/volume3/docker/[A-Za-z0-9_.-]+/nas-data$'){throw 'NasDataDir is invalid'}
 if(-not $PSCmdlet.ShouldProcess($NasDataDir,'Sync redacted V2 canary status')){Write-Output 'WhatIf: no status files changed.';return}
