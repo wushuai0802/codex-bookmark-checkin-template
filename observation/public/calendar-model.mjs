@@ -57,6 +57,27 @@ export function moveMonth(month, offset) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+function dateValue(value){
+  const date=new Date(`${value}T12:00:00Z`);
+  if(!DAY.test(value??'')||!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==value)throw Error('invalid calendar date');
+  return date;
+}
+function boundDate(value,{minimum='0001-01-01',maximum='9999-12-31'}={}){
+  const lower=dateValue(minimum),upper=dateValue(maximum),date=value instanceof Date?value:dateValue(value);
+  if(minimum>maximum||!Number.isFinite(date.getTime()))throw Error('invalid calendar bounds');
+  return date<lower?minimum:date>upper?maximum:date.toISOString().slice(0,10);
+}
+export function moveCalendarDay(date,offset,bounds){
+  if(!Number.isInteger(offset))throw Error('invalid day offset');
+  const value=dateValue(date);value.setUTCDate(value.getUTCDate()+offset);
+  return boundDate(value,bounds);
+}
+export function selectCalendarMonth(date,month,bounds){
+  dateValue(date);
+  const day=Math.min(Number(date.slice(8)),monthCells(month).days);
+  return boundDate(`${month}-${String(day).padStart(2,'0')}`,bounds);
+}
+
 export function dayTotals(entry) {
   const status = entry?.counts?.status ?? {};
   const total = entry?.counts?.executionUnits ?? 0;

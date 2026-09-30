@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dailyRecords, monthCells, moveMonth, dayTotals,monthTotals,calendarTasks,calendarTaskGroup} from '../public/calendar-model.mjs';
+import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks,calendarTaskGroup} from '../public/calendar-model.mjs';
 
 test('calendar uses latest daily execution summary and live snapshot, not historical canary receipts',()=>{
   const counts={executionUnits:3,status:{signed:2,not_available:1}};
@@ -31,6 +31,27 @@ test('calendar month navigation handles leap year and Monday offset',()=>{
   assert.equal(moveMonth('2026-01',-1),'2025-12');
   assert.equal(moveMonth('2026-12',1),'2027-01');
   assert.throws(()=>monthCells('2026-13'),/invalid month/);
+});
+
+test('daily navigation crosses months and years and respects real calendar bounds',()=>{
+  assert.equal(moveCalendarDay('2026-01-01',-1),'2025-12-31');
+  assert.equal(moveCalendarDay('2025-12-31',1),'2026-01-01');
+  assert.equal(moveCalendarDay('2024-02-28',1),'2024-02-29');
+  assert.equal(moveCalendarDay('2024-02-29',1),'2024-03-01');
+  assert.equal(moveCalendarDay('2100-02-28',1),'2100-03-01');
+  assert.equal(moveCalendarDay('2026-09-30',1,{maximum:'2026-09-30'}),'2026-09-30');
+  assert.equal(moveCalendarDay('2023-09-01',-1,{minimum:'2023-09-01'}),'2023-09-01');
+  assert.equal(moveCalendarDay('9999-12-31',1),'9999-12-31');
+  assert.throws(()=>moveCalendarDay('2026-02-30',1),/invalid calendar date/);
+});
+
+test('year and month selection retain the selected day or clamp it to the month end and today',()=>{
+  assert.equal(selectCalendarMonth('2026-01-31','2026-02'),'2026-02-28');
+  assert.equal(selectCalendarMonth('2024-01-31','2024-02'),'2024-02-29');
+  assert.equal(selectCalendarMonth('2024-02-29','2025-02'),'2025-02-28');
+  assert.equal(selectCalendarMonth('2026-03-31','2026-04'),'2026-04-30');
+  assert.equal(selectCalendarMonth('2025-12-31','2026-12',{maximum:'2026-09-15'}),'2026-09-15');
+  assert.equal(selectCalendarMonth('2026-03-12','2025-08'),'2025-08-12');
 });
 
 test('calendar combines all PT receipts without counting a regular PT account twice',()=>{
