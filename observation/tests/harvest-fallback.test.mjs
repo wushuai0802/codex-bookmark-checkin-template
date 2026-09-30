@@ -383,6 +383,47 @@ test('uncertain passive result never permits a recovery submission',async t=>{
   assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now,readOnlyOrigins:[origin]}).length,0);
 });
 
+test('busy and preflight deferrals keep the passive business budget and enforce cooldown',async t=>{
+  for(const kind of ['busy','preflight']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-probe-backoff-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);
+    const f=fixture(),origin='https://external.example';f.harvest.sites=[failed(origin)];
+    f.catalog.sites=f.catalog.sites.filter(s=>s.origin===origin);f.plan.targets=[];f.latest.results=[];
+    let current=new Date(now),calls=0;
+    const inputs=()=>({...f,root,now:current,clock:()=>current,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),
+      harvest:{...f.harvest,generatedAt:current.toISOString()},readOnlyOrigins:[origin]});
+    for(let i=0;i<3;i++){
+      await runHarvestFallback({...inputs(),runSite:async()=>{calls++;throw kind==='busy'?Error('V2 runner is already active'):Object.assign(Error('catalog changed'),{code:'PT_PREFLIGHT'});}});
+      const preview=planHarvestFallback(inputs());
+      assert.equal(pendingHarvestFallbackAttempts(root,preview,{now:current,readOnlyOrigins:[origin]}).length,0);
+      current=new Date(current.getTime()+31*60_000);
+    }
+    const preview=planHarvestFallback(inputs());
+    assert.equal(pendingHarvestFallbackAttempts(root,preview,{now:current,readOnlyOrigins:[origin]}).length,1);
+    const result=await runHarvestFallback({...inputs(),runSite:async options=>{calls++;assert.equal(options.readOnly,true);
+      return {origin,status:'already_signed',observedAt:current.toISOString(),businessDate:'2026-09-20',profileBinding:'a'.repeat(64),accountKey:'site-default',
+        operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+        evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:current.toISOString(),evidenceScope:'site_account_day'}};}});
+    assert.equal(result.outcomes[0].state,'confirmed_by_passive_read');assert.equal(calls,4);
+    const audit=JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json')));
+    assert.equal(audit.attempts.length,0);assert.equal(audit.verifications.filter(v=>v.state==='completed').length,1);
+  }
+});
+
+test('passive work keeps separate finite limits for actual reads and deferred wakeups',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-probe-limits-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const origin='https://external.example',day='2026-09-20';fs.mkdirSync(path.join(root,'outputs'));
+  const file=path.join(root,'outputs/harvest-fallback-attempts-'+day+'.json');
+  const preview={businessDate:day,eligible:[{origin,accountKey:'site-default',kind:'fallback_only'}]};
+  const pending=()=>pendingHarvestFallbackAttempts(root,preview,{now:new Date('2026-09-20T12:00:00Z'),readOnlyOrigins:[origin]}).length;
+  const write=verifications=>fs.writeFileSync(file,JSON.stringify({businessDate:day,attempts:[],verifications}));
+  write(Array.from({length:3},()=>({origin,state:'unverified',startedAt:'2026-09-20T01:00:00Z'})));assert.equal(pending(),0);
+  write(Array.from({length:24},()=>({origin,state:'deferred_busy',startedAt:'2026-09-20T01:00:00Z',nextEligibleAt:'2026-09-20T01:05:00Z'})));assert.equal(pending(),0);
+  write([{origin,state:'deferred_busy',startedAt:'2026-09-20T01:00:00Z'}]);assert.equal(pending(),0);
+  assert.equal(pendingHarvestFallbackAttempts(root,{businessDate:'2026-09-21',eligible:preview.eligible},
+    {now:new Date('2026-09-21T01:00:00Z'),readOnlyOrigins:[origin]}).length,1);
+});
+
 function configureUnifiedFixture(root){
   const legacyRoot=path.join(root,'legacy');fs.mkdirSync(path.join(root,'config'),{recursive:true});
   fs.mkdirSync(path.join(legacyRoot,'data'),{recursive:true});

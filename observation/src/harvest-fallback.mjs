@@ -162,7 +162,11 @@ function unresolvedEarlierAttempt(root,candidate){
 function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
   if(candidate.kind!=='fallback_only'||!readOnlyOrigins.includes(candidate.origin))return false;
   const probes=(state.verifications??[]).filter(v=>v.origin===candidate.origin&&(v.accountKey??'site-default')===candidate.accountKey);
-  return probes.length<3&&probes.every(v=>now.getTime()-Date.parse(v.startedAt)>=30*60_000);
+  const deferred=probe=>['deferred_busy','deferred_preflight'].includes(probe.state);
+  if(probes.filter(p=>!deferred(p)).length>=3||probes.filter(deferred).length>=24)return false;
+  return probes.every(probe=>deferred(probe)
+    ?Number.isFinite(Date.parse(probe.nextEligibleAt))&&Date.parse(probe.nextEligibleAt)<=now.getTime()
+    :now.getTime()-Date.parse(probe.startedAt)>=30*60_000);
 }
 
 export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={},readOnlyOrigins=[],now=new Date()}={}){
@@ -255,9 +259,17 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         if(state.attempts.filter(a=>a.origin===candidate.origin&&!['deferred_busy','deferred_preflight'].includes(a.state)).length>=3){
           outcomes.push({origin:candidate.origin,state:'daily_attempt_limit'});continue;
         }
-      }catch{
-        verification.state='unverified';verification.finishedAt=clock().toISOString();writeAtomic(stateFile,state);
-        outcomes.push({origin:candidate.origin,state:'passive_verification_unavailable'});continue;
+      }catch(error){
+        const at=clock();
+        verification.state=error.code==='PT_PREFLIGHT'?'deferred_preflight':
+          error.message==='V2 runner is already active'?'deferred_busy':'unverified';
+        verification.finishedAt=at.toISOString();
+        if(verification.state!=='unverified'){
+          verification.submissionAttempted=false;
+          verification.nextEligibleAt=new Date(at.getTime()+(verification.state==='deferred_busy'?5:15)*60_000).toISOString();
+        }
+        writeAtomic(stateFile,state);
+        outcomes.push({origin:candidate.origin,state:verification.state==='unverified'?'passive_verification_unavailable':verification.state});continue;
       }
     }
     if(canVerify&&dayAt(clock())!==preview.businessDate){outcomes.push({origin:candidate.origin,state:'business_day_changed'});break;}

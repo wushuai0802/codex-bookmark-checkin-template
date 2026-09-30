@@ -28,7 +28,10 @@ remain blocked. A public maintenance notice explains availability only; it
 does not confirm account status or resolve an earlier uncertain submission.
 
 For supported fallback-only sites, a historical blocker triggers a bounded
-passive check (up to three per day, at least thirty minutes apart). A fresh
+passive check (up to three actual checks per day, at least thirty minutes apart).
+Executor-busy and preflight refusals have separate wake-up accounting: they
+wait five or fifteen minutes respectively and allow at most 24 deferred
+wakeups per account/day, without consuming the three actual checks. A fresh
 authoritative unsigned daily control can permit one guarded daily attempt;
 the executor checks the passive page again inside its locks before using the
 mature check-in flow. Changed, stale, unsigned-but-unverified or mismatched
