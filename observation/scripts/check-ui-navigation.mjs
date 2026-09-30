@@ -191,10 +191,11 @@ try {
         const rect=node=>node.getBoundingClientRect();
         const controls=[...document.querySelectorAll('#calendar-nav .ui-select-trigger, #calendar-nav .calendar-nav-btn')].map(rect);
         const cells=[...document.querySelectorAll('.calendar-day-count')];
-        const countersFit=cells.every(node=>{
+        const counterOverflow=cells.flatMap(node=>{
           const range=document.createRange();range.selectNodeContents(node);
           const text=range.getBoundingClientRect(),cell=rect(node.closest('button'));
-          return !node.textContent||text.left>=cell.left+1&&text.right<=cell.right-1;
+          return !node.textContent||text.left>=cell.left+1&&text.right<=cell.right-1?[]:
+            [{text:node.textContent,textWidth:text.width,cellWidth:cell.width,font:getComputedStyle(node).font}];
         });
         const filtersFit=[...document.querySelectorAll('.calendar-filters button')].every(node=>node.scrollWidth<=node.clientWidth+1);
         const statsFit=[...document.querySelectorAll('.calendar-stat-label,.calendar-stat-value')].every(node=>{
@@ -202,10 +203,11 @@ try {
         });
         const rowsFit=[...document.querySelectorAll('.calendar-receipt-row')].every(row=>
           rect(row.querySelector('.calendar-receipt-identity')).right<=rect(row.querySelector('.status-chip')).left);
-        return {countersFit,filtersFit,statsFit,rowsFit,heights:controls.map(box=>box.height),
+        return {countersFit:!counterOverflow.length,counterOverflow,filtersFit,statsFit,rowsFit,heights:controls.map(box=>box.height),
           rows:new Set(controls.map(box=>Math.round(box.top))).size};
       });
-      for(const key of ['countersFit','filtersFit','statsFit','rowsFit'])assert.ok(calendarLayout[key],`calendar ${key} at ${viewport.width}px`);
+      for(const key of ['countersFit','filtersFit','statsFit','rowsFit'])assert.ok(calendarLayout[key],
+        `calendar ${key} at ${viewport.width}px: ${JSON.stringify(calendarLayout)}`);
       assert.ok(calendarLayout.heights.every(height=>height>=40&&Math.abs(height-calendarLayout.heights[0])<=1),
         `calendar controls need consistent touch heights at ${viewport.width}px`);
       assert.equal(calendarLayout.rows,mobile?2:1,`calendar toolbar rows at ${viewport.width}px`);

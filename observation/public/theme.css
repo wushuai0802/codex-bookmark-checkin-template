@@ -170,7 +170,8 @@
 .calendar-day.selected { outline:2px solid var(--blue); outline-offset:1px; }
 .calendar-day:disabled { opacity:.4; cursor:default; }
 .calendar-day-number { font-size:13px; font-weight:700; font-variant-numeric:tabular-nums; }
-.calendar-day-count { font-size:10px; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* Stable numeral metrics keep receipt counts inside narrow cells across systems. */
+.calendar-day-count { font-family:Arial,sans-serif; font-size:10px; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .calendar-day-count:empty { visibility:hidden; }
 .calendar-day-track { display:flex; width:100%; height:4px; overflow:hidden; border-radius:2px; background:var(--track); }
 .calendar-day-track i { display:block; height:100%; }
