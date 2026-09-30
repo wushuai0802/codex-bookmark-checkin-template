@@ -74,6 +74,7 @@ try {
       await page.locator('#kpi-grid .kpi').nth(2).click();
       assert.equal(await page.locator('#task-status').inputValue(),'pending');
       assert.equal(await page.locator('#tasks-body tr').count(),1);
+      assert.equal(await page.locator('#tasks-body .status-chip').textContent(),'等待站点恢复');
       if (mobile) {
         assert.equal(await page.locator('#task-mobile-list .mobile-task-card').count(),1);
         assert.equal(await page.locator('#task-mobile-list .mobile-task-card .status-chip').isVisible(),true);

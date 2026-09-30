@@ -56,7 +56,7 @@ function Get-NativeSuccessText([string]$BodyText) {
 }
 
 function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$Clicked = $false, [datetimeoffset]$Now = [datetimeoffset]::UtcNow, [bool]$FormalVisit = $false) {
-    if ($null -eq $Snapshot -or $Snapshot.success -ne $true -or $Snapshot.sameOrigin -ne $true -or
+    if ($null -eq $Snapshot -or $Snapshot.sameOrigin -ne $true -or
         $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute) { return $null }
     try {
         $expected = [uri]$TargetUrl
@@ -91,4 +91,12 @@ function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$C
         pagePath = $actual.AbsolutePath
         statusSignal = if ($header) { 'nexus_daily_header_signed' } else { 'same_day_page_text' }
     }
+}
+
+function Test-NativePageCompletion($Snapshot, [string]$Origin, $Evidence) {
+    if ($Evidence.authoritative -eq $true) { return $true }
+    $reviewedPt = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($Origin -replace '^https://www\.', 'https://') }).Count -gt 0
+    # The new PT evidence contract must not replace unrelated mature site rules.
+    return -not $reviewedPt -and $Snapshot.success -eq $true -and $Snapshot.sameOrigin -eq $true -and
+        -not $Snapshot.waf -and -not $Snapshot.securityVerification -and -not $Snapshot.loginRoute
 }
