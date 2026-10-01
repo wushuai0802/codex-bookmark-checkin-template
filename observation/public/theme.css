@@ -385,9 +385,9 @@ body,.sidebar,.kpi,.site-card,.account-card,.ledger-entry { transition:backgroun
 .kpi-link::after { transition:transform var(--motion-fast) var(--motion-ease); }
 .kpi-link:hover::after { transform:translate(2px,-2px); }
 .task-drawer { overscroll-behavior:contain; }
-.task-drawer::backdrop { animation:drawer-shade-in 240ms ease both; }
+.task-drawer::backdrop { animation:drawer-shade-in var(--motion-panel,240ms) ease both; }
 .task-drawer.is-closing { pointer-events:none; }
-.task-drawer.is-closing::backdrop { animation:drawer-shade-out 180ms ease both; }
+.task-drawer.is-closing::backdrop { animation:drawer-shade-out var(--motion-exit,180ms) ease both; }
 @keyframes drawer-shade-in { from {background:rgba(0,0,0,0)} to {background:rgba(0,0,0,.48)} }
 @keyframes drawer-shade-out { from {background:rgba(0,0,0,.48)} to {background:rgba(0,0,0,0)} }
 @media(max-width:700px) {

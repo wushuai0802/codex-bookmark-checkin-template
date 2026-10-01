@@ -1,4 +1,5 @@
 const active = new WeakMap();
+export const MOTION = Object.freeze({ fast:120, base:180, panel:220, exit:160 });
 export const reducedMotion = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
 
 export function stopMotion(node) {
@@ -8,7 +9,7 @@ export function stopMotion(node) {
 }
 
 // A cancelled exit must never remove a surface that has already reopened.
-export async function playMotion(node, frames, duration = 220) {
+export async function playMotion(node, frames, duration = MOTION.panel) {
   stopMotion(node);
   if (reducedMotion() || !node.animate) return true;
   const animation = node.animate(frames, { duration, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'both' });

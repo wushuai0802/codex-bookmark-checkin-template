@@ -2,7 +2,7 @@ import { overviewMetrics, dailySummaryTitle, statusGradient, statusColors } from
 import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, matchesLedger, ledgerPendingCount, TASK_FILTERS, taskStatusLabel, externalTask } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
-import { playMotion, stopMotion, reducedMotion } from './motion.mjs';
+import { playMotion, stopMotion, reducedMotion, MOTION } from './motion.mjs';
 import { createNoticeState, pausedNotices, attentionPreview } from './notice-state.mjs';
 import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
 import { enhanceSelect, closeSelectMenu } from './select-menu.mjs';
@@ -85,14 +85,37 @@ function showError(message = '') {
 }
 
 let feedbackTimer = null;
+let feedbackVersion = 0;
 function showFeedback(message, tone = 'success') {
   const node = $('#refresh-feedback');
   if (!node) return;
+  const version = ++feedbackVersion;
   clearTimeout(feedbackTimer);
   node.textContent = message;
   node.className = `feedback-toast ${tone}`;
   node.setAttribute('role', tone === 'error' ? 'alert' : 'status');
-  feedbackTimer = setTimeout(() => node.classList.add('hidden'), 3200);
+  void playMotion(node,[{opacity:0,transform:'translateY(-6px)'},{opacity:1,transform:'translateY(0)'}],MOTION.base);
+  feedbackTimer = setTimeout(async () => {
+    const complete=await playMotion(node,[{opacity:1,transform:'translateY(0)'},{opacity:0,transform:'translateY(-4px)'}],MOTION.exit);
+    if(complete && version===feedbackVersion)node.classList.add('hidden');
+  }, 3200);
+}
+
+function setRefreshBusy(busy) {
+  const button=$('#refresh-btn');
+  let label=button.querySelector('.refresh-label');
+  if(!label){
+    const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    icon.setAttribute('viewBox','0 0 24 24'); icon.setAttribute('aria-hidden','true');
+    icon.classList.add('refresh-icon');
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d','M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.7-1L20 9M4 15l2.2 3A7 7 0 0 0 18 17');
+    icon.append(path);label=el('span','refresh-label');
+    button.replaceChildren(icon,label);
+  }
+  button.disabled=busy;button.classList.toggle('is-loading',busy);
+  button.setAttribute('aria-busy',String(busy));
+  label.textContent=busy?'刷新中…':'刷新数据';
 }
 
 function renderSidebar(open) {
@@ -183,14 +206,14 @@ function mountDialog(dialog, previousFocus) {
   });
   dialog.addEventListener('close', () => { dialog.remove(); if (!document.querySelector('dialog[open]') && previousFocus?.isConnected && previousFocus.getClientRects().length) previousFocus.focus({preventScroll:true}); });
   document.body.append(dialog); dialog.showModal();
-  playMotion(dialog, [{transform:'translateX(100%)'}, {transform:'translateX(0)'}], 240);
+  playMotion(dialog, [{transform:'translateX(100%)'}, {transform:'translateX(0)'}], MOTION.panel);
 }
 
 async function dismissDialog(dialog) {
   if (dialog.classList.contains('is-closing')) return;
   const from = getComputedStyle(dialog).transform;
   dialog.classList.add('is-closing');
-  if (await playMotion(dialog, [{transform:from}, {transform:'translateX(100%)'}], 180)) {
+  if (await playMotion(dialog, [{transform:from}, {transform:'translateX(100%)'}], MOTION.exit)) {
     dialog.close(); dialog.remove();
   }
 }
@@ -238,6 +261,8 @@ function renderKpis(data) {
   const grid = $('#kpi-grid'); grid.replaceChildren();
   for (const [label, value, foot, filter] of cards) {
     const card = el('button', 'kpi kpi-link'); card.type = 'button';
+    card.dataset.kind=filter || 'scope';
+    card.classList.toggle('has-issues',filter==='pending' && metrics.pending>0);
     card.setAttribute('aria-label', `${label}，查看任务`);
     card.addEventListener('click', () => openTasks({ status: filter }));
     append(card, el('div', 'kpi-label', label), el('div', 'kpi-value', value), el('div', 'kpi-foot', foot));
@@ -365,12 +390,18 @@ function renderDailySummary(data) {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
   const previousDay = data?.businessDate && data.businessDate !== today;
   const node = $('#daily-summary'); node.replaceChildren();
-  const tone = !m.fresh ? 'stale' : m.allResolved ? 'complete' : 'attention';
+  const tone = !m.total ? 'empty' : !m.fresh ? 'stale' : m.allResolved ? 'complete' : 'attention';
   node.className = `daily-summary ${tone}`;
   const copy = el('div', 'daily-copy');
   const title = dailySummaryTitle(m, { previousDay, pausedCount });
-  append(copy, el('p', 'eyebrow', `DAILY CHECK-IN / ${data?.businessDate ?? '—'}`), el('h2', null, title),
-    el('p', 'daily-note', `${previousDay ? '最近业务日：' : ''}${m.success} 项执行成功，其中 ${m.verifiedSuccess} 项证据已核验、${m.unverifiedSuccess} 项待补证；${m.verifiedUnavailable} 项确认未开放，${m.unverifiedUnavailable} 项未开放结论待核验。`));
+  append(copy, el('p', 'eyebrow', `${previousDay ? '最近签到回执' : '今日签到'} · ${data?.businessDate ?? '—'}`), el('h2', null, title),
+    el('p', 'daily-note', m.total ? `收到 ${m.success} 项执行成功回执，${m.unavailable} 项未开放回执。` : '当前还没有可展示的今日回执。'));
+  const facts=el('div','summary-facts');
+  for(const [label,value,kind] of [['权威核验',m.verifiedSuccess,'verified'],['成功待补证',m.unverifiedSuccess,'pending'],['确认未开放',m.verifiedUnavailable,'neutral']]){
+    const item=el('span','summary-fact '+kind);item.classList.toggle('is-present',value>0);
+    append(item,el('b',null,value),document.createTextNode(label));facts.append(item);
+  }
+  if(m.unverifiedUnavailable)facts.append(el('span','summary-fact pending',`${m.unverifiedUnavailable} 未开放待核验`));
   const progress = el('div', 'daily-progress');
   append(progress, el('strong', null, m.executionRate === null ? '—' : `${m.executionRate}%`), el('span', null, previousDay ? '最近业务日执行成功率' : '执行成功率'));
   progress.title='执行成功项 / 总账号任务数；权威核验数单独列示，未开放项不算成功。';
@@ -378,7 +409,7 @@ function renderDailySummary(data) {
   const tasksButton = el('button', 'button primary summary-action', m.pending ? '查看待处理' : '查看全部任务');
   tasksButton.type = 'button';
   tasksButton.addEventListener('click', () => openTasks({ status: m.pending ? 'pending' : '' }));
-  copy.append(tasksButton);
+  const footer=el('div','summary-footer');append(footer,facts,tasksButton);copy.append(footer);
   append(node, copy, progress);
   $('#sync-age').textContent = `快照生成 ${formatTime(data?.generatedAt)} · ${m.ageMinutes === null ? '尚无数据' : `${m.ageMinutes} 分钟前`} · ${previousDay ? '等待今日业务回执' : m.fresh ? '数据有效' : '请检查同步'}`;
 }
@@ -418,7 +449,9 @@ function renderAttention(tasks) {
     row.classList.toggle('is-read', group.tasks.every(item => notices.isRead(item)));
     const top = el('div', 'attention-top');
     let host; try { host = new URL(task.origin).host; } catch { host = task.origin; }
-    append(top, el('strong', null, group.tasks.length > 1 ? `${host} · ${group.tasks.length} 个账号` : host), statusChip(task.observedStatus,task));
+    const title=el('strong',null,group.tasks.length>1?`${siteTitle(task)} · ${group.tasks.length} 个账号`:siteTitle(task));
+    title.title=host;
+    append(top,title,statusChip(task.observedStatus,task));
     const reason = el('p', 'attention-reason', task.evidence?.summary || '本次尚未取得明确结果。');
     reason.title = reason.textContent;
     const foot = el('div', 'attention-foot');
@@ -731,7 +764,9 @@ function renderCalendar(data) {
     (target&&!target.disabled?target:view.querySelector('.calendar-day.selected'))?.focus({preventScroll:true});
   };
   const selectDate=(date,focusId)=>{
+    const changed=state.calendarDate!==date;
     state.calendarDate=date;state.calendarMonth=date.slice(0,7);state.calendarFilter=null;renderCalendar(data);
+    if(changed)void playMotion(detail,[{opacity:.55},{opacity:1}],MOTION.fast);
     if(focusId)focusControl(focusId);
   };
   summary.replaceChildren();
@@ -795,6 +830,7 @@ function renderCalendar(data) {
       button.append(track);
     }
     button.addEventListener('click',()=>{state.calendarDate=date;state.calendarFilter=totals.pending?'pending':'all';renderCalendar(data);
+      void playMotion(detail,[{opacity:.55},{opacity:1}],MOTION.fast);
       view.querySelector(`.calendar-day[data-date="${date}"]`)?.focus({preventScroll:true});});
     button.addEventListener('keydown',event=>{
       const step={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7}[event.key];
@@ -900,7 +936,7 @@ function renderAll() {
 
 async function loadData({ manual = false } = {}) {
   if (state.loading) return;
-  state.loading = true; showError(''); $('#refresh-btn').disabled = true; $('#refresh-btn').textContent = '刷新中…';
+  state.loading = true; showError(''); setRefreshBusy(true);
   try {
     const overview = await api('/api/overview');
     state.data = { ...overview, ledger: overview.ledger ?? [] };
@@ -910,7 +946,7 @@ async function loadData({ manual = false } = {}) {
   } catch (error) {
     $('#service-status').textContent = '连接失败'; $('.status-dot').style.background = '#d76f78'; showError(error.name === 'TimeoutError' ? '请求超时，保留上次数据；请稍后刷新。' : error.message);
     if (manual) showFeedback('刷新失败，已保留上次数据', 'error');
-  } finally { state.loading = false; $('#refresh-btn').disabled = false; $('#refresh-btn').textContent = '刷新数据'; }
+  } finally { state.loading = false; setRefreshBusy(false); }
 }
 
 async function loadCalendarHistory({force=false}={}) {
@@ -1098,7 +1134,11 @@ document.addEventListener('DOMContentLoaded', () => {
     attentionScrollUntil = performance.now() + 800;
     window.scrollTo({ top: Math.max(0, window.scrollY + top - inset), behavior: reducedMotion() ? 'instant' : 'smooth' });
   });
-  const saveFilters = () => { state.taskPage=1; applyTaskFilter(); navigation.updateFilters({ query: $('#task-search').value, status: $('#task-status').value, account: $('#task-account').value }); };
+  const saveFilters = event => {
+    state.taskPage=1; applyTaskFilter();
+    navigation.updateFilters({ query: $('#task-search').value, status: $('#task-status').value, account: $('#task-account').value });
+    if(event.type==='change')void playMotion($('#task-result-count'),[{opacity:.5},{opacity:1}],MOTION.fast);
+  };
   $('#task-search').addEventListener('input', saveFilters); $('#task-status').addEventListener('change', saveFilters); $('#task-account').addEventListener('change', saveFilters);
   $('#token-visibility').addEventListener('click', () => {
     const input = $('#token-input');

@@ -59,7 +59,8 @@ try {
     { width: 700, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
     fs.writeFileSync(path.join(dataDir, 'control-state.json'), JSON.stringify({ schemaVersion: 1, sites: {}, audit: [] }));
     fs.writeFileSync(path.join(dataDir,'operation-requests.json'),JSON.stringify({schemaVersion:1,requests:[],worker:{lastSeenAt:new Date().toISOString()}}));
-    const context = await browser.newContext({ viewport, timezoneId: 'Asia/Shanghai' });
+    const context = await browser.newContext({ viewport, timezoneId: 'Asia/Shanghai',
+      reducedMotion:viewport.width===320?'reduce':'no-preference' });
     try {
       const page = await context.newPage();
       const errors = [];
@@ -92,8 +93,14 @@ try {
       const menuBox=await page.locator('.ui-select-menu').boundingBox();
       assert.ok(menuBox.height<viewport.height*.55,'option list covers too much of the screen');
       await page.keyboard.press('Escape');
-      assert.equal(await page.locator('.ui-select-menu').count(),0);
+      assert.equal(await page.getByRole('listbox',{name:'筛选任务状态'}).count(),0);
+      assert.equal(await statusTrigger.getAttribute('aria-expanded'),'false');
       assert.equal(await statusTrigger.evaluate(node=>document.activeElement===node),true);
+      await statusTrigger.click();
+      assert.equal(await page.locator('.ui-select-menu').count(),1);
+      assert.equal(await page.locator('.ui-select-menu.is-closing').count(),0);
+      await page.keyboard.press('Escape');
+      await page.locator('.ui-select-menu').waitFor({state:'hidden'});
       await statusTrigger.click();
       await page.getByRole('listbox').getByRole('option',{name:'已完成'}).click();
       assert.equal(await page.locator('#task-status').inputValue(),'completed');
@@ -314,6 +321,9 @@ try {
       await page.locator('dialog.ledger-drawer[open]').waitFor({state:'hidden'});
       await page.locator('#refresh-btn').click();
       await page.waitForFunction(() => !document.querySelector('#refresh-btn').disabled);
+      assert.equal(await page.locator('#refresh-btn').getAttribute('aria-busy'),'false');
+      assert.equal(await page.locator('#refresh-btn .refresh-icon').count(),1);
+      assert.equal(await page.locator('#refresh-feedback').isVisible(),true);
       if (mobile) await page.locator('#menu-toggle').click();
       await page.locator('.nav-item[data-view="sites"]').click();
       const siteCard = page.locator('#sites-grid .site-card').filter({ hasText: 'daily.example' });

@@ -1,27 +1,45 @@
+import { MOTION, playMotion, stopMotion, reducedMotion } from './motion.mjs';
+
 // A single in-page option list for visible selects. The native select remains
 // the value source for existing filters and site controls, but is not focusable.
 let active = null;
 let sequence = 0;
+const exiting = new Set();
 
-function closeMenu(restoreFocus = false) {
+function discardExits() {
+  for(const menu of exiting){stopMotion(menu);menu.remove();}
+  exiting.clear();
+}
+
+function closeMenu(restoreFocus = false, immediate = false) {
   if (!active) return;
   const { menu, trigger } = active;
   active = null;
-  menu.remove();
   trigger.setAttribute('aria-expanded', 'false');
   if (restoreFocus && trigger.isConnected) trigger.focus({ preventScroll:true });
+  menu.inert=true;menu.setAttribute('aria-hidden','true');menu.classList.add('is-closing');
+  if(immediate || reducedMotion()){stopMotion(menu);menu.remove();return;}
+  const style=getComputedStyle(menu);
+  const shift=menu.dataset.placement==='above'?'4px':'-4px';
+  exiting.add(menu);
+  void playMotion(menu,[{opacity:style.opacity,transform:style.transform},
+    {opacity:0,transform:'translateY('+shift+') scale(.985)'}],MOTION.exit).then(()=>{
+    exiting.delete(menu);menu.remove();
+  });
 }
 
 function positionMenu() {
   if (!active) return;
   const { menu, trigger } = active;
-  if (!trigger.isConnected) { closeMenu(); return; }
+  if (!trigger.isConnected) { closeMenu(false,true); return; }
   const box = trigger.getBoundingClientRect();
   const margin = 12;
   const below = window.innerHeight - box.bottom - margin;
   const above = box.top - margin;
   const height = Math.max(80, Math.min(360, Math.max(below, above) - 6));
   const openAbove = below < Math.min(240, above);
+  menu.dataset.placement=openAbove?'above':'below';
+  menu.style.transformOrigin=openAbove?'bottom center':'top center';
   const width = Math.min(window.innerWidth - margin * 2,
     Math.max(box.width, window.innerWidth <= 700 ? 320 : 260));
   menu.style.width = width + 'px';
@@ -32,7 +50,8 @@ function positionMenu() {
 
 function openMenu(select, trigger) {
   if (active?.trigger === trigger) { closeMenu(true); return; }
-  closeMenu();
+  closeMenu(false,true);
+  discardExits();
   const menu = document.createElement('div');
   menu.className = 'ui-select-menu';
   menu.id = 'ui-select-list-' + ++sequence;
@@ -53,7 +72,7 @@ function openMenu(select, trigger) {
     menu.append(row);
     return row;
   });
-  const enabled = index => !options[index]?.disabled;
+  const enabled = index => index >= 0 && index < options.length && !options[index].disabled;
   const focus = index => {
     const target = rows[index];
     if (!target || !enabled(index)) return;
@@ -106,6 +125,9 @@ function openMenu(select, trigger) {
   active = { menu, trigger };
   positionMenu();
   focus(Math.max(0, options.findIndex(option => option.selected && !option.disabled)));
+  const shift=menu.dataset.placement==='above'?'4px':'-4px';
+  void playMotion(menu,[{opacity:0,transform:'translateY('+shift+') scale(.985)'},
+    {opacity:1,transform:'translateY(0) scale(1)'}],MOTION.base);
 }
 
 document.addEventListener('pointerdown', event => {
@@ -162,4 +184,4 @@ export function enhanceSelect(select) {
   return select;
 }
 
-export function closeSelectMenu() { closeMenu(); }
+export function closeSelectMenu() { closeMenu(false,true); discardExits(); }
