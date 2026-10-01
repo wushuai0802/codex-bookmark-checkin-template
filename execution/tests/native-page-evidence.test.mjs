@@ -58,7 +58,10 @@ ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
   for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pwsh']){
   const {stdout}=await execFileAsync(shell,
     ['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(command,'utf16le').toString('base64')],
-    {encoding:'utf8',timeout:20000});
+    // Hosted Windows runners can cold-start Windows PowerShell slowly while
+    // the other native fixture processes start in parallel. Bound the test
+    // harness independently from the production browser/action timeouts.
+    {encoding:'utf8',timeout:60000});
   const results=JSON.parse(stdout.trim());
   assert.equal(results.length,cases.length);
   cases.forEach((item,index)=>{
