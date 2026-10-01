@@ -401,6 +401,23 @@ test('uncertain passive result never permits a recovery submission',async t=>{
   assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now,readOnlyOrigins:[origin]}).length,0);
 });
 
+test('a current maintenance notice records availability without authorizing a fallback submission',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-maintenance-read-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture(),origin='https://external.example';f.harvest.sites=[failed(origin)];
+  f.catalog.sites=f.catalog.sites.filter(s=>s.origin===origin);f.plan.targets=[];f.latest.results=[];
+  let calls=0;
+  const result=await runHarvestFallback({...f,root,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins:[origin],
+    runSite:async options=>{calls++;assert.equal(options.readOnly,true);return {origin,status:'unknown',observedAt:now.toISOString(),
+      businessDate:'2026-09-20',profileBinding:'b'.repeat(64),accountKey:'site-default',operationMode:'safe_history_page',
+      readSafety:'reviewed_passive',submissionAttempted:false,failureCode:'site_maintenance',siteCondition:'site_maintenance',
+      evidence:{source:'pt_page',authoritative:false,summary:'站点维护，等待恢复'}};}});
+  assert.equal(calls,1);assert.equal(result.outcomes[0].state,'passive_result_unverified');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json'))).attempts.length,0);
+  const recorded=JSON.parse(fs.readFileSync(path.join(root,'outputs/pt-fallback-results-2026-09-20.json'))).sites[0];
+  assert.equal(recorded.siteCondition,'site_maintenance');assert.equal(recorded.submissionAttempted,false);
+});
+
 test('busy and preflight deferrals keep the passive business budget and enforce cooldown',async t=>{
   for(const kind of ['busy','preflight']){
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-probe-backoff-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

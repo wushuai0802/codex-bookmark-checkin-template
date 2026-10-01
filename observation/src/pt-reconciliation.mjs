@@ -43,7 +43,7 @@ export function loadPtRecoveryDiagnostics(root,businessDate){
       if(byOrigin.has(attempt.origin)&&byOrigin.get(attempt.origin).code==='prior_outcome_unknown')continue;
       const code=unknown&&match[1]<businessDate?'prior_outcome_unknown':unknown?'submission_outcome_unknown':'unverified_prior_attempt';
       byOrigin.set(attempt.origin,{origin:attempt.origin,code,blockedSince:match[1],
-        summary:code==='prior_outcome_unknown'?`${match[1]} 的补签结果尚未结案，须先只读核验当前状态`:
+        summary:code==='prior_outcome_unknown'?`${match[1]} 的历史执行结果未确认；保留旧记录，先只读核验当前状态`:
           code==='unverified_prior_attempt'?'今日补签缺少明确结果和提交状态，须先只读核验':'今日提交结果不明，须先只读核验，禁止自动重放'});
     }
   }

@@ -77,6 +77,14 @@ export function matchesPt(site, scope = '') {
     || (scope === 'review' && (site.inLegacyPlan===true||site.fallbackEnabled===true) && category === 'unknown');
 }
 
+export function ptStatusCondition(site) {
+  const effective=site?.effective??{};
+  if(effective.fresh!==false&&effective.siteCondition==='site_maintenance')return 'site_maintenance';
+  if(effective.failureCode==='submission_outcome_unknown'||
+    ['submission_outcome_unknown','unverified_prior_attempt'].includes(site?.recovery?.code))return 'submission_outcome_unknown';
+  return effective.retryCause;
+}
+
 export function ptStatusCategory(site) {
   const status=site?.effective?.status,authoritative=site?.effective?.authoritative===true;
   if(site?.effective?.fresh===false)return 'unknown';

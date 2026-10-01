@@ -33,7 +33,9 @@ test('old unresolved attempts expose their actual blocking day without changing 
   const before=fs.readFileSync(file,'utf8'),recoveryReport=loadPtRecoveryDiagnostics(root,'2026-09-30');
   const args={generatedAt:now.toISOString(),businessDate:'2026-09-30',monitorCatalog:{sites:[{origin}]},recoveryReport};
   const unknown=buildPtStatus(args).sites[0];
-  assert.equal(unknown.recovery.code,'prior_outcome_unknown');assert.match(unknown.effective.evidence.summary,/2026-09-21/);
+  assert.equal(unknown.recovery.code,'prior_outcome_unknown');assert.match(unknown.recovery.summary,/2026-09-21/);
+  assert.equal(unknown.recovery.blockedSince,'2026-09-21');
+  assert.equal(unknown.effective.evidence.summary,'尚无今日确认回执');
   assert.equal(unknown.effective.authoritative,false);assert.equal(fs.readFileSync(file,'utf8'),before);
   const confirmed=buildPtStatus({...args,fallbackReport:{source:'execution-supplement',businessDate:'2026-09-30',sites:[receipt('already_signed')]}}).sites[0];
   assert.equal(confirmed.effective.status,'already_signed');assert.equal(confirmed.effective.authoritative,true);

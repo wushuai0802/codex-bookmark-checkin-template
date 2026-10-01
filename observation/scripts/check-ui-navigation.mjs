@@ -30,6 +30,9 @@ const ptSite = (host, status, authoritative) => ({
 });
 snapshot.ptStatus.sites = [ptSite('confirmed','signed',true),ptSite('reported','signed',false),ptSite('unknown','unknown',false)];
 snapshot.ptStatus.sites[0].origin='https://cspt.top';
+snapshot.ptStatus.sites[2].effective.siteCondition='site_maintenance';
+snapshot.ptStatus.sites[2].effective.evidence.summary='站点公告正在维护，等待恢复';
+snapshot.ptStatus.sites[2].recovery={code:'prior_outcome_unknown',blockedSince:'2026-09-25',summary:'历史执行结果未确认'};
 snapshot.ptStatus.counts = { ...snapshot.ptStatus.counts, sites: 3, externalOnly: 3, fallbackOnly: 3,
   status: { ...snapshot.ptStatus.counts.status, signed: 2, unknown: 1 } };
 fs.writeFileSync(path.join(dataDir, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
@@ -293,6 +296,12 @@ try {
       await page.locator('#pt-kpis .kpi').filter({hasText:'状态未知'}).click();
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
       assert.match(await page.locator('#pt-status-body').textContent(),/unknown\.example/);
+      assert.equal(await page.locator('#pt-status-body .status-chip.deferred').textContent(),'站点维护');
+      assert.match(await page.locator('#pt-status-body').textContent(),/等待站点恢复/);
+      assert.equal(await page.locator('#pt-status-body .pt-recovery-note').getAttribute('open'),null);
+      await page.locator('#pt-status-body .pt-recovery-note summary').click();
+      assert.equal(await page.locator('#pt-status-body .pt-recovery-note p').isVisible(),true);
+      assert.equal(await page.locator('#pt-status-body .pt-recovery-note p').textContent(),'历史执行结果未确认');
       await page.locator('#pt-kpis .kpi').filter({hasText:'PT 站点'}).click();
       await page.locator('#pt-status-body tr').filter({hasText:'https://cspt.top'}).getByRole('button',{name:'只读核验',exact:true}).click();
       await page.waitForFunction(()=>document.querySelector('#pt-status-body').textContent.includes('已排队'));
