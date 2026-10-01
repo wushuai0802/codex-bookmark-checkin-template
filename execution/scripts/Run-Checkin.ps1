@@ -2,6 +2,7 @@
 param(
     [switch]$DryRun,
     [switch]$SuppressReport,
+    [switch]$DeferNotificationDelivery,
     [int]$Attempts = 0,
     [string[]]$ManualConfirmedOrigins = @(),
     [string[]]$TemporarilyUnavailableOrigins = @(),
@@ -350,8 +351,10 @@ finally {
         catch {
             Write-Warning "结果通知失败：$($_.Exception.Message)"
         }
-        try { & $outboxScript | Out-Null }
-        catch { Write-Warning "通知 outbox 暂未送达，将由后台调度器重试：$($_.Exception.Message)" }
+        if (-not $DeferNotificationDelivery) {
+            try { & $outboxScript | Out-Null }
+            catch { Write-Warning "通知 outbox 暂未送达，将由后台调度器重试：$($_.Exception.Message)" }
+        }
     }
     if ($locationPushed) { Pop-Location }
     if ($wrapperMutexOwned -and $null -ne $wrapperMutex) {

@@ -301,6 +301,44 @@ test("调度状态分别记录执行完成与业务完成", async () => {
   assert.match(scheduler, /lastRunDate = if \(\$reportState\.ExecutionComplete\)/);
 });
 
+test('连续补跑逐次持久化回执，在调度 finally 中只投递一次', async () => {
+  const command = String.raw`
+$ErrorActionPreference = 'Stop'
+function Read-Ast([string]$name) {
+  $tokens=$null; $errors=$null
+  $ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:CHECKIN_TEST_ROOT "scripts/$name"),[ref]$tokens,[ref]$errors)
+  if($errors.Count){throw 'parse error'}
+  return $ast
+}
+$runner = Read-Ast 'Run-Checkin.ps1'
+$scheduler = Read-Ast 'Start-UserScheduler.ps1'
+$runnerTry = $runner.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.TryStatementAst] } | Select-Object -Last 1
+$batchFinally = $scheduler.FindAll({param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $n.Finally.Extent.Text -match 'deferredNotificationDelivery'},$true) | Select-Object -First 1
+if(-not $batchFinally){throw 'batch finally missing'}
+$script:queued=0; $script:delivered=0
+function Invoke-FixtureReporter { $script:queued++ }
+function Invoke-FixtureOutbox { $script:delivered++ }
+function Get-FreshResumeReport { [pscustomobject]@{Path='fixture'} }
+$reporterScript='Invoke-FixtureReporter'; $outboxScript='Invoke-FixtureOutbox'
+$DryRun=$false; $SuppressReport=$false; $DeferNotificationDelivery=$true
+$locationPushed=$false; $wrapperMutexOwned=$false; $wrapperMutex=$null
+$startedAt=Get-Date; $runnerStatus='completed'; $runnerMessage='fixture'
+foreach($pass in 1..3){foreach($statement in $runnerTry.Finally.Statements){Invoke-Expression $statement.Extent.Text}}
+$during=$script:delivered
+$deferredNotificationDelivery=$true
+foreach($statement in $batchFinally.Finally.Statements){Invoke-Expression $statement.Extent.Text}
+$after=$script:delivered
+$DeferNotificationDelivery=$false
+foreach($statement in $runnerTry.Finally.Statements){Invoke-Expression $statement.Extent.Text}
+[ordered]@{queued=$script:queued;during=$during;after=$after;manual=$script:delivered}|ConvertTo-Json -Compress
+`;
+  const {stdout} = await execFileAsync(powershell, ['-NoProfile','-NonInteractive','-Command',command], {
+    cwd:root,encoding:'utf8',env:{...process.env,CHECKIN_TEST_ROOT:root},
+  });
+  assert.deepEqual(JSON.parse(stdout.trim().split(/\r?\n/).at(-1)), {queued:4,during:0,after:1,manual:2});
+  assert.match(await schedulerSource(), /\$runArguments \+= '-DeferNotificationDelivery'/);
+});
+
 for (const shell of process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : [powershell]) {
   test(`Harvest 等待队列在同一轮依次续跑，保留冷却和提交保护 (${shell})`, async (t) => {
     const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-wake-drain-"));

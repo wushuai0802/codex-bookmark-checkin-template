@@ -489,6 +489,7 @@ try {
     Write-SchedulerLog "调度器启动（PID=$PID）。"
     while ($true) {
         $claimedThisLoop = $false
+        $deferredNotificationDelivery = $false
         $process = $null
         $config = $null
         try {
@@ -608,6 +609,10 @@ try {
                     '-ExecutionPolicy', 'Bypass', '-File', "`"$runScript`""
                 )
                 if ($deferredWakeups.Count -eq 1) {
+                    # Persist every receipt; deliver the latest summary once
+                    # after the bounded queue finishes, including error exits.
+                    $runArguments += '-DeferNotificationDelivery'
+                    $deferredNotificationDelivery = $true
                     $wakeIdentity = [string]$deferredWakeups[0].Identity
                     $identityParts = @($wakeIdentity -split '#account=', 2)
                     if ($identityParts.Count -eq 2) {
@@ -674,6 +679,12 @@ try {
             }
             Write-Warning "后台调度循环发生可恢复异常：$message"
             Write-SchedulerLog "可恢复异常：$message"
+        }
+        finally {
+            if ($deferredNotificationDelivery) {
+                try { & $outboxScript | Out-Null }
+                catch { Write-SchedulerLog "本轮汇总通知暂未送达：$(Compress-SchedulerError $_.Exception.Message)" }
+            }
         }
         if ($Once) { break }
         Start-Sleep -Seconds 60

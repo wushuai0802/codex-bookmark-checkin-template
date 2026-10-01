@@ -234,6 +234,42 @@ test("同一天只投递最新回执并淘汰旧状态", async () => {
   }
 });
 
+for (const invalidHistory of [false, true]) {
+  test(`较新的已送达回执阻止补发旧通知，但损坏历史不压制有效通知 (${invalidHistory})`, async (t) => {
+    await fs.mkdir(tmpRoot, { recursive: true });
+    const sandbox = await fs.mkdtemp(path.join(tmpRoot, 'outbox-delivered-history-'));
+    t.after(() => fs.rm(sandbox, { recursive: true, force: true }));
+    const outboxPath = path.join(sandbox, 'outbox');
+    const configPath = path.join(sandbox, 'config.json');
+    const commandPath = path.join(sandbox, 'receiver.mjs');
+    await writeConfig(configPath, commandNotification(process.execPath, [commandPath]));
+    await writeFakeCommand(commandPath, { accepted: true, duplicate: false });
+    await enqueue(outboxPath, configPath, completeReport({ origin: 'https://history.example', status: 'needs_attention', reason: 'Old failure' }));
+    await enqueue(outboxPath, configPath, completeReport({ origin: 'https://history.example', status: 'signed' }));
+    for (const file of await fs.readdir(outboxPath)) {
+      const filePath = path.join(outboxPath, file);
+      const item = JSON.parse(await fs.readFile(filePath, 'utf8'));
+      item.createdAt = item.status === 'success' ? '2026-07-23T05:00:00Z' : '2026-07-23T04:00:00Z';
+      item.nextAttemptAt = '2026-07-23T06:00:00Z';
+      if (item.status === 'success') {
+        item.delivered = true;
+        item.deliveredAt = '2026-07-23T05:01:00Z';
+        item.disposition = 'accepted';
+        if (invalidHistory) item.summary += ' altered';
+      }
+      await fs.writeFile(filePath, JSON.stringify(item));
+    }
+    const output = JSON.parse(await runPowerShell(worker, [
+      '-OutboxPath', outboxPath, '-ConfigPath', configPath, '-NowUtc', '2026-07-23T06:00:00Z',
+      '-MutexName', `Local\\DeliveredHistory${process.pid}${invalidHistory}`,
+    ]));
+    assert.equal(output.processed, invalidHistory ? 1 : 0);
+    assert.equal(output.superseded, invalidHistory ? 0 : 1);
+    const old = (await readItems(outboxPath)).find(item => item.status === 'needs_attention');
+    assert.equal(old.disposition, invalidHistory ? 'accepted' : 'superseded');
+  });
+}
+
 test("payloadHash 不匹配的 outbox 条目会被隔离且不会发送", async () => {
   await fs.mkdir(tmpRoot, { recursive: true });
   const sandbox = await fs.mkdtemp(path.join(tmpRoot, "public-outbox-integrity-"));
