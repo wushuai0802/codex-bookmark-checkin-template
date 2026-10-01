@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {reconcilePtAttempt,listPtAttempts} from '../src/pt-reconciliation.mjs';
+import {reconcilePtAttempt,listPtAttempts,loadPtRecoveryDiagnostics} from '../src/pt-reconciliation.mjs';
 import {pendingHarvestFallbackAttempts} from '../src/harvest-fallback.mjs';
 test('passive reconciliation keeps original unknown attempt and unblocks only subsequent days',t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-reconcile-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -52,4 +52,25 @@ test('non-submission closure accepts an executor refusal, never an unknown submi
   const attempt={attemptId,origin:'https://pt.example',state:'completed',submissionState:'not_submitted',outcome:{submissionAttempted:false}};
   fs.writeFileSync(path.join(root,'outputs','harvest-fallback-attempts-'+businessDate+'.json'),JSON.stringify({businessDate,attempts:[attempt]}));
   assert.equal(reconcilePtAttempt({root,businessDate,attemptId,kind:'confirmed_not_submitted'}).status,'unknown');
+});
+
+test('reviewing one historical attempt removes only its diagnostic and preserves other uncertainty',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-review-diagnostic-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(path.join(root,'outputs'));
+  const businessDate='2026-09-25',origin='https://pt.example',otherOrigin='https://other.example';
+  const attempts=[origin,otherOrigin].map(origin=>({origin,state:'outcome_unknown',startedAt:'2026-09-25T01:40:17Z'}));
+  const file=path.join(root,'outputs','harvest-fallback-attempts-'+businessDate+'.json');
+  fs.writeFileSync(file,JSON.stringify({businessDate,attempts}));
+  const before=loadPtRecoveryDiagnostics(root,'2026-10-02');
+  assert.equal(before.sites.length,2);
+  assert.match(before.sites[0].summary,/历史执行结果未确认/);
+  const attemptId=listPtAttempts(root,businessDate).find(item=>item.origin===origin).attemptId;
+  const resolution=reconcilePtAttempt({root,businessDate,attemptId,kind:'closed_manual',
+    acknowledgement:'reviewed-this-attempt-no-same-day-replay',note:'Reviewed this old record; no historical receipt is available.'});
+  assert.equal(resolution.status,'unknown');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)).attempts,attempts);
+  assert.deepEqual(loadPtRecoveryDiagnostics(root,'2026-10-02').sites.map(item=>item.origin),[otherOrigin]);
+  const eligible=attempts.map(item=>({origin:item.origin,accountKey:'site-default',businessDate:'2026-10-02'}));
+  assert.deepEqual(pendingHarvestFallbackAttempts(root,{businessDate:'2026-10-02',eligible}).map(item=>item.origin),[origin]);
+  assert.equal(pendingHarvestFallbackAttempts(root,{businessDate,eligible:eligible.map(item=>({...item,businessDate}))}).length,0);
 });

@@ -74,6 +74,14 @@ Manual closure keeps the outcome unknown and keeps same-day replay blocked.
 It never fabricates a successful check-in. Automated recovery must not emit
 this operator acknowledgement.
 
+Current-day state is displayed independently of historical uncertainty. A fresh
+maintenance observation takes precedence in the PT status label and explanation;
+it is availability evidence, never proof of a successful check-in. Unresolved
+historical diagnostics remain in the expandable execution explanation and the
+attempt journal. They do not replace today's evidence or imply that the old
+request reached the site. Individually reviewed manual closure removes that
+attempt's diagnostic from later days without enabling same-day replay.
+
 ## Retry and publication
 
 Harvest waiting and proven preflight refusals do not consume submission

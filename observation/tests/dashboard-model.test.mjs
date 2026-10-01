@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesPt,ptStatusCategory,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS,taskStatusLabel} from '../public/dashboard-model.mjs';
+import {matchesPt,ptStatusCategory,ptStatusCondition,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS,taskStatusLabel} from '../public/dashboard-model.mjs';
+
+test('PT current maintenance takes precedence over historical and same-day uncertainty',()=>{
+  const site={effective:{status:'needs_attention',fresh:true,siteCondition:'site_maintenance',failureCode:'submission_outcome_unknown'},
+    recovery:{code:'prior_outcome_unknown'}};
+  assert.equal(ptStatusCondition(site),'site_maintenance');
+  assert.equal(taskStatusLabel({observedStatus:site.effective.status,condition:ptStatusCondition(site)}),'站点维护');
+  site.recovery.code='submission_outcome_unknown';
+  assert.equal(ptStatusCondition(site),'site_maintenance');
+  site.effective.fresh=false;
+  assert.equal(ptStatusCondition(site),'submission_outcome_unknown');
+  site.effective={status:'unknown',fresh:true};site.recovery.code='prior_outcome_unknown';
+  assert.equal(ptStatusCondition(site),undefined);
+  site.recovery.code='unverified_prior_attempt';
+  assert.equal(ptStatusCondition(site),'submission_outcome_unknown');
+  site.effective={status:'already_signed',fresh:true,siteCondition:'site_maintenance'};
+  assert.equal(taskStatusLabel({observedStatus:site.effective.status,condition:ptStatusCondition(site)}),'今日已完成');
+});
 
 test('external conditions and unknown submissions have distinct labels and filters',()=>{
   const external={origin:'https://site.test',observedStatus:'deferred',condition:'upstream_unavailable'};

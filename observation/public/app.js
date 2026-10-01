@@ -1,5 +1,5 @@
 import { overviewMetrics, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, matchesLedger, ledgerPendingCount, TASK_FILTERS, taskStatusLabel, externalTask } from './dashboard-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, TASK_FILTERS, taskStatusLabel, externalTask } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion, MOTION } from './motion.mjs';
@@ -554,8 +554,7 @@ function renderPtStatus(data) {
     const effective = site.effective ?? {};
     const category = ptStatusCategory(site);
     const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? category === 'confirmed' ? '今日已确认，无需补签' : 'Harvest 未完成后复核' : '不在补签范围'));
-    const ptCondition=site.recovery?.code==='prior_outcome_unknown'||effective.failureCode==='submission_outcome_unknown'?'submission_outcome_unknown':
-      effective.siteCondition==='site_maintenance'?'site_maintenance':effective.retryCause;
+    const ptCondition=ptStatusCondition(site);
     const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown',{observedStatus:effective.status??'unknown',condition:ptCondition});
     const likelySigned = effective.status === 'unknown' && effective.fresh && !effective.authoritative &&
       effective.evidence?.source === 'pt_page' && effective.evidence?.summary?.startsWith('检测到签到已得');
@@ -572,7 +571,13 @@ function renderPtStatus(data) {
       effective.source==='harvest'?el('span','subtext','执行账号以自身回执为准'):null);
     else if (category==='unavailable') append(actionCell,el('span',null,'功能未开放'));
     else if(category==='reported')append(actionCell,el('span',null,'补录当日证据'),el('span','subtext','不重复提交签到'));
+    else if(ptCondition==='site_maintenance')append(actionCell,el('span',null,'等待站点恢复'),el('span','subtext',effective.evidence?.summary));
     else append(actionCell,statusChip('needs_attention'),el('span','subtext',effective.evidence?.summary || site.recovery?.summary || '待执行层核验'));
+    if(site.recovery?.summary){
+      const note=el('details','subtext pt-recovery-note');
+      append(note,el('summary',null,site.recovery.code==='prior_outcome_unknown'?'历史执行说明':'执行核验说明'),el('p',null,site.recovery.summary));
+      actionCell.append(note);
+    }
     actionCell.append(operationControls(site));
     if(site.inLegacyPlan && state.data?.sites?.some(item=>item.origin===site.origin)){
       const manage=el('button','link-button','管理标记');manage.type='button';manage.addEventListener('click',()=>openSiteControls(site.origin));actionCell.append(manage);

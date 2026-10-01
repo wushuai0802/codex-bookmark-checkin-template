@@ -5,6 +5,34 @@ import { buildPtStatus, normalizePtStatusReport } from '../src/pt-status.mjs';
 const accountRef = 'acct_0123456789abcdef';
 const taskId = 'task_0123456789abcdef01234567';
 
+test('historical uncertainty preserves today evidence and maintenance without certifying completion',()=>{
+  const origin='https://pt.example',businessDate='2026-10-02';
+  const base={generatedAt:'2026-10-02T02:00:00Z',businessDate,
+    planTargets:[{origin,folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown'}],
+    receipts:[{taskId,observedAt:'2026-10-02T01:50:00Z',evidence:{source:'none',authoritative:false,summary:'今日结果尚待核验'}}],
+    recoveryReport:{businessDate,sites:[{origin,code:'prior_outcome_unknown',blockedSince:'2026-09-25',summary:'历史执行结果未确认'}]}};
+  const unresolved=buildPtStatus(base).sites[0];
+  assert.equal(unresolved.effective.evidence.summary,'今日结果尚待核验');
+  assert.equal(unresolved.recovery.blockedSince,'2026-09-25');
+  const maintenanceReport={source:'execution-supplement',businessDate,sites:[{origin,status:'unknown',siteCondition:'site_maintenance',
+    observedAt:'2026-10-02T01:40:00Z',evidence:{source:'pt_page',authoritative:false,summary:'站点公告正在维护，等待恢复'}}]};
+  const maintenance=buildPtStatus({...base,fallbackReport:maintenanceReport}).sites[0];
+  assert.equal(maintenance.effective.siteCondition,'site_maintenance');
+  assert.equal(maintenance.effective.evidence.summary,'站点公告正在维护，等待恢复');
+  assert.equal(maintenance.effective.authoritative,false);
+  assert.equal(maintenance.effective.status,'needs_attention');
+  assert.equal(maintenance.recovery.code,'prior_outcome_unknown');
+  const staleReport={...maintenanceReport,sites:maintenanceReport.sites.map(site=>({...site,observedAt:'2026-10-01T01:40:00Z'}))};
+  assert.equal(buildPtStatus({...base,fallbackReport:staleReport}).sites[0].effective.siteCondition,undefined);
+  const completed=buildPtStatus({...base,tasks:[{...base.tasks[0],observedStatus:'already_signed'}],
+    receipts:[{taskId,observedAt:'2026-10-02T01:50:00Z',evidence:{source:'pt_page',authoritative:true,summary:'今日已签到'}}],
+    fallbackReport:maintenanceReport}).sites[0];
+  assert.equal(completed.effective.status,'already_signed');
+  assert.equal(completed.effective.authoritative,true);
+  assert.equal(completed.effective.evidence.summary,'今日已签到');
+});
+
 test('PT status merges legacy plan sites with Harvest-only observations', () => {
   const result = buildPtStatus({
     generatedAt: '2026-09-04T04:00:00.000Z',

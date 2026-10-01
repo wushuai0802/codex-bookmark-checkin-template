@@ -325,7 +325,8 @@ export function buildPtStatus({
     const recovery=recoveryReport.sites?.find(item=>item.origin===site.origin);
     if(!recovery||!['prior_outcome_unknown','submission_outcome_unknown','unverified_prior_attempt'].includes(recovery.code))continue;
     site.recovery={code:recovery.code,blockedSince:recovery.blockedSince,summary:redactText(recovery.summary)};
-    if(!['signed','already_signed'].includes(site.effective.status)){
+    // Earlier uncertainty remains audit metadata, not evidence about today.
+    if(recovery.code!=='prior_outcome_unknown'&&!['signed','already_signed'].includes(site.effective.status)){
       const detail=site.effective.evidence.summary;
       site.effective.evidence.summary=site.recovery.summary+
         (detail&&/维护|登录|验证|验证码|暂时不可用/.test(detail)?`；${detail}`:'');
@@ -336,8 +337,7 @@ export function buildPtStatus({
     const maintenance=site.observations.find(item=>item.fresh&&item.siteCondition==='site_maintenance');
     if(!maintenance)continue;
     site.effective.siteCondition='site_maintenance';
-    if(!/维护|恢复数据/.test(site.effective.evidence.summary))
-      site.effective.evidence.summary=redactText(`${site.effective.evidence.summary}；最近只读检查确认站点维护，等待恢复`);
+    site.effective.evidence.summary=redactText(maintenance.evidence.summary||'只读检查确认站点维护，等待恢复后核验');
   }
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;
