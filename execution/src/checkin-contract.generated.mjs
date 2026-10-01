@@ -102,6 +102,16 @@ export const ptRetryCauses = Object.freeze([
   "harvest_waiting"
 ]);
 export const ptReadPolicies = Object.freeze({
+  "https://dstudio.me": {
+    "selector": "#info_block",
+    "actionPath": "/attendance.php",
+    "unsignedText": "签到",
+    "dailyHeader": true,
+    "signedTexts": [
+      "今日已完成已签到"
+    ],
+    "completionReadFirst": true
+  },
   "https://ourbits.club": {
     "selector": "#info_block",
     "selfProfileHeader": true

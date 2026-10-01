@@ -175,3 +175,16 @@ function Invoke-SyncRemoteCommand([string]$Executable, [string[]]$Arguments, [st
         failure = if ($code -ne 0) { Get-SyncTransportFailure $Phase $code $output } else { $null }
     }
 }
+
+function Invoke-SyncUploadWithRetry([string]$Executable, [string[]]$Arguments, [int]$MaxAttempts = 3, [int]$RetryDelaySeconds = 2, [scriptblock]$Invoke) {
+    $MaxAttempts = [Math]::Max(1, [Math]::Min(3, $MaxAttempts))
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = if ($Invoke) { & $Invoke $Executable $Arguments } else { Invoke-SyncRemoteCommand $Executable $Arguments 'nas_upload' }
+        if ($result.exitCode -eq 0 -or $attempt -eq $MaxAttempts -or
+            $result.failure -notmatch 'cause=(connection_timeout|connection_interrupted|ssh_transport_failed)\)') { return $result }
+        $message = "NAS upload transport interrupted; retry $($attempt + 1)/$MaxAttempts."
+        if (Get-Command Write-Log -CommandType Function -ErrorAction SilentlyContinue) { Write-Log $message | Out-Null }
+        elseif (Get-Command Write-SchedulerLog -CommandType Function -ErrorAction SilentlyContinue) { Write-SchedulerLog $message | Out-Null }
+        if ($RetryDelaySeconds -gt 0) { Start-Sleep -Seconds ([Math]::Min(5, $RetryDelaySeconds)) }
+    }
+}

@@ -155,6 +155,20 @@ test("a submission with unknown outcome cannot reach another candidate", async (
   assert.equal(result.failureCode, "submission_outcome_unknown");
 });
 
+test('Depth Studio checks its daily header before visiting the formal attendance endpoint',async()=>{
+  const visited=[];
+  const context={newPage:async()=>({close:async()=>{}})};
+  const result=await (await import('../src/browser.mjs')).processTarget(context,
+    {origin:'https://dstudio.me',candidates:['https://dstudio.me/attendance.php']},
+    {retryCount:0,failureScreenshots:false},[],'',{runCandidate:async(_page,_target,url)=>{
+      visited.push(url);
+      if(url.endsWith('/attendance.php'))throw Error('Already complete must not revisit attendance');
+      return {status:'already_signed',reason:'Current daily header',submissionAttempted:false,evidence:{authoritative:true}};
+    }});
+  assert.deepEqual(visited,['https://dstudio.me/index.php']);
+  assert.equal(result.status,'already_signed');assert.equal(result.submissionAttempted,false);
+});
+
 test("a pre-submit login failure can be retried after login, while mixed candidates stay uncertain", async () => {
   const context = { newPage: async () => ({ close: async () => {} }) };
   const start = { status: "login_required", reason: "session expired", submissionAttempted: false };
