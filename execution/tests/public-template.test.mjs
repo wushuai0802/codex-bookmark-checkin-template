@@ -230,11 +230,12 @@ test("wrapper 覆盖前置步骤并且只在子进程退出后清理运行锁", 
   assert.match(runner, /\[datetimeoffset\]\$result\.nextEligibleAt -le \$nowOffset/);
 });
 
-test("PowerShell 按绝对时间解释 UTC 重试时间", async () => {
+test("PowerShell 按绝对时间调度，通知统一显示上海重试时间", async () => {
   const scheduler = await fs.readFile(new URL("../scripts/Start-UserScheduler.ps1", import.meta.url), "utf8");
   const reporter = await fs.readFile(new URL("../scripts/Submit-UnifiedCheckinReport.ps1", import.meta.url), "utf8");
   assert.match(scheduler, /\[datetimeoffset\]\$state\.nextEligibleAt -gt \[datetimeoffset\]\$now/);
-  assert.match(reporter, /\[datetimeoffset\]\$problem\.nextEligibleAt\)\.ToLocalTime\(\)/);
+  assert.match(reporter, /\[datetimeoffset\]\$Result\.nextEligibleAt\)\.ToOffset\(\[timespan\]::FromHours\(8\)\)/);
+  assert.doesNotMatch(reporter, /\.ToLocalTime\(\)/);
 });
 
 test("默认恢复策略使用半小时探测并保留晚间上游复查", async () => {

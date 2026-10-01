@@ -55,8 +55,8 @@ test("部分进度即使全部已签到也不会报告成功", async () => {
 
   assert.equal(report.status, "unconfirmed");
   assert.equal(report.isComplete, false);
-  assert.match(report.summary, /已处理 2\/5 个签到项（任务未完成）/);
-  assert.match(report.summary, /\n2 个签到正常/);
+  assert.match(report.summary, /任务未完成：已处理 2\/5 项/);
+  assert.match(report.summary, /已签到 2\/5/);
 });
 
 test("部分进度在运行器超时时保持超时状态", async () => {
@@ -70,7 +70,7 @@ test("部分进度在运行器超时时保持超时状态", async () => {
   }, "timeout");
 
   assert.equal(report.status, "timeout");
-  assert.match(report.summary, /已处理 1\/5 个签到项（任务未完成）/);
+  assert.match(report.summary, /任务未完成：已处理 1\/5 项/);
 });
 
 test("只有完整的 final 报告可以映射为今日已完成", async () => {
@@ -88,7 +88,7 @@ test("只有完整的 final 报告可以映射为今日已完成", async () => {
 
   assert.equal(report.status, "already_done");
   assert.equal(report.isComplete, true);
-  assert.match(report.summary, /^共 2 个签到项：\n/);
+  assert.equal(report.summary, '已签到 2/2');
 });
 
 test("同一逻辑站点的两个取消任务只统计一次", async () => {
@@ -120,12 +120,11 @@ test("同一逻辑站点的两个取消任务只统计一次", async () => {
 
   assert.equal(report.status, "skipped");
   assert.equal(report.siteCount, 1);
-  assert.match(report.summary, /^共 1 个签到项：\n/);
-  assert.match(report.summary, /\n1 个已取消签到/);
-  assert.doesNotMatch(report.summary, /2 个未开放签到/);
+  assert.equal(report.summary, '已签到 0/1 · 已取消 1');
+  assert.doesNotMatch(report.summary, /未开放/);
 });
 
-test("同一站点的三个账号分别统计并显示签到结果", async () => {
+test("同一站点的三个成功账号分别统计，通知不重复列出明细", async () => {
   const accountIds = ["10001", "20002", "30003"];
   const report = await previewReport({
     runId: "20260723-120002-three-accounts",
@@ -151,8 +150,8 @@ test("同一站点的三个账号分别统计并显示签到结果", async () =>
 
   assert.equal(report.status, "success");
   assert.equal(report.siteCount, 3);
-  assert.match(report.summary, /^共 3 个签到项：/);
-  for (const accountId of accountIds) assert.match(report.summary, new RegExp(accountId));
+  assert.equal(report.summary, '已签到 3/3');
+  for (const accountId of accountIds) assert.doesNotMatch(report.summary, new RegExp(accountId));
 });
 
 test("通知事件键对相同状态稳定并在结果变化后更新", async () => {
@@ -204,10 +203,10 @@ test("延迟重试按原因区分登录恢复和安全验证", async () => {
   });
 
   assert.equal(report.status, "retrying");
-  assert.match(report.summary, /待自动重试 2 个：/);
-  assert.doesNotMatch(report.summary, /需关注/);
-  assert.match(report.summary, /login\.example\.test：登录恢复未成功，计划/);
-  assert.match(report.summary, /challenge\.example\.test：验证未自动通过，计划/);
+  assert.match(report.summary, /待重试 2/);
+  assert.doesNotMatch(report.summary, /需处理/);
+  assert.match(report.summary, /login\.example\.test：登录待恢复 · /);
+  assert.match(report.summary, /challenge\.example\.test：验证待通过 · /);
 });
 
 test("native readback errors are not reported as failed verification, including saved legacy results", async () => {
@@ -217,7 +216,7 @@ test("native readback errors are not reported as failed verification, including 
       results: [{ origin: "https://readback.example.test", status: "deferred", retryCause,
         nativePreflight: true, inspectionStatus: "accessibility_unavailable" }],
     });
-    assert.match(report.summary, /自动验收未读到结果，签到状态待确认/);
+    assert.match(report.summary, /未读到结果，状态待确认/);
     assert.doesNotMatch(report.summary, /验证未自动通过/);
   }
 });
@@ -229,7 +228,7 @@ test("cleanup warning preserves confirmed checkin but remains visible", async ()
   const warning = await previewReport({ ...base, results: [{ ...result, cleanupFailureCode: "window_cleanup_failed" }] });
   assert.equal(warning.status, clean.status);
   assert.match(warning.summary, /窗口清理异常/);
-  assert.match(warning.summary, /1 个签到正常/);
+  assert.match(warning.summary, /已签到 1\/1/);
   assert.notEqual(warning.eventKey, clean.eventKey);
 });
 
@@ -250,10 +249,10 @@ test("站点故障单列外部条件，保留有限复核时间而不误报本�
 
   assert.equal(report.status, "unconfirmed");
   assert.equal(report.externalPendingCount,1);
-  assert.match(report.summary, /等待外部条件 1 个/);
+  assert.match(report.summary, /等待外部 1/);
   assert.match(report.summary, /offline\.example\.test：上游暂不可用/);
-  assert.match(report.summary, /有限复核/);
-  assert.doesNotMatch(report.summary, /需关注|待自动重试|❌/);
+  assert.match(report.summary, /复核|等待调度/);
+  assert.doesNotMatch(report.summary, /需处理|待重试|❌/);
 });
 
 test('unknown submissions stay in verification even if the site is under maintenance',async()=>{
@@ -261,8 +260,8 @@ test('unknown submissions stay in verification even if the site is under mainten
     results:[{origin:'https://review.example.test',status:'needs_attention',failureCode:'submission_outcome_unknown',
       submissionAttempted:true,siteCondition:'site_maintenance',reason:'站点维护，之前提交结果不明'}]});
   assert.equal(report.externalPendingCount,0);assert.equal(report.verificationPendingCount,1);
-  assert.match(report.summary,/结果待核验 1 个（不重复提交）/);
-  assert.doesNotMatch(report.summary,/待自动重试|❌/);
+  assert.match(report.summary,/待核验 1（不重复提交）/);
+  assert.doesNotMatch(report.summary,/待重试|❌/);
 });
 
 test("动作结果未知转为关注，只有可恢复异常进入自动重试", async () => {
@@ -281,8 +280,8 @@ test("动作结果未知转为关注，只有可恢复异常进入自动重试",
   });
 
   assert.equal(report.status, "needs_attention");
-  assert.match(report.summary, /待自动重试 3 个：/);
-  assert.match(report.summary, /需关注 3 个：/);
+  assert.match(report.summary, /待重试 3/);
+  assert.match(report.summary, /需处理 3/);
 });
 
 test("真正需要登录或交互验证时仍明确要求人工处理", async () => {
@@ -297,7 +296,7 @@ test("真正需要登录或交互验证时仍明确要求人工处理", async ()
     });
 
     assert.equal(report.status, "needs_attention");
-    assert.match(report.summary, /需关注 1 个：/);
+    assert.match(report.summary, /需处理 1/);
   }
 });
 
@@ -313,7 +312,7 @@ test("无证据的未开放签到不能伪装成业务完成", async () => {
   assert.equal(report.businessComplete, false);
   assert.equal(report.problemCount, 1);
   assert.equal(report.status, "retrying");
-  assert.match(report.summary, /待自动重试 1 个：/);
+  assert.match(report.summary, /待重试 1/);
 });
 
 test("带账号身份的无效未开放结果显示重试而不是跳过", async () => {
@@ -331,8 +330,8 @@ test("带账号身份的无效未开放结果显示重试而不是跳过", async
     }],
   });
   assert.equal(report.status, "retrying");
-  assert.match(report.summary, /🔄 .*Primary/);
-  assert.doesNotMatch(report.summary, /⏭️ .*Primary/);
+  assert.match(report.summary, /待重试 1\n• invalid-account\.example\.test（Primary）/);
+  assert.equal((report.summary.match(/Primary/g) ?? []).length, 1);
 });
 
 test("二次验证报告明确提示可信设备初始化", async () => {
@@ -351,7 +350,7 @@ test("二次验证报告明确提示可信设备初始化", async () => {
   });
   assert.equal(report.status, "needs_attention");
   assert.match(report.summary, /建立可信设备会话/);
-  assert.doesNotMatch(report.summary, /待自动重试/);
+  assert.doesNotMatch(report.summary, /待重试/);
 });
 
 test("当天已停止重试的维护站点不计入未开放签到", async () => {
@@ -372,9 +371,8 @@ test("当天已停止重试的维护站点不计入未开放签到", async () =>
   });
 
   assert.equal(report.status, "skipped");
-  assert.match(report.summary, /1 个站点暂不可用（今日不再重试）/);
-  assert.match(report.summary, /0 个未开放签到/);
-  assert.doesNotMatch(report.summary, /待自动重试/);
+  assert.match(report.summary, /暂不可用 1（今日暂停）/);
+  assert.doesNotMatch(report.summary, /未开放|待重试/);
 });
 
 test("伪造相同数量的重复 signed 结果不能冒充完整报告", async () => {
@@ -392,4 +390,67 @@ test("伪造相同数量的重复 signed 结果不能冒充完整报告", async 
   assert.equal(report.status, "unconfirmed");
   assert.equal(report.isComplete, false);
   assert.match(report.summary, /任务未完成/);
+});
+
+test('摘要只列异常账号一次，成功账号不会挤掉待处理结果', async () => {
+  const successes = Array.from({length: 24}, (_, i) => ({origin: 'https://multi.example', accountKey: `ok-${i}`, accountLabel: `ok-${i}`, status: 'signed'}));
+  const report = await previewReport({runId: '20261001-compact', runState: 'final', plannedTotal: 26, processedTotal: 26, isComplete: true,
+    results: [...successes,
+      {origin: 'https://multi.example', accountKey: 'problem', accountLabel: 'Primary', status: 'needs_attention', reason: '请登录'},
+      {origin: 'https://multi.example', accountKey: 'review', accountLabel: 'Secondary', status: 'needs_attention', submissionAttempted: true},
+    ]});
+  assert.equal(report.siteCount, 26);
+  assert.equal(report.problemCount, 2);
+  assert.match(report.summary, /^已签到 24\/26 · 待处理 2/);
+  assert.equal((report.summary.match(/Primary/g) ?? []).length, 1);
+  assert.equal((report.summary.match(/Secondary/g) ?? []).length, 1);
+  assert.doesNotMatch(report.summary, /账号结果|ok-\d|更多明细/);
+  assert.ok(report.summary.length < 240);
+});
+
+test('重试暂停会更新通知事件键，过期时间不再写成未来计划', async () => {
+  const base = {runId: '20261001-retry', runState: 'final', plannedTotal: 1, processedTotal: 1, isComplete: true};
+  const result = {origin: 'https://retry.example', status: 'deferred', retryCause: 'login_required', nextEligibleAt: '2000-01-01T00:00:00Z'};
+  const retry = await previewReport({...base, results: [result]});
+  const stopped = await previewReport({...base, results: [{...result, retryExhaustedForDay: true}]});
+  assert.match(retry.summary, /已到期，等待调度/);
+  assert.doesNotMatch(retry.summary, /计划|00:00/);
+  assert.match(stopped.summary, /今日停止，次日复核/);
+  assert.notEqual(retry.eventKey, stopped.eventKey);
+  const harvest = await previewReport({...base, results: [{...result, retryCause: 'harvest_waiting', submissionAttempted: false}]});
+  assert.match(harvest.summary, /待本项目续跑，先复核 Harvest/);
+  assert.doesNotMatch(harvest.summary, /等待 Harvest 完成/);
+});
+
+test('重试时间固定使用上海时间，跨日包含日期', async () => {
+  const report = await previewReport({runId: '20261001-timezone', runState: 'final', plannedTotal: 1, processedTotal: 1, isComplete: true,
+    results: [{origin: 'https://time.example', status: 'deferred', retryCause: 'login_required', nextEligibleAt: '2099-01-01T16:15:00Z'}]});
+  assert.match(report.summary, /01-02 00:15 后复核/);
+});
+
+test('精简保留权益过期原因，但历史提交仍列为待核验', async () => {
+  const report = await previewReport({runId: '20261001-entitlement', runState: 'final', plannedTotal: 1, processedTotal: 1, isComplete: true,
+    results: [{origin: 'https://entitlement.example', status: 'needs_attention', submissionAttempted: true, failureCode: 'submission_outcome_unknown',
+      evidence: {source: 'vibe_entitlement_status', authoritative: false, statusSignal: 'expired_subscription'}}]});
+  assert.equal(report.verificationPendingCount, 1);
+  assert.equal(report.externalPendingCount, 0);
+  assert.equal(report.businessComplete, false);
+  assert.match(report.summary, /权益已过期，历史提交待核验/);
+  assert.doesNotMatch(report.summary, /待重试/);
+});
+
+test('同原因同时间的重试只显示一次安排，人工处理排在长列表前', async () => {
+  const retries = Array.from({length: 30}, (_, i) => ({origin: `https://retry-${i}.example`, status: 'deferred', retryCause: 'login_required', nextEligibleAt: '2099-01-01T16:15:00Z'}));
+  const report = await previewReport({runId: '20261001-grouping', runState: 'final', plannedTotal: 32, processedTotal: 32, isComplete: true,
+    results: [...retries,
+      {origin: 'https://manual.example', status: 'needs_attention', reason: '请登录'},
+      {origin: 'https://unknown.example', status: 'needs_attention', submissionAttempted: true},
+    ]});
+  assert.equal((report.summary.match(/登录待恢复/g) ?? []).length, 1);
+  assert.equal((report.summary.match(/01-02 00:15/g) ?? []).length, 1);
+  assert.ok(report.summary.indexOf('manual.example') < report.summary.indexOf('retry-0.example'));
+  assert.ok(report.summary.indexOf('unknown.example') < report.summary.indexOf('retry-0.example'));
+  assert.ok(report.summary.length <= 950);
+  assert.match(report.summary, /待处理 32/);
+  assert.doesNotMatch(report.summary, /账号结果/);
 });

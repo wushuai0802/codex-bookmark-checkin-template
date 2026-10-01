@@ -145,6 +145,18 @@ try {
                 if ($deliveredAt -le [datetimeoffset]$now.AddDays(-$RetentionDays)) {
                     Remove-Item -LiteralPath $file.FullName -Force
                     $pruned++
+                    continue
+                }
+                # A newer acknowledged receipt also supersedes an older pending
+                # one. Superseded or invalid history cannot suppress delivery.
+                if ([string]$item.disposition -ne 'superseded' -and
+                    [string]$item.payloadHash -match '^[a-f0-9]{64}$' -and
+                    [string]$item.payloadHash -eq (Get-PayloadHash $item)) {
+                    $createdAt = try { ([datetimeoffset]$item.createdAt).ToUniversalTime() } catch { [datetimeoffset]$file.LastWriteTimeUtc }
+                    $pendingItems.Add([pscustomobject]@{
+                        File = $file; Item = $item; DueAt = [datetime]::MaxValue
+                        CreatedAt = $createdAt; Scope = Get-OutboxLogicalScope $item
+                    })
                 }
                 continue
             }
@@ -171,7 +183,7 @@ try {
     foreach ($group in @($pendingItems | Group-Object Scope)) {
         $ordered = @($group.Group | Sort-Object CreatedAt, @{ Expression = { $_.File.Name } } -Descending)
         $latest = $ordered | Select-Object -First 1
-        foreach ($stale in @($ordered | Select-Object -Skip 1)) {
+        foreach ($stale in @($ordered | Select-Object -Skip 1 | Where-Object { $_.Item.delivered -ne $true })) {
             $stale.Item.delivered = $true
             $stale.Item.deliveredAt = $now.ToString('o')
             $stale.Item.updatedAt = $now.ToString('o')
@@ -181,7 +193,7 @@ try {
             Write-OutboxItemAtomic $stale.File.FullName $stale.Item
             $superseded++
         }
-        if ($null -ne $latest -and ($ForceDue -or $latest.DueAt -le $now)) { $dueItems.Add($latest) }
+        if ($null -ne $latest -and $latest.Item.delivered -ne $true -and ($ForceDue -or $latest.DueAt -le $now)) { $dueItems.Add($latest) }
     }
 
     foreach ($entry in @($dueItems | Sort-Object DueAt, @{ Expression = { $_.File.Name } } | Select-Object -First $MaxItems)) {

@@ -54,6 +54,18 @@ function Get-ResultDisplayName($Result) {
     return $hostName
 }
 
+function Get-RetryTimeText($Result) {
+    if ($Result.retryExhaustedForDay -eq $true) { return '今日停止，次日复核' }
+    if (-not $Result.nextEligibleAt) { return '等待调度' }
+    try {
+        $now = [datetimeoffset]::UtcNow.ToOffset([timespan]::FromHours(8))
+        $next = ([datetimeoffset]$Result.nextEligibleAt).ToOffset([timespan]::FromHours(8))
+        if ($next -le $now) { return '已到期，等待调度' }
+        $format = if ($next.Date -eq $now.Date) { 'HH:mm' } else { 'MM-dd HH:mm' }
+        return "$($next.ToString($format)) 后复核"
+    } catch { return '等待调度' }
+}
+
 function Get-LogicalStatusPriority($Result) {
     $status = [string]$Result.status
     if ($status -eq 'signed') { return 100 }
@@ -153,47 +165,60 @@ elseif ($RunnerStatus -eq 'skipped') { $status = 'skipped' }
 else { $status = 'unconfirmed' }
 
 $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
-    $heading = if ($isCompleteFinalReport) { "共 $logicalPlannedTotal 个签到项：" } else { "已处理 $logicalProcessedTotal/$logicalPlannedTotal 个签到项（任务未完成）：" }
-    $summaryValue = "$heading`n$done 个签到正常`n$notAvailable 个未开放签到"
-    if ($temporarilyUnavailable -gt 0) { $summaryValue += "`n$temporarilyUnavailable 个站点暂不可用（今日不再重试）" }
-    if ($disabled -gt 0) { $summaryValue += "`n$disabled 个已取消签到" }
+    $counts = @("已签到 $done/$logicalPlannedTotal")
+    if ($notAvailable -gt 0) { $counts += "未开放 $notAvailable" }
+    if ($temporarilyUnavailable -gt 0) { $counts += "暂不可用 $temporarilyUnavailable（今日暂停）" }
+    if ($disabled -gt 0) { $counts += "已取消 $disabled" }
+    if ($problems.Count -gt 0) { $counts += "待处理 $($problems.Count)" }
+    $summaryValue = $counts -join ' · '
+    if (-not $isCompleteFinalReport) { $summaryValue += "`n任务未完成：已处理 $logicalProcessedTotal/$logicalPlannedTotal 项" }
     $summaryValue
 }
 else { Compress-Text $RunnerMessage 160 }
-$accountResults = @($reportingResults | Where-Object { [string]$_.accountKey })
-if ($accountResults.Count -gt 0) {
-    $summary += "`n账号结果："
-    $summary += "`n" + (($accountResults | ForEach-Object {
-        $marker = if ($_.status -in @('signed', 'already_signed')) { '✅' } `
-            elseif ($_.status -eq 'not_available' -and (Test-ConfirmedNotAvailableResult $_)) { '⏭️' } `
-            elseif ((Get-CheckinAttentionClass $_) -eq 'external') { '⏸️' } `
-            elseif ((Get-CheckinAttentionClass $_) -eq 'verification') { '❔' } `
-            elseif ($_.status -in $automaticRetryStatuses) { '🔄' } `
-            else { '❌' }
-        $reward = if ($_.evidence.rewardAmount) { " `$$([decimal]$_.evidence.rewardAmount)" } else { '' }
-        "- $marker $(Get-ResultDisplayName $_)$reward"
-    }) -join "`n")
-}
-if ($externalProblems.Count -gt 0) {
-    $summary += "`n等待外部条件 $($externalProblems.Count) 个（非本地执行故障）："
-    foreach ($problem in $externalProblems) {
-        $reason = if ([string]$problem.siteCondition -eq 'site_maintenance' -or [string]$problem.failureCode -eq 'site_maintenance') {
-            '站点维护，今日不再自动提交，次日核验'
-        } elseif ([string]$problem.retryCause -eq 'harvest_waiting') { '等待 Harvest 完成，尚未发起补签' }
-        elseif ($problem.retryExhaustedForDay -eq $true) { '站点暂不可用，本日停止探测，次日再核验' }
-        elseif ($problem.nextEligibleAt) {
-            $at = try { ([datetimeoffset]$problem.nextEligibleAt).ToOffset([timespan]::FromHours(8)).ToString('MM-dd HH:mm') } catch { '冷却后' }
-            "$(if([string]$problem.retryCause -eq 'rate_limit'){'站点限频'}else{'上游暂不可用'})，$at 有限复核"
-        } else { '外部条件尚未满足，暂停自动提交' }
-        $summary += "`n- $(Get-ResultDisplayName $problem)：$reason"
-    }
+if ($attentionProblems.Count -gt 0) {
+    $summary += "`n`n需处理 $($attentionProblems.Count)"
+    $brief = @($attentionProblems | ForEach-Object {
+        $problem = $_
+        $hostName = Get-ResultDisplayName $problem
+        $reason = if ([string]$problem.failureCode -eq 'two_factor_required') {
+            '需完成一次二次验证以建立可信设备会话'
+        } else { switch ([string]$problem.status) {
+            'login_required' { '登录失效' }
+            'interactive_challenge' { '需要验证' }
+            'managed_challenge_timeout' { '验证超时' }
+            'no_action' { '未找到入口' }
+            'visited' { '结果未确认' }
+            'clicked' { '结果未确认' }
+            default { Compress-Text $problem.reason 40 }
+        } }
+        "• $hostName：$reason"
+    }) -join "`n"
+    $summary += "`n$brief"
 }
 if ($verificationProblems.Count -gt 0) {
-    $summary += "`n结果待核验 $($verificationProblems.Count) 个（不重复提交）："
-    foreach ($problem in $verificationProblems) { $summary += "`n- $(Get-ResultDisplayName $problem)：$(Compress-Text $problem.reason 80)" }
+    $summary += "`n`n待核验 $($verificationProblems.Count)（不重复提交）"
+    foreach ($problem in $verificationProblems) {
+        $reason = if ([string]$problem.evidence.source -eq 'vibe_entitlement_status' -and
+            ([string]$problem.evidence.outcome -eq 'entitlement_expired' -or [string]$problem.evidence.statusSignal -eq 'expired_subscription')) {
+            '权益已过期，历史提交待核验'
+        } else { '提交结果未确认，等待只读复核' }
+        $summary += "`n• $(Get-ResultDisplayName $problem)：$reason"
+    }
+}
+if ($externalProblems.Count -gt 0) {
+    $summary += "`n`n等待外部 $($externalProblems.Count)"
+    foreach ($problem in $externalProblems) {
+        $reason = if ([string]$problem.siteCondition -eq 'site_maintenance' -or [string]$problem.failureCode -eq 'site_maintenance') {
+            '站点维护，次日复核'
+        } elseif ([string]$problem.retryCause -eq 'harvest_waiting') { '待本项目续跑，先复核 Harvest' }
+        elseif ([string]$problem.retryCause -in @('upstream_unavailable', 'rate_limit')) {
+            "$(if([string]$problem.retryCause -eq 'rate_limit'){'站点限频'}else{'上游暂不可用'}) · $(Get-RetryTimeText $problem)"
+        } else { '外部条件未满足，暂停提交' }
+        $summary += "`n• $(Get-ResultDisplayName $problem)：$reason"
+    }
 }
 if ($automaticRetryProblems.Count -gt 0) {
-    $summary += "`n待自动重试 $($automaticRetryProblems.Count) 个："
+    $summary += "`n`n待重试 $($automaticRetryProblems.Count)"
     $retryBrief = @($automaticRetryProblems | ForEach-Object {
         $problem = $_
         $hostName = Get-ResultDisplayName $problem
@@ -202,9 +227,9 @@ if ($automaticRetryProblems.Count -gt 0) {
             [string]$problem.retryCause -eq 'native_readback_unavailable' -or
             [string]$problem.inspectionStatus -in @('accessibility_unavailable', 'window_not_created', 'window_merged', 'target_not_loaded', 'missing')
         )
-        $retryLabel = if ($readbackUnavailable) { '自动验收未读到结果，签到状态待确认' } else { switch ([string]$problem.retryCause) {
-            'login_required' { '登录恢复未成功'; break }
-            'managed_challenge_timeout' { '验证未自动通过'; break }
+        $retryLabel = if ($readbackUnavailable) { '未读到结果，状态待确认' } else { switch ([string]$problem.retryCause) {
+            'login_required' { '登录待恢复'; break }
+            'managed_challenge_timeout' { '验证待通过'; break }
             'upstream_unavailable' { '站点暂时不可用'; break }
             'rate_limit' { '站点限频'; break }
             default {
@@ -221,41 +246,33 @@ if ($automaticRetryProblems.Count -gt 0) {
                 }
             }
         } }
-        $reason = if ($problem.nextEligibleAt) { try { "$retryLabel，计划 $(([datetimeoffset]$problem.nextEligibleAt).ToLocalTime().ToString('HH:mm')) 重试" } catch { "$retryLabel，已安排重试" } }
-        else { "$retryLabel，已安排重试" }
-        if ($problem.retryExhaustedForDay -eq $true) { $reason = "$retryLabel，本日停止重复探测，次日再检查" }
-        "- $hostName：$reason"
-    }) -join "`n"
-    $summary += "`n$retryBrief"
-}
-if ($attentionProblems.Count -gt 0) {
-    $summary += "`n需关注 $($attentionProblems.Count) 个："
-    $brief = @($attentionProblems | ForEach-Object {
-        $problem = $_
-        $hostName = Get-ResultDisplayName $problem
-        $reason = if ([string]$problem.failureCode -eq 'two_factor_required') {
-            '需完成一次二次验证以建立可信设备会话'
-        } else { switch ([string]$problem.status) {
-            'login_required' { '登录失效' }
-            'interactive_challenge' { '需要验证' }
-            'managed_challenge_timeout' { '验证超时' }
-            'no_action' { '未找到入口' }
-            'visited' { '结果未确认' }
-            'clicked' { '结果未确认' }
-            default { Compress-Text $problem.reason 40 }
-        } }
-        "- $hostName：$reason"
-    }) -join "`n"
-    $summary += "`n$brief"
+        [pscustomobject]@{ Name = $hostName; Label = $retryLabel; Schedule = Get-RetryTimeText $problem }
+    })
+    foreach ($group in @($retryBrief | Group-Object Label, Schedule)) {
+        $first = $group.Group[0]
+        if ($group.Count -eq 1) {
+            $summary += "`n• $($first.Name)：$($first.Label) · $($first.Schedule)"
+        } else {
+            $summary += "`n$($first.Label) · $($first.Schedule)"
+            $summary += "`n" + (($group.Group | ForEach-Object { "• $($_.Name)" }) -join "`n")
+        }
+    }
 }
 $cleanupProblems = @($reportingResults | Where-Object { $_.cleanupFailureCode })
 if ($cleanupProblems.Count -gt 0) {
-    $summary += "`n窗口清理异常（不改变已确认的签到结果）："
+    $summary += "`n`n窗口清理异常（签到结果已保留）"
     foreach ($problem in $cleanupProblems) {
-        $summary += "`n- $(Get-ResultDisplayName $problem)：任务窗口未正常关闭，未触碰用户窗口"
+        $summary += "`n• $(Get-ResultDisplayName $problem)：任务窗口未关闭"
     }
 }
-if ($summary.Length -gt 950) { $summary = $summary.Substring(0, 947) + "…`n（其余签到项请查看本地日志）" }
+if ($summary.Length -gt 950) {
+    $lines = @()
+    foreach ($line in ($summary -split "`n")) {
+        if ((($lines + $line) -join "`n").Length -gt 900) { break }
+        $lines += $line
+    }
+    $summary = ($lines -join "`n").TrimEnd() + "`n… 更多明细见面板"
+}
 $summary = Remove-SensitiveText $summary
 
 $notification = $config.notification
@@ -266,7 +283,7 @@ $source = if ($notification.source) { [string]$notification.source } else { 'bro
 
 $stateParts = @($reportingResults | Sort-Object { Get-LogicalSiteKey $_ } | ForEach-Object {
     $evidenceSource = if ($_.status -eq 'not_available') { [string]$_.evidence.source } else { '' }
-    "$(Get-LogicalSiteKey $_)=$([string]$_.status):$([string]$_.retryCause):$([string]$_.availabilityKind):$evidenceSource`:$([string]$_.cleanupFailureCode)"
+    "$(Get-LogicalSiteKey $_)=$([string]$_.status):$([string]$_.retryCause):$([string]$_.availabilityKind):$evidenceSource`:$([string]$_.cleanupFailureCode):$([string]$_.retryExhaustedForDay):$([string]$_.retryable):$([string]$_.failureCode)"
 })
 $stateMaterial = if ($stateParts.Count -gt 0) { "$status|$reportRunState|$($stateParts -join '|')" } else { "$status|$RunnerStatus" }
 $stateBytes = [System.Text.Encoding]::UTF8.GetBytes($stateMaterial)
