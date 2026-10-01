@@ -21,6 +21,7 @@ import {createDashboardGenerationReader} from './dashboard-generation.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {releaseInfo} from './release-info.mjs';
 import {operationTargets,enqueueOperation,operationView} from './dashboard-operations.mjs';
+import {matchesTask} from '../public/dashboard-model.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -369,6 +370,16 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   const receiptByTask = new Map((snapshot?.receipts ?? []).map((receipt) => [receipt.taskId, receipt]));
   const canaryByTask=liveCanaryByTask(canaryResults);
   const ptByTask=confirmedPtByTask(snapshot);
+  const ptStatus=publicPtStatus(snapshot?.ptStatus);
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const availabilityByOrigin=new Map();
+  if(ptStatus?.businessDate===today)for(const site of ptStatus.sites){
+    const current=site.effective,at=Date.parse(current?.observedAt??'');
+    if(current?.siteCondition!=='site_maintenance'||['signed','already_signed'].includes(current.status)||current.fresh!==true||!Number.isFinite(at)||
+       !Number.isFinite(Date.parse(snapshot.generatedAt))||at>Date.parse(snapshot.generatedAt)+60_000)continue;
+    availabilityByOrigin.set(site.origin,{condition:'site_maintenance',businessDate:ptStatus.businessDate,
+      observedAt:current.observedAt,summary:current.evidence?.summary||conditionLabels.site_maintenance});
+  }
   const tasks = (snapshot?.tasks ?? []).map((task) => {
     const merged=mergeCanaryTask(task, receiptByTask.get(task.taskId), canaryByTask.get(task.taskId));
     if(runtime?.owners.some(item=>item.origin===task.origin&&item.accountRef===task.accountRef)) {
@@ -392,6 +403,10 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
         summary:redactText(pt.evidence?.summary??'当日 PT 页面已确认签到'),redacted:true,
         verification:'verified'};
     }
+    // Site availability is current, site-wide context, not an account/day receipt.
+    // Keep the runner's uncertainty and submission guards intact, including after midnight.
+    if(!['signed','already_signed','not_available'].includes(merged.observedStatus)&&availabilityByOrigin.has(task.origin))
+      merged.availability=availabilityByOrigin.get(task.origin);
     return merged;
   });
   const sites = new Map();
@@ -432,7 +447,7 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
     evidenceQuality,
     execution,
     readiness: evaluateShadowHistory(ledger),
-    ptStatus: publicPtStatus(snapshot?.ptStatus),
+    ptStatus,
     status,
     tasks,
     sites: [...sites.values()].map(serializeGroup).sort((a, b) => a.origin.localeCompare(b.origin)),
@@ -700,7 +715,7 @@ export function createDashboardServer({
       } else if (requestUrl.pathname === '/api/tasks') {
         const query = (requestUrl.searchParams.get('q') ?? '').trim().toLowerCase().slice(0, 80);
         const filterStatus = requestUrl.searchParams.get('status');
-        const tasks = view.tasks.filter((task) => (!filterStatus || task.observedStatus === filterStatus) && (!query || `${task.origin} ${task.logicalSiteKey} ${task.accountRef ?? ''} ${task.taskId}`.toLowerCase().includes(query)));
+        const tasks = view.tasks.filter(task=>matchesTask(task,{status:filterStatus??'',query}));
         sendJson(response, 200, { tasks, total: tasks.length });
       } else if (requestUrl.pathname === '/api/sites') {
         const sites = view.sites.map((site) => ({ ...site, control: view.controls?.[site.origin] ?? { policy: 'monitor', note: '', updatedAt: null } }));

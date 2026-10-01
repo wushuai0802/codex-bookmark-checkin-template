@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { overviewMetrics, dailySummaryTitle, statusGradient } from '../public/overview-model.mjs';
+import { overviewMetrics, overviewStatusCounts, dailySummaryTitle, statusGradient } from '../public/overview-model.mjs';
+
+test('overview separates maintenance, active uncertainty and deferred work without inflating completion',()=>{
+  const data={counts:{executionUnits:5},status:{signed:1,needs_attention:2,deferred:1,not_available:1},
+    evidenceQuality:{verifiedSuccess:1,verifiedUnavailable:1},tasks:[
+      {observedStatus:'signed'},
+      {observedStatus:'needs_attention',condition:'submission_outcome_unknown',availability:{condition:'site_maintenance'}},
+      {observedStatus:'needs_attention',condition:'submission_outcome_unknown'},
+      {observedStatus:'deferred'},
+      {observedStatus:'not_available'}]};
+  const original=JSON.stringify(data);
+  assert.deepEqual(overviewStatusCounts(data),{signed:1,external:1,verification:1,deferred:1,not_available:1});
+  const metrics=overviewMetrics(data);
+  assert.equal(metrics.pending,3);assert.equal(metrics.success,1);assert.equal(metrics.verifiedSuccess,1);
+  assert.equal(metrics.manual,1);assert.equal(metrics.external,1);assert.equal(metrics.deferred,1);
+  assert.equal(metrics.allResolved,false);assert.equal(JSON.stringify(data),original);
+  assert.deepEqual(overviewStatusCounts({...data,tasks:data.tasks.slice(0,1)}),data.status);
+});
 
 test('success, disabled and outstanding counts do not overlap', () => {
   const now = Date.now();

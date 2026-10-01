@@ -1,5 +1,5 @@
-import { overviewMetrics, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, TASK_FILTERS, taskStatusLabel, externalTask } from './dashboard-model.mjs';
+import { overviewMetrics, overviewStatusCounts, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, TASK_FILTERS, taskStatusLabel, taskStatusSummary, taskStatusCondition, externalTask } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion, MOTION } from './motion.mjs';
@@ -63,6 +63,7 @@ function statusChip(status,task=null) {
 }
 
 function evidenceLabel(task) {
+  if(task.availability?.condition==='site_maintenance')return '站点公告 · 状态观察';
   const evidence = task.evidence;
   if (!evidence) return '无证据';
   const quality = {missing_evidence:'缺少结构化证据',unsupported_evidence:'证据类型未支持',non_authoritative:'非权威证据',wrong_business_date:'证据日期不符',identity_conflict:'身份冲突',unverified_source:'证据待核验',not_started:'尚无执行回执',feature_unavailable:'功能未开放证据',unverified_unavailable:'未开放结论待核验'}[evidence.verification];
@@ -255,7 +256,7 @@ function renderKpis(data) {
   const cards = [
     ['执行成功', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'completed'],
     ['未开放回执', metrics.unavailable, `已核验 ${metrics.verifiedUnavailable} / 待核验 ${metrics.unverifiedUnavailable}`, 'unavailable'],
-    ['尚未完成', metrics.pending, `${metrics.manual} 项需关注 · ${metrics.deferred} 项延后`, 'pending'],
+    ['尚未完成', metrics.pending, [`${metrics.manual} 项需关注`,...(metrics.external?[`${metrics.external} 项等待外部条件`]:[]),...(metrics.deferred||!metrics.external?[`${metrics.deferred} 项延后`]:[])].join(' · '), 'pending'],
     ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, '同站多账号分别核验', '']
   ];
   const grid = $('#kpi-grid'); grid.replaceChildren();
@@ -322,11 +323,16 @@ function renderTaskDetails(task) {
   dialog.setAttribute('aria-labelledby', title.id);
   const close = el('button', 'icon-button', '×'); close.type = 'button'; close.setAttribute('aria-label', '关闭任务详情');
   close.addEventListener('click', () => navigation.closeOverlay()); append(heading, title, close); dialog.append(heading);
+  if(task.availability){
+    for(const [label,value] of [['当前站点状态',taskStatusLabel(task)],['站点状态说明',taskStatusSummary(task)],['状态观察时间',formatTime(task.availability.observedAt)]]){
+      const row=el('div','detail-row');append(row,el('span','muted',label),el('strong',null,value));dialog.append(row);
+    }
+  }
   for (const [label, value] of [['账户', identityTitle(task)], ['身份标识', identityCaption(task)],
     ['身份来源', {result:'执行回执',harvest:'Harvest 账号资料',configuration:'配置中的预期账号', 'user-self':'身份接口核验', 'browser-cache':'本站登录缓存，尚未通过在线核验'}[task.identity?.source]],
     ['身份采集时间', formatTime(task.identity?.observedAt)], ['原始证据类型',task.evidence?.rawSource], ['缓存原证据',task.evidence?.originalSource],
-    ['登录方式', task.identity?.provider], ['状态', taskStatusLabel(task)], ['业务日期', task.businessDate],
-    ['观察时间', formatTime(task.observedAt)], ['判定依据', evidenceLabel(task)], ['结果说明', task.evidence?.summary],
+    ['登录方式', task.identity?.provider], ['执行记录状态', taskStatusLabel({...task,availability:null})], ['业务日期', task.businessDate],
+    ['观察时间', formatTime(task.observedAt)], ['判定依据', evidenceLabel({...task,availability:null})], ['执行记录说明', task.evidence?.summary],
     ['执行所有者', task.executionOwner], ['任务 ID', task.taskId]]) {
     const row = el('div', 'detail-row'); append(row, el('span', 'muted', label), el('strong', null, value)); dialog.append(row);
   }
@@ -352,17 +358,17 @@ function renderHealth(data) {
 }
 
 function renderStatusChart(data) {
-  const status = data?.status ?? {};
+  const status = overviewStatusCounts(data);
   const total = Object.values(status).reduce((sum, value) => sum + Number(value || 0), 0);
   const chart = $('#status-chart'); chart.replaceChildren();
   const donut = el('div', 'donut'); donut.style.background = statusGradient(status); append(donut, el('strong', null, total));
   const legend = el('div', 'legend');
   const colors = statusColors;
-  for (const key of ['signed', 'already_signed', 'not_available', 'needs_attention', 'deferred', 'login_required', 'failed', 'unknown','not_started']) {
+  for (const key of ['signed', 'already_signed', 'not_available', 'external','verification','needs_attention', 'deferred', 'login_required', 'failed', 'unknown','not_started']) {
     if (!(status[key] ?? 0)) continue;
     const row = el('button', 'legend-row legend-link'); row.type = 'button';
     row.addEventListener('click', () => openTasks({ status: key }));
-    const label = el('span', 'legend-label', STATUS_LABELS[key]); label.style.setProperty('--dot', colors[key] ?? '#8b96a8');
+    const label = el('span', 'legend-label', {external:'等待外部条件',verification:'结果待核验'}[key]??STATUS_LABELS[key]); label.style.setProperty('--dot', colors[key] ?? '#8b96a8');
     append(row, label, el('strong', null, `${status[key]} · ${total ? Math.round(status[key] / total * 100) : 0}%`)); legend.append(row);
   }
   append(chart, donut, legend);
@@ -428,7 +434,8 @@ function renderReadiness(data) {
 
 function renderAttention(tasks) {
   const { all: pending, pausedCount, visible, remaining } = attentionPreview(tasks, matchMedia('(max-width:700px)').matches ? 3 : 4);
-  $('#attention-count').textContent = `${pending.length} 待关注${pausedCount ? ` · ${pausedCount} 暂缓` : ''}`;
+  const waiting=pending.filter(externalTask).length;
+  $('#attention-count').textContent = `${pending.length&&waiting===pending.length?`${waiting} 等待恢复`:`${pending.length} 待关注`}${pausedCount ? ` · ${pausedCount} 暂缓` : ''}`;
   const unread = pending.filter(task => !notices.isRead(task)).length;
   const badge = $('#attention-badge');
   if (badge) { badge.textContent = String(unread); badge.hidden = unread === 0; badge.style.display = unread ? '' : 'none'; }
@@ -452,10 +459,10 @@ function renderAttention(tasks) {
     const title=el('strong',null,group.tasks.length>1?`${siteTitle(task)} · ${group.tasks.length} 个账号`:siteTitle(task));
     title.title=host;
     append(top,title,statusChip(task.observedStatus,task));
-    const reason = el('p', 'attention-reason', task.evidence?.summary || '本次尚未取得明确结果。');
+    const reason = el('p', 'attention-reason', taskStatusSummary(task) || '本次尚未取得明确结果。');
     reason.title = reason.textContent;
     const foot = el('div', 'attention-foot');
-    append(foot, el('span', null, task.observedStatus === 'deferred' ? '等待既有重试策略 · 面板不执行补签' : '需要复核身份或流程 · 不自动重复提交'));
+    append(foot, el('span', null, taskStatusCondition(task)==='site_maintenance'?'等待站点恢复后只读核验':externalTask(task)?'等待外部条件恢复':task.observedStatus === 'deferred' ? '等待既有重试策略 · 面板不执行补签' : '需要复核身份或流程 · 不自动重复提交'));
     const view = el('button', 'link-button', group.tasks.length > 1 ? '查看相关任务 →' : '查看任务 →');
     view.addEventListener('click', () => {
       notices.markRead(group.tasks); renderAttention(tasks);
@@ -495,6 +502,7 @@ function renderTasks(tasks) {
     return;
   }
   for (const task of tasks.slice((state.taskPage-1)*pageSize,state.taskPage*pageSize)) {
+    const displayAt=task.availability?.observedAt??task.observedAt;
     const row = el('tr');
     const taskCell = el('td'); const detail = el('button', 'link-button', '查看详情'); detail.type = 'button'; detail.addEventListener('click', () => taskDetails(task));
     taskCell.append(detail);
@@ -502,17 +510,17 @@ function renderTasks(tasks) {
     const accountCell = el('td'); append(accountCell, el('span', 'origin', identityTitle(task)), el('span', 'subtext', identityCaption(task)));
     const statusCell = el('td'); append(statusCell, statusChip(task.observedStatus,task),
       task.attention?.pausedUntil ? el('span', 'subtext', `暂缓关注至 ${formatTime(task.attention.pausedUntil)}`) : null);
-    const evidenceCell = el('td'); append(evidenceCell, el('span', null, evidenceLabel(task)), el('span', 'subtext evidence-summary', task.evidence?.summary ?? '无详细证据'), el('span', 'subtext', task.observedAt ? formatTime(task.observedAt) : '—'));
-    const observedCell = el('td'); append(observedCell, el('span', null, task.observedAt ? formatTime(task.observedAt) : '—'), el('span', 'subtext', task.businessDate));
+    const evidenceCell = el('td'); append(evidenceCell, el('span', null, evidenceLabel(task)), el('span', 'subtext evidence-summary', taskStatusSummary(task) ?? '无详细证据'), el('span', 'subtext', displayAt ? formatTime(displayAt) : '—'));
+    const observedCell = el('td'); append(observedCell, el('span', null, displayAt ? formatTime(displayAt) : '—'), el('span', 'subtext', task.availability?.businessDate??task.businessDate));
     append(row, siteCell, accountCell, statusCell, evidenceCell, observedCell, taskCell); body.append(row);
     const card = el('article', 'mobile-task-card');
     const heading = el('div', 'mobile-task-head');
     const identity = el('div', 'mobile-task-identity');
     append(identity, el('strong', null, siteTitle(task)), el('span', 'subtext', identityTitle(task)));
     append(heading, identity, statusChip(task.observedStatus,task));
-    const explanation = el('p', 'mobile-task-evidence', task.evidence?.summary || evidenceLabel(task));
+    const explanation = el('p', 'mobile-task-evidence', taskStatusSummary(task) || evidenceLabel(task));
     const footer = el('div', 'mobile-task-foot');
-    const timestamp = el('span', 'muted', task.attention?.pausedUntil ? `暂缓关注至 ${formatTime(task.attention.pausedUntil)}` : task.observedAt ? formatTime(task.observedAt) : task.businessDate);
+    const timestamp = el('span', 'muted', task.attention?.pausedUntil ? `暂缓关注至 ${formatTime(task.attention.pausedUntil)}` : displayAt ? formatTime(displayAt) : task.businessDate);
     const action = el('button', 'link-button', '查看详情 →'); action.type = 'button';
     action.setAttribute('aria-label', `查看${siteTitle(task)}的任务详情`);
     action.addEventListener('click', () => taskDetails(task));
@@ -670,8 +678,9 @@ function renderAccountDetails(account) {
   for(const task of tasks){
     const row=el('div','account-result');
     append(row,el('strong',null,siteTitle(task)),statusChip(task.observedStatus,task));
-    append(today,row,el('p','account-evidence',task.evidence?.summary??'尚无详细证据'),
-      el('p','muted',`${evidenceLabel(task)} · ${task.observedAt?formatTime(task.observedAt):'未记录时间'}`));
+    const displayAt=task.availability?.observedAt??task.observedAt;
+    append(today,row,el('p','account-evidence',taskStatusSummary(task)??'尚无详细证据'),
+      el('p','muted',`${evidenceLabel(task)} · ${displayAt?formatTime(displayAt):'未记录时间'}`));
   }
   dialog.append(today);
   const identity=el('section','account-detail-section');identity.append(el('h3',null,'身份与归属'));

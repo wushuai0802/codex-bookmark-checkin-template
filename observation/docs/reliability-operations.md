@@ -82,6 +82,14 @@ attempt journal. They do not replace today's evidence or imply that the old
 request reached the site. Individually reviewed manual closure removes that
 attempt's diagnostic from later days without enabling same-day replay.
 
+The dashboard also projects fresh PT maintenance observations onto the matching
+origin's unresolved regular tasks as `availability` metadata. This works after
+midnight while the latest execution report still belongs to yesterday. Task
+cards, notices, filters and overview categories show the current availability;
+task details keep the original execution date, evidence and uncertain submission.
+Availability never changes completion, account binding or permitted operations.
+Expired observations are discarded when serving the dashboard.
+
 ## Retry and publication
 
 Harvest waiting and proven preflight refusals do not consume submission

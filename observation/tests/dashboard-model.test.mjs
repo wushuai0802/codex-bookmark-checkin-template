@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesPt,ptStatusCategory,ptStatusCondition,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS,taskStatusLabel} from '../public/dashboard-model.mjs';
+import {matchesPt,ptStatusCategory,ptStatusCondition,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS,taskStatusLabel,taskStatusSummary,externalTask} from '../public/dashboard-model.mjs';
+
+test('current availability consistently labels and filters an uncertain regular task without changing its result',()=>{
+  const task={origin:'https://fixture.example',observedStatus:'needs_attention',condition:'submission_outcome_unknown',
+    failureCode:'submission_outcome_unknown',submissionAttempted:true,evidence:{authoritative:false,summary:'旧执行结果尚未确认'},
+    availability:{condition:'site_maintenance',summary:'站点维护，等待恢复'}};
+  const original=JSON.stringify(task);
+  assert.equal(taskStatusLabel(task),'站点维护');assert.equal(taskStatusSummary(task),'站点维护，等待恢复');
+  assert.equal(externalTask(task),true);
+  assert.equal(matchesTask(task,{status:'external'}),true);
+  assert.equal(matchesTask(task,{status:'verification'}),false);
+  assert.equal(matchesTask(task,{status:'attention'}),false);
+  assert.equal(matchesTask(task,{status:'pending'}),true);
+  assert.equal(JSON.stringify(task),original);
+  assert.equal(taskStatusLabel({...task,availability:null}),'结果待核验');
+  assert.equal(taskStatusLabel({...task,observedStatus:'already_signed'}),'今日已完成');
+  assert.equal(externalTask({...task,observedStatus:'already_signed'}),false);
+});
 
 test('PT current maintenance takes precedence over historical and same-day uncertainty',()=>{
   const site={effective:{status:'needs_attention',fresh:true,siteCondition:'site_maintenance',failureCode:'submission_outcome_unknown'},
