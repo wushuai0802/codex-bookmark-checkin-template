@@ -18,7 +18,9 @@ const snapshot = buildSnapshot({
 const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
 snapshot.businessDate=today;
 snapshot.tasks=snapshot.tasks.map(task=>({...task,businessDate:today,
-  ...(task.observedStatus==='needs_attention'?{condition:'upstream_unavailable'}:{})}));
+  ...(task.observedStatus==='needs_attention'?{condition:'submission_outcome_unknown',failureCode:'submission_outcome_unknown',submissionAttempted:true}:{})}));
+const uncertainTask=snapshot.tasks.find(task=>task.observedStatus==='needs_attention');
+snapshot.receipts.find(receipt=>receipt.taskId===uncertainTask.taskId).evidence.summary='签到动作已发出但结果未确认';
 snapshot.ptStatus.businessDate=today;
 const ptSite = (host, status, authoritative) => ({
   origin: `https://${host}.example`, displayName: host, fallbackEnabled: true,
@@ -32,8 +34,11 @@ snapshot.ptStatus.sites = [ptSite('confirmed','signed',true),ptSite('reported','
 snapshot.ptStatus.sites[0].origin='https://cspt.top';
 snapshot.ptStatus.sites[2].effective.siteCondition='site_maintenance';
 snapshot.ptStatus.sites[2].effective.evidence.summary='站点公告正在维护，等待恢复';
+snapshot.ptStatus.sites[2].origin=uncertainTask.origin;
+snapshot.ptStatus.sites[2].inLegacyPlan=true;
+snapshot.ptStatus.sites[2].accountRef=uncertainTask.accountRef;
 snapshot.ptStatus.sites[2].recovery={code:'prior_outcome_unknown',blockedSince:'2026-09-25',summary:'历史执行结果未确认'};
-snapshot.ptStatus.counts = { ...snapshot.ptStatus.counts, sites: 3, externalOnly: 3, fallbackOnly: 3,
+snapshot.ptStatus.counts = { ...snapshot.ptStatus.counts, sites: 3, inLegacyPlan:1, externalOnly: 2, fallbackOnly: 2,
   status: { ...snapshot.ptStatus.counts.status, signed: 2, unknown: 1 } };
 fs.writeFileSync(path.join(dataDir, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
 const baseRecord=createLedgerRecord(snapshot),dayMs=86_400_000;
@@ -78,10 +83,14 @@ try {
       await page.locator('#kpi-grid .kpi').nth(2).click();
       assert.equal(await page.locator('#task-status').inputValue(),'pending');
       assert.equal(await page.locator('#tasks-body tr').count(),1);
-      assert.equal(await page.locator('#tasks-body .status-chip').textContent(),'等待站点恢复');
+      assert.equal(await page.locator('#tasks-body .status-chip').textContent(),'站点维护');
+      assert.match(await page.locator('#tasks-body .evidence-summary').textContent(),/维护/);
+      assert.doesNotMatch(await page.locator('#tasks-body .evidence-summary').textContent(),/动作已发出/);
       if (mobile) {
         assert.equal(await page.locator('#task-mobile-list .mobile-task-card').count(),1);
         assert.equal(await page.locator('#task-mobile-list .mobile-task-card .status-chip').isVisible(),true);
+        assert.equal(await page.locator('#task-mobile-list .mobile-task-card .status-chip').textContent(),'站点维护');
+        assert.match(await page.locator('#task-mobile-list .mobile-task-evidence').textContent(),/维护/);
         assert.equal(await page.locator('#view-tasks .table-wrap').isVisible(),false);
       }
       await page.reload();
@@ -171,7 +180,8 @@ try {
       await page.getByRole('button',{name:'回到今天'}).click();
       await page.locator(`.calendar-day[aria-label^="${snapshot.businessDate}"]`).click();
       assert.match(await page.locator('#calendar-detail').textContent(), /项完成/);
-      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),2);
+      // The maintained PT site is the same regular task, so it stays one pending row.
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),1);
       if(mobile)assert.ok(await page.evaluate(()=>{
         const filters=document.querySelector('.calendar-filters'),right=filters.getBoundingClientRect().right;
         return [...filters.querySelectorAll('button')].every(button=>button.getBoundingClientRect().right<=right+1&&
@@ -184,7 +194,7 @@ try {
           `${snapshot.businessDate.slice(0,8)}${String(selectedDay-1).padStart(2,'0')}`);
       }
       await page.locator('.calendar-filters').getByRole('button',{name:/全部/}).click();
-      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),snapshot.tasks.length+snapshot.ptStatus.sites.length);
+      assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),snapshot.tasks.length+snapshot.ptStatus.sites.length-1);
       assert.equal(await page.locator('.calendar-filters button:focus').getAttribute('aria-pressed'),'true');
       await page.locator('.ui-select[data-for="calendar-scope"] .ui-select-trigger').click();
       await page.getByRole('listbox',{name:'日历范围'}).getByRole('option',{name:'PT 站点'}).click();
@@ -250,6 +260,12 @@ try {
       await page.waitForFunction(() => location.hash === '#overview');
       // Opening the queue preserves unread state; acknowledgement is explicit.
       assert.equal(await page.locator('#attention-badge').isVisible(), true);
+      assert.equal(await page.locator('#attention-list .status-chip').textContent(),'站点维护');
+      assert.equal(await page.locator('#attention-count').textContent(),'1 等待恢复');
+      assert.match(await page.locator('#attention-list .attention-reason').textContent(),/维护/);
+      assert.doesNotMatch(await page.locator('#attention-list').textContent(),/需要复核身份|动作已发出/);
+      assert.match(await page.locator('#kpi-grid .kpi').nth(2).textContent(),/0 项需关注.*1 项等待外部条件/);
+      assert.match(await page.locator('#status-chart .legend').textContent(),/等待外部条件/);
       await page.getByRole('button',{name:'全部标记为已读'}).click();
       await page.waitForTimeout(1000);
       const scrollBefore = await page.evaluate(() => scrollY);
@@ -295,7 +311,7 @@ try {
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
       await page.locator('#pt-kpis .kpi').filter({hasText:'状态未知'}).click();
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
-      assert.match(await page.locator('#pt-status-body').textContent(),/unknown\.example/);
+      assert.ok((await page.locator('#pt-status-body').textContent()).includes(uncertainTask.origin));
       assert.equal(await page.locator('#pt-status-body .status-chip.deferred').textContent(),'站点维护');
       assert.match(await page.locator('#pt-status-body').textContent(),/等待站点恢复/);
       assert.equal(await page.locator('#pt-status-body .pt-recovery-note').getAttribute('open'),null);

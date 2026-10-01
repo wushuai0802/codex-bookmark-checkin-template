@@ -1,3 +1,5 @@
+import {externalTask,taskStatusCondition,taskStatusSummary} from './dashboard-model.mjs';
+
 // Presentation-only acknowledgement. Never changes task status or execution.
 const STORAGE_KEY = 'fabricReadNotices.v1';
 export const noticeKey = task => `${task.businessDate ?? ''}:${task.taskId}:${task.observedStatus}`;
@@ -8,10 +10,11 @@ export const pendingNotices = (tasks, now = Date.now()) => tasks.filter(task => 
   && !(Number.isFinite(Date.parse(task.attention?.pausedUntil)) && Date.parse(task.attention.pausedUntil) > now));
 export function attentionPreview(tasks, limit = 4, now = Date.now()) {
   const priority = { needs_attention: 0, login_required: 1, failed: 2, deferred: 3 };
-  const all = pendingNotices(tasks, now).sort((a, b) => (priority[a.observedStatus] ?? 4) - (priority[b.observedStatus] ?? 4));
+  const rank=task=>externalTask(task)?3:priority[task.observedStatus]??4;
+  const all = pendingNotices(tasks, now).sort((a, b) => rank(a)-rank(b));
   const grouped = new Map();
   for (const task of all) {
-    const key = JSON.stringify([task.businessDate, task.origin, task.observedStatus, task.evidence?.summary]);
+    const key = JSON.stringify([task.businessDate, task.origin, taskStatusCondition(task)??task.observedStatus, taskStatusSummary(task)]);
     const group = grouped.get(key) ?? { task, tasks: [], origin: task.origin };
     group.tasks.push(task);
     grouped.set(key, group);

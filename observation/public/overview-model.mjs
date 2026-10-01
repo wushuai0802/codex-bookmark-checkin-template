@@ -1,6 +1,18 @@
+import {externalTask,taskStatusCondition} from './dashboard-model.mjs';
+
+export function overviewStatusCounts(data={}) {
+  const total=data.counts?.executionUnits;
+  if(!Array.isArray(data.tasks)||data.tasks.length!==total)return data.status??data.counts?.status??{};
+  return data.tasks.reduce((counts,task)=>{
+    const status=externalTask(task)?'external':
+      !['signed','already_signed','not_available'].includes(task.observedStatus)&&taskStatusCondition(task)==='submission_outcome_unknown'?'verification':task.observedStatus??'unknown';
+    counts[status]=(counts[status]??0)+1;return counts;
+  },{});
+}
+
 export function overviewMetrics(data = {}, now = Date.now()) {
   const count = value => Number.isInteger(value) && value >= 0 ? value : 0;
-  const status = data.status ?? data.counts?.status ?? {};
+  const status = overviewStatusCounts(data);
   const total = count(data.counts?.executionUnits);
   const success = count(status.signed) + count(status.already_signed);
   const unavailable = count(status.not_available);
@@ -9,7 +21,7 @@ export function overviewMetrics(data = {}, now = Date.now()) {
   const verifiedUnavailable = Math.min(unavailable, count(data.evidenceQuality?.verifiedUnavailable));
   const unverifiedUnavailable = unavailable - verifiedUnavailable;
   const pending = Math.max(0, total - success - unavailable);
-  const manual = count(status.needs_attention) + count(status.login_required) + count(status.failed);
+  const manual = count(status.needs_attention) + count(status.login_required) + count(status.failed) + count(status.verification);
   const age = now - Date.parse(data.generatedAt ?? '');
   const healthAge = now - Date.parse(data.health?.sourceCheckedAt ?? '');
   const businessDate = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai'}).format(new Date(now));
@@ -20,7 +32,7 @@ export function overviewMetrics(data = {}, now = Date.now()) {
   return {
     total, success, unavailable, pending, manual, verifiedSuccess, unverifiedSuccess, verifiedUnavailable, unverifiedUnavailable,
     executionRate: total ? Math.round(success / total * 100) : null,
-    deferred: count(status.deferred),
+    deferred: count(status.deferred),external:count(status.external),
     eligible: Math.max(0, total - verifiedUnavailable),
     rate: total > verifiedUnavailable ? Math.round(verifiedSuccess / (total - verifiedUnavailable) * 100) : null,
     fresh, healthFresh,
@@ -41,7 +53,7 @@ export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0
   return '执行回执已收齐，成功证据待补录';
 }
 
-export const statusColors = { signed: '#36c99b', already_signed: '#57b9f3', not_available: '#bbc6d4', needs_attention: '#ffc65c', deferred: '#b69cf6', login_required: '#ffac70', failed: '#ff7f93', unknown: '#91a4b7',not_started:'#91a4b7' };
+export const statusColors = { signed: '#36c99b', already_signed: '#57b9f3', not_available: '#bbc6d4', needs_attention: '#ffc65c', deferred: '#b69cf6', external:'#b69cf6',verification:'#ffc65c', login_required: '#ffac70', failed: '#ff7f93', unknown: '#91a4b7',not_started:'#91a4b7' };
 export function statusGradient(status = {}) {
   const entries = Object.entries(status).filter(([, n]) => Number.isInteger(n) && n > 0);
   const total = entries.reduce((sum, [, n]) => sum + n, 0);

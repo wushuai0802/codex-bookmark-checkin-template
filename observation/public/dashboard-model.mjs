@@ -1,8 +1,10 @@
 import {conditionLabels,statusLabels,externalRetryCauses} from './checkin-contract.generated.mjs';
 
-export function taskStatusLabel(task){return (!['signed','already_signed','not_available'].includes(task?.observedStatus)?conditionLabels[task?.condition]:null)??statusLabels[task?.observedStatus]??task?.observedStatus;}
+export function taskStatusCondition(task){return task?.availability?.condition==='site_maintenance'?'site_maintenance':task?.condition;}
+export function taskStatusSummary(task){return task?.availability?.condition==='site_maintenance'?task.availability.summary:task?.evidence?.summary;}
+export function taskStatusLabel(task){return (!['signed','already_signed','not_available'].includes(task?.observedStatus)?conditionLabels[taskStatusCondition(task)]:null)??statusLabels[task?.observedStatus]??task?.observedStatus;}
 export function externalTask(task){return !['signed','already_signed','not_available'].includes(task?.observedStatus)&&
-  [...externalRetryCauses,'site_maintenance','entitlement_expired'].includes(task?.condition);}
+  [...externalRetryCauses,'site_maintenance','entitlement_expired'].includes(taskStatusCondition(task));}
 
 export function identityTitle(item) {
   const identity = item.identity ?? {};
@@ -40,6 +42,7 @@ export const normalizeTaskFilter = value => value === 'not_available' ? 'unavail
 export function matchesTask(task, { status = '', query = '' } = {}) {
   status = normalizeTaskFilter(status);
   const value = task.observedStatus;
+  const condition=taskStatusCondition(task);
   const statusGroups = {
     completed: ['signed', 'already_signed'],
     pending: ['deferred', 'needs_attention', 'failed', 'unknown', 'not_started', 'login_required'],
@@ -47,9 +50,10 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
     login_required: ['login_required'],
     unavailable: ['not_available'],
   };
-  const statusMatch = !status || (status==='external'?externalTask(task):status==='verification'?!['signed','already_signed','not_available'].includes(value)&&task.condition==='submission_outcome_unknown':
-    status==='attention'?statusGroups.attention.includes(value)&&!externalTask(task)&&task.condition!=='submission_outcome_unknown':
-    statusGroups[status] ? statusGroups[status].includes(value) : value === status);
+  const statusGroup=Object.hasOwn(statusGroups,status)?statusGroups[status]:null;
+  const statusMatch = !status || (status==='external'?externalTask(task):status==='verification'?!['signed','already_signed','not_available'].includes(value)&&condition==='submission_outcome_unknown':
+    status==='attention'?statusGroups.attention.includes(value)&&!externalTask(task)&&condition!=='submission_outcome_unknown':
+    statusGroup ? statusGroup.includes(value) : value === status);
   const haystack = [task.origin, task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
     task.identity?.username, task.identity?.userId, task.identity?.label].join(' ').toLowerCase();
   return statusMatch && haystack.includes(query.trim().toLowerCase());
