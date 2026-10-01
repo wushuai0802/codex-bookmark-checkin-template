@@ -1,4 +1,10 @@
 // Display metadata is explicitly allowlisted and never used for execution identity.
+import {ptSiteDisplayNames} from './checkin-contract.generated.mjs';
+
+export function siteDisplayName(origin, value) {
+  return ptSiteDisplayNames[origin] ?? shortLabel(value);
+}
+
 export function shortLabel(value, limit = 80) {
   if (!['string', 'number'].includes(typeof value)) return null;
   const text = String(value).trim();

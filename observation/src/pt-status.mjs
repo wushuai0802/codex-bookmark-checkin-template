@@ -3,6 +3,7 @@ import { normalizeOrigin, redactText } from './contracts.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {ptStatuses} from './checkin-contract.generated.mjs';
+import {siteDisplayName} from './display-identity.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
 
 const SOURCE_VALUES = new Set(['harvest', 'legacy-checkin', 'execution-supplement', 'manual', 'v2-observer', 'other']);
@@ -106,6 +107,8 @@ function stableSiteRef(origin, accountRef) {
 
 function displayNameFor(target, origin) {
   const candidate = target?.displayName ?? target?.title ?? target?.name;
+  const canonical = siteDisplayName(origin, null);
+  if (canonical) return canonical;
   if (typeof candidate === 'string' && candidate.trim()) return redactText(candidate).slice(0, 80);
   return origin.replace(/^https:\/\//, '');
 }
@@ -174,12 +177,11 @@ export function normalizePtStatusReport(report, {
 function betterObservation(a, b) {
   const confirmedCompletion = item => item.freshness.fresh && item.evidence.authoritative
     && ['signed', 'already_signed'].includes(item.status);
-  const unconfirmedNegative = item => !item.evidence.authoritative
-    && ['failed', 'not_signed', 'unknown', 'needs_attention', 'interactive_challenge'].includes(item.status);
+  const unconfirmedObservation = item => !item.evidence.authoritative;
   if (a.status === 'unknown' && !a.evidence.authoritative && confirmedCompletion(b)) return b;
   if (b.status === 'unknown' && !b.evidence.authoritative && confirmedCompletion(a)) return a;
-  if (confirmedCompletion(a) && unconfirmedNegative(b)) return a;
-  if (confirmedCompletion(b) && unconfirmedNegative(a)) return b;
+  if (confirmedCompletion(a) && unconfirmedObservation(b)) return a;
+  if (confirmedCompletion(b) && unconfirmedObservation(a)) return b;
   const time = new Date(a.observedAt) - new Date(b.observedAt);
   if (time !== 0) return time > 0 ? a : b;
   return (SOURCE_PRIORITY.get(a.source) ?? 0) >= (SOURCE_PRIORITY.get(b.source) ?? 0) ? a : b;
@@ -203,7 +205,8 @@ function mergeSiteObservations(observations, target) {
   return {
     siteRef: stableSiteRef(ordered[0].origin, ordered[0].accountRef),
     origin: ordered[0].origin,
-    displayName: ordered.find((item) => item.displayName)?.displayName ?? displayNameFor(target, ordered[0].origin),
+    displayName: target ? displayNameFor(target, ordered[0].origin)
+      : ordered.find((item) => item.displayName)?.displayName ?? displayNameFor(target, ordered[0].origin),
     accountRef: ordered[0].accountRef,
     inLegacyPlan: ordered.some((item) => item.inLegacyPlan),
     managedBy: [...new Set(ordered.map((item) => item.managedBy))].sort().join(' + '),
@@ -316,7 +319,7 @@ export function buildPtStatus({
       item.supplementCandidate = false;
     }
   }
-  const sites = [...grouped.values()].map((items) => ({...mergeSiteObservations(items, targets.get(items[0].origin)),
+  const sites = [...grouped.values()].map((items) => ({...mergeSiteObservations(items, targets.get(items[0].origin)??monitorSites.get(items[0].origin)),
     fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)})).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
   if(recoveryReport?.businessDate===businessDate)for(const site of sites){
     const recovery=recoveryReport.sites?.find(item=>item.origin===site.origin);

@@ -18,6 +18,9 @@ export const externalRetryCauses = Object.freeze([
   "rate_limit",
   "harvest_waiting"
 ]);
+export const ptSiteDisplayNames = Object.freeze({
+  "https://ptsbao.club": "骚包"
+});
 export const nativePtHeaderOrigins = Object.freeze([
   "https://audiences.me",
   "https://ourbits.club",
@@ -99,6 +102,10 @@ export const ptRetryCauses = Object.freeze([
   "harvest_waiting"
 ]);
 export const ptReadPolicies = Object.freeze({
+  "https://ourbits.club": {
+    "selector": "#info_block",
+    "selfProfileHeader": true
+  },
   "https://cspt.top": {
     "selector": ".menu-base-info",
     "actionPath": "/attendance.php",

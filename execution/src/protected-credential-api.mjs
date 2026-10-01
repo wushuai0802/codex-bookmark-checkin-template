@@ -32,6 +32,18 @@ export function credentialApiUserData(body) {
   return { id: String(id), value: raw };
 }
 
+export function credentialApiStoredUser(body) {
+  const user = credentialApiUserData(body);
+  const token = body?.data?.access_token;
+  if (!user || typeof token !== 'string' || !token) return null;
+  // Keep the authenticated response's session with the same verified user.
+  // Some sites nest the user separately from the tokens; storing only that
+  // nested object makes a fresh browser lose authorization immediately.
+  return {...user.value, access_token: token,
+    ...(typeof body.data.refresh_token === 'string' && body.data.refresh_token
+      ? {refresh_token: body.data.refresh_token} : {})};
+}
+
 export function classifyCredentialApiLoginResponse({ statusCode, body }) {
   const message = String(body?.message ?? body?.error ?? "");
   if (/(密码错误|账号或密码|用户名或密码|invalid credentials|incorrect password)/i.test(message)) {

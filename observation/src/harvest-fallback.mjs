@@ -227,7 +227,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         const livePreview=planHarvestFallback({harvest:live,catalog,plan,latest,
           fallbackReport:currentSupplement,config,now:clock(),fallbackOnlyEnabled});
         if(live.taskCompletion?.resultId!==harvest.taskCompletion?.resultId||
-           live.taskCompletion?.completedAt!==harvest.taskCompletion?.completedAt){
+           Date.parse(live.taskCompletion?.completedAt)!==Date.parse(harvest.taskCompletion?.completedAt)){
           outcomes.push({origin:candidate.origin,state:'harvest_task_changed'});
           break;
         }

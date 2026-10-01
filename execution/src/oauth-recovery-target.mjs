@@ -7,6 +7,18 @@ function canonicalHttpsOrigin(value, field) {
   return url.origin;
 }
 
+export function oauthRecoveryProvider(origin, allowedOrigins = [], config = {}) {
+  const direct = config.automaticOAuthProviders?.[origin];
+  if (direct) return direct;
+  // A migrated bookmark may retain its provider on an explicitly allowed
+  // related origin. Reuse only the provider label, never its account/profile.
+  const providers = new Set(allowedOrigins.map(value => {
+    try { return config.automaticOAuthProviders?.[canonicalHttpsOrigin(value, 'OAuth 允许来源')]; }
+    catch { return null; }
+  }).filter(Boolean));
+  return providers.size === 1 && providers.has('LinuxDO') ? 'LinuxDO' : null;
+}
+
 /**
  * Resolve an OAuth recovery alias without widening the bookmark navigation
  * boundary. A migrated site may authenticate on a related origin only when

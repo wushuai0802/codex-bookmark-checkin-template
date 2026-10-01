@@ -34,6 +34,29 @@ test('PT status merges legacy plan sites with Harvest-only observations', () => 
   assert.equal(legacy.effective.status, 'signed');
 });
 
+test('a newer weak signed report cannot replace earlier authoritative same-day completion',()=>{
+  const origin='https://ourbits.club';
+  const result=buildPtStatus({generatedAt:'2026-10-01T10:30:00Z',businessDate:'2026-10-01',
+    planTargets:[{origin,title:'我堡',folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef,observedStatus:'signed'}],
+    receipts:[{taskId,observedAt:'2026-10-01T10:22:00Z',evidence:{source:'none',authoritative:false}}],
+    monitorCatalog:{sites:[{origin,displayName:'我堡'}]},
+    fallbackReport:{source:'execution-supplement',businessDate:'2026-10-01',generatedAt:'2026-10-01T10:21:00Z',
+      sites:[{origin,status:'already_signed',observedAt:'2026-10-01T10:21:00Z',evidence:{source:'pt_page',authoritative:true,businessDate:'2026-10-01'}}]}});
+  assert.equal(result.sites[0].effective.status,'already_signed');
+  assert.equal(result.sites[0].effective.authoritative,true);
+  assert.equal(result.sites[0].displayName,'我堡');
+});
+
+test('a supplement keeps the bookmark display name for monitoring-only sites',()=>{
+  const origin='https://pt.example';
+  const result=buildPtStatus({generatedAt:'2026-10-01T10:30:00Z',businessDate:'2026-10-01',
+    monitorCatalog:{sites:[{origin,displayName:'PT Name'}]},
+    fallbackReport:{source:'execution-supplement',businessDate:'2026-10-01',generatedAt:'2026-10-01T10:21:00Z',
+      sites:[{origin,status:'already_signed',observedAt:'2026-10-01T10:21:00Z',evidence:{source:'pt_page',authoritative:true}}]}});
+  assert.equal(result.sites[0].displayName,'PT Name');
+});
+
 test('a monitored PT site is joined to the full execution plan across a non-PT folder label',()=>{
   const result=buildPtStatus({
     generatedAt:'2026-09-04T04:00:00.000Z',businessDate:'2026-09-04',

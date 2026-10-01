@@ -42,7 +42,7 @@ export function projectPtSiteResult(value,origin){
       ...(evidence.businessDate===dayAt(observed)?{businessDate:evidence.businessDate}:{}),
       ...(/^[a-z0-9_]{1,80}$/.test(evidence.statusSignal??'')?{statusSignal:evidence.statusSignal}:{}),
       ...(evidence.evidenceScope==='site_account_day'?{evidenceScope:evidence.evidenceScope}:{}),
-      ...(['/index.php','/'].includes(evidence.pagePath)?{pagePath:evidence.pagePath}:{}),
+      ...(['/index.php','/','/userdetails.php'].includes(evidence.pagePath)?{pagePath:evidence.pagePath}:{}),
       summary:typeof evidence.summary==='string'?evidence.summary.slice(0,160):''},
     ...(value.submissionOutcomeUnknown===true?{submissionOutcomeUnknown:true}:{}),
     ...(value.submissionAttempted===true?{submissionAttempted:true}:{}),
