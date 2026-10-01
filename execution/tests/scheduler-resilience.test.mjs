@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -299,3 +300,84 @@ test("调度状态分别记录执行完成与业务完成", async () => {
   assert.match(scheduler, /reportBusinessComplete = \[bool\]\$reportState\.BusinessComplete/);
   assert.match(scheduler, /lastRunDate = if \(\$reportState\.ExecutionComplete\)/);
 });
+
+for (const shell of process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : [powershell]) {
+  test(`Harvest 等待队列在同一轮依次续跑，保留冷却和提交保护 (${shell})`, async (t) => {
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-wake-drain-"));
+    t.after(() => fs.rm(fixture, { recursive: true, force: true }));
+    const reportFile = path.join(fixture, "latest.json");
+    const result = (name, nextEligibleAt, extra = {}) => ({
+      origin: `https://${name}.example`, status: "deferred", retryCause: "harvest_waiting",
+      nextEligibleAt, submissionAttempted: false, retrySequence: 0, ...extra,
+    });
+    const results = [
+      result("first", "2026-10-01T01:10:00Z"),
+      result("second", "2026-10-01T01:11:00Z"),
+      result("third", "2026-10-01T01:12:00Z"),
+      result("depth", "2026-10-01T01:35:08Z"),
+      result("future", "2026-10-01T06:20:00Z"),
+      result("unknown", "2026-10-01T01:10:00Z", { submissionAttempted: true, failureCode: "submission_outcome_unknown" }),
+      result("disabled", "2026-10-01T01:10:00Z", { retryable: false }),
+      result("exhausted", "2026-10-01T01:10:00Z", { retryExhaustedForDay: true }),
+      result("signed", "2026-10-01T01:10:00Z", { status: "already_signed" }),
+    ];
+    await fs.writeFile(reportFile, JSON.stringify({
+      runId: "20261001-fixture", runState: "final", isComplete: true,
+      plannedTotal: results.length, processedTotal: results.length, results,
+      bookmarkSummary: { planFingerprint: "fixture", targets: results.map(({ origin }) => ({ origin })) },
+    }));
+    const command = String.raw`
+$ErrorActionPreference = 'Stop'
+. (Join-Path $env:CHECKIN_TEST_ROOT 'scripts/ResultIdentity.ps1')
+. (Join-Path $env:CHECKIN_TEST_ROOT 'scripts/ResultContract.ps1')
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:CHECKIN_TEST_ROOT 'scripts/Start-UserScheduler.ps1'), [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Scheduler syntax error' }
+foreach ($name in @('Get-LatestReportState', 'Get-UnclaimedDeferredWakeups', 'Get-NormalizedDeferredWakeTokens', 'Get-SchedulerDrainWakeups', 'Test-SchedulerWaiting', 'Test-SchedulerShouldRun')) {
+  $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
+  Invoke-Expression $f.Extent.Text
+}
+$latestReportPath = $env:CHECKIN_TEST_REPORT
+$latest = Get-Content -Raw $latestReportPath | ConvertFrom-Json
+$plan = [pscustomobject]@{ targetCount = $latest.plannedTotal; planFingerprint = 'fixture'; identities = @($latest.results | ForEach-Object { Get-CanonicalResultIdentity $_ }) }
+$config = [pscustomobject]@{ schedulerMaxDailyAttempts = 5; taskTimeoutMinutes = 25 }
+$start = [datetime]::SpecifyKind([datetime]'2026-10-01T01:35:02', [DateTimeKind]::Utc)
+$now = $start
+$report = Get-LatestReportState $now $config $plan
+$state = [pscustomobject]@{ lastRunDate = '2026-10-01'; lastAttemptDate = '2026-10-01'; attemptsToday = 5; reportComplete = $false; automaticRetryCount = 4; phase = 'finished'; nextEligibleAt = '2026-10-01T06:20:00Z'; deferredWakeDate = '2026-10-01'; deferredWakeTokens = @() }
+$visited = @()
+$due = @(Get-UnclaimedDeferredWakeups $state $report $now $config | Sort-Object NextEligibleAt, Identity | Select-Object -First 1)
+while ($due.Count -and (Test-SchedulerShouldRun $state $now $config $due $false $start.Date)) {
+  $visited += [string]$due[0].Identity
+  $state.attemptsToday += 1
+  $state.deferredWakeTokens += [string]$due[0].Token
+  $now = $now.AddSeconds(15)
+  $report = Get-LatestReportState $now $config $plan
+  $due = @(Get-SchedulerDrainWakeups $state $report $now $config $start $visited)
+  if ($visited.Count -gt 6) { throw 'Unbounded drain' }
+}
+$state.deferredWakeTokens = @()
+$six = @('a', 'b', 'c', 'd', 'e', 'f')
+$bounded = @(Get-SchedulerDrainWakeups $state $report $now $config $start $six).Count
+$timedOut = @(Get-SchedulerDrainWakeups $state $report $start.AddMinutes(25) $config $start @()).Count
+$crossDay = @(Get-SchedulerDrainWakeups $state $report $start.AddDays(1) $config $start @()).Count
+$invalid = @(Get-SchedulerDrainWakeups $state ([pscustomobject]@{ Valid = $false }) $now $config $start @()).Count
+$accountReport = [pscustomobject]@{ Valid = $true; DeferredWakeups = @([pscustomobject]@{ Identity = 'https://multi.example#account=second'; NextEligibleAt = [datetimeoffset]$now; RetrySequence = 0; RetryCause = 'harvest_waiting'; SubmissionAttempted = $false; Token = 'account'; RetryExhaustedForDay = $false }) }
+$account = @(Get-SchedulerDrainWakeups $state $accountReport $now $config $start @())
+$claimed = @(Get-SchedulerDrainWakeups $state $accountReport $now $config $start @('https://multi.example#account=second')).Count
+[ordered]@{ valid = $report.Valid; visited = $visited; bounded = $bounded; timedOut = $timedOut; crossDay = $crossDay; invalid = $invalid; account = $account[0].Identity; repeated = $claimed } | ConvertTo-Json -Compress
+`;
+    const { stdout } = await execFileAsync(shell, ["-NoProfile", "-NonInteractive", "-Command", command], {
+      cwd: root, encoding: "utf8",
+      env: { ...process.env, CHECKIN_TEST_ROOT: root, CHECKIN_TEST_REPORT: reportFile },
+    });
+    const observed = JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
+    assert.equal(observed.valid, true);
+    assert.deepEqual(observed.visited, ["first", "second", "third", "depth"].map(name => `https://${name}.example`));
+    for (const key of ["bounded", "timedOut", "crossDay", "invalid", "repeated"]) assert.equal(observed[key], 0, key);
+    assert.equal(observed.account, "https://multi.example#account=second");
+    const source = await schedulerSource();
+    assert.match(source, /while \(\$shouldRun\)/);
+    assert.match(source, /\$latestReportState = Get-LatestReportState \$now \$config \$currentPlan \$runStartedAt[\s\S]*?Get-SchedulerDrainWakeups/);
+  });
+}
