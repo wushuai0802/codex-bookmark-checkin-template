@@ -280,7 +280,7 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
         })
         $missingCount = [Math]::Max(0, $plannedTotal - $processedTotal)
         $nowOffset = [datetimeoffset]$now
-        $deferredWakeups = @($problems | Where-Object { $_.status -eq 'deferred' -and $_.nextEligibleAt -and $_.submissionAttempted -ne $true -and $_.failureCode -ne 'submission_outcome_unknown' } | ForEach-Object {
+        $deferredWakeups = @($problems | Where-Object { $_.status -eq 'deferred' -and $_.nextEligibleAt -and $_.retryable -ne $false -and $_.submissionAttempted -ne $true -and $_.failureCode -ne 'submission_outcome_unknown' } | ForEach-Object {
             $next = try { [datetimeoffset]$_.nextEligibleAt } catch { return }
             $identity = Get-CanonicalResultIdentity $_
             $sequence = [Math]::Max(0, [int]$_.retrySequence)
@@ -365,6 +365,19 @@ function Test-SchedulerWaiting($state, [datetime]$now, $config, [object[]]$defer
         } catch { }
     }
     return $false
+}
+
+function Get-SchedulerDrainWakeups($state, $reportState, [datetime]$now, $config, [datetime]$startedAt, [string[]]$visitedIdentities) {
+    # A scheduled tick drains a small serial queue, refreshing the final report
+    # after each site. Keep the same origin/account scope and all daily budgets.
+    # Never loop on the same site, an invalid receipt, or across a business day.
+    $minutes = if ($null -ne $config.taskTimeoutMinutes) { [int]$config.taskTimeoutMinutes } else { 25 }
+    $minutes = [Math]::Max(1, [Math]::Min(25, $minutes))
+    if ($visitedIdentities.Count -ge 6 -or $now.Date -ne $startedAt.Date `
+        -or $now -lt $startedAt -or $now - $startedAt -ge [timespan]::FromMinutes($minutes)) { return @() }
+    return @(Get-UnclaimedDeferredWakeups $state $reportState $now $config |
+        Where-Object { $visitedIdentities -notcontains [string]$_.Identity } |
+        Sort-Object NextEligibleAt, Identity | Select-Object -First 1)
 }
 
 function Test-SchedulerShouldRun($state, [datetime]$now, $config, [object[]]$deferredWakeups, [bool]$manualAttentionOnly, [datetime]$scheduledToday) {
@@ -578,7 +591,9 @@ try {
                 }
             }
             $shouldRun = [bool](Test-SchedulerShouldRun $state $now $config $deferredWakeups $manualAttentionOnly $scheduledToday)
-            if ($shouldRun) {
+            $drainStartedAt = $now
+            $drainedIdentities = @()
+            while ($shouldRun) {
                 Write-SchedulerHeartbeat 'running_checkin'
                 $attemptNumber = if ([string]$state.lastAttemptDate -eq $now.ToString('yyyy-MM-dd')) { [int]$state.attemptsToday + 1 } else { 1 }
                 Write-SchedulerLog "开始第 $attemptNumber 次签到尝试。"
@@ -626,6 +641,14 @@ try {
                     try { [void](Invoke-SchedulerFailureNotification $exitMessage $config $true) }
                     catch { Write-SchedulerLog "签到子进程失败通知异常：$(Compress-SchedulerError $_.Exception.Message)" }
                 }
+                if ($deferredWakeups.Count -ne 1) { break }
+                $drainedIdentities += [string]$deferredWakeups[0].Identity
+                $now = Get-Date
+                $state = Read-SchedulerState
+                $latestReportState = Get-LatestReportState $now $config $currentPlan $runStartedAt
+                $deferredWakeups = @(Get-SchedulerDrainWakeups $state $latestReportState $now $config $drainStartedAt $drainedIdentities)
+                $shouldRun = $deferredWakeups.Count -gt 0 -and
+                    [bool](Test-SchedulerShouldRun $state $now $config $deferredWakeups $false $scheduledToday)
             }
         }
         catch {
