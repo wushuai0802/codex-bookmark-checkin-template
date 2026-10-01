@@ -81,11 +81,13 @@ export function classifyPtPassivePage({origin,url,policy,bodyText,controls=[],au
     // On these reviewed headers the action itself switches from "签到得…"
     // to "签到已得…" after success. A counter elsewhere is not this control.
     const signed=actions.some(text=>/^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$/.test(text)||
+      (policy.signedTexts??[]).includes(text.replace(/\s+/g,''))||
       policy.signedRewardControl===true&&/^(?:签到已得|簽到已得)[0-9,.]+(?:,\s*补签卡:\s*\d+)?$/.test(text));
     if(unsigned&&signed)return {status:'unknown',failureCode:'authoritative_status_unavailable'};
     if(unsigned||signed)return {status:unsigned?'not_signed':'already_signed',evidence:{source:'pt_page',authoritative:true,
       confirmedAt:now.toISOString(),businessDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),
       pagePath:new URL(policy.url).pathname,statusSignal:unsigned?'nexus_daily_header_unsigned':'nexus_daily_header_signed'}};
+    if(policy.signedTexts?.length)return {status:'unknown',failureCode:'authoritative_status_unavailable'};
   }
   const evidence=ptPageEvidence({origin,url,bodyText,status:'already_signed',now,allowUndatedActionText:false});
   return {status:evidence?'already_signed':'unknown',evidence:evidence?{...evidence,pagePath:new URL(policy.url).pathname}:undefined};

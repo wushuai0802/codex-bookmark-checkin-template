@@ -8,6 +8,15 @@ import {ptSupplementTarget,publicSupplementResult,runPtSupplement,ptRewardCounte
 import {ptPageEvidence} from '../src/browser.mjs';
 import {ptReadPolicy,installPtReadFirewall,ptExecutionBinding,classifyPtPassivePage,readPtPublicAvailability} from '../src/pt-read-policy.mjs';
 
+test('Depth Studio completed header is authoritative only on its authenticated daily control',()=>{
+  const origin='https://dstudio.me',policy=ptReadPolicy(origin),now=new Date('2026-10-01T12:00:00Z');
+  const args={origin,policy,url:policy.url,now,authenticated:true,bodyText:'今日已完成已签到',controls:[{path:'/attendance.php',text:'今日已完成 已签到'}]};
+  const result=classifyPtPassivePage(args);
+  assert.equal(result.status,'already_signed');assert.equal(result.evidence.authoritative,true);
+  assert.equal(classifyPtPassivePage({...args,authenticated:false}).status,'unknown');
+  assert.equal(classifyPtPassivePage({...args,controls:[{path:'/forums.php',text:'今日已完成已签到'}]}).status,'unknown');
+});
+
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-site-fallback-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

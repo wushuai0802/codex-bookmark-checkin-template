@@ -18,6 +18,7 @@ import { applyOptionalBaiduSecondOpinion } from "./baidu-ocr.mjs";
 import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
 import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
+import {ptReadPolicies} from './checkin-contract.generated.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -1668,11 +1669,14 @@ export async function processTarget(context, target, config, qaRules, logDirecto
   let lastResult = null;
   const candidateHistory = [];
   let allCandidatesUnsubmitted = true;
+  const candidates = ptReadPolicies[target.origin]?.completionReadFirst
+    ? [...new Set([target.origin+'/index.php', ...target.candidates])]
+    : target.candidates;
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
     const page = await context.newPage();
     let attemptResult = null;
     try {
-      for (const candidateUrl of target.candidates) {
+      for (const candidateUrl of candidates) {
         let result;
         try {
           result = withRetrySchedule(
