@@ -198,7 +198,8 @@ if ($attentionProblems.Count -gt 0) {
 if ($verificationProblems.Count -gt 0) {
     $summary += "`n`n待核验 $($verificationProblems.Count)（不重复提交）"
     foreach ($problem in $verificationProblems) {
-        $reason = if ([string]$problem.evidence.source -eq 'vibe_entitlement_status' -and [string]$problem.evidence.outcome -eq 'entitlement_expired') {
+        $reason = if ([string]$problem.evidence.source -eq 'vibe_entitlement_status' -and
+            ([string]$problem.evidence.outcome -eq 'entitlement_expired' -or [string]$problem.evidence.statusSignal -eq 'expired_subscription')) {
             '权益已过期，历史提交待核验'
         } else { '提交结果未确认，等待只读复核' }
         $summary += "`n• $(Get-ResultDisplayName $problem)：$reason"

@@ -428,6 +428,17 @@ test('重试时间固定使用上海时间，跨日包含日期', async () => {
   assert.match(report.summary, /01-02 00:15 后复核/);
 });
 
+test('精简保留权益过期原因，但历史提交仍列为待核验', async () => {
+  const report = await previewReport({runId: '20261001-entitlement', runState: 'final', plannedTotal: 1, processedTotal: 1, isComplete: true,
+    results: [{origin: 'https://entitlement.example', status: 'needs_attention', submissionAttempted: true, failureCode: 'submission_outcome_unknown',
+      evidence: {source: 'vibe_entitlement_status', authoritative: false, statusSignal: 'expired_subscription'}}]});
+  assert.equal(report.verificationPendingCount, 1);
+  assert.equal(report.externalPendingCount, 0);
+  assert.equal(report.businessComplete, false);
+  assert.match(report.summary, /权益已过期，历史提交待核验/);
+  assert.doesNotMatch(report.summary, /待重试/);
+});
+
 test('同原因同时间的重试只显示一次安排，人工处理排在长列表前', async () => {
   const retries = Array.from({length: 30}, (_, i) => ({origin: `https://retry-${i}.example`, status: 'deferred', retryCause: 'login_required', nextEligibleAt: '2099-01-01T16:15:00Z'}));
   const report = await previewReport({runId: '20261001-grouping', runState: 'final', plannedTotal: 32, processedTotal: 32, isComplete: true,
