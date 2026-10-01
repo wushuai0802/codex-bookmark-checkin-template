@@ -76,6 +76,7 @@ import {
 import { normalizeResultReasons } from "./report-reason.mjs";
 import { isTerminalResult, normalizeResultContract } from "./result-contract.mjs";
 import { nativeWafProfileForOrigin } from "./native-waf-profile.mjs";
+import {oauthRecoveryProvider} from './oauth-recovery-target.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -673,7 +674,7 @@ try {
         const current = results[resultIndex];
         if (current.status !== "login_required") continue;
         const target = selectedTargets[resultIndex];
-        const provider = config.automaticOAuthProviders?.[current.origin];
+        const provider = oauthRecoveryProvider(current.origin, target?.allowedOrigins ?? [], config);
         const upstreamProvider = String(config.oauthUpstreamProviders?.[current.origin] ?? "").trim();
         const oauthRetryGroup = provider ? upstreamRetryGroup({
           origin: current.origin,

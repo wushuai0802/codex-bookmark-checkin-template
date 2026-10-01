@@ -10,6 +10,7 @@ import {
   classifyCredentialApiSelfResponse,
   configuredProtectedCredentialApiRule,
   credentialApiUserData,
+  credentialApiStoredUser,
 } from "./protected-credential-api.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
 
@@ -123,7 +124,7 @@ try {
     } else {
       await page.evaluate(({ storageKey, user }) => {
         localStorage.setItem(storageKey, JSON.stringify(user));
-      }, { storageKey: rule.storageKey, user: loginUser.value });
+      }, { storageKey: rule.storageKey, user: credentialApiStoredUser(loginBody) });
       await page.goto(verificationUrl.href, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
       await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
       const dailyCheckin = (config.newApiCheckinOrigins ?? []).includes(origin)

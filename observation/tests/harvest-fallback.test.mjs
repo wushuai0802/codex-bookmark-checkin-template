@@ -280,6 +280,24 @@ test('fresh Harvest state is checked before every PT write and outages fail clos
   assert.equal((await runHarvestFallback({...args,refreshHarvest:async()=>f.harvest})).outcomes[0].state,'completed');
   assert.equal(calls,1);
 });
+test('equivalent Harvest completion offsets resume the same task instead of stalling the queue', async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-equivalent-time-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture();f.harvest.sites=[failed('https://external.example')];
+  f.catalog.sites=f.catalog.sites.slice(0,2);f.latest.results[0].status='already_signed';
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  const catalogHash=(await import('node:crypto')).createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
+  const live={...f.harvest,taskCompletion:{...f.harvest.taskCompletion,
+    startedAt:new Date(f.harvest.taskCompletion.startedAt).toISOString(),completedAt:new Date(f.harvest.taskCompletion.completedAt).toISOString()}};
+  let calls=0;
+  const result=await runHarvestFallback({...f,root,execute:true,catalogFile,catalogHash,refreshHarvest:async()=>live,
+    runSite:async()=>{calls++;return {origin:'https://external.example',status:'already_signed',observedAt:f.now.toISOString(),evidence:{source:'page_text',authoritative:true}};}});
+  assert.equal(calls,1);assert.equal(result.outcomes[0].state,'completed');
+  const changed=await runHarvestFallback({...f,root,execute:true,catalogFile,catalogHash,refreshHarvest:async()=>({...live,taskCompletion:{...live.taskCompletion,resultId:6}})});
+  assert.equal(calls,1);assert.notEqual(changed.outcomes[0].state,'completed');
+});
+
 test('a recovered login is bounded by time, cooldown, business day and two resumptions',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-login-budget-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);

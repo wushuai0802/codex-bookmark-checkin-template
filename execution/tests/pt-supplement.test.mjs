@@ -156,6 +156,7 @@ test('configured native PT evidence repair binds the main profile and never laun
   fs.mkdirSync(path.join(sourceRoot,'Default'),{recursive:true});fs.writeFileSync(path.join(sourceRoot,'Local State'),'fixture');
   const file=path.join(args.root,'config/config.json'),config=JSON.parse(fs.readFileSync(file));
   Object.assign(config,{sourceUserDataDir:sourceRoot,bookmarksPath:path.join(sourceRoot,'Default/Bookmarks'),mainChromeFallbackUrls:[origin+'/attendance.php']});
+  config.ptReadOnlyPolicies={[origin]:{reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'#info_block',nativeMainChrome:true}};
   fs.writeFileSync(file,JSON.stringify(config));
   fs.writeFileSync(args.catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
   const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');

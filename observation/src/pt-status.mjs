@@ -3,6 +3,7 @@ import { normalizeOrigin, redactText } from './contracts.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {ptStatuses} from './checkin-contract.generated.mjs';
+import {siteDisplayName} from './display-identity.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
 
 const SOURCE_VALUES = new Set(['harvest', 'legacy-checkin', 'execution-supplement', 'manual', 'v2-observer', 'other']);
@@ -106,6 +107,8 @@ function stableSiteRef(origin, accountRef) {
 
 function displayNameFor(target, origin) {
   const candidate = target?.displayName ?? target?.title ?? target?.name;
+  const canonical = siteDisplayName(origin, null);
+  if (canonical) return canonical;
   if (typeof candidate === 'string' && candidate.trim()) return redactText(candidate).slice(0, 80);
   return origin.replace(/^https:\/\//, '');
 }

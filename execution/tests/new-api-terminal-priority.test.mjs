@@ -102,3 +102,23 @@ test("server errors and rate limits cannot claim disabled or signed", async () =
     assert.equal(requests, 2);
   }
 });
+
+for (const confirmedId of [123,321]) {
+  test(`a cold saved session is used only after same-account self verification (${confirmedId})`,async()=>{
+    const session=['offline','session'].join('.');
+    const storage={length:1,key:()=> 'user',getItem:()=>JSON.stringify({id:123,access_token:session})};
+    const requests=[];
+    const sandbox={localStorage:storage,sessionStorage:storage,Date,document:{},fetch:async(url,options={})=>{
+      requests.push({url,method:options.method??'GET'});
+      let status=401,body={success:false};
+      if(url==='/api/user/self'&&options.headers?.Authorization===`Bearer ${session}`){status=200;body={success:true,data:{id:confirmedId}};}
+      if(url.startsWith('/api/user/checkin?')&&options.headers?.Authorization===`Bearer ${session}`){status=200;body={success:true,data:{stats:{checked_in_today:true}}};}
+      return {status,text:async()=>JSON.stringify(body)};
+    }};
+    const result=await tryNewApiCheckin({evaluate:fn=>vm.runInNewContext('('+fn.toString()+')()',sandbox)});
+    assert.equal(result.status,confirmedId===123?'already_signed':'login_required');
+    assert.equal(requests.filter(r=>r.url==='/api/user/checkin'&&r.method==='POST').length,0);
+    assert.equal(JSON.stringify(result).includes(session),false);
+    if(confirmedId===123)assert.equal(result.evidence.accountId,'123');
+  });
+}

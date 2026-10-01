@@ -11,7 +11,7 @@ import {
 } from './contracts.mjs';
 import { buildPtStatus } from './pt-status.mjs';
 import { timestampFresh } from './freshness.mjs';
-import { displayIdentity, shortLabel } from './display-identity.mjs';
+import { displayIdentity, shortLabel, siteDisplayName } from './display-identity.mjs';
 import { observedIdentity } from './identity-observations.mjs';
 import {loadEffectiveConfig} from './effective-config.mjs';
 import {desiredTargets,reconcilePlan} from './desired-plan.mjs';
@@ -171,7 +171,7 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
       origin,
       accountKey,
       accountRef: accountRef(accountKey),
-      displayName: shortLabel(entry.title),
+      displayName: siteDisplayName(entry.origin, entry.title),
       identity: displayIdentity({ userId: resultId ?? externalIdentity.userId ?? observed?.userId ?? configuredId,
         username: entry.username ?? externalIdentity.username ?? observed?.username, label: entry.accountLabel,
         provider: entry.provider, source: resultId ? (entry.identityFromPlan ? 'configuration':'result') : externalIdentity.userId ? 'harvest' : observed?.source ?? (configuredId ? 'configuration' : null),

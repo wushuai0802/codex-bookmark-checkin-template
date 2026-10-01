@@ -38,10 +38,10 @@ export function ptReadPolicy(origin,config={}){
   // Registration is validated against the exact current bookmark catalog by
   // the gateway. Passive index capability does not need the mutation allowlist.
   const nativeBound=nativePtHeaderOrigins.some(value=>nativeOrigin(value)===nativeOrigin(origin));
-  const policy=config.ptReadOnlyPolicies?.[origin]??(nativeBound?{
-    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'#info_block',nativeMainChrome:true
-  }:ptReadPolicies[origin]?{
+  const policy=config.ptReadOnlyPolicies?.[origin]??(ptReadPolicies[origin]?{
     reviewed:true,mode:'safe_history_page',url:origin+'/index.php',...ptReadPolicies[origin]
+  }:nativeBound?{
+    reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'#info_block',nativeMainChrome:true
   }:null);
   const unsafe=()=>{const e=Error('PT read-only capability is not reviewed for this site');e.code='PT_READONLY_UNSAFE';return e;};
   if(!policy||policy.reviewed!==true||policy.mode!=='safe_history_page'||typeof policy.selector!=='string'||

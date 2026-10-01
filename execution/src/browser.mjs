@@ -915,6 +915,23 @@ export async function tryNewApiCheckin(page) {
         userId = candidateId ?? userId;
       }
     }
+    if (!accessToken && userId != null) {
+      // A credential login may return its session beside a nested user and
+      // persist it in browser storage. Verify that same user's saved token
+      // before using it; an absent refresh cookie is not proof of logout.
+      for (const storage of storages) {
+        let stored;
+        try { stored = JSON.parse(storage.getItem('user') || 'null'); } catch { continue; }
+        if (String(userIdFrom(stored)) !== String(userId) || typeof stored?.access_token !== 'string' || !stored.access_token) continue;
+        const verified = await request('/api/user/self', {headers: {Accept:'application/json',
+          'New-Api-User':String(userId),Authorization:`Bearer ${stored.access_token}`}});
+        if (verified.status >= 200 && verified.status < 300 && verified.body?.success === true &&
+            String(userIdFrom(verified.body)) === String(userId)) {
+          accessToken = stored.access_token;
+          break;
+        }
+      }
+    }
     if (userId == null && refreshedIdentity == null) return null;
 
     const headers = {
