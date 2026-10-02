@@ -201,7 +201,8 @@ function mergeSiteObservations(observations, target) {
     source: item.source, status: item.status, observedAt: item.observedAt,
     fresh: item.freshness.fresh, authoritative: item.evidence.authoritative
   }));
-  const distinctStatuses = new Set(sourceStatuses.filter((item) => item.authoritative&&item.fresh).map((item) => item.status));
+  const distinctStatuses = new Set(sourceStatuses.filter((item) => item.authoritative&&item.fresh)
+    .map((item) => item.status==='already_signed'?'signed':item.status));
   const supplementCandidate = distinctStatuses.size <= 1 && effective?.supplementCandidate === true;
   return {
     siteRef: stableSiteRef(ordered[0].origin, ordered[0].accountRef),

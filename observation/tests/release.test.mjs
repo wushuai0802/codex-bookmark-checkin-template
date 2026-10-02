@@ -31,3 +31,54 @@ test('release and rollback refuse drift instead of overwriting unrelated changes
   assert.throws(()=>planRelease({...f,files:['execution/config/config.json']}),/scope/);
   if(process.platform==='win32')assert.throws(()=>planRelease({...f,observationRoot:f.executionRoot.toUpperCase()}),/distinct/);
 });
+
+test('public runtime rules and deployment inputs are released and rolled back without local configuration',async t=>{
+  const f=fixture(t),publicFiles=[
+    'execution/config/defaults.json','execution/config/qa-rules.json','execution/config/site-rules.public.json',
+    'execution/requirements-ocr.txt','observation/compose.nas.yaml','observation/compose.worker.yaml','observation/.dockerignore'
+  ];
+  for(const file of publicFiles){
+    const [layer,...parts]=file.split('/'),relative=parts.join('/');
+    fs.mkdirSync(path.dirname(path.join(f.source,file)),{recursive:true});
+    fs.writeFileSync(path.join(f.source,file),'new '+file);
+    fs.writeFileSync(path.join(f[layer+'Root'],relative),'old '+file);
+  }
+  for(const file of ['execution/config/config.local.json','execution/config/qa-rules.local.json','execution/data/account-bindings.json','observation/config/runtime.local.json']){
+    assert.throws(()=>planRelease({...f,files:[file]}),/outside release scope/);
+  }
+  const plan=planRelease({...f,files:[...f.files,...publicFiles]});
+  const out=await applyRelease(plan,{backupRoot:f.root+'/backups',lock});
+  assert.equal(auditRelease(plan).drift.length,0);
+  for(const file of publicFiles){const [layer,...parts]=file.split('/');assert.equal(fs.readFileSync(path.join(f[layer+'Root'],...parts),'utf8'),'new '+file);}
+  await rollbackRelease(out.backup,{lock});
+  for(const file of publicFiles){const [layer,...parts]=file.split('/');assert.equal(fs.readFileSync(path.join(f[layer+'Root'],...parts),'utf8'),'old '+file);}
+  assert.equal(fs.readFileSync(f.executionRoot+'/config/config.json','utf8'),'private config');
+});
+
+test('new public input refuses source or runtime drift before copying other code',async t=>{
+  const f=fixture(t),file='execution/config/defaults.json';
+  fs.mkdirSync(f.source+'/execution/config');fs.writeFileSync(f.source+'/'+file,'new defaults');
+  fs.writeFileSync(f.executionRoot+'/config/defaults.json','old defaults');
+  const first=planRelease({...f,files:[...f.files,file]});
+  fs.writeFileSync(f.source+'/'+file,'changed source');
+  await assert.rejects(()=>applyRelease(first,{backupRoot:f.root+'/backups',lock}),/release drift/);
+  const second=planRelease({...f,files:[...f.files,file]});
+  fs.writeFileSync(f.executionRoot+'/config/defaults.json','local runtime repair');
+  await assert.rejects(()=>applyRelease(second,{backupRoot:f.root+'/backups',lock}),/release drift/);
+  assert.equal(fs.readFileSync(f.executionRoot+'/src/runner.mjs','utf8'),'old runner');
+  assert.equal(fs.readFileSync(f.executionRoot+'/config/defaults.json','utf8'),'local runtime repair');
+});
+
+test('failed release restores old code and retires newly installed files',async t=>{
+  const f=fixture(t),plan=planRelease(f),rename=fs.renameSync;
+  t.mock.method(fs,'renameSync',(from,to)=>{
+    if(to===path.join(f.executionRoot,'src/runner.mjs')&&String(from).endsWith('.tmp'))throw Error('fixture write failure');
+    return rename(from,to);
+  });
+  await assert.rejects(()=>applyRelease(plan,{backupRoot:f.root+'/backups',lock}),/fixture write failure/);
+  assert.equal(fs.readFileSync(f.executionRoot+'/src/runner.mjs','utf8'),'old runner');
+  assert.equal(fs.existsSync(f.observationRoot+'/public/app.js'),false);
+  const [backup]=fs.readdirSync(f.root+'/backups');
+  assert.equal(fs.readFileSync(path.join(f.root,'backups',backup,'retired/observation/public/app.js'),'utf8'),'new ui');
+  assert.equal(fs.readFileSync(f.executionRoot+'/config/config.json','utf8'),'private config');
+});

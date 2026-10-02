@@ -16,8 +16,10 @@ test('NAS deployment preserves data/secrets and performs backup before rebuild',
   assert.match(source,/rm -rf '\$stage'/);
   assert.match(source,/\$stage="\$RemoteRoot\/\.staging\/code-/);
   assert.doesNotMatch(source,/\$stage="\/tmp\//);
-  assert.match(source,/install -m 0644 '\$stage\/compose\.worker\.yaml'/);
-  assert.match(source,/install -m 0644 '\$stage\/\.dockerignore'/);
+  assert.match(source,/nas-code-release\.sh' prepare/);
+  assert.match(source,/recover\.sh' apply/);
+  assert.match(source,/recover\.sh' rollback/);
+  assert.doesNotMatch(source,/cp -a '\$stage\/src\/\.'/);
   assert.match(source,/UseWorkerTransport/);
   assert.match(source,/BundleDir -notmatch/);
   assert.match(source,/transport-config\/worker-registry\.json/);

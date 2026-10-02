@@ -86,6 +86,20 @@ if (-not $profilePath.StartsWith($sourcePrefix, [System.StringComparison]::Ordin
 }
 if (-not (Test-Path -LiteralPath ([string]$config.chromeExecutable))) { throw '未找到已配置的 Chrome。' }
 
+. (Join-Path $PSScriptRoot 'Native-PtGuard.ps1')
+$script:nativeLocalSubmissionAttempted = $false
+$script:checkinClickAttempted = $false
+try {
+    $nativeDecision = Initialize-NativePtGuard -Root $root -Origin $originValue -Url $Url -ProfilePath $profilePath -MainProfile -ReadOnly:$ReadOnly
+} catch {
+    $nativeDecision = Get-NativePtFailure -ErrorRecord $_
+}
+if ($null -ne $nativeDecision) {
+    $nativeDecision | Complete-NativePtResult | ConvertTo-Json -Depth 8
+    if ($nativeDecision.status -in @('signed', 'already_signed')) { exit 0 }
+    exit 2
+}
+
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type @'
@@ -174,6 +188,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $elements = @(Get-WindowElements $Window)
     $names = @()
     $controlNames = @()
+    $linkNames = @()
     $nonAddressEdits = 0
     foreach ($element in $elements) {
         try {
@@ -183,6 +198,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
                 $names += $name
             }
             if ($type -in @('ControlType.Hyperlink', 'ControlType.Button') -and $name) { $controlNames += $name }
+            if ($type -eq 'ControlType.Hyperlink' -and $name) { $linkNames += $name }
             if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) {
                 $editName = [string]$element.Current.Name
                 $editId = [string]$element.Current.AutomationId
@@ -201,6 +217,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $securityVerification = $bodyText -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b'
     $success = $bodyText -match '签到成功|今日已签到|今天已签到|今天已经签到过|已经签到|已完成今日签到|(?:^|\s)已签到(?:\s|$)|Already checked in|Checked in today'
     $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeDailyControl $originValue $_ } | Select-Object -Unique)
+    $unsignedControls = @($linkNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { $_ -ceq '签到' })
     $normalizedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() })
     $authenticated = @($normalizedControls | Where-Object { $_ -match '^(?:退出|退出登录|登出|注销|登出账号|登出帳號|Logout|Log out)$' }).Count -gt 0 -and
         @($normalizedControls | Where-Object { $_ -match '^(?:控制面板|用户中心|用戶中心|个人资料|個人資料|设置|設定|Control Panel|User CP)$' }).Count -gt 0
@@ -210,6 +227,9 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
         bodyText = $bodyText.Substring(0, [Math]::Min(2000, $bodyText.Length))
         successText = Get-NativeSuccessText $bodyText
         successControl = if ($signedControls.Count -eq 1) { $signedControls[0] } else { '' }
+        signedControlCount = $signedControls.Count
+        unsignedControl = if ($unsignedControls.Count -eq 1) { $unsignedControls[0] } else { '' }
+        unsignedControlCount = $unsignedControls.Count
         authenticated = [bool]$authenticated
         sameOrigin = [bool]$sameOrigin
         waf = [bool]($leichiWaf -or $cloudflareWaf)
@@ -224,6 +244,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
 }
 
 function Invoke-UniqueCheckinButton([System.Windows.Automation.AutomationElement]$Window) {
+    if ($ReadOnly -or $script:checkinClickAttempted) { return $false }
     $matches = @()
     $priorities = @{
         '开始转动' = 105
@@ -255,10 +276,15 @@ function Invoke-UniqueCheckinButton([System.Windows.Automation.AutomationElement
     $control = $topMatches[0].element
     try {
         $invoke = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $invoke.Invoke()
-        return $true
     }
     catch { return $false }
+    Start-NativePtWrite -Action click
+    $script:checkinClickAttempted = $true
+    $script:nativeLocalSubmissionAttempted = $true
+    # An Invoke error may arrive after the website received the action. Do not
+    # turn it into a false return that permits another click on the next poll.
+    [void]$invoke.Invoke()
+    return $true
 }
 
 function Get-UniqueNamedControl(
@@ -319,6 +345,7 @@ foreach ($window in @(Get-ChromeWindows)) {
 }
 $taskWindow = $null
 $result = $null
+$clicked = $false
 try {
     $arguments = @(
         "`"--user-data-dir=$sourceRoot`"",
@@ -336,6 +363,10 @@ try {
     )
     # Request background startup before URL discovery, which can time out.
     # Never use task-only negative restore bounds on the user's profile.
+    if (Test-NativePtNavigationRisk) {
+        Start-NativePtWrite -Action navigation
+        $script:nativeLocalSubmissionAttempted = $true
+    }
     Start-Process -FilePath ([string]$config.chromeExecutable) -ArgumentList $arguments -WindowStyle Hidden | Out-Null
     $windowDeadline = (Get-Date).AddSeconds(25)
     do {
@@ -371,7 +402,6 @@ try {
         [void][CheckinWindowNative]::ShowWindow($taskHandle, 7)
 
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-        $clicked = $false
         $oauthLoginClicked = $false
         $oauthAuthorizeClicked = $false
         $last = $null
@@ -387,6 +417,20 @@ try {
                     inspection = $last
                 }
                 break
+            }
+            if ($ReadOnly) {
+                $unsignedEvidence = Get-ConfirmedNativeUnsignedEvidence $last $Url
+                if ($null -ne $unsignedEvidence) {
+                    $result = [pscustomobject]@{
+                        status = 'not_signed'
+                        reason = '主 Chrome 已登录首页确认今日尚未签到'
+                        submissionAttempted = $false
+                        clicked = $false
+                        evidence = $unsignedEvidence
+                        inspection = $last
+                    }
+                    break
+                }
             }
             $currentUri = $null
             if ($last.currentUrl) {
@@ -434,7 +478,7 @@ try {
                 }
                 break
             }
-            if (-not $ReadOnly -and -not $last.success -and -not $clicked -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
+            if (-not $ReadOnly -and -not $last.success -and -not $script:checkinClickAttempted -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
                 $clicked = Invoke-UniqueCheckinButton $taskWindow
                 if ($clicked) { Start-Sleep -Seconds 2; continue }
             }
@@ -475,11 +519,7 @@ try {
 }
 catch {
     if ($null -eq $result) {
-        $result = [pscustomobject]@{
-            status = 'unconfirmed'
-            failureCode = 'accessibility_unavailable'
-            reason = '主 Chrome 可访问性检查未能完成'
-        }
+        $result = Get-NativePtFailure -ErrorRecord $_
     }
 }
 finally {
@@ -494,6 +534,12 @@ finally {
     }
 }
 
+$result | Add-Member -NotePropertyName clicked -NotePropertyValue ([bool]$clicked) -Force
+$result | Add-Member -NotePropertyName checkinClickAttempted -NotePropertyValue ([bool]$script:checkinClickAttempted) -Force
+if ($script:nativeLocalSubmissionAttempted) {
+    $result | Add-Member -NotePropertyName submissionAttempted -NotePropertyValue $true -Force
+}
+$result = $result | Complete-NativePtResult
 $result | ConvertTo-Json -Depth 8
-if ($result.status -in @('signed', 'already_signed')) { exit 0 }
+if ($result.status -in @('signed', 'already_signed') -or ($ReadOnly -and $result.status -eq 'not_signed')) { exit 0 }
 exit 2

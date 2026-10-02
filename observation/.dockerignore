@@ -4,6 +4,8 @@ outputs
 logs
 tmp
 work
+backups
+.staging
 tests
 schemas
 docs

@@ -83,6 +83,24 @@ test('cached unavailability retains original evidence, but is never a success',(
  const evidence=normalizeEvidence({status:'not_available',evidence:{source:'cached_confirmation',originalSource:'new_api_checkin_status',outcome:'message_not_enabled',authoritative:true,confirmedAt:'2026-09-01T02:00:00Z'}},{businessDate:'2026-09-02',referenceAt:now});
  assert.equal(evidence.source,'health_cache');assert.equal(evidence.originalSource,'new_api_checkin_status');assert.equal(evidence.verification,'feature_unavailable');
 });
+
+test('only explicit configuration cancellation is resolved without site evidence',()=>{
+ const context={businessDate:'2026-09-02',referenceAt:now};
+ const result={status:'not_available',availabilityKind:'task_disabled',disabledByConfig:true,
+   evidence:{source:'configuration',authoritative:true,confirmedAt:now}};
+ const evidence=normalizeEvidence(result,context);
+ assert.equal(evidence.verification,'task_disabled');assert.equal(evidence.authoritative,true);
+ assert.equal(result.status,'not_available');
+ for(const candidate of [
+   {...result,disabledByConfig:false}, {...result,availabilityKind:'feature_disabled'},
+   {...result,evidence:{...result.evidence,source:'api'}},
+   {...result,evidence:{...result.evidence,authoritative:false}},
+   {...result,evidence:{...result.evidence,confirmedAt:undefined}},
+   {...result,evidence:{...result.evidence,createdAt:now,confirmedAt:'2026-09-03T00:00:00Z'}},
+   {...result,status:'signed'}, {...result,status:'already_signed'}
+ ])assert.notEqual(normalizeEvidence(candidate,context).verification,'task_disabled');
+ assert.equal(normalizeEvidence({...result,status:'signed'},context).authoritative,false);
+});
 test('wrong date, future timestamp, and account mismatch cannot establish success',()=>{
  const context={businessDate:'2026-09-02',referenceAt:now,expectedId:'1'};
  for(const evidence of [{source:'api',createdAt:'2026-09-01T01:00:00Z'},{source:'api',createdAt:'2026-09-03T01:00:00Z'},{source:'api',accountId:'2'}])

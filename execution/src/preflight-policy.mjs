@@ -20,6 +20,7 @@ export function configuredNativeWafOrigins(config = {}) {
   return new Set([
     ...(config.nativeWafPreflightUrls ?? []),
     ...(config.mainChromeFallbackUrls ?? []),
+    ...(config.nativeChallengePreflight ?? []).filter(entry=>entry?.action==='checkin'),
   ]
     .map((value) => typeof value === "string" ? value : value?.sourceOrigin ?? value?.url)
     .filter(Boolean)

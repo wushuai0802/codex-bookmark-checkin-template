@@ -136,17 +136,28 @@ if((Test-Path -LiteralPath $overlaySource -PathType Leaf) -and -not (Test-Path -
 $items=@('Dockerfile','compose.nas.yaml','.dockerignore','package.json','package-lock.json','release.json','src','public','TRANSFER-MANIFEST.txt')
 if($UseWorkerTransport){$items=@('Dockerfile','compose.nas.yaml','compose.worker.yaml','.dockerignore','package.json','package-lock.json','release.json','src','public','TRANSFER-MANIFEST.txt')}
 if($scopedPaths.Count -gt 0){$items=$scopedPaths}
+else {
+  # A shell helper keeps full-tree replacement and rollback independently
+  # testable. Normalize its line endings for POSIX sh after Windows checkout.
+  $treeHelper=Join-Path $PSScriptRoot 'nas-code-release.sh'
+  $helperText=[IO.File]::ReadAllText($treeHelper).Replace("`r`n","`n")
+  [IO.File]::WriteAllText((Join-Path $bundle 'nas-code-release.sh'),$helperText,[Text.UTF8Encoding]::new($false))
+  $items+='nas-code-release.sh'
+}
 foreach($item in $items){
   if(-not (Test-Path -LiteralPath (Join-Path $bundle $item))){throw "NAS bundle item is missing: $item"}
 }
 
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
 $stage="$RemoteRoot/.staging/code-$stamp-$([guid]::NewGuid().ToString('N'))"
-$remoteBackup="$RemoteRoot/backups/code-$stamp.tar.gz"
+$releaseId="$stamp-$([guid]::NewGuid().ToString('N'))"
+$remoteBackup="$RemoteRoot/backups/code-$releaseId.tar.gz"
+$remoteTransaction="$RemoteRoot/backups/code-$releaseId.tree"
 $archive=Join-Path ([IO.Path]::GetTempPath()) "checkin-fabric-v2-$stamp-$([guid]::NewGuid().ToString('N')).tar.gz"
 $stageCreated=$false
 $backupReady=$false
 $deployStarted=$false
+$codeTreeReady=$false
 
 try {
   & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "sudo -n install -d -m 0700 '$stage' && sudo -n chown `$(id -u):`$(id -g) '$stage'"
@@ -182,12 +193,8 @@ try {
     & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget $backupCommand
     if($LASTEXITCODE -ne 0){throw 'NAS code backup failed'}
     $backupReady=$true
-    $workerInstall='';$composeFiles="-f '$RemoteRoot/compose.nas.yaml'"
-    $composeInstall="if test ! -f '$RemoteRoot/compose.nas.yaml'; then sudo -n install -m 0644 '$stage/compose.nas.yaml' '$RemoteRoot/compose.nas.yaml'; fi;"
-    if($ReplaceCompose){$composeInstall="sudo -n install -m 0644 '$stage/compose.nas.yaml' '$RemoteRoot/compose.nas.yaml';"}
+    $composeFiles="-f '$RemoteRoot/compose.nas.yaml'"
     if($UseWorkerTransport){
-      $workerInstall=" if test ! -f '$RemoteRoot/compose.worker.yaml'; then sudo -n install -m 0644 '$stage/compose.worker.yaml' '$RemoteRoot/compose.worker.yaml'; fi;"
-      if($ReplaceCompose){$workerInstall=" sudo -n install -m 0644 '$stage/compose.worker.yaml' '$RemoteRoot/compose.worker.yaml';"}
       $composeFiles += " -f '$RemoteRoot/compose.worker.yaml'"
     }
     if($scopedPaths.Count -gt 0){
@@ -205,7 +212,12 @@ try {
       $deploy="set -eu; $($installCommands -join '; '); sudo -n docker compose $composeFiles up -d --build --force-recreate --no-deps checkin-fabric-dashboard"
     }
     else {
-      $deploy="set -eu; sudo -n mkdir -p '$RemoteRoot/src' '$RemoteRoot/public'; sudo -n cp -a '$stage/src/.' '$RemoteRoot/src/'; sudo -n cp -a '$stage/public/.' '$RemoteRoot/public/'; sudo -n install -m 0644 '$stage/package.json' '$RemoteRoot/package.json'; sudo -n install -m 0644 '$stage/package-lock.json' '$RemoteRoot/package-lock.json'; sudo -n install -m 0644 '$stage/release.json' '$RemoteRoot/release.json'; sudo -n install -m 0644 '$stage/Dockerfile' '$RemoteRoot/Dockerfile'; $composeInstall $workerInstall sudo -n install -m 0644 '$stage/.dockerignore' '$RemoteRoot/.dockerignore'; sudo -n install -m 0644 '$stage/TRANSFER-MANIFEST.txt' '$RemoteRoot/TRANSFER-MANIFEST.txt'; sudo -n docker compose $composeFiles up -d --build --force-recreate --no-deps checkin-fabric-dashboard"
+      $replaceMode=if($ReplaceCompose){'1'}else{'0'}
+      $workerMode=if($UseWorkerTransport){'1'}else{'0'}
+      & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "sudo -n sh '$stage/nas-code-release.sh' prepare '$RemoteRoot' '$stage' '$remoteTransaction' '$replaceMode' '$workerMode'"
+      if($LASTEXITCODE -ne 0){throw "NAS code transaction preparation failed; backup=$remoteBackup"}
+      $codeTreeReady=$true
+      $deploy="set -eu; sudo -n sh '$remoteTransaction/recover.sh' apply '$RemoteRoot' '$remoteTransaction'; sudo -n docker compose $composeFiles up -d --build --force-recreate --no-deps checkin-fabric-dashboard"
     }
     $deployStarted=$true
     & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget $deploy
@@ -217,7 +229,7 @@ try {
       Start-Sleep -Seconds 5
     }
     if(-not $healthy){throw "NAS health is not healthy; backup=$remoteBackup"}
-    Write-Output "NAS V2 code deployed; backup=$remoteBackup"
+    Write-Output "NAS V2 code deployed; backup=$remoteBackup; codeTransaction=$(if($codeTreeReady){$remoteTransaction}else{'scoped'})"
   }
   else {
     Write-Output "WhatIf: bundle uploaded to $stage; no deployment performed."
@@ -226,12 +238,13 @@ try {
 catch {
   $failure=$_
   if($backupReady -and $deployStarted){
-    Write-Warning "Scoped deployment failed; restoring NAS code backup $remoteBackup"
+    Write-Warning "Deployment failed; restoring NAS code backup $remoteBackup"
     $rollbackCompose="-f '$RemoteRoot/compose.nas.yaml'"
     if($UseWorkerTransport){$rollbackCompose+=" -f '$RemoteRoot/compose.worker.yaml'"}
     $removeSelected=if($scopedPaths.Count){($scopedPaths | ForEach-Object { "sudo -n rm -f '$RemoteRoot/$_'" }) -join '; '}else{':' }
     $restoreConfig=if($ReplaceCompose){''}else{' --exclude=compose.nas.yaml --exclude=compose.worker.yaml'}
-    & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "set -eu; $removeSelected; sudo -n tar -xzf '$remoteBackup' -C '$RemoteRoot'$restoreConfig; sudo -n docker compose $rollbackCompose up -d --build --force-recreate --no-deps checkin-fabric-dashboard"
+    $restoreCode=if($codeTreeReady){"sudo -n sh '$remoteTransaction/recover.sh' rollback '$RemoteRoot' '$remoteTransaction'"}else{"$removeSelected; sudo -n tar -xzf '$remoteBackup' -C '$RemoteRoot'$restoreConfig"}
+    & $ssh -o BatchMode=yes -o ConnectTimeout=15 $SshTarget "set -eu; $restoreCode; sudo -n docker compose $rollbackCompose up -d --build --force-recreate --no-deps checkin-fabric-dashboard"
     if($LASTEXITCODE -ne 0){Write-Warning "Automatic rollback failed; backup remains at $remoteBackup"}
   }
   throw $failure

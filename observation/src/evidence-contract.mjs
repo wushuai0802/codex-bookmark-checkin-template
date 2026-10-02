@@ -47,7 +47,8 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
     rawSource==='new_api_captcha'&&Number.isInteger(Number(raw.attempts))&&Number(raw.attempts)>0&&
       Number.isFinite(Number(raw.quotaAwarded))&&Number(raw.quotaAwarded)>0||
     rawSource==='oauth_api_action_status'&&structuredLegacy&&result?.status==='signed');
-  const at=raw.createdAt??raw.confirmedAt??result?.confirmedAt??referenceAt,parsed=Date.parse(at),reference=Date.parse(referenceAt);
+  const at=rawSource==='configuration'?raw.confirmedAt:raw.createdAt??raw.confirmedAt??result?.confirmedAt??referenceAt,
+    parsed=Date.parse(at),reference=Date.parse(referenceAt);
   const day=Number.isFinite(parsed)?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(parsed)):null,account=raw.accountId??raw.userId??result?.accountId,conflict=expectedId&&account&&String(expectedId)!==String(account);
   let verification='not_applicable';
   if(result?.missingResult)verification='not_started';
@@ -69,10 +70,12 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
       ||original==='vibe_entitlement_status'&&['claim_not_enabled','claim_not_configured','entitlement_active'].includes(raw.outcome)
       ||original==='pt_page'&&raw.statusSignal==='maintenance';
     const validTime=Number.isFinite(parsed)&&Number.isFinite(reference)&&parsed<=reference+60_000;
+    const taskDisabled=result.availabilityKind==='task_disabled'&&result.disabledByConfig===true&&
+      rawSource==='configuration'&&raw.authoritative===true&&Number.isFinite(Date.parse(raw.confirmedAt))&&validTime;
     const cachedAgeOk=rawSource!=='cached_confirmation'||(raw.confirmedAt&&reference-parsed<=168*3600000);
-    verification=raw.authoritative===true&&feature&&(validTime||validDay(raw.businessDate))&&cachedAgeOk?'feature_unavailable':'unverified_unavailable';
+    verification=taskDisabled?'task_disabled':raw.authoritative===true&&feature&&(validTime||validDay(raw.businessDate))&&cachedAgeOk?'feature_unavailable':'unverified_unavailable';
   }
-  return {source,rawSource,originalSource:typeof raw.originalSource==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(raw.originalSource)?raw.originalSource:null,authoritative:verification==='verified'||verification==='feature_unavailable',verification,summary:redactText(result?.reason??''),redacted:true,
+  return {source,rawSource,originalSource:typeof raw.originalSource==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(raw.originalSource)?raw.originalSource:null,authoritative:['verified','feature_unavailable','task_disabled'].includes(verification),verification,summary:redactText(result?.reason??''),redacted:true,
     ...(Number.isFinite(parsed)&&(raw.createdAt||raw.confirmedAt||result?.confirmedAt)?{confirmedAt:new Date(parsed).toISOString()}:{}),
     ...(validDay(raw.businessDate)?{businessDate:raw.businessDate}:{}),
     ...(/^[a-z0-9_]{1,80}$/.test(raw.statusSignal??'')?{statusSignal:raw.statusSignal}:{}),

@@ -7,13 +7,13 @@ test('calendar uses latest daily execution summary and live snapshot, not histor
   const days=dailyRecords({
     ledger:[{businessDate:'2026-09-19',recordedAt:'2026-09-19T01:00:00Z',counts},
       {businessDate:'2026-09-19',recordedAt:'2026-09-19T02:00:00Z',counts,taskSummaries:[{observedStatus:'signed'}]}],
-    snapshot:{businessDate:'2026-09-20',generatedAt:'2026-09-20T02:00:00Z',counts},tasks:[{observedStatus:'signed'}]
+    snapshot:{businessDate:'2026-09-20',generatedAt:'2026-09-20T02:00:00Z',counts},tasks:[{observedStatus:'signed'}],now:Date.parse('2026-09-20T03:00:00Z')
   });
   assert.equal(days.size,2);
   assert.equal(days.get('2026-09-19').tasks.length,1);
   assert.equal(days.get('2026-09-20').source,'current');
-  assert.deepEqual(dayTotals(days.get('2026-09-20')),{total:3,completed:2,unavailable:1,pending:0});
-  assert.deepEqual(monthTotals(days,'2026-09'),{recordDays:2,total:6,completed:4,unavailable:2,pending:0});
+  assert.deepEqual(dayTotals(days.get('2026-09-20')),{total:3,completed:2,unavailable:1,cancelled:0,pending:0});
+  assert.deepEqual(monthTotals(days,'2026-09'),{recordDays:2,total:6,completed:4,unavailable:2,cancelled:0,pending:0});
 });
 
 test('calendar details put unresolved work first and keep filters disjoint',()=>{
@@ -62,7 +62,7 @@ test('calendar combines all PT receipts without counting a regular PT account tw
     {origin:'https://fallback.example',inLegacyPlan:false,observedStatus:'already_signed'}];
   const ledger=[{businessDate:day,recordedAt:at,counts:{executionUnits:2,status:{signed:1,unknown:1}},taskSummaries:tasks,ptSummaries}];
   const all=dailyRecords({ledger}).get(day),regular=dailyRecords({ledger,scope:'regular'}).get(day),pt=dailyRecords({ledger,scope:'pt'}).get(day);
-  assert.deepEqual(dayTotals(all),{total:3,completed:3,unavailable:0,pending:0});
+  assert.deepEqual(dayTotals(all),{total:3,completed:3,unavailable:0,cancelled:0,pending:0});
   assert.equal(dayTotals(regular).total,2);assert.equal(dayTotals(regular).pending,1);
   assert.equal(dayTotals(pt).total,2);assert.equal(all.tasks[0].taskId,'regular-a');assert.equal(all.ptRecorded,true);
   assert.equal(ledger[0].taskSummaries[0].observedStatus,'unknown');
@@ -77,4 +77,32 @@ test('missing historical PT detail is explicit and multiple regular accounts sta
   assert.equal(dailyRecords({ledger:[record],scope:'pt'}).get(day).tasks.length,0);
   const merged=dailyRecords({ledger:[{...record,ptSummaries:[{origin:'https://pt.example',inLegacyPlan:true,observedStatus:'unknown'}]}]}).get(day);
   assert.equal(merged.tasks.length,2);assert.equal(dayTotals(merged).completed,2);
+});
+
+test('midnight freshness does not rewrite a prior-day PT calendar receipt',()=>{
+  const businessDate='2026-10-01',at='2026-10-01T15:59:00Z',origin='https://pt.example';
+  const task={taskId:'one',origin,observedStatus:'signed',evidence:{authoritative:true}};
+  const counts={executionUnits:1,status:{signed:1}};
+  const ledger=[{businessDate,recordedAt:at,counts,taskSummaries:[task],ptSummaries:[{...task,inLegacyPlan:true}]}];
+  const input={ledger,snapshot:{businessDate,generatedAt:at,counts},tasks:[task],
+    ptStatus:{businessDate,sites:[{origin,inLegacyPlan:true,effective:{status:'signed',fresh:false,authoritative:true,observedAt:at}}]},
+    now:Date.parse('2026-10-01T16:01:00Z')};
+  const original=JSON.stringify(input),entry=dailyRecords(input).get(businessDate);
+  assert.equal(entry.source,'ledger');assert.equal(entry.tasks[0].observedStatus,'signed');
+  assert.equal(dayTotals(entry).completed,1);assert.equal(dayTotals(entry).pending,0);
+  assert.equal(JSON.stringify(input),original);
+  const today='2026-10-02';
+  input.snapshot={businessDate:today,generatedAt:'2026-10-01T16:00:00Z',counts:{executionUnits:1,status:{not_started:1}}};
+  input.tasks=[{...task,observedStatus:'not_started'}];input.ptStatus=null;
+  const days=dailyRecords(input);assert.equal(days.get(businessDate).tasks[0].observedStatus,'signed');
+  assert.equal(days.get(today).source,'current');assert.equal(dayTotals(days.get(today)).pending,1);
+});
+
+test('cancelled tasks have a separate calendar count and never count as unfinished or completed',()=>{
+  const task={observedStatus:'not_available',condition:'task_disabled',evidence:{verification:'task_disabled',rawSource:'configuration',authoritative:true}};
+  const entry={counts:{executionUnits:3,status:{signed:1,not_available:2}},tasks:[task,{observedStatus:'not_available'},{observedStatus:'signed'}]};
+  assert.deepEqual(dayTotals(entry),{total:3,completed:1,unavailable:1,cancelled:1,pending:0});
+  assert.equal(calendarTasks(entry,'cancelled').length,1);assert.equal(calendarTasks(entry,'unavailable').length,1);
+  assert.equal(calendarTasks(entry,'completed').length,1);assert.equal(calendarTasks(entry,'pending').length,0);
+  assert.equal(monthTotals(new Map([['2026-10-02',entry]]),'2026-10').cancelled,1);
 });

@@ -46,6 +46,7 @@ import {
 } from "./result-identity.mjs";
 import { closeSharedContexts } from "./shared-context-lifecycle.mjs";
 import { nativePreflightFailure } from "./native-preflight-result.mjs";
+import { currentNativePreflightResults } from "./native-preflight-receipt.mjs";
 import {
   configuredOAuthAccounts,
   runOAuthAccount,
@@ -186,11 +187,7 @@ async function readFreshNativeWafPreflight() {
   const report = await fs.readFile(nativeWafPreflightPath, "utf8")
     .then((text) => JSON.parse(text))
     .catch(() => null);
-  const generatedAt = Date.parse(report?.generatedAt ?? "");
-  if (!Number.isFinite(generatedAt) || Date.now() - generatedAt > 10 * 60 * 1000) return new Map();
-  return new Map((report?.results ?? [])
-    .filter((result) => allowedOrigins.has(result?.origin))
-    .map((result) => [result.origin, result]));
+  return currentNativePreflightResults(report, { allowedOrigins });
 }
 
 const activeContexts = new Set();
@@ -491,6 +488,7 @@ try {
       }
       const result = await runWithRecentNotAvailableCache(target, siteState, config, async () => {
         const preflight = nativeWafPreflight.get(target.origin);
+        if (preflight?.nativeGate === true) return { ...preflight, attempt: 0, nativePreflight: true };
         if (isTerminalResult(preflight)) {
           return { ...preflight, attempt: 1, nativePreflight: true };
         }
