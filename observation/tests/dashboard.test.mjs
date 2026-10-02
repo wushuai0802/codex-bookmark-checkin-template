@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
 import { createDashboardServer,calendarHistory } from '../src/dashboard-server.mjs';
+import {projectOverviewSnapshot,overviewMetrics} from '../public/overview-model.mjs';
+import {taskStatusLabel} from '../public/dashboard-model.mjs';
 
 const legacyRoot = fileURLToPath(new URL('./fixtures/legacy/', import.meta.url));
 
@@ -137,6 +139,31 @@ test('dashboard never combines a new snapshot with a stale ledger generation',as
     assert.equal(previous.snapshotMeta.generationStale,true);
     assert.equal(previous.snapshotMeta.fresh,false);
     assert.equal((await(await fetch(base+'/api/calendar')).json()).generationStale,true);
+  }finally{await close(instance);}
+});
+
+test('dashboard separates a policy cancellation from success and unavailable evidence',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-cancelled-task-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:'2026-09-02T14:00:00Z'});
+  for(const task of snapshot.tasks){
+    task.observedStatus='signed';
+    const receipt=snapshot.receipts.find(item=>item.taskId===task.taskId);
+    receipt.status='signed';receipt.evidence={source:'page_text',authoritative:true,verification:'verified',summary:'已签到',redacted:true};
+  }
+  const task=snapshot.tasks[0],receipt=snapshot.receipts.find(item=>item.taskId===task.taskId);
+  task.observedStatus='not_available';task.condition='task_disabled';receipt.status='not_available';
+  receipt.evidence={source:'user_confirmation',rawSource:'configuration',authoritative:true,verification:'task_disabled',summary:'已按配置取消该站签到任务',redacted:true};
+  fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+  const {instance,base}=await start({dataDir:root});
+  try{
+    const response=await(await fetch(base+'/api/overview')).json();
+    const cancelled=response.tasks.find(item=>item.taskId===task.taskId);
+    assert.equal(cancelled.observedStatus,'not_available');assert.equal(taskStatusLabel(cancelled),'已取消');
+    assert.equal(response.evidenceQuality.cancelled,1);assert.equal(response.evidenceQuality.unverifiedUnavailable,0);
+    const metrics=overviewMetrics(projectOverviewSnapshot(response),Date.parse(snapshot.generatedAt));
+    assert.equal(metrics.cancelled,1);assert.equal(metrics.unavailable,0);assert.equal(metrics.pending,0);
+    assert.equal(metrics.allResolved,true);assert.equal(metrics.rate,100);
   }finally{await close(instance);}
 });
 

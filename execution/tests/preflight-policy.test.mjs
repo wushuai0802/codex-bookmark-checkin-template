@@ -197,7 +197,9 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(preflightScript, /elseif\s*\(\$preparedOnly\)\s*\{\s*'prepared'/);
   assert.doesNotMatch(preflightScript, /inspectionStatus\s*=\s*if\s*\(\$passivePrepared\)\s*\{\s*'passive_wait'/);
   assert.match(preflightScript, /Offscreen\s*=\s*\$true/);
-  assert.doesNotMatch(preflightScript, /action\s+-ne\s+'checkin'[\s\S]*?Offscreen/);
+  const inspectionLaunch=preflightScript.slice(preflightScript.indexOf('$maximumInspectionAttempts'),preflightScript.indexOf('$nativeChromeStarted = $false',preflightScript.indexOf('$maximumInspectionAttempts')));
+  assert.match(inspectionLaunch,/Offscreen\s*=\s*\$true/);
+  assert.doesNotMatch(inspectionLaunch,/action\s+-ne\s+'checkin'[\s\S]*?Offscreen/);
   assert.match(inspector, /Math\.min\(120,/);
   assert.match(inspector, /nativeCheckinActionOrigins = new Set\(\[/);
   assert.match(inspector, /https:\/\/audiences\.me/);
@@ -297,7 +299,7 @@ test("原生预热保留 2FA 终态且专属 Profile 不落入调试恢复", asy
   assert.match(preflight, /failureCode\s*-eq\s*'accessibility_unavailable'/);
   assert.match(preflight, /'require-confirmed'/);
   assert.match(preflight, /-RemoteDebuggingPort\s+\$readbackPort/);
-  assert.match(preflight, /-not \[bool\]\$item\.passiveOnly -and \$mainFallbackByOrigin\.ContainsKey/);
+  assert.match(preflight, /-not \[bool\]\$item\.passiveOnly -or \[bool\]\$item\.mainChromeFallbackOnly/);
   assert.match(preflight, /Keep the user's normal Chrome as the last resort/);
   assert.match(preflight, /trusted_device_initialization/);
   assert.match(indexSource, /requiresTrustedDeviceInitialization\(preflight\)/);

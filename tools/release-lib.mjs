@@ -3,7 +3,15 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-const managed=/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|observation\/Dockerfile$|(?:execution|observation)\/package(?:-lock)?\.json$)/;
+// Keep public runtime inputs explicit: allowing the entire config directory
+// would also overwrite account bindings and local site/credential settings.
+const publicRuntimeFiles=new Set([
+  'execution/config/defaults.json','execution/config/qa-rules.json',
+  'execution/config/site-rules.public.json','execution/requirements-ocr.txt',
+  'observation/Dockerfile','observation/compose.nas.yaml',
+  'observation/compose.worker.yaml','observation/.dockerignore'
+]);
+const managed={test:file=>publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
 export const fileHash=file=>fs.existsSync(file)?crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'):null;
 function safeFile(root,relative){
   if(!/^[A-Za-z0-9_.\/-]+$/.test(relative)||relative.split('/').some(p=>p==='..'||p==='.'||!p))throw Error('unsafe release path');

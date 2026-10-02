@@ -87,13 +87,13 @@ npm test
 pwsh -NoProfile -File .\scripts\Scan-PublicSafety.ps1
 ```
 
-公开仓库作为共享源码时，可用以下命令检查私有部署是否发生代码漂移。
-默认只报告；使用 `-Apply` 时还必须用 `-IncludePaths` 明确列出本次要同步的
-文件（多个路径用逗号分隔），不能一次覆盖所有漂移文件。它只在私有部署的
-`tmp` 中备份所选文件并原子替换；运行锁存在时拒绝应用。管理范围仍限于
-`src`、`scripts`、`tests`、`config/defaults.json` 和 `requirements-ocr.txt`。
-该脚本不会复制或删除 `config.json`、
-`config.local.json`、`data`、`logs`、浏览器资料或其他私有扩展：
+统一项目从仓库根目录使用 `node tools/release.mjs plan/apply/audit/rollback`，
+按清单一起发布执行层和观测层，取得执行锁并保留可验证备份。
+具体参数与公开文件范围见 [发布与恢复](../docs/release-and-recovery.md)。
+私有配置、账号绑定、浏览器资料、实际签到记录不随代码发布或回滚。
+
+下面的旧脚本只保留为旧安装兼容及局部只读诊断，覆盖范围小于统一发布清单，
+不应用它替代整个项目的发布验收：
 
 ```powershell
 pwsh -NoProfile -File .\scripts\Sync-PrivateRuntime.ps1 `

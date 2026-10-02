@@ -7,13 +7,15 @@ param(
     [ValidateSet('offscreen', 'minimized', 'visible')][string]$WindowMode = 'offscreen',
     [switch]$AllowPreparedSiteBody,
     [switch]$AllowCloudflareChallengeClick,
-    [switch]$PerformCheckin
+    [switch]$PerformCheckin,
+    [switch]$ReadOnly,
+    [string]$RuntimeRoot
 )
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$root = Split-Path -Parent $PSScriptRoot
+$root = if ($RuntimeRoot) { [IO.Path]::GetFullPath($RuntimeRoot) } else { Split-Path -Parent $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $originUri = [uri]$Origin
@@ -34,6 +36,26 @@ if ($originUri.Scheme -ne 'https' -or $originUri.UserInfo -or
 }
 if (-not $profilePath.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "机器人 Chrome 目录必须位于 $allowedRoot"
+}
+if ($ReadOnly) {
+    $reviewedOrigin = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($originValue -replace '^https://www\.', 'https://') }).Count -gt 0
+    if (-not $reviewedOrigin -or $targetUri.AbsolutePath -ne '/index.php' -or $targetUri.Query -or $targetUri.Fragment) {
+        throw '只读核验仅允许已复核站点的首页。'
+    }
+}
+
+. (Join-Path $PSScriptRoot 'Native-PtGuard.ps1')
+$script:nativeLocalSubmissionAttempted = $false
+$script:checkinClickAttempted = $false
+try {
+    $nativeDecision = Initialize-NativePtGuard -Root $root -Origin $originValue -Url $Url -ProfilePath $profilePath -ReadOnly:$ReadOnly
+} catch {
+    $nativeDecision = Get-NativePtFailure -ErrorRecord $_
+}
+if ($null -ne $nativeDecision) {
+    $nativeDecision | Complete-NativePtResult | ConvertTo-Json -Depth 8
+    if ($nativeDecision.status -in @('signed', 'already_signed')) { exit 0 }
+    exit 2
 }
 
 . (Join-Path $PSScriptRoot 'Safe-UIAutomation.ps1')
@@ -262,6 +284,7 @@ function Invoke-CloudflareChallengeClick {
 }
 
 function Invoke-NativeCheckinAction {
+    if ($ReadOnly -or $script:checkinClickAttempted) { return $false }
     # Only invoke an unambiguous, same-page attendance control.  We never use
     # coordinates or broad text matching here: a missing or ambiguous control
     # is safer to report than to click the wrong action.
@@ -280,12 +303,31 @@ function Invoke-NativeCheckinAction {
         catch { }
     }
     if ($matches.Count -ne 1) { return $false }
-    return Invoke-SafeAutomationControl -Element $matches[0] -AllowedPatterns @('Invoke', 'Toggle')
+    # Select a supported pattern before recording the write. Once an actual
+    # invocation starts, an exception must never fall through to another one.
+    $pattern = $null
+    $patternName = ''
+    foreach ($candidate in @('Invoke', 'Toggle')) {
+        try {
+            $patternId = if ($candidate -eq 'Invoke') { [System.Windows.Automation.InvokePattern]::Pattern } else { [System.Windows.Automation.TogglePattern]::Pattern }
+            $pattern = $matches[0].GetCurrentPattern($patternId)
+            $patternName = $candidate
+            break
+        } catch { }
+    }
+    if ($null -eq $pattern) { return $false }
+    if ($patternName -eq 'Toggle' -and $pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { return $false }
+    Start-NativePtWrite -Action click
+    $script:checkinClickAttempted = $true
+    $script:nativeLocalSubmissionAttempted = $true
+    if ($patternName -eq 'Invoke') { [void]$pattern.Invoke() } else { [void]$pattern.Toggle() }
+    return $true
 }
 
 if ((Get-ProfileChromeProcesses).Count -gt 0) { throw '机器人专用 Chrome 配置正被占用。' }
 $started = $false
 $diagnosticStage = 'launch'
+$checkinClicked = $false
 try {
     # Use named-parameter splatting.  An array splat is positional in
     # PowerShell; it previously bound "-Urls" to Open-PlainLoginChrome's
@@ -304,6 +346,10 @@ try {
     } else {
         $openParameters.Offscreen = $true
     }
+    if (Test-NativePtNavigationRisk) {
+        Start-NativePtWrite -Action navigation
+        $script:nativeLocalSubmissionAttempted = $true
+    }
     & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters | Out-Null
     $diagnosticStage = 'window_discovery'
     $windowDeadline = (Get-Date).AddSeconds(25)
@@ -317,8 +363,6 @@ try {
     $confirmationClicked = $false
     $cloudflareObservedAt = $null
     $cloudflareChallengeClicked = $false
-    $checkinClickAttempted = $false
-    $checkinClicked = $false
     $last = $null
     do {
         $last = Read-PageSnapshot
@@ -335,10 +379,11 @@ try {
                 checkinClickAttempted = $checkinClickAttempted
                 checkinClicked = $checkinClicked
                 inspection = $last
-            } | ConvertTo-Json -Depth 8
+                submissionAttempted = [bool]$script:nativeLocalSubmissionAttempted
+            } | Complete-NativePtResult | ConvertTo-Json -Depth 8
             exit 2
         }
-        $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked -FormalVisit:([bool]$PerformCheckin -and [bool]$last.attendanceEndpoint)
+        $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked -FormalVisit:(-not $ReadOnly -and [bool]$PerformCheckin -and [bool]$last.attendanceEndpoint)
         if (Test-NativePageCompletion $last $originValue $pageEvidence) {
             [pscustomobject]@{
                 status = 'signed'
@@ -350,7 +395,8 @@ try {
                 checkinClickAttempted = $checkinClickAttempted
                 checkinClicked = $checkinClicked
                 inspection = $last
-            } | ConvertTo-Json -Depth 8
+                submissionAttempted = [bool]$script:nativeLocalSubmissionAttempted
+            } | Complete-NativePtResult | ConvertTo-Json -Depth 8
             exit 0
         }
         if (-not $PerformCheckin -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and -not $last.loginRoute) {
@@ -363,7 +409,8 @@ try {
                 checkinClickAttempted = $checkinClickAttempted
                 checkinClicked = $checkinClicked
                 inspection = $last
-            } | ConvertTo-Json -Depth 8
+                submissionAttempted = [bool]$script:nativeLocalSubmissionAttempted
+            } | Complete-NativePtResult | ConvertTo-Json -Depth 8
             exit 0
         }
         if (-not $PerformCheckin -and $AllowPreparedSiteBody -and $last.siteBodyLoaded -and -not $last.loginRoute) {
@@ -376,7 +423,8 @@ try {
                 checkinClickAttempted = $checkinClickAttempted
                 checkinClicked = $checkinClicked
                 inspection = $last
-            } | ConvertTo-Json -Depth 8
+                submissionAttempted = [bool]$script:nativeLocalSubmissionAttempted
+            } | Complete-NativePtResult | ConvertTo-Json -Depth 8
             exit 0
         }
         # A WAF challenge can keep the original /login.php URL while its own
@@ -389,11 +437,14 @@ try {
                 confirmationClickAttempted = $confirmationClickAttempted
                 confirmationClicked = $confirmationClicked
                 cloudflareChallengeClicked = $cloudflareChallengeClicked
+                checkinClickAttempted = $checkinClickAttempted
+                checkinClicked = $checkinClicked
                 inspection = $last
-            } | ConvertTo-Json -Depth 8
+                submissionAttempted = [bool]$script:nativeLocalSubmissionAttempted
+            } | Complete-NativePtResult | ConvertTo-Json -Depth 8
             exit 2
         }
-        if ($last.waf -and $last.bodyText -match '客户端异常.*确认.*合法用户' -and -not $confirmationClickAttempted) {
+        if (-not $ReadOnly -and $last.waf -and $last.bodyText -match '客户端异常.*确认.*合法用户' -and -not $confirmationClickAttempted) {
             $confirmationClickAttempted = $true
             $confirmationClicked = Invoke-LeichiConfirmationClick
             if ($confirmationClicked) {
@@ -401,9 +452,8 @@ try {
                 continue
             }
         }
-        if ($PerformCheckin -and -not $last.success -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and
+        if (-not $ReadOnly -and $PerformCheckin -and -not $last.success -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and
             -not $last.success -and -not $checkinClickAttempted) {
-            $checkinClickAttempted = $true
             $checkinClicked = Invoke-NativeCheckinAction
             if ($checkinClicked) {
                 Start-Sleep -Seconds 2
@@ -411,7 +461,7 @@ try {
             }
         }
         if ($last.cloudflareWaf -and $null -eq $cloudflareObservedAt) { $cloudflareObservedAt = Get-Date }
-        if ($AllowCloudflareChallengeClick -and $last.cloudflareWaf -and -not $cloudflareChallengeClicked -and
+        if (-not $ReadOnly -and $AllowCloudflareChallengeClick -and $last.cloudflareWaf -and -not $cloudflareChallengeClicked -and
             $null -ne $cloudflareObservedAt -and ((Get-Date) - $cloudflareObservedAt).TotalSeconds -ge 8) {
             $cloudflareChallengeClicked = Invoke-CloudflareChallengeClick
             if ($cloudflareChallengeClicked) {
@@ -429,7 +479,7 @@ try {
             "无调试原生 Chrome 未取得签到终态（雷池确认点击=$confirmationClicked，Cloudflare 验证点击=$cloudflareChallengeClicked）"
         }
         failureCode = if ($checkinClicked) { 'submission_outcome_unknown' } elseif (-not $last.currentUrl) { 'accessibility_unavailable' } else { $null }
-        submissionAttempted = $checkinClicked
+        submissionAttempted = [bool]$script:nativeLocalSubmissionAttempted
         retryable = if ($checkinClicked) { $false } else { $null }
         confirmationClickAttempted = $confirmationClickAttempted
         confirmationClicked = $confirmationClicked
@@ -437,19 +487,20 @@ try {
         checkinClickAttempted = $checkinClickAttempted
         checkinClicked = $checkinClicked
         inspection = $last
-    } | ConvertTo-Json -Depth 8
+    } | Complete-NativePtResult | ConvertTo-Json -Depth 8
     exit 2
 }
 catch {
     # Do not lose all diagnostic information through the parent's stderr sink.
     # No raw exception message/page text: it can contain private session data.
-    [pscustomobject]@{
-        status = if ($checkinClicked) { 'needs_attention' } else { 'unconfirmed' }
-        failureCode = if ($checkinClicked) { 'submission_outcome_unknown' } else { 'accessibility_unavailable' }
-        submissionAttempted = [bool]$checkinClicked
-        diagnosticStage = $diagnosticStage
-        reason = '原生 Chrome 自动验收未能读取页面结果；未确认签到是否完成'
-    } | ConvertTo-Json -Depth 4
+    $failure = Get-NativePtFailure -ErrorRecord $_
+    $failure | Add-Member -NotePropertyName diagnosticStage -NotePropertyValue $diagnosticStage -Force
+    $failure | Add-Member -NotePropertyName checkinClickAttempted -NotePropertyValue ([bool]$script:checkinClickAttempted) -Force
+    $failure | Add-Member -NotePropertyName checkinClicked -NotePropertyValue ([bool]$checkinClicked) -Force
+    if ($script:nativeLocalSubmissionAttempted) {
+        $failure | Add-Member -NotePropertyName submissionAttempted -NotePropertyValue $true -Force
+    }
+    $failure | Complete-NativePtResult | ConvertTo-Json -Depth 8
     exit 2
 }
 finally {

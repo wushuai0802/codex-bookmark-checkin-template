@@ -37,7 +37,9 @@ test('live task APIs show current maintenance after midnight while keeping the o
     if(body.operationTargets){assert.equal(body.operationTargets[0].actions.retry,false);assert.equal(body.operationTargets[0].actions.login,false);}
   }
   const apiTask=async()=>(await(await fetch(base+'/api/tasks')).json()).tasks[0];
-  for(const [status,total] of [['external',1],['verification',0],['attention',0],['pending',1],['needs_attention',1],['constructor',0]]){
+  // Filters follow the displayed category; the underlying uncertain enum above
+  // remains intact for audit and submission guards.
+  for(const [status,total] of [['external',1],['verification',0],['attention',0],['pending',1],['needs_attention',0],['constructor',0]]){
     const response=await fetch(base+'/api/tasks?status='+status);
     assert.equal(response.status,200);assert.equal((await response.json()).total,total);
   }

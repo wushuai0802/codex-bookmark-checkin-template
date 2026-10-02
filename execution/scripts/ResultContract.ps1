@@ -101,6 +101,30 @@ function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$C
     }
 }
 
+function Get-ConfirmedNativeUnsignedEvidence($Snapshot, [string]$TargetUrl, [datetimeoffset]$Now = [datetimeoffset]::UtcNow) {
+    # Only the reviewed SaoBao home header has this native unsigned contract.
+    # Absence of a success message alone never permits another submission.
+    if ($null -eq $Snapshot -or $Snapshot.sameOrigin -ne $true -or $Snapshot.authenticated -ne $true -or
+        $Snapshot.siteBodyLoaded -ne $true -or $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute -or
+        $Snapshot.success -ne $false -or $Snapshot.successText -or $Snapshot.successControl -or
+        $Snapshot.signedControlCount -ne 0 -or $Snapshot.unsignedControlCount -ne 1 -or
+        [string]$Snapshot.unsignedControl -cne '签到') { return $null }
+    try {
+        $expected = [uri]$TargetUrl
+        $actual = [uri][string]$Snapshot.currentUrl
+        if ($expected.AbsoluteUri -cne 'https://ptsbao.club/index.php' -or
+            $actual.AbsoluteUri -cne 'https://ptsbao.club/index.php') { return $null }
+    } catch { return $null }
+    return [pscustomobject]@{
+        source = 'page_text'
+        authoritative = $true
+        confirmedAt = $Now.ToUniversalTime().ToString('o')
+        businessDate = $Now.ToOffset([timespan]::FromHours(8)).ToString('yyyy-MM-dd')
+        pagePath = '/index.php'
+        statusSignal = 'nexus_daily_header_unsigned'
+    }
+}
+
 function Test-NativePageCompletion($Snapshot, [string]$Origin, $Evidence) {
     if ($Evidence.authoritative -eq $true) { return $true }
     $reviewedPt = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($Origin -replace '^https://www\.', 'https://') }).Count -gt 0

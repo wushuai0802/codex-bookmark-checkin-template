@@ -21,7 +21,7 @@ import {createDashboardGenerationReader} from './dashboard-generation.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {releaseInfo} from './release-info.mjs';
 import {operationTargets,enqueueOperation,operationView} from './dashboard-operations.mjs';
-import {matchesTask} from '../public/dashboard-model.mjs';
+import {matchesTask,cancelledTask} from '../public/dashboard-model.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -313,7 +313,8 @@ function publicSnapshot(snapshot, now = new Date().toISOString()) {
       missingCount:Number(snapshot.reconciliation.missingCount)||0,conflictCount:Number(snapshot.reconciliation.conflictCount)||0,
       unexpectedCount:Number(snapshot.reconciliation.unexpectedCount)||0,planSource:shortLabel(snapshot.reconciliation.planSource)
     } : null,
-    evidenceQuality: snapshot.evidenceQuality ? {verifiedSuccess:Number(snapshot.evidenceQuality.verifiedSuccess)||0,unverifiedSuccess:Number(snapshot.evidenceQuality.unverifiedSuccess)||0} : null,
+    evidenceQuality: snapshot.evidenceQuality ? Object.fromEntries(['verifiedSuccess','unverifiedSuccess','verifiedUnavailable','unverifiedUnavailable','cancelled']
+      .map(key=>[key,Math.max(0,Number(snapshot.evidenceQuality[key])||0)])) : null,
     ptStatus: publicPtStatus(snapshot.ptStatus),
     health: snapshot.health && typeof snapshot.health === 'object' ? {
       healthy: snapshot.health.healthy === true,
@@ -436,9 +437,10 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   const status = {};
   for (const task of tasks) status[task.observedStatus ?? 'unknown'] = (status[task.observedStatus ?? 'unknown'] ?? 0) + 1;
   const successes=tasks.filter(task=>['signed','already_signed'].includes(task.observedStatus));
-  const unavailable=tasks.filter(task=>task.observedStatus==='not_available');
+  const cancelled=tasks.filter(cancelledTask);
+  const unavailable=tasks.filter(task=>task.observedStatus==='not_available'&&!cancelled.includes(task));
   const verified=task=>task.evidence?.authoritative===true;
-  const evidenceQuality={verifiedSuccess:successes.filter(verified).length,unverifiedSuccess:successes.filter(task=>!verified(task)).length,verifiedUnavailable:unavailable.filter(verified).length,unverifiedUnavailable:unavailable.filter(task=>!verified(task)).length};
+  const evidenceQuality={verifiedSuccess:successes.filter(verified).length,unverifiedSuccess:successes.filter(task=>!verified(task)).length,verifiedUnavailable:unavailable.filter(verified).length,unverifiedUnavailable:unavailable.filter(task=>!verified(task)).length,cancelled:cancelled.length};
   const execution={webExecutionEnabled:false,owners:tasks.reduce((counts,task)=>{counts[task.executionOwner]=(counts[task.executionOwner]??0)+1;return counts;},{}),syncedAt:runtime?.generatedAt??null};
   const projectedSnapshot=publicSnapshot(snapshot);
   if(projectedSnapshot){projectedSnapshot.counts.status=status;projectedSnapshot.evidenceQuality=evidenceQuality;}

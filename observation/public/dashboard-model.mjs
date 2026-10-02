@@ -2,9 +2,22 @@ import {conditionLabels,statusLabels,externalRetryCauses,ptSiteDisplayNames} fro
 
 export function taskStatusCondition(task){return task?.availability?.condition==='site_maintenance'?'site_maintenance':task?.condition;}
 export function taskStatusSummary(task){return task?.availability?.condition==='site_maintenance'?task.availability.summary:task?.evidence?.summary;}
-export function taskStatusLabel(task){return (!['signed','already_signed','not_available'].includes(task?.observedStatus)?conditionLabels[taskStatusCondition(task)]:null)??statusLabels[task?.observedStatus]??task?.observedStatus;}
+export function cancelledTask(task){return task?.observedStatus==='not_available'&&task?.evidence?.verification==='task_disabled'&&
+  task.evidence.authoritative===true&&task.evidence.rawSource==='configuration';}
+export function taskStatusLabel(task){return cancelledTask(task)?conditionLabels.task_disabled:
+  (!['signed','already_signed','not_available'].includes(task?.observedStatus)?conditionLabels[taskStatusCondition(task)]:null)??statusLabels[task?.observedStatus]??task?.observedStatus;}
 export function externalTask(task){return !['signed','already_signed','not_available'].includes(task?.observedStatus)&&
   [...externalRetryCauses,'site_maintenance','entitlement_expired'].includes(taskStatusCondition(task));}
+
+// Charts and their drill-down filters share the same presentation buckets.
+// The original execution enum and receipt remain unchanged.
+export function taskDisplayStatus(task){
+  if(cancelledTask(task))return 'cancelled';
+  if(['signed','already_signed'].includes(task?.observedStatus))return 'signed';
+  if(externalTask(task))return 'external';
+  if(task?.observedStatus!=='not_available'&&taskStatusCondition(task)==='submission_outcome_unknown')return 'verification';
+  return task?.observedStatus??'unknown';
+}
 
 export function identityTitle(item) {
   const identity = item.identity ?? {};
@@ -31,6 +44,7 @@ export const TASK_FILTERS = [
   ['external', '等待外部条件'],
   ['verification', '结果待核验'],
   ['unavailable', '未开放'],
+  ['cancelled', '已取消'],
   ['attention', '需关注'],
   ['deferred', '已延迟'],
   ['login_required', '需登录'],
@@ -41,19 +55,16 @@ export const normalizeTaskFilter = value => value === 'not_available' ? 'unavail
 
 export function matchesTask(task, { status = '', query = '' } = {}) {
   status = normalizeTaskFilter(status);
-  const value = task.observedStatus;
-  const condition=taskStatusCondition(task);
+  const display=taskDisplayStatus(task);
   const statusGroups = {
-    completed: ['signed', 'already_signed'],
-    pending: ['deferred', 'needs_attention', 'failed', 'unknown', 'not_started', 'login_required'],
+    completed: ['signed'],
+    pending: ['deferred', 'needs_attention', 'failed', 'unknown', 'not_started', 'login_required','external','verification'],
     attention: ['needs_attention', 'failed', 'unknown', 'not_started'],
     login_required: ['login_required'],
     unavailable: ['not_available'],
   };
   const statusGroup=Object.hasOwn(statusGroups,status)?statusGroups[status]:null;
-  const statusMatch = !status || (status==='external'?externalTask(task):status==='verification'?!['signed','already_signed','not_available'].includes(value)&&condition==='submission_outcome_unknown':
-    status==='attention'?statusGroups.attention.includes(value)&&!externalTask(task)&&condition!=='submission_outcome_unknown':
-    statusGroup ? statusGroup.includes(value) : value === status);
+  const statusMatch = !status || (statusGroup ? statusGroup.includes(display) : display === status);
   const haystack = [task.origin, siteTitle(task), task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
     task.identity?.username, task.identity?.userId, task.identity?.label].join(' ').toLowerCase();
   return statusMatch && haystack.includes(query.trim().toLowerCase());
@@ -63,6 +74,10 @@ export function ledgerPendingCount(record) {
   const counts = record?.counts?.status ?? {};
   const total = record?.counts?.executionUnits ?? 0;
   return Math.max(0, total - (counts.signed ?? 0) - (counts.already_signed ?? 0) - (counts.not_available ?? 0));
+}
+
+export function ledgerCancelledCount(record){
+  return Math.min(record?.counts?.status?.not_available??0,(record?.taskSummaries??record?.tasks??[]).filter(cancelledTask).length);
 }
 
 export function matchesLedger(record, filter = 'all') {

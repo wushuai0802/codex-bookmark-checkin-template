@@ -1,3 +1,5 @@
+import {cancelledTask,ledgerCancelledCount} from './dashboard-model.mjs';
+
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 function scopedEntry(entry,scope){
@@ -24,7 +26,7 @@ export function calendarPtSummaries(ptStatus){
     evidence:site.effective?.evidence??null}));
 }
 
-export function dailyRecords({ledger = [], snapshot = null, tasks = [],ptStatus=snapshot?.ptStatus,scope='all'} = {}) {
+export function dailyRecords({ledger = [], snapshot = null, tasks = [],ptStatus=snapshot?.ptStatus,scope='all',now=Date.now()} = {}) {
   const days = new Map();
   for (const record of ledger) {
     if (!DAY.test(record?.businessDate ?? '')) continue;
@@ -36,9 +38,13 @@ export function dailyRecords({ledger = [], snapshot = null, tasks = [],ptStatus=
   }
   if (DAY.test(snapshot?.businessDate ?? '') && Array.isArray(tasks) && tasks.length) {
     const previous = days.get(snapshot.businessDate);
-    if (!previous || Date.parse(snapshot.generatedAt) >= Date.parse(previous.recordedAt)) {
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(now));
+    const currentDay=snapshot.businessDate===today;
+    // Live freshness is measured against today. It must never downgrade an
+    // archived receipt after midnight while the next snapshot is still pending.
+    if (!previous || currentDay&&Date.parse(snapshot.generatedAt) >= Date.parse(previous.recordedAt)) {
       days.set(snapshot.businessDate, {recordedAt:snapshot.generatedAt, counts:snapshot.counts,
-        tasks,ptSummaries:calendarPtSummaries(ptStatus), source:'current'});
+        tasks,ptSummaries:currentDay?calendarPtSummaries(ptStatus):null, source:currentDay?'current':'snapshot'});
     }
   }
   return new Map([...days].map(([day,entry])=>[day,scopedEntry(entry,scope)]));
@@ -82,30 +88,33 @@ export function dayTotals(entry) {
   const status = entry?.counts?.status ?? {};
   const total = entry?.counts?.executionUnits ?? 0;
   const completed = (status.signed ?? 0) + (status.already_signed ?? 0);
-  const unavailable = status.not_available ?? 0;
-  return {total, completed, unavailable, pending:Math.max(0,total-completed-unavailable)};
+  const cancelled = ledgerCancelledCount(entry);
+  const unavailable = Math.max(0,(status.not_available ?? 0)-cancelled);
+  return {total, completed, unavailable, cancelled, pending:Math.max(0,total-completed-unavailable-cancelled)};
 }
 
 export function monthTotals(records,month) {
-  const result={recordDays:0,total:0,completed:0,unavailable:0,pending:0};
+  const result={recordDays:0,total:0,completed:0,unavailable:0,cancelled:0,pending:0};
   for(const [date,entry] of records){
     if(!date.startsWith(`${month}-`))continue;
     const totals=dayTotals(entry);
     result.recordDays++;
-    for(const key of ['total','completed','unavailable','pending'])result[key]+=totals[key];
+    for(const key of ['total','completed','unavailable','cancelled','pending'])result[key]+=totals[key];
   }
   return result;
 }
 
-export function calendarTaskGroup(status) {
+export function calendarTaskGroup(value) {
+  const task=typeof value==='string'?{observedStatus:value}:value,status=task?.observedStatus;
+  if(cancelledTask(task))return 'cancelled';
   if(['signed','already_signed'].includes(status))return 'completed';
   if(status==='not_available')return 'unavailable';
   return 'pending';
 }
 
 export function calendarTasks(entry,filter='all') {
-  const priority={pending:0,completed:1,unavailable:2};
-  return [...(entry?.tasks??[])].filter(task=>filter==='all'||calendarTaskGroup(task.observedStatus)===filter)
-    .sort((a,b)=>priority[calendarTaskGroup(a.observedStatus)]-priority[calendarTaskGroup(b.observedStatus)]||
+  const priority={pending:0,completed:1,unavailable:2,cancelled:3};
+  return [...(entry?.tasks??[])].filter(task=>filter==='all'||calendarTaskGroup(task)===filter)
+    .sort((a,b)=>priority[calendarTaskGroup(a)]-priority[calendarTaskGroup(b)]||
       String(a.displayName??a.origin??'').localeCompare(String(b.displayName??b.origin??''),'zh-CN'));
 }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesPt,ptStatusCategory,ptStatusCondition,matchesTask,matchesLedger,ledgerPendingCount,TASK_FILTERS,taskStatusLabel,taskStatusSummary,externalTask} from '../public/dashboard-model.mjs';
+import {matchesPt,ptStatusCategory,ptStatusCondition,matchesTask,matchesLedger,ledgerPendingCount,ledgerCancelledCount,TASK_FILTERS,taskStatusLabel,taskStatusSummary,externalTask,cancelledTask} from '../public/dashboard-model.mjs';
+import {overviewStatusCounts} from '../public/overview-model.mjs';
 
 test('current availability consistently labels and filters an uncertain regular task without changing its result',()=>{
   const task={origin:'https://fixture.example',observedStatus:'needs_attention',condition:'submission_outcome_unknown',
@@ -73,6 +74,34 @@ test('task filters use non-overlapping business groups',()=>{
     assert.ok(TASK_FILTERS.some(([value]) => value === key), key + ' must be selectable from the dashboard');
   }
   assert.equal(matchesTask(task('deferred'),{status:'completed'}),false);
+});
+
+test('every chart legend drills down to exactly its visible bucket',()=>{
+  const tasks=[];
+  for(const observedStatus of ['signed','already_signed','not_available','needs_attention','failed','deferred','login_required','unknown','not_started']){
+    tasks.push({origin:'https://fixture.example',observedStatus});
+    if(!['signed','already_signed','not_available'].includes(observedStatus)){
+      tasks.push({origin:'https://fixture.example',observedStatus,condition:'site_maintenance'});
+      tasks.push({origin:'https://fixture.example',observedStatus,condition:'submission_outcome_unknown'});
+    }
+  }
+  tasks.push({origin:'https://cancelled.example',observedStatus:'not_available',condition:'task_disabled',
+    evidence:{verification:'task_disabled',rawSource:'configuration',authoritative:true}});
+  const counts=overviewStatusCounts({counts:{executionUnits:tasks.length},tasks});
+  for(const [status,count] of Object.entries(counts))assert.equal(tasks.filter(task=>matchesTask(task,{status})).length,count,status);
+  assert.equal(tasks.filter(task=>matchesTask(task,{status:'needs_attention'})).length,1);
+  assert.equal(tasks.filter(task=>matchesTask(task,{status:'attention'})).length,4);
+});
+
+test('configuration cancellation is distinct from feature unavailability and completion',()=>{
+  const task={observedStatus:'not_available',condition:'task_disabled',evidence:{verification:'task_disabled',rawSource:'configuration',authoritative:true}};
+  assert.equal(cancelledTask(task),true);assert.equal(taskStatusLabel(task),'已取消');
+  for(const status of ['unavailable','completed','pending','attention'])assert.equal(matchesTask(task,{status}),false,status);
+  assert.equal(matchesTask(task,{status:'cancelled'}),true);
+  assert.equal(cancelledTask({...task,evidence:{...task.evidence,authoritative:false}}),false);
+  assert.equal(cancelledTask({...task,observedStatus:'signed'}),false);
+  const record={counts:{executionUnits:1,status:{not_available:1}},taskSummaries:[task]};
+  assert.equal(ledgerCancelledCount(record),1);assert.equal(ledgerPendingCount(record),0);
 });
 
 test('ledger review filters keep pending and drift records distinct', () => {

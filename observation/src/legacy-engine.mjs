@@ -65,6 +65,7 @@ export function publishEngineReport({root,legacyRoot,exitCode=null,requireFreshS
   if(requireFreshSince&&Date.parse(latest.finishedAt)<Date.parse(requireFreshSince)-2000)throw Error('engine did not produce a fresh report');
   const currentHealth=readLegacyHealth({root,legacyRoot});
   const results=latest.results.map(r=>({origin:new URL(r.origin).origin,accountKey:r.accountKey??'site-default',status:r.status,reason:redactText(r.reason??''),availabilityKind:r.availabilityKind??null,
+    ...(r.disabledByConfig===true?{disabledByConfig:true}:{}),
     ...(r.failureCode?{failureCode:String(r.failureCode).slice(0,80)}:{}),
     ...(r.submissionAttempted===true?{submissionAttempted:true}:{}),
     ...(r.submissionAttempted===false?{submissionAttempted:false}:{}),
@@ -79,8 +80,13 @@ export function publishEngineReport({root,legacyRoot,exitCode=null,requireFreshS
       ...(r.evidence?.businessDate===sourceDate?{businessDate:sourceDate}:{}),
       ...(/^[a-z0-9_]{1,80}$/.test(r.evidence?.statusSignal??'')?{statusSignal:r.evidence.statusSignal}:{})},
   }));
-  const counts={completed:0,unavailable:0,unresolved:0};
-  for(const r of results){if(['signed','already_signed'].includes(r.status))counts.completed++;else if(r.status==='not_available'&&r.availabilityKind!=='task_disabled')counts.unavailable++;else counts.unresolved++;}
+  const counts={completed:0,unavailable:0,cancelled:0,unresolved:0};
+  for(const r of results){
+    if(['signed','already_signed'].includes(r.status))counts.completed++;
+    else if(r.status==='not_available'&&r.evidence.verification==='task_disabled')counts.cancelled++;
+    else if(r.status==='not_available'&&r.availabilityKind!=='task_disabled')counts.unavailable++;
+    else counts.unresolved++;
+  }
   const report={schemaVersion:1,mode:'v2_v1_engine',executionEngine:'v1',businessDate:day,runId:latest.runId,sourceFinishedAt:latest.finishedAt,observedAt:now.toISOString(),healthCheckedAt:currentHealth?.checkedAt??null,plannedTotal:latest.plannedTotal,processedTotal:latest.processedTotal,executionComplete:latest.isComplete===true,businessComplete:latest.isComplete===true&&counts.unresolved===0,exitCode,counts,results};
   if(crossDay){report.completedCrossDay=true;report.businessComplete=false;}
   writeAtomic(path.join(root,'outputs',`engine-daily-${day}.json`),report);

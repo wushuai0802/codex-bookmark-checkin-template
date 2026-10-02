@@ -49,6 +49,7 @@ function Test-TwoFactorResult($Result) {
 $profilePath = $defaultProfilePath
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
 . (Join-Path $PSScriptRoot 'Native-ChromeDebug.ps1')
+. (Join-Path $PSScriptRoot 'Native-PtGuard.ps1')
 $node = Resolve-CheckinNode $config
 $inspector = Join-Path $root 'src\native-browser-inspect.mjs'
 $items = @($config.nativeWafPreflightUrls | ForEach-Object {
@@ -214,6 +215,7 @@ function Invoke-MainChromeFallbackResult([string]$Origin, [string]$Url, [int]$Ti
     )
     $lastResult = $null
     for ($fallbackAttempt = 1; $fallbackAttempt -le 2; $fallbackAttempt++) {
+        $lastResult = $null
         try {
             $powershellExecutable = (Get-Process -Id $PID).Path
             $fallbackArguments = @(
@@ -222,16 +224,23 @@ function Invoke-MainChromeFallbackResult([string]$Origin, [string]$Url, [int]$Ti
                 '-Origin', $Origin, '-Url', $Url, '-TimeoutSeconds', [string]$TimeoutSeconds
             )
             $fallbackText = & $powershellExecutable @fallbackArguments 2>$null
-            if ($fallbackText) { $lastResult = ($fallbackText | ConvertFrom-Json) }
+            if ($fallbackText) { $lastResult = ($fallbackText | ConvertFrom-Json) } else { throw 'Native helper returned no result' }
         }
         catch {
             $lastResult = [pscustomobject]@{
-                status = 'unconfirmed'
-                failureCode = 'accessibility_unavailable'
-                reason = '主 Chrome 回退子进程未能返回可解析结果'
+                status = 'needs_attention'
+                failureCode = 'submission_outcome_unknown'
+                submissionAttempted = $true
+                retryable = $false
+                reason = '主 Chrome 子进程结果不可确认，先只读核验，禁止自动重放'
             }
         }
+        if ($null -eq $lastResult) {
+            $lastResult = [pscustomobject]@{status='needs_attention';failureCode='submission_outcome_unknown';
+                submissionAttempted=$true;retryable=$false;reason='主 Chrome 子进程无结果，先只读核验，禁止自动重放'}
+        }
         if ($null -ne $lastResult -and (
+            $lastResult.submissionAttempted -ne $false -or $lastResult.nativeGate -eq $true -or
             [string]$lastResult.status -in @('signed', 'already_signed', 'login_required', 'needs_attention', 'managed_challenge') -or
             [string]$lastResult.failureCode -notin $transientWindowFailures
         )) {
@@ -286,7 +295,25 @@ function Clear-StaleAutomationChrome {
     return @(Get-AutomationChromeProcesses).Count -eq 0
 }
 
-foreach ($configuredProfile in @($items.profilePath | Select-Object -Unique)) {
+$eligibleItems = @()
+foreach ($candidate in $items) {
+    $candidateOrigin = if ($candidate.sourceOrigin) { [string]$candidate.sourceOrigin } else { ([uri][string]$candidate.url).GetLeftPart([UriPartial]::Authority) }
+    $useMain = [string]$candidate.action -ne 'checkin' -and $mainFallbackByOrigin.ContainsKey($candidateOrigin) -and
+        (-not [bool]$candidate.passiveOnly -or [bool]$candidate.mainChromeFallbackOnly)
+    $candidate | Add-Member -NotePropertyName nativeMainDirect -NotePropertyValue $useMain -Force
+    $candidateUrl = if ($useMain) { [string]$mainFallbackByOrigin[$candidateOrigin].url } else { [string]$candidate.url }
+    $candidateProfile = if ($useMain) { Split-Path -Parent ([string]$config.bookmarksPath) } else { [string]$candidate.profilePath }
+    $decision = Initialize-NativePtGuard -Root $root -Origin $candidateOrigin -Url $candidateUrl -ProfilePath $candidateProfile -MainProfile:$useMain
+    if ($null -ne $decision) {
+        $decision | Add-Member -NotePropertyName origin -NotePropertyValue $candidateOrigin -Force
+        $decision | Add-Member -NotePropertyName url -NotePropertyValue $candidateUrl -Force
+        $decision | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+        $preflightResults += $decision
+    } else { $eligibleItems += $candidate }
+}
+$items = $eligibleItems
+
+foreach ($configuredProfile in @($items | Where-Object { -not $_.nativeMainDirect } | Select-Object -ExpandProperty profilePath -Unique)) {
     $profilePath = [string]$configuredProfile
     if ((Get-AutomationChromeProcesses).Count -gt 0 -and -not (Clear-StaleAutomationChrome)) {
         throw "机器人专用 Chrome 配置正被占用，无法执行原生 WAF 预热：$profilePath"
@@ -301,6 +328,14 @@ foreach ($item in $items) {
     $url = [string]$item.url
     $origin = if ($item.sourceOrigin) { [string]$item.sourceOrigin } else { ([uri]$url).GetLeftPart([System.UriPartial]::Authority) }
     $hostName = ([uri]$url).Host
+    $gateUrl = if ($item.nativeMainDirect) { [string]$mainFallbackByOrigin[$origin].url } else { $url }
+    $gateProfile = if ($item.nativeMainDirect) { Split-Path -Parent ([string]$config.bookmarksPath) } else { $profilePath }
+    $decision = Initialize-NativePtGuard -Root $root -Origin $origin -Url $gateUrl -ProfilePath $gateProfile -MainProfile:([bool]$item.nativeMainDirect)
+    if ($null -ne $decision) {
+        $decision | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
+        $preflightResults += $decision
+        continue
+    }
 
     if ([string]$item.action -eq 'checkin') {
         $checkinInspection = $null
@@ -316,8 +351,14 @@ foreach ($item in $items) {
             if ($autoClickTurnstile.ContainsKey($origin)) { $checkinArguments += '-AllowCloudflareChallengeClick' }
             $checkinText = & $powershellExecutable @checkinArguments 2>$null
             if ($checkinText) { $checkinInspection = $checkinText | ConvertFrom-Json }
-        } catch { $checkinInspection = $null }
+        } catch { $checkinInspection = [pscustomobject]@{status='needs_attention';failureCode='submission_outcome_unknown';submissionAttempted=$true;retryable=$false;reason='原生执行器结果不可解析，先只读核验'} }
         finally { if ((Get-AutomationChromeProcesses).Count -gt 0) { Close-AutomationChrome } }
+        if ($null -eq $checkinInspection) { $checkinInspection = [pscustomobject]@{status='needs_attention';failureCode='submission_outcome_unknown';submissionAttempted=$true;retryable=$false;reason='原生执行器无结果，先只读核验'} }
+        if ($checkinInspection.nativeGate -eq $true) {
+            $checkinInspection | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
+            $preflightResults += $checkinInspection
+            continue
+        }
         $confirmed = $null -ne $checkinInspection -and [string]$checkinInspection.status -in @('signed', 'already_signed')
         $twoFactorRequired = Test-TwoFactorResult $checkinInspection
         $submissionAttempted = $null -ne $checkinInspection -and (
@@ -331,7 +372,7 @@ foreach ($item in $items) {
             inspectionStatus = if ($checkinInspection) { [string]$checkinInspection.status } else { 'unavailable' }
             evidence = if ($confirmed) { $checkinInspection.evidence } else { $null }
             diagnosticStage = if ($checkinInspection) { [string]$checkinInspection.diagnosticStage } else { 'child_result' }
-            failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($submissionAttempted) { 'submission_outcome_unknown' } elseif ($checkinInspection) { [string]$checkinInspection.failureCode } else { 'accessibility_unavailable' }
+            failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($submissionAttempted -and -not $confirmed) { 'submission_outcome_unknown' } elseif ($checkinInspection) { [string]$checkinInspection.failureCode } else { 'accessibility_unavailable' }
             submissionAttempted = $submissionAttempted
             retryable = if ($submissionAttempted) { $false } else { $null }
             attentionKind = if ($twoFactorRequired) { 'trusted_device_initialization' } else { $null }
@@ -343,9 +384,14 @@ foreach ($item in $items) {
     }
 
     $mainInspection = $null
-    if (-not [bool]$item.passiveOnly -and $mainFallbackByOrigin.ContainsKey($origin)) {
+    if ((-not [bool]$item.passiveOnly -or [bool]$item.mainChromeFallbackOnly) -and $mainFallbackByOrigin.ContainsKey($origin)) {
         $fallbackEntry = $mainFallbackByOrigin[$origin]
         $mainInspection = Invoke-MainChromeFallbackResult $origin ([string]$fallbackEntry.url) ([int]$fallbackEntry.waitSeconds)
+        if ($mainInspection.nativeGate -eq $true) {
+            $mainInspection | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
+            $preflightResults += $mainInspection
+            continue
+        }
         $mainConfirmed = $null -ne $mainInspection -and [string]$mainInspection.status -in @('signed', 'already_signed')
         $mainTwoFactorRequired = Test-TwoFactorResult $mainInspection
         $mainSubmissionAttempted = $null -ne $mainInspection -and [bool]$mainInspection.submissionAttempted
@@ -388,6 +434,7 @@ foreach ($item in $items) {
                 if (-not [bool]$item.trustAsSigned) { $plainArguments += '-AllowPreparedSiteBody' }
                 if ($autoClickTurnstile.ContainsKey($origin)) { $plainArguments += '-AllowCloudflareChallengeClick' }
                 $inspectionText = & $powershellExecutable @plainArguments 2>$null
+                if (-not $inspectionText) { throw 'Native passive helper returned no result' }
                 if ($inspectionText) {
                     $inspection = $inspectionText | ConvertFrom-Json
                     $passiveInspection = $inspection
@@ -395,23 +442,35 @@ foreach ($item in $items) {
                         -or ([string]$inspection.status -eq 'ready' `
                             -and [bool]$inspection.inspection.siteBodyLoaded `
                             -and (-not [bool]$item.trustAsSigned -or [bool]$inspection.inspection.attendanceEndpoint))
-                    if ([string]$inspection.status -eq 'login_required' -or (Test-TwoFactorResult $inspection)) { break }
+                    if ($inspection.submissionAttempted -eq $true -or $inspection.nativeGate -eq $true -or
+                        [string]$inspection.status -eq 'login_required' -or (Test-TwoFactorResult $inspection)) { break }
                 }
                 if (-not $passivePrepared -and $plainAttempt -lt 2) { Start-Sleep -Seconds 2 }
             }
         }
         catch {
             $passivePrepared = $false
+            $possibleSubmit = $script:NativePtGuard.managed -and $script:NativePtGuard.navigationRisk
+            $passiveInspection = [pscustomobject]@{status=if($possibleSubmit){'needs_attention'}else{'unconfirmed'};
+                failureCode=if($possibleSubmit){'submission_outcome_unknown'}else{'accessibility_unavailable'};
+                submissionAttempted=[bool]$possibleSubmit;retryable=if($possibleSubmit){$false}else{$null};reason='原生预热结果不可确认，等待只读核验'}
         }
         finally {
             if ((Get-AutomationChromeProcesses).Count -gt 0) { Close-AutomationChrome }
+        }
+
+        if ($passiveInspection.nativeGate -eq $true -or $passiveInspection.submissionAttempted -eq $true) {
+            $passiveInspection | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
+            $passiveInspection | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+            $preflightResults += $passiveInspection
+            continue
         }
 
         # Windows UI Automation is unavailable while the interactive desktop
         # is locked. The no-debug launch above still lets Chrome establish the
         # WAF/session state. Reopen the same isolated profile once with a debug
         # port only for authoritative readback; never use this path to click.
-        if (-not $passivePrepared -and (
+        if (-not $passivePrepared -and (-not $script:NativePtGuard.managed -or $origin -in $CheckinNativePtHeaderOrigins) -and (
             $null -eq $passiveInspection -or
             [string]$passiveInspection.failureCode -eq 'accessibility_unavailable'
         )) {
@@ -419,9 +478,10 @@ foreach ($item in $items) {
             try {
                 [void](Reset-NativeChromeDebugPort $profilePath)
                 $readbackPort = Get-NativeChromeDebugPort
+                $readbackUrl = if ($script:NativePtGuard.managed) { $origin + '/index.php' } else { $url }
                 & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') `
                     -RemoteDebuggingPort $readbackPort `
-                    -Urls @($url) `
+                    -Urls @($readbackUrl) `
                     -Offscreen `
                     -UserDataDirOverride $profilePath | Out-Null
                 $readbackStarted = $true
@@ -447,6 +507,11 @@ foreach ($item in $items) {
         if (-not $passivePrepared -and $mainFallbackByOrigin.ContainsKey($origin)) {
             $fallbackEntry = $mainFallbackByOrigin[$origin]
             $mainInspection = Invoke-MainChromeFallbackResult $origin ([string]$fallbackEntry.url) ([int]$fallbackEntry.waitSeconds)
+            if ($mainInspection.nativeGate -eq $true) {
+                $mainInspection | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
+                $preflightResults += $mainInspection
+                continue
+            }
             $mainConfirmed = $null -ne $mainInspection -and [string]$mainInspection.status -in @('signed', 'already_signed')
             $mainTwoFactorRequired = Test-TwoFactorResult $mainInspection
             $mainSubmissionAttempted = $null -ne $mainInspection -and [bool]$mainInspection.submissionAttempted
@@ -529,6 +594,7 @@ foreach ($item in $items) {
         # the user's desktop.
         $nativeChromeStarted = $false
         try {
+            if (Test-NativePtNavigationRisk) { Start-NativePtWrite -Action navigation }
             & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') @openParameters
             $nativeChromeStarted = $true
             $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
@@ -546,9 +612,14 @@ foreach ($item in $items) {
                 if (-not $attemptExplicit -and -not $attemptEndpoint -and -not $attemptPrepared -and -not $attemptAttention -and -not $attemptSubmitted) { $inspection = $null }
             }
         }
-        catch { $inspection = $null }
+        catch { $inspection = Get-NativePtFailure -ErrorRecord $_ }
         finally {
             if ($nativeChromeStarted) { Close-AutomationChrome }
+        }
+        if ($script:NativePtGuard.attempted) {
+            if ($null -eq $inspection) { $inspection = [pscustomobject]@{status='unconfirmed'} }
+            $inspection = $inspection | Complete-NativePtResult
+            break
         }
         if ($null -eq $inspection -and $inspectionAttempt -lt $maximumInspectionAttempts) { Start-Sleep -Seconds 1 }
     }
@@ -587,7 +658,7 @@ foreach ($item in $items) {
             '原生验证页面未能确认签到结果'
         }
         inspectionStatus = if ($null -ne $inspection) { [string]$inspection.status } else { 'unavailable' }
-        failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($submissionAttempted) { 'submission_outcome_unknown' } elseif ($inspection) { [string]$inspection.failureCode } else { 'accessibility_unavailable' }
+        failureCode = if ($twoFactorRequired) { 'two_factor_required' } elseif ($submissionAttempted -and -not $explicitlyConfirmed) { 'submission_outcome_unknown' } elseif ($inspection) { [string]$inspection.failureCode } else { 'accessibility_unavailable' }
         submissionAttempted = $submissionAttempted
         retryable = if ($submissionAttempted) { $false } else { $null }
         attentionKind = if ($twoFactorRequired) { 'trusted_device_initialization' } else { $null }

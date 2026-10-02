@@ -164,6 +164,21 @@ test('a newer non-authoritative execution failure cannot hide an authoritative O
   assert.equal(result.sites[0].discrepancy,false);
 });
 
+test('signed and already-signed authorities agree while original receipts remain distinct',()=>{
+  const origin='https://open.cd',businessDate='2026-10-02',generatedAt='2026-10-02T04:00:00Z';
+  const options={generatedAt,businessDate,monitorCatalog:{sites:[{origin}]},
+    externalReport:{source:'harvest',businessDate,sites:[{origin,status:'signed',observedAt:'2026-10-02T02:00:00Z',
+      evidence:{source:'api',authoritative:true,summary:'今日已签到'}}]},
+    fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,status:'already_signed',observedAt:'2026-10-02T03:00:00Z',
+      evidence:{source:'pt_page',authoritative:true,summary:'今日已签到'}}]}};
+  const original=JSON.stringify(options),site=buildPtStatus(options).sites[0];
+  assert.equal(site.discrepancy,false);assert.equal(site.effective.status,'already_signed');
+  assert.deepEqual(new Set(site.sourceStatuses.map(item=>item.status)),new Set(['signed','already_signed']));
+  assert.equal(JSON.stringify(options),original);
+  options.externalReport.sites[0].status='not_signed';
+  assert.equal(buildPtStatus(options).sites[0].discrepancy,true);
+});
+
 test('PT status rejects credential-bearing reports and normalizes safe aliases', () => {
   assert.throws(() => normalizePtStatusReport({ source: 'harvest', sites: [{ origin: 'https://example.com', status: 'signed', password: 'TEST' }] }), /sensitive field/);
   const report = normalizePtStatusReport({ generatedAt: '2026-09-04T04:00:00.000Z', source: 'harvest', sites: [{ origin: 'https://example.com', status: 'checked_in', observedAt: '2026-09-04T03:00:00.000Z', evidence: { source: 'api', authoritative: true, summary: 'ok' } }] });

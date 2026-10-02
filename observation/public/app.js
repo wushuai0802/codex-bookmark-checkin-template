@@ -1,5 +1,5 @@
-import { overviewMetrics, overviewStatusCounts, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, visibleLedgerChange, TASK_FILTERS, taskStatusLabel, taskStatusSummary, taskStatusCondition, externalTask } from './dashboard-model.mjs';
+import { overviewMetrics, overviewStatusCounts, projectOverviewSnapshot, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, ledgerCancelledCount, visibleLedgerChange, TASK_FILTERS, taskStatusLabel, taskStatusSummary, taskStatusCondition, externalTask } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion, MOTION } from './motion.mjs';
@@ -21,7 +21,7 @@ for (const storageName of ['sessionStorage', 'localStorage']) {
 
 const state = { view: 'overview', data: null, loading: false, ptScope: '', ledgerFilter:'all', taskPage:1, calendarMonth: null,
   calendarDate: null,calendarFilter: null,calendarHistory: null,calendarLoading: false,
-  calendarError: null,calendarTruncated: false };
+  calendarError: null,calendarTruncated: false,calendarGenerationStale: false };
 let sidebarReturnFocus = null;
 let sidebarExitTimer = null;
 let sidebarCloseWatcher = null;
@@ -67,7 +67,7 @@ function evidenceLabel(task) {
   if(task.availability?.condition==='site_maintenance')return '站点公告 · 状态观察';
   const evidence = task.evidence;
   if (!evidence) return '无证据';
-  const quality = {missing_evidence:'缺少结构化证据',unsupported_evidence:'证据类型未支持',non_authoritative:'非权威证据',wrong_business_date:'证据日期不符',identity_conflict:'身份冲突',unverified_source:'证据待核验',not_started:'尚无执行回执',feature_unavailable:'功能未开放证据',unverified_unavailable:'未开放结论待核验'}[evidence.verification];
+  const quality = {missing_evidence:'缺少结构化证据',unsupported_evidence:'证据类型未支持',non_authoritative:'非权威证据',wrong_business_date:'证据日期不符',identity_conflict:'身份冲突',unverified_source:'证据待核验',not_started:'尚无执行回执',feature_unavailable:'功能未开放证据',task_disabled:'已按配置取消',unverified_unavailable:'未开放结论待核验'}[evidence.verification];
   if (quality) return quality;
   const source = { usage_log: '使用日志', api: 'API', page_text: '页面文本', user_confirmation: '用户确认', legacy_authoritative: '旧系统权威', none: '无' }[evidence.source] ?? evidence.source;
   return evidence.authoritative ? `${source} · 已确认` : `${source} · 待确认`;
@@ -258,7 +258,7 @@ function renderKpis(data) {
     ['已签到', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'completed'],
     ['未开放回执', metrics.unavailable, `已核验 ${metrics.verifiedUnavailable} / 待核验 ${metrics.unverifiedUnavailable}`, 'unavailable'],
     ['尚未完成', metrics.pending, [`${metrics.manual} 项需关注`,...(metrics.external?[`${metrics.external} 项等待外部条件`]:[]),...(metrics.deferred||!metrics.external?[`${metrics.deferred} 项延后`]:[])].join(' · '), 'pending'],
-    ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, '同站多账号分别核验', '']
+    ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, `同站多账号分别核验${metrics.cancelled?` · 已取消 ${metrics.cancelled}`:''}`, '']
   ];
   const grid = $('#kpi-grid'); grid.replaceChildren();
   for (const [label, value, foot, filter] of cards) {
@@ -365,11 +365,11 @@ function renderStatusChart(data) {
   const donut = el('div', 'donut'); donut.style.background = statusGradient(status); append(donut, el('strong', null, total));
   const legend = el('div', 'legend');
   const colors = statusColors;
-  for (const key of ['signed', 'not_available', 'external','verification','needs_attention', 'deferred', 'login_required', 'failed', 'unknown','not_started']) {
+  for (const key of ['signed', 'not_available', 'cancelled', 'external','verification','needs_attention', 'deferred', 'login_required', 'failed', 'unknown','not_started']) {
     if (!(status[key] ?? 0)) continue;
     const row = el('button', 'legend-row legend-link'); row.type = 'button';
     row.addEventListener('click', () => openTasks({ status: key }));
-    const label = el('span', 'legend-label', {external:'等待外部条件',verification:'结果待核验'}[key]??STATUS_LABELS[key]); label.style.setProperty('--dot', colors[key] ?? '#8b96a8');
+    const label = el('span', 'legend-label', {external:'等待外部条件',verification:'结果待核验',cancelled:'已取消'}[key]??STATUS_LABELS[key]); label.style.setProperty('--dot', colors[key] ?? '#8b96a8');
     append(row, label, el('strong', null, `${status[key]} · ${total ? Math.round(status[key] / total * 100) : 0}%`)); legend.append(row);
   }
   append(chart, donut, legend);
@@ -402,13 +402,14 @@ function renderDailySummary(data) {
   const copy = el('div', 'daily-copy');
   const title = dailySummaryTitle(m, { previousDay, pausedCount });
   append(copy, el('p', 'eyebrow', `${previousDay ? '最近签到回执' : '今日签到'} · ${data?.businessDate ?? '—'}`), el('h2', null, title),
-    el('p', 'daily-note', m.total ? `收到 ${m.success} 项执行成功回执，${m.unavailable} 项未开放回执。` : '当前还没有可展示的今日回执。'));
+    el('p', 'daily-note', m.total ? `收到 ${m.success} 项执行成功回执，${m.unavailable} 项未开放回执${m.cancelled?`，${m.cancelled} 项已按配置取消`:''}。` : '当前还没有可展示的今日回执。'));
   const facts=el('div','summary-facts');
   for(const [label,value,kind] of [['权威核验',m.verifiedSuccess,'verified'],['成功待补证',m.unverifiedSuccess,'pending'],['确认未开放',m.verifiedUnavailable,'neutral']]){
     const item=el('span','summary-fact '+kind);item.classList.toggle('is-present',value>0);
     append(item,el('b',null,value),document.createTextNode(label));facts.append(item);
   }
   if(m.unverifiedUnavailable)facts.append(el('span','summary-fact pending',`${m.unverifiedUnavailable} 未开放待核验`));
+  if(m.cancelled)facts.append(el('span','summary-fact neutral',`${m.cancelled} 已取消`));
   const progress = el('div', 'daily-progress');
   append(progress, el('strong', null, m.executionRate === null ? '—' : `${m.executionRate}%`), el('span', null, previousDay ? '最近业务日执行成功率' : '执行成功率'));
   progress.title='执行成功项 / 总账号任务数；权威核验数单独列示，未开放项不算成功。';
@@ -721,7 +722,8 @@ function renderLedger(records) {
     const success = (counts.signed ?? 0) + (counts.already_signed ?? 0);
     const pending = ledgerPendingCount(record);
     const totals = el('div', 'ledger-totals');
-    append(totals, el('span', 'badge good', `成功 ${success}`), el('span', pending ? 'badge warn' : 'badge', `待处理 ${pending}`), el('span', 'badge', `未开放 ${counts.not_available ?? 0}`), el('span', 'muted', `${record.counts?.logicalSites ?? 0} 站 / ${record.counts?.executionUnits ?? 0} 个账号任务`));
+    const cancelled=ledgerCancelledCount(record);
+    append(totals, el('span', 'badge good', `成功 ${success}`), el('span', pending ? 'badge warn' : 'badge', `待处理 ${pending}`), el('span', 'badge', `未开放 ${Math.max(0,(counts.not_available ?? 0)-cancelled)}`), cancelled?el('span','badge',`已取消 ${cancelled}`):null, el('span', 'muted', `${record.counts?.logicalSites ?? 0} 站 / ${record.counts?.executionUnits ?? 0} 个账号任务`));
     const changed = (record.drift?.statusChanges??[]).filter(visibleLedgerChange).length;
     const classification = record.drift?.classification;
     const summary = changed ? `${changed} 项任务状态变化` : classification === 'initial' ? '首次记录' : classification === 'plan_changed' ? '签到范围发生变化' : '签到计划未变';
@@ -794,10 +796,12 @@ function renderCalendar(data) {
       caption.append(document.createTextNode(label));append(item,el('strong','calendar-stat-value',String(count)),caption);stats.append(item);
     }
     summary.append(stats);
+    if(monthly.cancelled)summary.append(el('span','calendar-history-note',`另有 ${monthly.cancelled} 项按配置取消，不计入待处理。`));
   }else summary.append(el('span',null,'此月没有已保存的执行回执'));
   if(state.calendarLoading)summary.append(el('span','calendar-history-note','正在读取历史…'));
   else if(state.calendarError)summary.append(el('span','calendar-history-note error',state.calendarHistory?
     '历史刷新失败，显示已缓存记录':'历史记录暂不可用，当前仅显示最近数据'));
+  else if(state.calendarGenerationStale||data?.snapshotMeta?.generationStale)summary.append(el('span','calendar-history-note','数据更新尚未完成，显示上次完整记录。'));
   else if(state.calendarTruncated)summary.append(el('span','calendar-history-note','仅展示最近 180 个有回执的日期'));
   nav.replaceChildren();
   const period=el('div','calendar-period');period.setAttribute('role','group');period.setAttribute('aria-label','选择年月');
@@ -829,17 +833,17 @@ function renderCalendar(data) {
   const dayControls=el('div','calendar-day-controls');append(dayControls,previous,todayButton,next);
   append(buttons,scope,dayControls);append(nav,period,buttons);for(const select of [year,month,scope])enhanceSelect(select);
   view.replaceChildren();for(const label of labels)view.append(el('span','calendar-weekday',label));for(let i=0;i<offset;i++)view.append(el('span','calendar-empty',''));
-  const stateOf=entry=>{if(!entry)return 'none';const totals=dayTotals(entry);if(totals.pending>0)return 'warn';if(totals.completed>0)return 'success';if(totals.unavailable>0)return 'done';return 'observe';};
+  const stateOf=entry=>{if(!entry)return 'none';const totals=dayTotals(entry);if(totals.pending>0)return 'warn';if(totals.completed>0)return 'success';if(totals.unavailable+totals.cancelled>0)return 'done';return 'observe';};
   for(let day=1;day<=days;day++){
     const date=`${state.calendarMonth}-${String(day).padStart(2,'0')}`,entry=records.get(date),totals=dayTotals(entry);
     const button=el('button',`calendar-day ${stateOf(entry)}${date===today?' today':''}${date===state.calendarDate?' selected':''}`);button.type='button';button.disabled=date>today;
     button.dataset.date=date;
-    button.setAttribute('aria-label',`${date} ${entry?`${totals.completed} 项完成，${totals.unavailable} 项未开放，${totals.pending} 项待处理`:'无执行记录'}`);
+    button.setAttribute('aria-label',`${date} ${entry?`${totals.completed} 项完成，${totals.unavailable} 项未开放，${totals.cancelled} 项已取消，${totals.pending} 项待处理`:'无执行记录'}`);
     button.setAttribute('aria-pressed',String(date===state.calendarDate));
     append(button,el('span','calendar-day-number',String(day)),el('span','calendar-day-count',entry?(totals.total?`${totals.completed}/${totals.total}`:'无任务'):date===today?'今天':''));
     if(entry&&totals.total){
       const track=el('span','calendar-day-track');
-      for(const [kind,count] of [['completed',totals.completed],['unavailable',totals.unavailable],['pending',totals.pending]]){
+      for(const [kind,count] of [['completed',totals.completed],['unavailable',totals.unavailable+totals.cancelled],['pending',totals.pending]]){
         if(count){const segment=el('i',kind);segment.style.width=`${count/totals.total*100}%`;track.append(segment);}
       }
       button.append(track);
@@ -862,12 +866,12 @@ function renderCalendar(data) {
   if(state.calendarScope!=='regular'&&selected.ptRecorded===false)
     detail.append(el('p','calendar-history-note','该日期的 PT 历史记录不完整，仅展示已有回执。'));
   const detailTotals=el('p','calendar-detail-totals');
-  for(const text of [`${totals.completed} 项完成`,`${totals.unavailable} 项未开放`,`${totals.pending} 项待处理`])detailTotals.append(el('span',null,text));
+  for(const text of [`${totals.completed} 项完成`,`${totals.unavailable} 项未开放`,...(totals.cancelled?[`${totals.cancelled} 项已取消`]:[]),`${totals.pending} 项待处理`])detailTotals.append(el('span',null,text));
   detail.append(detailTotals);
   if(!Array.isArray(selected.tasks)||!selected.tasks.length){detail.append(el('p','calendar-empty-state','仅有当日汇总，未保存逐站回执'));return;}
   state.calendarFilter??=totals.pending?'pending':'all';
   const filters=el('div','calendar-filters');filters.setAttribute('role','group');filters.setAttribute('aria-label','筛选当天任务');
-  for(const [filter,label,count] of [['pending','待处理',totals.pending],['all','全部',totals.total],['completed','已签到',totals.completed],['unavailable','未开放',totals.unavailable]]){
+  for(const [filter,label,count] of [['pending','待处理',totals.pending],['all','全部',totals.total],['completed','已签到',totals.completed],['unavailable','未开放',totals.unavailable],...(totals.cancelled?[['cancelled','已取消',totals.cancelled]]:[])]){
     const button=el('button',state.calendarFilter===filter?'active':'');button.type='button';button.setAttribute('aria-pressed',String(state.calendarFilter===filter));
     append(button,el('span',null,label),document.createTextNode(' '),el('span','calendar-filter-count',String(count)));
     button.addEventListener('click',()=>{state.calendarFilter=filter;renderCalendar(data);
@@ -920,7 +924,7 @@ function renderAll() {
   if (!data) return;
   closeSelectMenu();
   $('#mode-pill').textContent = '执行层 + 观测层';
-  const liveSnapshot={...(data.snapshot??{}),tasks:data.tasks??[],ptStatus:data.ptStatus,readiness:data.readiness,evidenceQuality:data.evidenceQuality??data.snapshot?.evidenceQuality,status:data.status??data.snapshot?.counts?.status??{},counts:{...(data.snapshot?.counts??{}),status:data.status??data.snapshot?.counts?.status??{}}};
+  const liveSnapshot=projectOverviewSnapshot(data);
   renderOverview(liveSnapshot);
   renderCalendar(data);
   let integrity = $('#integrity-note');
@@ -945,7 +949,9 @@ function renderAll() {
   for (const [target, label, view] of [['#health-content', '系统健康详情 →', 'settings'], ['#readiness-content', '查看观察记录 →', 'ledger']]) {
     const link = el('button', 'link-button', label); link.addEventListener('click', () => switchView(view)); $(target).append(link);
   }
-  $('#service-status').textContent = '已连接 · 数据新鲜'; $('.status-dot').style.background = '#45c59d';
+  const fresh=overviewMetrics(liveSnapshot).fresh;
+  $('#service-status').textContent = liveSnapshot.snapshotMeta?.generationStale?'已连接 · 显示上次完整数据':fresh?'已连接 · 数据新鲜':'已连接 · 数据待更新';
+  $('.status-dot').style.background = fresh?'#45c59d':'#f1b84b';
   applyRoute(navigation.current, { restoreScroll: !hasRenderedData }); hasRenderedData = true;
 }
 
@@ -973,6 +979,7 @@ async function loadCalendarHistory({force=false}={}) {
     if(!Array.isArray(response.days))throw Error('日历历史格式无效');
     state.calendarHistory=response.days;
     state.calendarTruncated=response.truncated===true;
+    state.calendarGenerationStale=response.generationStale===true;
   }catch(error){state.calendarError=error.message;}
   finally{state.calendarLoading=false;if(state.data&&state.view==='calendar')renderCalendar(state.data);}
 }

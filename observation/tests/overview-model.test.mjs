@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { overviewMetrics, overviewStatusCounts, dailySummaryTitle, statusGradient } from '../public/overview-model.mjs';
+import { overviewMetrics, overviewStatusCounts, projectOverviewSnapshot, dailySummaryTitle, statusGradient } from '../public/overview-model.mjs';
 
 test('both successful outcomes share one chart category for live and historical counts without altering records or evidence quality',()=>{
   const data={counts:{executionUnits:4},status:{signed:1,already_signed:2,login_required:1},
@@ -72,4 +72,31 @@ test('paused attention stays unfinished in the daily headline',()=>{
   assert.equal(dailySummaryTitle(metrics,{pausedCount:2}),'2 项未完成 · 2 项暂缓关注');
   assert.equal(dailySummaryTitle(metrics,{pausedCount:0}),'还有 2 个签到项待处理');
   assert.equal(dailySummaryTitle(metrics,{previousDay:true,pausedCount:2}),'等待今日签到结果');
+});
+
+test('an API fallback generation is visibly stale even when its receipt is from today',()=>{
+  const now=Date.parse('2026-10-02T08:00:00Z');
+  const response={snapshot:{businessDate:'2026-10-02',generatedAt:'2026-10-02T07:55:00Z',counts:{executionUnits:1}},
+    tasks:[{observedStatus:'signed'}],status:{signed:1},evidenceQuality:{verifiedSuccess:1},
+    snapshotMeta:{available:true,fresh:false,generationStale:true}};
+  const original=JSON.stringify(response),snapshot=projectOverviewSnapshot(response),metrics=overviewMetrics(snapshot,now);
+  assert.equal(metrics.total,1);assert.equal(metrics.fresh,false);assert.equal(dailySummaryTitle(metrics),'当前数据已过期');
+  assert.equal(JSON.stringify(response),original);
+  response.snapshotMeta={available:true,fresh:true,generationStale:false};
+  assert.equal(overviewMetrics(projectOverviewSnapshot(response),now).fresh,true);
+});
+
+test('a cancelled account cannot keep an otherwise complete nested overview awaiting evidence',()=>{
+  const now=Date.parse('2026-10-02T08:00:00Z'),cancelled={observedStatus:'not_available',condition:'task_disabled',
+    evidence:{verification:'task_disabled',rawSource:'configuration',authoritative:true}};
+  const response={snapshot:{businessDate:'2026-10-02',generatedAt:'2026-10-02T07:55:00Z',counts:{executionUnits:25}},
+    tasks:[...Array.from({length:19},()=>({observedStatus:'signed'})),...Array.from({length:5},()=>({observedStatus:'not_available'})),cancelled],
+    status:{signed:19,not_available:6},evidenceQuality:{verifiedSuccess:19,verifiedUnavailable:5,cancelled:1}};
+  const data=projectOverviewSnapshot(response),metrics=overviewMetrics(data,now);
+  assert.deepEqual(overviewStatusCounts(data),{signed:19,not_available:5,cancelled:1});
+  assert.deepEqual(overviewStatusCounts({...data,tasks:undefined}),{signed:19,not_available:5,cancelled:1});
+  assert.equal(metrics.cancelled,1);assert.equal(metrics.unavailable,5);assert.equal(metrics.pending,0);
+  assert.equal(metrics.unverifiedUnavailable,0);assert.equal(metrics.allResolved,true);assert.equal(metrics.rate,100);
+  assert.equal(dailySummaryTitle(metrics),'今日签到项已全部确认');
+  assert.equal(response.status.not_available,6);assert.equal(cancelled.observedStatus,'not_available');
 });

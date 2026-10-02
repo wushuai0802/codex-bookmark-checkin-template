@@ -191,8 +191,10 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
         entry.evidence?.source==='vibe_entitlement_status'&&entry.evidence?.statusSignal==='expired_subscription'?'entitlement_expired':null;
       if(condition)task.condition=condition;
     }
+    const receipt=evidenceReceipt(entry, identity.taskId, fallbackAt, businessDate);
+    if(status==='not_available'&&receipt.evidence.verification==='task_disabled')task.condition='task_disabled';
     tasks.push(task);
-    receipts.push(evidenceReceipt(entry, identity.taskId, fallbackAt, businessDate));
+    receipts.push(receipt);
     if (!logicalSites.has(origin)) {
       const planTarget = Array.isArray(plan?.targets) ? plan.targets.find((target) => {
         try { return normalizeOrigin(target.origin) === origin; } catch { return false; }
@@ -273,7 +275,10 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     health: evaluatedHealth,
     reconciliation: {...reconciled.diagnostics,planSource:desiredPlan?'current-bookmarks-runtime-config':'saved-plan-runtime-config'},
     evidenceQuality: {verifiedSuccess:receipts.filter(r=>['signed','already_signed'].includes(r.status)&&r.evidence.verification==='verified').length,
-      unverifiedSuccess:receipts.filter(r=>['signed','already_signed'].includes(r.status)&&r.evidence.verification!=='verified').length},
+      unverifiedSuccess:receipts.filter(r=>['signed','already_signed'].includes(r.status)&&r.evidence.verification!=='verified').length,
+      verifiedUnavailable:receipts.filter(r=>r.status==='not_available'&&r.evidence.verification==='feature_unavailable').length,
+      unverifiedUnavailable:receipts.filter(r=>r.status==='not_available'&&!['feature_unavailable','task_disabled'].includes(r.evidence.verification)).length,
+      cancelled:receipts.filter(r=>r.status==='not_available'&&r.evidence.verification==='task_disabled').length},
     ptStatus
   };
 }

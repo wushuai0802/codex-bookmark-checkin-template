@@ -263,7 +263,7 @@ try {
             if ($null -ne $resumeCandidate) {
                 $runArguments += @('--resume-report', [string]$resumeCandidate.Path)
             }
-            if (@($config.nativeWafPreflightUrls).Count -gt 0 -or @($config.nativeChallengePreflight).Count -gt 0) {
+            if (@($config.nativeWafPreflightUrls).Count -gt 0 -or @($config.nativeChallengePreflight).Count -gt 0 -or @($config.mainChromeFallbackUrls).Count -gt 0) {
                 $preflightOrigins = @()
                 if ($null -ne $resumeCandidate) {
                     $preflightResults = @($resumeCandidate.Report.results | Where-Object {
