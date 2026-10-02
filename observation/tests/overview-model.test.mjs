@@ -2,6 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { overviewMetrics, overviewStatusCounts, dailySummaryTitle, statusGradient } from '../public/overview-model.mjs';
 
+test('both successful outcomes share one chart category for live and historical counts without altering records or evidence quality',()=>{
+  const data={counts:{executionUnits:4},status:{signed:1,already_signed:2,login_required:1},
+    evidenceQuality:{verifiedSuccess:2},tasks:[{observedStatus:'signed'},{observedStatus:'already_signed'},
+      {observedStatus:'already_signed'},{observedStatus:'login_required'}]};
+  const original=JSON.stringify(data),expected={signed:3,login_required:1};
+  assert.deepEqual(overviewStatusCounts(data),expected);
+  assert.deepEqual(overviewStatusCounts({...data,tasks:undefined}),expected);
+  assert.equal(statusGradient(data.status),'conic-gradient(#36c99b 0% 75%,#ffac70 75% 100%)');
+  const metrics=overviewMetrics(data);
+  assert.equal(metrics.success,3);assert.equal(metrics.pending,1);
+  assert.equal(metrics.verifiedSuccess,2);assert.equal(metrics.unverifiedSuccess,1);
+  assert.equal(JSON.stringify(data),original);
+});
+
 test('overview separates maintenance, active uncertainty and deferred work without inflating completion',()=>{
   const data={counts:{executionUnits:5},status:{signed:1,needs_attention:2,deferred:1,not_available:1},
     evidenceQuality:{verifiedSuccess:1,verifiedUnavailable:1},tasks:[

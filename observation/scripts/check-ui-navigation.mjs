@@ -79,6 +79,8 @@ try {
       page.on('response', response => { if (response.status() >= 400) failedResponses.push(`${new URL(response.url()).pathname}:${response.status()}`); });
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+      assert.equal(await page.locator('#status-chart .legend-label').filter({hasText:'已签到'}).count(),1);
+      assert.doesNotMatch(await page.locator('#status-chart').textContent(),/今日已完成/);
       const mobile = viewport.width <= 700;
       await page.locator('#kpi-grid .kpi').nth(2).click();
       assert.equal(await page.locator('#task-status').inputValue(),'pending');
@@ -114,7 +116,7 @@ try {
       await page.keyboard.press('Escape');
       await page.locator('.ui-select-menu').waitFor({state:'hidden'});
       await statusTrigger.click();
-      await page.getByRole('listbox').getByRole('option',{name:'已完成'}).click();
+      await page.getByRole('listbox').getByRole('option',{name:'已签到'}).click();
       assert.equal(await page.locator('#task-status').inputValue(),'completed');
       assert.equal(await page.locator('#tasks-body tr').count(),2);
       await statusTrigger.click();
