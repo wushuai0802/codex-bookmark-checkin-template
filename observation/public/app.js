@@ -1,5 +1,5 @@
 import { overviewMetrics, overviewStatusCounts, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, TASK_FILTERS, taskStatusLabel, taskStatusSummary, taskStatusCondition, externalTask } from './dashboard-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, visibleLedgerChange, TASK_FILTERS, taskStatusLabel, taskStatusSummary, taskStatusCondition, externalTask } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion, MOTION } from './motion.mjs';
@@ -59,7 +59,8 @@ function formatHash(value) {
 }
 
 function statusChip(status,task=null) {
-  return el('span', `status-chip ${externalTask(task)?'deferred':status ?? ''}`, task?taskStatusLabel(task):STATUS_LABELS[status] ?? text(status));
+  const displayStatus=status==='already_signed'?'signed':status;
+  return el('span', `status-chip ${externalTask(task)?'deferred':displayStatus ?? ''}`, task?taskStatusLabel(task):STATUS_LABELS[status] ?? text(status));
 }
 
 function evidenceLabel(task) {
@@ -254,7 +255,7 @@ function renderKpis(data) {
   const status = data?.status ?? {};
   const metrics = overviewMetrics(data);
   const cards = [
-    ['执行成功', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'completed'],
+    ['已签到', metrics.success, `权威核验 ${metrics.verifiedSuccess} · 待补证 ${metrics.unverifiedSuccess}`, 'completed'],
     ['未开放回执', metrics.unavailable, `已核验 ${metrics.verifiedUnavailable} / 待核验 ${metrics.unverifiedUnavailable}`, 'unavailable'],
     ['尚未完成', metrics.pending, [`${metrics.manual} 项需关注`,...(metrics.external?[`${metrics.external} 项等待外部条件`]:[]),...(metrics.deferred||!metrics.external?[`${metrics.deferred} 项延后`]:[])].join(' · '), 'pending'],
     ['签到站点 / 账号任务', `${counts.logicalSites ?? 0} / ${metrics.total}`, '同站多账号分别核验', '']
@@ -364,7 +365,7 @@ function renderStatusChart(data) {
   const donut = el('div', 'donut'); donut.style.background = statusGradient(status); append(donut, el('strong', null, total));
   const legend = el('div', 'legend');
   const colors = statusColors;
-  for (const key of ['signed', 'already_signed', 'not_available', 'external','verification','needs_attention', 'deferred', 'login_required', 'failed', 'unknown','not_started']) {
+  for (const key of ['signed', 'not_available', 'external','verification','needs_attention', 'deferred', 'login_required', 'failed', 'unknown','not_started']) {
     if (!(status[key] ?? 0)) continue;
     const row = el('button', 'legend-row legend-link'); row.type = 'button';
     row.addEventListener('click', () => openTasks({ status: key }));
@@ -607,7 +608,7 @@ function renderSites(sites) {
     const stats = el('div', 'card-stats');
     const total = site.executionUnitCount ?? 0; const done = (site.status?.signed ?? 0) + (site.status?.already_signed ?? 0);
     append(stats, el('div', 'card-stat', null)); stats.lastChild.append(el('b', null, total), el('span', null, '执行单元'));
-    const statusStat = el('div', 'card-stat'); statusStat.append(el('b', null, done), el('span', null, '已完成')); stats.append(statusStat);
+    const statusStat = el('div', 'card-stat'); statusStat.append(el('b', null, done), el('span', null, '已签到')); stats.append(statusStat);
     const bar = el('div', 'mini-bar'); const fill = el('i'); fill.style.width = `${total ? Math.round(done / total * 100) : 0}%`; bar.append(fill);
     const controls = el('div', 'site-controls');
     const policy = el('select'); policy.setAttribute('aria-label','关注标记');
@@ -647,7 +648,7 @@ function renderAccounts(accounts) {
     append(top, el('h3', null, identityTitle(account)), el('span', account.identity?.source === 'browser-cache' ? 'badge warn' : 'badge', account.identity?.source === 'browser-cache' ? '缓存身份' : account.identity?.provider || '站点账号'));
     const stats = el('div', 'card-stats'); const done = (account.status?.signed ?? 0) + (account.status?.already_signed ?? 0);
     const count = el('div', 'card-stat'); count.append(el('b', null, account.taskCount), el('span', null, '任务')); stats.append(count);
-    const completed = el('div', 'card-stat'); completed.append(el('b', null, done), el('span', null, '已完成')); stats.append(completed);
+    const completed = el('div', 'card-stat'); completed.append(el('b', null, done), el('span', null, '已签到')); stats.append(completed);
     const sites = (account.sites ?? []).join(' · ');
     const detail = el('button', 'link-button', '查看账号概览 →');
     detail.type='button';
@@ -721,7 +722,7 @@ function renderLedger(records) {
     const pending = ledgerPendingCount(record);
     const totals = el('div', 'ledger-totals');
     append(totals, el('span', 'badge good', `成功 ${success}`), el('span', pending ? 'badge warn' : 'badge', `待处理 ${pending}`), el('span', 'badge', `未开放 ${counts.not_available ?? 0}`), el('span', 'muted', `${record.counts?.logicalSites ?? 0} 站 / ${record.counts?.executionUnits ?? 0} 个账号任务`));
-    const changed = record.drift?.statusChanges?.length ?? 0;
+    const changed = (record.drift?.statusChanges??[]).filter(visibleLedgerChange).length;
     const classification = record.drift?.classification;
     const summary = changed ? `${changed} 项任务状态变化` : classification === 'initial' ? '首次记录' : classification === 'plan_changed' ? '签到范围发生变化' : '签到计划未变';
     const outstanding = (record.taskSummaries ?? []).filter(task => !['signed','already_signed','not_available'].includes(task.observedStatus));
@@ -742,7 +743,7 @@ function renderLedgerDetails(record) {
   close.addEventListener('click', () => navigation.closeOverlay()); append(header, title, close); dialog.append(header);
   dialog.append(el('p', 'muted', `观察时间：${formatTime(record.recordedAt)}`));
   if (!record.taskSummaries) dialog.append(el('p', 'alert', '该历史记录未保存逐站明细，仅保留当时的汇总与计划变化。'));
-  for (const change of record.changes ?? []) {
+  for (const change of (record.changes??[]).filter(visibleLedgerChange)) {
     const label = change.kind === 'status' ? `${STATUS_LABELS[change.from] ?? change.from} → ${STATUS_LABELS[change.to] ?? change.to}`
       : { added: '新增任务', removed: '移除任务', changed: '任务配置变化' }[change.kind];
     dialog.append(el('p', 'ledger-note', `${siteTitle(change.task)} · ${identityTitle(change.task)}：${label}`));
@@ -786,7 +787,7 @@ function renderCalendar(data) {
   summary.replaceChildren();
   if(monthly.recordDays){
     const stats=el('div','calendar-summary-count');stats.setAttribute('role','group');stats.setAttribute('aria-label','本月回执汇总');
-    for(const [name,label,count] of [['days','天有回执',monthly.recordDays],['completed','已完成',monthly.completed],
+    for(const [name,label,count] of [['days','天有回执',monthly.recordDays],['completed','已签到',monthly.completed],
       ['unavailable','未开放',monthly.unavailable],['pending','待处理',monthly.pending]]){
       const item=el('div','calendar-stat'),caption=el('span','calendar-stat-label');
       if(name!=='days'){const swatch=el('i',`calendar-swatch ${name}`);swatch.setAttribute('aria-hidden','true');caption.append(swatch);}
@@ -866,7 +867,7 @@ function renderCalendar(data) {
   if(!Array.isArray(selected.tasks)||!selected.tasks.length){detail.append(el('p','calendar-empty-state','仅有当日汇总，未保存逐站回执'));return;}
   state.calendarFilter??=totals.pending?'pending':'all';
   const filters=el('div','calendar-filters');filters.setAttribute('role','group');filters.setAttribute('aria-label','筛选当天任务');
-  for(const [filter,label,count] of [['pending','待处理',totals.pending],['all','全部',totals.total],['completed','已完成',totals.completed],['unavailable','未开放',totals.unavailable]]){
+  for(const [filter,label,count] of [['pending','待处理',totals.pending],['all','全部',totals.total],['completed','已签到',totals.completed],['unavailable','未开放',totals.unavailable]]){
     const button=el('button',state.calendarFilter===filter?'active':'');button.type='button';button.setAttribute('aria-pressed',String(state.calendarFilter===filter));
     append(button,el('span',null,label),document.createTextNode(' '),el('span','calendar-filter-count',String(count)));
     button.addEventListener('click',()=>{state.calendarFilter=filter;renderCalendar(data);

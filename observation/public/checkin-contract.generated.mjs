@@ -19,7 +19,7 @@ export const externalRetryCauses = Object.freeze([
   "harvest_waiting"
 ]);
 export const ptSiteDisplayNames = Object.freeze({
-  "https://ptsbao.club": "骚包"
+  "https://ptsbao.club": "烧包"
 });
 export const ptOriginAliases = Object.freeze({
   "https://www.open.cd": "https://open.cd"
@@ -71,7 +71,7 @@ export const ptResultStatuses = Object.freeze([
 ]);
 export const statusLabels = Object.freeze({
   "signed": "已签到",
-  "already_signed": "今日已完成",
+  "already_signed": "已签到",
   "not_available": "未开放",
   "not_signed": "未签到（已确认）",
   "needs_attention": "需关注",

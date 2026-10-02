@@ -1,4 +1,4 @@
-import {conditionLabels,statusLabels,externalRetryCauses} from './checkin-contract.generated.mjs';
+import {conditionLabels,statusLabels,externalRetryCauses,ptSiteDisplayNames} from './checkin-contract.generated.mjs';
 
 export function taskStatusCondition(task){return task?.availability?.condition==='site_maintenance'?'site_maintenance':task?.condition;}
 export function taskStatusSummary(task){return task?.availability?.condition==='site_maintenance'?task.availability.summary:task?.evidence?.summary;}
@@ -20,13 +20,13 @@ export function identityCaption(item) {
 }
 
 export function siteTitle(item) {
-  try { return item.displayName || new URL(item.origin).hostname; }
+  try { const url=new URL(item.origin);return ptSiteDisplayNames[url.origin] || item.displayName || url.hostname; }
   catch { return item.displayName || item.origin || '未知站点'; }
 }
 
 export const TASK_FILTERS = [
   ['', '全部任务'],
-  ['completed', '已完成'],
+  ['completed', '已签到'],
   ['pending', '尚未完成'],
   ['external', '等待外部条件'],
   ['verification', '结果待核验'],
@@ -37,7 +37,7 @@ export const TASK_FILTERS = [
 ];
 
 export const normalizeTaskFilter = value => value === 'not_available' ? 'unavailable'
-  : value === 'success' ? 'completed' : value;
+  : ['success','signed','already_signed'].includes(value) ? 'completed' : value;
 
 export function matchesTask(task, { status = '', query = '' } = {}) {
   status = normalizeTaskFilter(status);
@@ -54,7 +54,7 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
   const statusMatch = !status || (status==='external'?externalTask(task):status==='verification'?!['signed','already_signed','not_available'].includes(value)&&condition==='submission_outcome_unknown':
     status==='attention'?statusGroups.attention.includes(value)&&!externalTask(task)&&condition!=='submission_outcome_unknown':
     statusGroup ? statusGroup.includes(value) : value === status);
-  const haystack = [task.origin, task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
+  const haystack = [task.origin, siteTitle(task), task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
     task.identity?.username, task.identity?.userId, task.identity?.label].join(' ').toLowerCase();
   return statusMatch && haystack.includes(query.trim().toLowerCase());
 }
@@ -67,9 +67,14 @@ export function ledgerPendingCount(record) {
 
 export function matchesLedger(record, filter = 'all') {
   if (filter === 'pending') return ledgerPendingCount(record) > 0;
-  if (filter === 'changed') return (record?.drift?.statusChanges?.length ?? 0) > 0
-    || record?.drift?.classification === 'plan_changed' || (record?.changes?.length ?? 0) > 0;
+  if (filter === 'changed') return (record?.drift?.statusChanges??[]).some(visibleLedgerChange)
+    || record?.drift?.classification === 'plan_changed' || (record?.changes??[]).some(visibleLedgerChange);
   return true;
+}
+
+export function visibleLedgerChange(change={}) {
+  return !((!change.kind||change.kind==='status')&&['signed','already_signed'].includes(change.from)&&
+    ['signed','already_signed'].includes(change.to));
 }
 
 export function matchesPt(site, scope = '') {

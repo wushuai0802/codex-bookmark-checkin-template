@@ -15,7 +15,7 @@ test('current availability consistently labels and filters an uncertain regular 
   assert.equal(matchesTask(task,{status:'pending'}),true);
   assert.equal(JSON.stringify(task),original);
   assert.equal(taskStatusLabel({...task,availability:null}),'结果待核验');
-  assert.equal(taskStatusLabel({...task,observedStatus:'already_signed'}),'今日已完成');
+  assert.equal(taskStatusLabel({...task,observedStatus:'already_signed'}),'已签到');
   assert.equal(externalTask({...task,observedStatus:'already_signed'}),false);
 });
 
@@ -33,7 +33,7 @@ test('PT current maintenance takes precedence over historical and same-day uncer
   site.recovery.code='unverified_prior_attempt';
   assert.equal(ptStatusCondition(site),'submission_outcome_unknown');
   site.effective={status:'already_signed',fresh:true,siteCondition:'site_maintenance'};
-  assert.equal(taskStatusLabel({observedStatus:site.effective.status,condition:ptStatusCondition(site)}),'今日已完成');
+  assert.equal(taskStatusLabel({observedStatus:site.effective.status,condition:ptStatusCondition(site)}),'已签到');
 });
 
 test('external conditions and unknown submissions have distinct labels and filters',()=>{
@@ -48,13 +48,16 @@ test('external conditions and unknown submissions have distinct labels and filte
   assert.equal(matchesTask(external,{status:'attention'}),false);
   assert.equal(matchesTask(external,{status:'pending'}),true);
   const recovered={...unknown,observedStatus:'already_signed'};
-  assert.equal(taskStatusLabel(recovered),'今日已完成');
+  assert.equal(taskStatusLabel(recovered),'已签到');
   assert.equal(matchesTask(recovered,{status:'verification'}),false);
 });
 
 test('task filters use non-overlapping business groups',()=>{
   const task=status=>({observedStatus:status,origin:'https://example.test'});
-  for(const status of ['signed','already_signed'])assert.equal(matchesTask(task(status),{status:'completed'}),true);
+  for(const status of ['signed','already_signed']){
+    assert.equal(taskStatusLabel(task(status)),'已签到');
+    for(const filter of ['completed','signed','already_signed'])assert.equal(matchesTask(task(status),{status:filter}),true);
+  }
   assert.equal(matchesTask(task('deferred'),{status:'pending'}),true);
   assert.equal(matchesTask(task('needs_attention'),{status:'attention'}),true);
   assert.equal(matchesTask(task('failed'),{status:'attention'}),true);
@@ -79,6 +82,15 @@ test('ledger review filters keep pending and drift records distinct', () => {
   assert.equal(matchesLedger(pending, 'pending'), true);
   assert.equal(matchesLedger(changed, 'pending'), false);
   assert.equal(matchesLedger(changed, 'changed'), true);
+  const successReview={counts:{executionUnits:1,status:{already_signed:1}},
+    drift:{classification:'status_changed',statusChanges:[{from:'signed',to:'already_signed'}]},
+    changes:[{kind:'status',from:'signed',to:'already_signed'}]};
+  const original=JSON.stringify(successReview);
+  assert.equal(matchesLedger(successReview,'changed'),false);
+  assert.equal(matchesLedger(successReview,'pending'),false);
+  assert.equal(JSON.stringify(successReview),original);
+  successReview.changes.push({kind:'status',from:'login_required',to:'already_signed'});
+  assert.equal(matchesLedger(successReview,'changed'),true);
 });
 
 test('PT review filter includes registered unknown status but not unregistered observations',()=>{

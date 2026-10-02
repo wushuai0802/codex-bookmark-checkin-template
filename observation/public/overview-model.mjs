@@ -1,13 +1,23 @@
 import {externalTask,taskStatusCondition} from './dashboard-model.mjs';
 
+function successCounts(status={}) {
+  const counts={...status};
+  if(Object.hasOwn(counts,'signed')||Object.hasOwn(counts,'already_signed')){
+    const count=value=>Number.isInteger(value)&&value>=0?value:0;
+    counts.signed=count(counts.signed)+count(counts.already_signed);
+    delete counts.already_signed;
+  }
+  return counts;
+}
+
 export function overviewStatusCounts(data={}) {
   const total=data.counts?.executionUnits;
-  if(!Array.isArray(data.tasks)||data.tasks.length!==total)return data.status??data.counts?.status??{};
-  return data.tasks.reduce((counts,task)=>{
+  if(!Array.isArray(data.tasks)||data.tasks.length!==total)return successCounts(data.status??data.counts?.status??{});
+  return successCounts(data.tasks.reduce((counts,task)=>{
     const status=externalTask(task)?'external':
       !['signed','already_signed','not_available'].includes(task.observedStatus)&&taskStatusCondition(task)==='submission_outcome_unknown'?'verification':task.observedStatus??'unknown';
     counts[status]=(counts[status]??0)+1;return counts;
-  },{});
+  },{}));
 }
 
 export function overviewMetrics(data = {}, now = Date.now()) {
@@ -53,9 +63,9 @@ export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0
   return '执行回执已收齐，成功证据待补录';
 }
 
-export const statusColors = { signed: '#36c99b', already_signed: '#57b9f3', not_available: '#bbc6d4', needs_attention: '#ffc65c', deferred: '#b69cf6', external:'#b69cf6',verification:'#ffc65c', login_required: '#ffac70', failed: '#ff7f93', unknown: '#91a4b7',not_started:'#91a4b7' };
+export const statusColors = { signed: '#36c99b', already_signed: '#36c99b', not_available: '#bbc6d4', needs_attention: '#ffc65c', deferred: '#b69cf6', external:'#b69cf6',verification:'#ffc65c', login_required: '#ffac70', failed: '#ff7f93', unknown: '#91a4b7',not_started:'#91a4b7' };
 export function statusGradient(status = {}) {
-  const entries = Object.entries(status).filter(([, n]) => Number.isInteger(n) && n > 0);
+  const entries = Object.entries(successCounts(status)).filter(([, n]) => Number.isInteger(n) && n > 0);
   const total = entries.reduce((sum, [, n]) => sum + n, 0);
   if (!total) return '#e8edf3';
   let start = 0;
