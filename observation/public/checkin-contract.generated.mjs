@@ -21,6 +21,9 @@ export const externalRetryCauses = Object.freeze([
 export const ptSiteDisplayNames = Object.freeze({
   "https://ptsbao.club": "骚包"
 });
+export const ptOriginAliases = Object.freeze({
+  "https://www.open.cd": "https://open.cd"
+});
 export const nativePtHeaderOrigins = Object.freeze([
   "https://audiences.me",
   "https://ourbits.club",

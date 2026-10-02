@@ -19,6 +19,7 @@ import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
 import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
+import {initialPtObservation} from './pt-initial-observation.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -1663,9 +1664,17 @@ export async function launchAutomationContext(config) {
 
 export async function processTarget(context, target, config, qaRules, logDirectory, {
   runCandidate = processCandidate,
+  observePt = runCandidate===processCandidate?initialPtObservation:null,
 } = {}) {
   const configuredSkip = configuredTargetSkip(target, config);
   if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
+  if(observePt&&isPtExecutionTarget(target,{root:rootDirectory})){
+    const readPage=await context.newPage();
+    try{
+      const observation=await observePt(readPage,target,config);
+      if(observation)return {...observation,attempt:0,candidateHistory:[candidateHistoryEntry(observation.url,observation,0)]};
+    }finally{await readPage.close().catch(()=>{});}
+  }
   let lastResult = null;
   const candidateHistory = [];
   let allCandidatesUnsubmitted = true;

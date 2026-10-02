@@ -15,6 +15,45 @@ const fixture=()=>({
   plan:{targets:[{origin:'https://ourbits.club',folderNames:['PT白名单']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
 });
 
+test('independent PT sites are eligible while Harvest is pending; managed sites remain gated',()=>{
+  const f=fixture();f.harvest.checkinInventoryComplete=true;f.harvest.taskCompletion=null;
+  f.harvest.sites=f.harvest.sites.filter(site=>site.origin!=='https://external.example')
+    .map(site=>({...site,checkinEnabled:site.origin!=='https://ourbits.club'}));
+  const result=planHarvestFallback(f);
+  assert.deepEqual(result.eligible.map(site=>site.origin),['https://ourbits.club','https://external.example']);
+  assert.ok(result.eligible.every(site=>site.trigger==='execution_owned_pt_recheck'));
+  f.harvest.sites[0].checkinEnabled=true;
+  const managed=planHarvestFallback(f);
+  assert.deepEqual(managed.eligible.map(site=>site.origin),['https://external.example']);
+  assert.equal(managed.blocked.find(site=>site.origin==='https://ourbits.club').reason,'harvest_task_not_complete');
+});
+
+test('independent PT recheck ignores unrelated Harvest completion changes but respects assignment changes',async t=>{
+  for(const switched of [false,true]){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-owner-refresh-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);
+    const f=fixture();f.harvest.checkinInventoryComplete=true;f.harvest.taskCompletion=null;
+    f.harvest.sites=[{...failed('https://ourbits.club'),checkinEnabled:false}];f.catalog.sites=f.catalog.sites.slice(0,1);
+    let calls=0;
+    const result=await runHarvestFallback({...f,root,execute:true,refreshHarvest:async()=>({...f.harvest,
+      sites:[{...f.harvest.sites[0],checkinEnabled:switched}],taskCompletion:switched?null:fixture().harvest.taskCompletion}),
+      runEngine:async()=>{calls++;return {runId:'fixture',results:[{origin:'https://ourbits.club',status:'already_signed'}]};}});
+    assert.equal(calls,switched?0:1);
+    assert.equal(result.outcomes[0].state,switched?'harvest_assignment_changed':'completed');
+  }
+});
+
+test('OpenCD alias success joins the canonical site and never creates a duplicate fallback',()=>{
+  const f=fixture();f.catalog.sites=[{origin:'https://open.cd'}];f.plan.targets=[{origin:'https://open.cd'}];
+  f.latest.results=[{origin:'https://open.cd',status:'deferred'}];
+  f.harvest.checkinInventoryComplete=true;f.harvest.taskCompletion=null;
+  f.harvest.sites=[{origin:'https://www.open.cd',checkinEnabled:true,status:'signed',
+    observedAt:now.toISOString(),evidence:{authoritative:true}}];
+  const result=planHarvestFallback(f);assert.equal(result.observedSuccess,1);assert.equal(result.eligible.length,0);
+  f.harvest.sites.push({...f.harvest.sites[0],origin:'https://open.cd'});
+  const ambiguous=planHarvestFallback(f);assert.equal(ambiguous.observedSuccess,0);assert.equal(ambiguous.eligible.length,0);
+});
+
 test('site-bound PT fallback includes monitored sites outside the daily plan',()=>{
   const report=planHarvestFallback(fixture());
   assert.deepEqual(report.eligible.map(item=>item.origin),['https://ourbits.club','https://external.example']);

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted} from './pt-coordination.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 export function isPtExecutionTarget(target,{root}={}){
@@ -25,15 +26,8 @@ export function harvestPtDecision({report,target,now=new Date()}={}){
     !Number.isFinite(Date.parse(report.generatedAt))||
     Date.parse(report.generatedAt)>now.getTime()+60_000||
     now.getTime()-Date.parse(report.generatedAt)>2*60_000)return wait('Harvest 当日状态未刷新，PT 提交已暂缓');
-  const completion=report.taskCompletion;
-  const started=Date.parse(completion?.startedAt),ended=Date.parse(completion?.completedAt);
-  if(completion?.status!=='completed'||!Number.isInteger(completion.resultId)||
-    !Number.isFinite(started)||!Number.isFinite(ended)||started>ended||
-    ended>now.getTime()+60_000||dayAt(new Date(started))!==businessDate||
-    dayAt(new Date(ended))!==businessDate)return wait('Harvest 当日任务未完成或正在重新执行，PT 提交已暂缓');
-  const matches=(report.sites??[]).filter(site=>exactOrigin(site?.origin)===target.origin);
-  if(matches.length>1)return wait('Harvest 同站身份不明确，PT 提交已暂缓');
-  const site=matches[0];
+  const assignment=harvestSiteAssignment(report,target.origin),site=assignment.site;
+  if(assignment.owner==='ambiguous')return wait('Harvest 同站身份不明确，PT 提交已暂缓');
   if(site&&['signed','already_signed'].includes(site.status)){
     const at=Date.parse(site.observedAt);
     if(site.evidence?.authoritative!==true||!Number.isFinite(at)||dayAt(new Date(at))!==businessDate||
@@ -44,6 +38,9 @@ export function harvestPtDecision({report,target,now=new Date()}={}){
       submissionAttempted:false,evidence:{source:'harvest',authoritative:false,
         confirmedAt:new Date(at).toISOString(),businessDate}};
   }
+  if(assignment.owner==='unknown')return wait('Harvest 签到分工尚未确认，先只读核验');
+  if(assignment.owner==='execution')return null;
+  if(!harvestTaskCompleted(report,businessDate,now))return wait('Harvest 当日任务未完成或正在重新执行，PT 提交已暂缓');
   return null;
 }
 
@@ -60,7 +57,7 @@ export function checkHarvestPtBeforeWrite(target,{root,now=new Date(),probe}={})
   try{catalog=JSON.parse(fs.readFileSync(gate.catalogFile,'utf8'));}
   catch{return suspectPt?delay(now,'PT 监测目录暂不可读，已阻止提交'):null;}
   if(!Array.isArray(catalog?.sites))return suspectPt?delay(now,'PT 监测目录无效，已阻止提交'):null;
-  const monitored=catalog.sites.filter(site=>site?.origin===target.origin);
+  const monitored=catalog.sites.filter(site=>canonicalPtOrigin(site?.origin)===canonicalPtOrigin(target.origin));
   if(!monitored.length)return suspectPt?delay(now,'PT 书签尚未进入精确监测目录，已阻止提交'):null;
   if(monitored.length!==1)return delay(now,'PT 监测目录同站重复，已阻止提交');
   let plan;
