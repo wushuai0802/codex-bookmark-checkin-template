@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {ptExecutionBinding,ptReadPolicy} from './pt-read-policy.mjs';
+import {nativePtReadBinding} from './native-pt-read.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 
 // Read an already-verified passive receipt, not a URL. This lets the mature
@@ -16,7 +17,9 @@ export function verifiedPtObservation(root,target,config,now=new Date()){
     if(report.source!=='execution-supplement'||report.businessDate!==day||!Array.isArray(report.sites))return null;
     const matches=report.sites.filter(site=>site.origin===target.origin);
     if(matches.length!==1)return null;
-    const result=matches[0],binding=ptExecutionBinding(config,root,target),policy=ptReadPolicy(target.origin,config);
+    const result=matches[0],policy=ptReadPolicy(target.origin,config);
+    const binding=policy.nativeMainChrome===true?nativePtReadBinding(config,{...target,accountKey:target.accountKey??'site-default'}):
+      ptExecutionBinding(config,root,target);
     const observed=Date.parse(result.observedAt),confirmed=Date.parse(result.evidence?.confirmedAt);
     if(!['signed','already_signed'].includes(result.status)||result.evidence?.authoritative!==true||
        !['pt_page','page_text','api'].includes(result.evidence.source)||result.evidence.evidenceScope!=='site_account_day'||

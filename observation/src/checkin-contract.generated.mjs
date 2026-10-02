@@ -28,7 +28,8 @@ export const nativePtHeaderOrigins = Object.freeze([
   "https://audiences.me",
   "https://ourbits.club",
   "https://piggo.me",
-  "https://www.hdkyl.in"
+  "https://www.hdkyl.in",
+  "https://ptsbao.club"
 ]);
 export const conditionLabels = Object.freeze({
   "site_maintenance": "站点维护",
