@@ -105,6 +105,13 @@ export const ptRetryCauses = Object.freeze([
   "harvest_waiting"
 ]);
 export const ptReadPolicies = Object.freeze({
+  "https://p.t-baozi.cc": {
+    "selector": "#info_block",
+    "actionPath": "/attendance.php",
+    "unsignedText": "签到",
+    "signedRewardControl": true,
+    "dailyHeader": true
+  },
   "https://dstudio.me": {
     "selector": "#info_block",
     "actionPath": "/attendance.php",

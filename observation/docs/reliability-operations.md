@@ -102,8 +102,8 @@ The known OpenCD www alias is explicit in the shared contract.
 
 Current positive Harvest receipts are status-only even before the rest of the
 batch completes. A reviewed initial GET can confirm an authenticated daily
-header or maintenance before considering submission. It follows no redirects
-and parses inert server HTML without navigating action/resource URLs. The
+header or maintenance before considering submission. The existing reviewed
+passive page reader checks completion before the formal attendance URL. The
 existing guard rechecks live Harvest ownership before every actual PT write.
 An ownership change during queued fallback defers that site. Unrelated Harvest
 job changes do not block an independently owned site. Existing profiles,

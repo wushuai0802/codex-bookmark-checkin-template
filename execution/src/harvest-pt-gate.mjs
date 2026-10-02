@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted} from './pt-coordination.mjs';
+import {ptReadPolicies} from './checkin-contract.generated.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 export function isPtExecutionTarget(target,{root}={}){
   if(target?.ptSupplement===true||(target?.folderNames??[]).some(folder=>/pt/i.test(folder))||
-     ['https://open.cd','https://u2.dmhy.org'].includes(target?.origin))return true;
+     Object.hasOwn(ptReadPolicies,target?.origin??''))return true;
   try{const integration=JSON.parse(fs.readFileSync(path.join(root,'data/v2-integration.json'),'utf8'));
     if((integration.harvestPtGate?.expectedOrigins??[]).includes(target.origin))return true;
     const catalog=JSON.parse(fs.readFileSync(integration.harvestPtGate.catalogFile,'utf8'));
