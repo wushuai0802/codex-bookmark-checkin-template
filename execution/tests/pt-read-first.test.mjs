@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import {chromium} from 'playwright-core';
 import {processTarget} from '../src/browser.mjs';
+import {installPtReadFirewall,ptReadPolicy,readPtPassivePage} from '../src/pt-read-policy.mjs';
 
 test('authenticated daily completion stops the real browser flow before any attendance request',async()=>{
   const browser=await chromium.launch({headless:true,channel:'chrome'});
   try{
-    for(const [origin,control] of [['https://dstudio.me','今日已完成已签到'],['https://p.t-baozi.cc','[签到已得3000, 补签卡: 0]']]){
+    for(const [origin,control] of [['https://dstudio.me','今日已完成已签到'],['https://p.t-baozi.cc','[签到已得3000, 补签卡: 0]'],['https://ptsbao.club','[签到已得3000, 补签卡: 0]']]){
     const context=await browser.newContext({javaScriptEnabled:false,serviceWorkers:'block'}),visited=[];
     await context.route('**/*',async route=>{
       visited.push({url:route.request().url(),method:route.request().method()});
@@ -21,4 +23,42 @@ test('authenticated daily completion stops the real browser flow before any atte
     await context.close();
     }
   }finally{await browser.close();}
+});
+
+test('real server redirects cannot bypass the passive firewall to attendance; login is read without following another redirect',async()=>{
+  const visited=[];let redirect='/attendance.php',loginRedirect=false,browser;
+  const server=http.createServer((request,response)=>{
+    visited.push(request.url);
+    if(request.url==='/index.php'||request.url==='/login.php'&&loginRedirect){
+      response.writeHead(302,{location:request.url==='/index.php'?redirect:'/attendance.php'});response.end();
+    }else{
+      response.writeHead(200,{'content-type':'text/html; charset=utf-8'});
+      response.end(request.url==='/login.php'?'<div id="info_block"></div>请先登录':'fixture attendance action');
+    }
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  try{
+    browser=await chromium.launch({headless:true,channel:'chrome'});
+    for(const fixture of [
+      {redirect:'/attendance.php',expected:['/index.php']},
+      {redirect:'/login.php',expected:['/index.php','/login.php'],login:true},
+      {redirect:'/login.php',loginRedirect:true,expected:['/index.php','/login.php']},
+      {redirect:'/login.php?returnto=attendance.php',expected:['/index.php']}
+    ]){
+      redirect=fixture.redirect;loginRedirect=Boolean(fixture.loginRedirect);visited.length=0;
+      const context=await browser.newContext({javaScriptEnabled:false,serviceWorkers:'block'});
+      const policy={...ptReadPolicy('https://ptsbao.club'),url:origin+'/index.php'};
+      await installPtReadFirewall(context,policy);
+      const page=await context.newPage();let response,error;
+      try{response=await page.goto(policy.url,{waitUntil:'domcontentloaded',timeout:5000});}catch(value){error=value;}
+      if(fixture.login){
+        assert.equal(error,undefined);
+        const result=await readPtPassivePage(page,policy,{origin,httpStatus:response.status()});
+        assert.equal(result.status,'login_required');assert.equal(result.submissionAttempted,false);
+      }else assert.ok(error,'An unreviewed redirect must fail before its target receives a request');
+      assert.deepEqual(visited,fixture.expected);assert.ok(!visited.includes('/attendance.php'));
+      await context.close();
+    }
+  }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
 });

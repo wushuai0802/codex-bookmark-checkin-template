@@ -92,7 +92,7 @@ export async function readPtRewardCounter(context,origin,config){
 export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,clock=()=>now?new Date(now):new Date(),
   readOnly=false,verifyBeforeSubmit=false,validateScope=()=>{},
   launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
-  acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader}={}){
+  acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader,readAvailability=readPtPublicAvailability}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
   const bytes=fs.readFileSync(catalogFile);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase())throw Error('PT catalog changed');
@@ -132,10 +132,6 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
       return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},clock());
     }
-    if(readOnly&&policy.publicAvailabilityUrl){
-      const availability=await readPtPublicAvailability(target.origin,policy);
-      if(availability)return publicSupplementResult(target.origin,{...metadata,...availability,submissionAttempted:false},clock());
-    }
     context=await launch({...safeConfig,ptPassiveReadOnly:readOnly||verifyBeforeSubmit});
     await validateScope();
     if(readOnly&&policy.selfProfileHeader===true){
@@ -148,10 +144,16 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       const readOnlyUrl=policy.url;
       const page=await context.newPage();
       try{
-        const response=await page.goto(readOnlyUrl,{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)});
+        const response=await page.goto(readOnlyUrl,{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)}).catch(error=>{
+          if(!readOnly||!policy.publicAvailabilityUrl)throw error;return null;
+        });
         const observedAt=clock();
-        const result=await readPtPassivePage(page,policy,{origin:target.origin,now:observedAt,httpStatus:response?.status?.()??200});
-        if(dayAt(observedAt)!==dayAt(startedAt))throw Error('PT business day changed during readback');
+        let result=await readPtPassivePage(page,policy,{origin:target.origin,now:observedAt,httpStatus:response?.status?.()??0});
+        // An authenticated daily control is newer account evidence than a
+        // public maintenance landing page. Login also needs its own recovery.
+        if(readOnly&&policy.publicAvailabilityUrl&&!['signed','already_signed','not_signed','login_required'].includes(result.status))
+          result=await readAvailability(target.origin,policy)??result;
+        if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
         if(readOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)
           return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},observedAt);
       }finally{await page.close().catch(()=>{});}

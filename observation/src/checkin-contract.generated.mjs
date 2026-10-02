@@ -28,7 +28,8 @@ export const nativePtHeaderOrigins = Object.freeze([
   "https://audiences.me",
   "https://ourbits.club",
   "https://piggo.me",
-  "https://www.hdkyl.in"
+  "https://www.hdkyl.in",
+  "https://ptsbao.club"
 ]);
 export const conditionLabels = Object.freeze({
   "site_maintenance": "站点维护",
@@ -151,7 +152,12 @@ export const ptReadPolicies = Object.freeze({
     "openCdHeader": true
   },
   "https://ptsbao.club": {
-    "selector": "body",
+    "selector": "#info_block",
+    "actionPath": "/attendance.php",
+    "unsignedText": "签到",
+    "signedRewardControl": true,
+    "dailyHeader": true,
+    "loginPath": "/login.php",
     "publicAvailabilityUrl": "https://ptsbao.club/claim/"
   }
 });

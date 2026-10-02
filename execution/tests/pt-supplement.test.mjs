@@ -92,7 +92,7 @@ test('read-only PT verification uses the selected profile and never calls a subm
   const visited=[];
   const result=await runPtSupplement({...args,origin,catalogHash,now,readOnly:true,
     acquire:async()=>({owner:{nonce:'fixture'}}),release:async()=>{},
-    launch:async config=>{assert.equal(config.ptPassiveReadOnly,true);return {route:async()=>{},newPage:async()=>({goto:async url=>{visited.push(url);},url:()=>origin+'/index.php',locator:()=>({innerText:async()=>body}),close:async()=>{}}),close:async()=>{}};},
+    launch:async config=>{assert.equal(config.ptPassiveReadOnly,true);return {route:async()=>{},newPage:async()=>({goto:async url=>{visited.push(url);return {status:()=>200};},url:()=>origin+'/index.php',locator:()=>({innerText:async()=>body}),close:async()=>{}}),close:async()=>{}};},
     readReward:async()=>{throw Error('read-only mode cannot visit rewards');},
     runTarget:async()=>{throw Error('read-only must never upgrade to a mutation');}});
   assert.deepEqual(visited,['https://open.cd/index.php']);
@@ -103,7 +103,7 @@ test('read-only PT verification uses the selected profile and never calls a subm
   config.ptReadOnlyPolicies={'https://pt.example':{reviewed:true,mode:'safe_history_page',url:'https://pt.example/userdetails.php?id=7',selector:'#attendance-summary'}};
   fs.writeFileSync(configFile,JSON.stringify(config));
   const generic=await runPtSupplement({...args,catalogHash,origin:'https://pt.example',readOnly:true,
-    launch:async()=>({route:async()=>{},newPage:async()=>({goto:async url=>{visited.push(url);},url:()=>args.origin+'/userdetails.php?id=7',locator:()=>({innerText:async()=> '今日已签到'}),close:async()=>{}}),close:async()=>{}})});
+    launch:async()=>({route:async()=>{},newPage:async()=>({goto:async url=>{visited.push(url);return {status:()=>200};},url:()=>args.origin+'/userdetails.php?id=7',locator:()=>({innerText:async()=> '今日已签到'}),close:async()=>{}}),close:async()=>{}})});
   assert.equal(generic.status,'already_signed');
   assert.equal(generic.evidence.authoritative,true);
   assert.equal(generic.submissionAttempted,false);
@@ -115,7 +115,8 @@ test('passive firewall allows only one reviewed main-document GET, not action GE
   const frame={page:()=>({mainFrame:()=>frame})};
   const request=async(url,method='GET',type='document')=>handler({
     request:()=>({url:()=>url,method:()=>method,resourceType:()=>type,isNavigationRequest:()=>type==='document',frame:()=>frame}),
-    continue:async()=>allowed.push(url),abort:async()=>blocked.push(url)});
+    fetch:async options=>{assert.equal(options.maxRedirects,0);return {status:()=>200};},
+    fulfill:async()=>allowed.push(url),abort:async()=>blocked.push(url)});
   await request('https://open.cd/attendance.php');
   await request(policy.url,'POST');
   await request(policy.url,'GET','script');
@@ -223,6 +224,42 @@ test('maintenance observation uses an unauthenticated GET and cannot establish a
     return {status:200,text:async()=>'<h1>维护通知</h1>站点处于全量数据恢复与测试阶段,暂时无法访问。'};
   }});
   assert.equal(result.failureCode,'site_maintenance');assert.equal(result.evidence.authoritative,false);
+});
+
+test('same-origin login redirects report auth loss without trusting foreign pages or HTTP errors',()=>{
+  const origin='https://ptsbao.club',policy=ptReadPolicy(origin);
+  const args={origin,policy,url:origin+'/login.php',bodyText:''};
+  assert.equal(classifyPtPassivePage(args).status,'login_required');
+  assert.equal(classifyPtPassivePage({...args,url:'https://other.example/login.php'}).status,'unknown');
+  assert.equal(classifyPtPassivePage({...args,httpStatus:503}).status,'unknown');
+});
+
+test('current SaoBao account state precedes stale public notices and failed navigation cannot certify success',async t=>{
+  const args=fixture(t),origin='https://ptsbao.club';
+  fs.writeFileSync(args.catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
+  const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');
+  for(const state of [
+    {url:origin+'/index.php',text:'[签到已得3000, 补签卡: 0]',authenticated:true,expected:'already_signed'},
+    {url:origin+'/index.php',text:'签到',authenticated:true,expected:'not_signed'},
+    {url:origin+'/login.php',text:'',authenticated:false,expected:'login_required'},
+    {url:origin+'/index.php',text:'',authenticated:false,expected:'needs_attention',fallback:true},
+    {url:origin+'/index.php',text:'[签到已得3000, 补签卡: 0]',authenticated:true,expected:'needs_attention',fallback:true,failed:true}
+  ]){
+    let fallbackCalls=0;
+    const result=await runPtSupplement({...args,origin,catalogHash,readOnly:true,
+      launch:async config=>{assert.equal(config.ptPassiveReadOnly,true);return {route:async()=>{},newPage:async()=>({
+        goto:async()=>{if(state.failed)throw Error('navigation failed');return {status:()=>200};},url:()=>state.url,
+        locator:selector=>({innerText:async()=>state.text,evaluateAll:async()=>selector==='a'?state.authenticated:
+          [{path:'/attendance.php',text:state.text}]}),close:async()=>{}}),close:async()=>{}};},
+      readAvailability:async()=>{fallbackCalls++;return {status:'needs_attention',failureCode:'site_maintenance',
+        siteCondition:'site_maintenance',retryCause:'upstream_unavailable',evidence:{source:'page_text',authoritative:false}};},
+      readReward:async()=>{throw Error('must not browse reward or attendance pages');},
+      runTarget:async()=>{throw Error('must not submit');}});
+    assert.equal(result.status,state.expected);
+    assert.equal(result.submissionAttempted,false);
+    assert.equal(fallbackCalls,state.fallback?1:0);
+    assert.equal(result.evidence.authoritative,['already_signed','not_signed'].includes(state.expected));
+  }
 });
 
 test('guarded recovery repeats the passive read and never submits when state changed to signed',async t=>{

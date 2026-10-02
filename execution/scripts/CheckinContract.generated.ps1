@@ -6,4 +6,4 @@ $CheckinFeatureDisabledEvidence = @{
     'new_api_checkin_action' = @('message_not_enabled')
 }
 $CheckinExternalRetryCauses = @('upstream_unavailable', 'rate_limit', 'harvest_waiting')
-$CheckinNativePtHeaderOrigins = @('https://audiences.me', 'https://ourbits.club', 'https://piggo.me', 'https://www.hdkyl.in')
+$CheckinNativePtHeaderOrigins = @('https://audiences.me', 'https://ourbits.club', 'https://piggo.me', 'https://www.hdkyl.in', 'https://ptsbao.club')

@@ -200,7 +200,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $cloudflareWaf = $bodyText -match '请稍候[.…]*\s*[^ ]+\s*正在进行安全验证|本网站使用安全服务防护恶意自动程序|Just a moment|Performing security verification|Verify you are human|Cloudflare.*performance and security'
     $securityVerification = $bodyText -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b'
     $success = $bodyText -match '签到成功|今日已签到|今天已签到|今天已经签到过|已经签到|已完成今日签到|(?:^|\s)已签到(?:\s|$)|Already checked in|Checked in today'
-    $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { $_ -match '^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$' } | Select-Object -Unique)
+    $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeDailyControl $originValue $_ } | Select-Object -Unique)
     $normalizedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() })
     $authenticated = @($normalizedControls | Where-Object { $_ -match '^(?:退出|退出登录|登出|注销|登出账号|登出帳號|Logout|Log out)$' }).Count -gt 0 -and
         @($normalizedControls | Where-Object { $_ -match '^(?:控制面板|用户中心|用戶中心|个人资料|個人資料|设置|設定|Control Panel|User CP)$' }).Count -gt 0

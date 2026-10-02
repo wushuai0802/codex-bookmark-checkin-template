@@ -19,7 +19,7 @@ import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
 import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
-import {ptReadPolicy,readPtPassivePage,readPtPublicAvailability} from './pt-read-policy.mjs';
+import {ptReadPolicy,readPtPassivePage} from './pt-read-policy.mjs';
 import {initialPtObservation} from './pt-initial-observation.mjs';
 
 const require = createRequire(import.meta.url);
@@ -1683,11 +1683,6 @@ export async function processTarget(context, target, config, qaRules, logDirecto
   let passivePolicy;
   if(isPtExecutionTarget(target,{root:rootDirectory})){
     try{passivePolicy=ptReadPolicy(target.origin,config);}catch{}
-    if(passivePolicy?.publicAvailabilityUrl){
-      const availability=await readPtPublicAvailability(target.origin,passivePolicy);
-      if(availability)return {...availability,reason:'站点公告正在维护或恢复数据，等待恢复后核验',submissionAttempted:false,
-        operationMode:'safe_history_page',readSafety:'reviewed_passive',attempt:0,candidateHistory:[]};
-    }
   }
   let lastResult = null;
   const candidateHistory = [];
