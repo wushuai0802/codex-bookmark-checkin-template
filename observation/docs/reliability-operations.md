@@ -109,6 +109,14 @@ An ownership change during queued fallback defers that site. Unrelated Harvest
 job changes do not block an independently owned site. Existing profiles,
 account bindings and all exact-scope PT fallback capabilities are preserved.
 
+U2's questionnaire GET is an opener; the answer button performs the POST. The
+existing visual challenge flow is entered after a reviewed unsigned index read,
+and only the answer submission consumes the mutation guard. Pre-answer failures
+record non-submission. Public signup-feed messages cannot prove this account's
+success: after an answer POST, the executor checks this session's authenticated
+daily header. An expired challenge is not submitted; uncertain answers stay
+protected until a fresh bound passive read supplies current state.
+
 Harvest waiting and proven preflight refusals do not consume submission
 attempts. Due per-account wakeups have a separate bounded scheduler budget,
 including reserved late upstream probes. A login-recovered timestamp is a

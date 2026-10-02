@@ -19,7 +19,7 @@ import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
 import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
-import {ptReadPolicy,readPtPublicAvailability} from './pt-read-policy.mjs';
+import {ptReadPolicy,readPtPassivePage,readPtPublicAvailability} from './pt-read-policy.mjs';
 import {initialPtObservation} from './pt-initial-observation.mjs';
 
 const require = createRequire(import.meta.url);
@@ -1270,13 +1270,14 @@ export async function tryNexusImageCaptcha(page, config = {}, {
   return { status: "interactive_challenge", reason: "NexusPHP 图片验证码未能完成" };
 }
 
-async function tryU2Captcha(page, expectedOrigin, config) {
+export async function tryU2Captcha(page, expectedOrigin, config, {solve=solveU2VisualChallenge}={}) {
   if (expectedOrigin !== "https://u2.dmhy.org") return null;
+  const openedAt=Date.now();
   const buttons = page.locator('input[type="submit"][name^="captcha_"]');
   if (await buttons.count() < 2) return null;
   const image = page.locator('img[alt="captcha"]');
   if (await image.count() !== 1) {
-    return { status: "interactive_challenge", reason: "U2 验证题缺少题图" };
+    return { status: "interactive_challenge", reason: "U2 验证题缺少题图",submissionAttempted:false };
   }
   try {
     await page.waitForFunction(() => {
@@ -1284,31 +1285,34 @@ async function tryU2Captcha(page, expectedOrigin, config) {
       return Boolean(element?.complete && element.naturalWidth > 0 && element.naturalHeight > 0);
     }, null, { timeout: 50000 });
   } catch {
-    return { status: "interactive_challenge", reason: "U2 验证题图片加载超时" };
+    return { status: "interactive_challenge", reason: "U2 验证题图片加载超时",submissionAttempted:false };
   }
   const options = await buttons.evaluateAll((elements) => elements.map((element) => ({
     name: element.name,
     text: element.value,
   })));
   const screenshot = await image.screenshot();
-  const solution = await solveU2VisualChallenge(screenshot, options);
+  const solution = await solve(screenshot, options);
   if (!solution.answer?.name) {
-    return { status: "interactive_challenge", reason: `U2 本地视觉识别未得出可靠答案：${solution.reason}` };
+    return { status: "interactive_challenge", reason: `U2 本地视觉识别未得出可靠答案：${solution.reason}`,submissionAttempted:false };
   }
+  if(Date.now()-openedAt>100000)return {status:'interactive_challenge',reason:'U2 题目接近有效期，未提交答案，等待重新验证',submissionAttempted:false};
   const message = page.locator('textarea[name="message"]');
-  if (await message.count() !== 1) return { status: "interactive_challenge", reason: "U2 留言框不存在" };
+  if (await message.count() !== 1) return { status: "interactive_challenge", reason: "U2 留言框不存在",submissionAttempted:false };
   await message.fill(String(config.u2Message || "今日天气不错"));
   const chosen = page.locator(`input[type="submit"][name="${solution.answer.name}"]`);
-  if (await chosen.count() !== 1) return { status: "interactive_challenge", reason: "U2 识别答案不属于当前题目" };
+  if (await chosen.count() !== 1) return { status: "interactive_challenge", reason: "U2 识别答案不属于当前题目",submissionAttempted:false };
   config.beforePtSubmit?.();
   await chosen.click();
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-  const bodyText = String(await page.locator("body").innerText()).replace(/\s+/g, " ").trim();
-  if (/(回答正確|回答正确|簽到成功|签到成功|獎勵UCoin|奖励UCoin|今日已簽到|今天已签到)/i.test(bodyText)) {
-    return {
-      status: "signed",
-      reason: `U2 图片题识别正确：${solution.answer.text}`,
-    };
+  const policy=ptReadPolicy(expectedOrigin,config);
+  for(let read=0;read<3;read++){
+    if(read)await sleep(750);
+    const response=await page.goto(policy.url,{waitUntil:'domcontentloaded',timeout:15000}).catch(()=>null);
+    if(!response)continue;
+    const observed=await readPtPassivePage(page,policy,{origin:expectedOrigin,httpStatus:response.status()});
+    if(observed.status==='already_signed'&&observed.evidence?.authoritative===true)
+      return {status:'signed',reason:'U2 答案已提交，当前账号每日首页确认签到完成',submissionAttempted:true,evidence:observed.evidence};
   }
   return { status: "needs_attention", reason: "U2 答案已提交，但页面未显示签到成功",
     submissionAttempted: true, failureCode: 'submission_outcome_unknown', retryable: false };
@@ -1334,11 +1338,13 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
     ? await tryAnyRouterApiCheckin(page, config, target.origin)
     : null;
   if (anyRouterResult) return { ...anyRouterResult, url: safeLogUrl(destination) };
-  if(/attendance|check[-_]?in|showup/i.test(new URL(destination).pathname))config.beforePtSubmit?.();
+  const u2Question=target.origin==='https://u2.dmhy.org'&&new URL(destination).pathname==='/showup.php';
+  if(!u2Question&&/attendance|check[-_]?in|showup/i.test(new URL(destination).pathname))config.beforePtSubmit?.();
   const navigationResponse=await page.goto(destination, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
   if(passiveVisit){
     const observed=await initialPtObservation(page,passivePolicy,target.origin,navigationResponse);
     if(observed)return observed;
+    if(target.origin==='https://u2.dmhy.org')return {status:'visited',reason:'每日首页尚未确认完成，继续原有 U2 问卷流程',submissionAttempted:false,url:passivePolicy.url};
   }
   if (useExtendedDiscovery) {
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
