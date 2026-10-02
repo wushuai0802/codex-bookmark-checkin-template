@@ -4,6 +4,7 @@ import {siteIdentityIndex} from './site-identity-index.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {ptStatuses} from './checkin-contract.generated.mjs';
 import {siteDisplayName} from './display-identity.mjs';
+import {canonicalPtOrigin} from './pt-coordination.generated.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
 
 const SOURCE_VALUES = new Set(['harvest', 'legacy-checkin', 'execution-supplement', 'manual', 'v2-observer', 'other']);
@@ -61,7 +62,7 @@ function normalizeOriginForStatus(value) {
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
     throw new Error('PT status origin must be HTTPS without credentials');
   }
-  return normalizeOrigin(value);
+  return canonicalPtOrigin(normalizeOrigin(value));
 }
 
 function normalizeAccountRef(value) {

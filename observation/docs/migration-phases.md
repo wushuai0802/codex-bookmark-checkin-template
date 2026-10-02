@@ -141,3 +141,13 @@ guarantee about an unobservable Harvest job is implied.
 
 See [PT recovery and evidence](reliability-operations.md) for operator commands,
 the three reconciliation outcomes and the generation publication order.
+
+## Per-site Harvest coordination: 2026-10-02
+
+The complete PT catalog remains the monitoring and supplement scope. Actual
+Harvest ownership is a separate live configuration signal. Independent sites
+may run before Harvest completes; managed sites retain completion gating before
+submission, while current successful receipts and reviewed passive completion
+checks stop repeat submissions. Both planner and executor share a generated
+coordination policy. Known aliases are explicit; duplicate origins, incomplete
+inventory and changed ownership never infer a new write permission.

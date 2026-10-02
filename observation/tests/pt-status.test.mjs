@@ -5,6 +5,16 @@ import { buildPtStatus, normalizePtStatusReport } from '../src/pt-status.mjs';
 const accountRef = 'acct_0123456789abcdef';
 const taskId = 'task_0123456789abcdef01234567';
 
+test('Harvest OpenCD www receipt matches the canonical bookmark and regular task',()=>{
+  const result=buildPtStatus({generatedAt:'2026-10-02T02:00:00Z',businessDate:'2026-10-02',
+    monitorCatalog:{sites:[{origin:'https://open.cd'}]},planTargets:[{origin:'https://open.cd'}],
+    tasks:[{taskId,origin:'https://open.cd',observedStatus:'deferred'}],
+    externalReport:{source:'harvest',businessDate:'2026-10-02',sites:[{origin:'https://www.open.cd',status:'signed',
+      observedAt:'2026-10-02T01:59:00Z',evidence:{source:'harvest',authoritative:true,summary:'签到成功'}}]}});
+  assert.equal(result.sites.length,1);assert.equal(result.sites[0].origin,'https://open.cd');
+  assert.equal(result.sites[0].effective.status,'signed');assert.equal(result.sites[0].effective.authoritative,true);
+});
+
 test('historical uncertainty preserves today evidence and maintenance without certifying completion',()=>{
   const origin='https://pt.example',businessDate='2026-10-02';
   const base={generatedAt:'2026-10-02T02:00:00Z',businessDate,

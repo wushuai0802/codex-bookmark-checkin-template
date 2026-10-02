@@ -8,9 +8,10 @@ import {runPtSite,projectPtSiteResult} from './pt-site-execution.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
 import {ptAttemptReconciled} from './pt-reconciliation.mjs';
 import {currentPassivePtResult,recordPtVerification} from './pt-verification.mjs';
+import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted} from './pt-coordination.generated.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
-const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:null;}catch{return null;}};
+const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?canonicalPtOrigin(u.origin):null;}catch{return null;}};
 const terminal=new Set(['signed','already_signed']);
 const failures=new Set(['failed','not_signed']);
 
@@ -31,10 +32,8 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
   if(fallbackReport&&(fallbackReport.source!=='execution-supplement'||fallbackReport.businessDate!==businessDate||
      !Array.isArray(fallbackReport.sites)))throw Error('PT supplement report has the wrong source or date');
   const currentV1=latest.runState==='final'&&latest.isComplete===true&&String(latest.runId??'').startsWith(businessDate.replaceAll('-','')+'-');
-  const doneAt=Date.parse(harvest.taskCompletion?.completedAt),startedAt=Date.parse(harvest.taskCompletion?.startedAt);
-  const harvestCompleted=harvest.taskCompletion?.status==='completed'&&Number.isInteger(harvest.taskCompletion.resultId)&&
-    Number.isFinite(startedAt)&&Number.isFinite(doneAt)&&startedAt<=doneAt&&doneAt<=now.getTime()+60_000&&
-    dayAt(new Date(startedAt))===businessDate&&dayAt(new Date(doneAt))===businessDate;
+  const doneAt=Date.parse(harvest.taskCompletion?.completedAt);
+  const harvestCompleted=harvestTaskCompleted(harvest,businessDate,now);
   const catalogByOrigin=new Map();
   for(const site of catalog.sites){
     const origin=originOf(site?.origin);
@@ -62,13 +61,19 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     if(confirmedSupplement(fallbackReport,origin,businessDate,now)){
       assessments.push({origin,state:'confirmed_by_executor_supplement'});continue;
     }
+    const assignment=harvestSiteAssignment(harvest,origin);
+    if(assignment.owner==='ambiguous'){
+      if(!blocked.some(item=>item.origin===origin))block(origin,'harvest_assignment_unverified');
+      continue;
+    }
     const confirmedAt=Date.parse(site.observedAt);
     const confirmed=terminal.has(site.status)&&site.evidence?.authoritative===true&&Number.isFinite(confirmedAt)&&dayAt(new Date(confirmedAt))===businessDate;
     if(confirmed){observedSuccess++;assessments.push({origin,state:'confirmed_by_harvest'});continue;}
     const status=terminal.has(site.status)?'unknown':site.status;
     if(!failures.has(status)&&status!=='unknown')continue;
-    if(!harvestCompleted){block(origin,'harvest_task_not_complete');continue;}
-    const at=status==='unknown'?doneAt:Date.parse(site.observedAt);
+    if(['unknown','ambiguous'].includes(assignment.owner)){block(origin,'harvest_assignment_unverified');continue;}
+    if(assignment.owner!=='execution'&&!harvestCompleted){block(origin,'harvest_task_not_complete');continue;}
+    const at=status==='unknown'?(assignment.owner==='execution'?now.getTime():doneAt):Date.parse(site.observedAt);
     if(!Number.isFinite(at)||at>now.getTime()+60_000||dayAt(new Date(at))!==businessDate||
        now.getTime()-at>26*3600_000){block(origin,'stale_failure');continue;}
     if(!catalogOrigins.has(origin)&&!registered.some(target=>originOf(target.origin)===origin)){
@@ -100,7 +105,7 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
       block(origin,'submission_outcome_unknown');continue;
     }
     eligible.push({origin,accountKey,businessDate,kind:target?'registered':'fallback_only',...(entryUrl?{entryUrl}:{}),observedAt:new Date(at).toISOString(),
-      trigger:site.missingFromHarvest?(target?'registered_pt_status_unobserved':'monitored_pt_status_unobserved'):
+      trigger:assignment.owner==='execution'?'execution_owned_pt_recheck':site.missingFromHarvest?(target?'registered_pt_status_unobserved':'monitored_pt_status_unobserved'):
         status==='unknown'?'harvest_task_done_status_unknown':'harvest_explicit_failure'});
     assessments.push({origin,state:'executor_recheck_queued'});
   }
@@ -226,8 +231,11 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         live=await refreshHarvest();
         const livePreview=planHarvestFallback({harvest:live,catalog,plan,latest,
           fallbackReport:currentSupplement,config,now:clock(),fallbackOnlyEnabled});
-        if(live.taskCompletion?.resultId!==harvest.taskCompletion?.resultId||
-           Date.parse(live.taskCompletion?.completedAt)!==Date.parse(harvest.taskCompletion?.completedAt)){
+        const previousOwner=harvestSiteAssignment(harvest,candidate.origin).owner;
+        const currentOwner=harvestSiteAssignment(live,candidate.origin).owner;
+        if(currentOwner!==previousOwner){outcomes.push({origin:candidate.origin,state:'harvest_assignment_changed'});continue;}
+        if(currentOwner!=='execution'&&(live.taskCompletion?.resultId!==harvest.taskCompletion?.resultId||
+           Date.parse(live.taskCompletion?.completedAt)!==Date.parse(harvest.taskCompletion?.completedAt))){
           outcomes.push({origin:candidate.origin,state:'harvest_task_changed'});
           break;
         }

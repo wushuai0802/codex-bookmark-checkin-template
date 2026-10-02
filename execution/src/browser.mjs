@@ -19,6 +19,8 @@ import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
 import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
+import {ptReadPolicy,readPtPublicAvailability} from './pt-read-policy.mjs';
+import {initialPtObservation} from './pt-initial-observation.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -1320,18 +1322,24 @@ async function processCandidate(page, target, candidateUrl, config, qaRules) {
 
 async function processCandidateBody(page, target, candidateUrl, config, qaRules) {
   const checkPt=()=>checkHarvestPtBeforeWrite(target,{root:rootDirectory});
-  const beforeVisit=checkPt();
-  if(beforeVisit)return beforeVisit;
   const allowedOrigins = target.allowedOrigins ?? [target.origin];
   const useNewApiCheckin = shouldTryGenericNewApiCheckin(target, config.newApiCheckinOrigins);
   const useExtendedDiscovery = targetUsesConfiguredOrigins(target, config.extendedDiscoveryOrigins);
   const destination = assertBookmarkNavigation(candidateUrl, allowedOrigins);
+  let passivePolicy;
+  try{passivePolicy=ptReadPolicy(target.origin,config);}catch{}
+  const passiveVisit=passivePolicy?.url===destination&&!passivePolicy.nativeMainChrome&&!passivePolicy.selfProfileHeader;
+  if(!passiveVisit){const beforeVisit=checkPt();if(beforeVisit)return beforeVisit;}
   const anyRouterResult = target.origin === "https://anyrouter.top"
     ? await tryAnyRouterApiCheckin(page, config, target.origin)
     : null;
   if (anyRouterResult) return { ...anyRouterResult, url: safeLogUrl(destination) };
   if(/attendance|check[-_]?in|showup/i.test(new URL(destination).pathname))config.beforePtSubmit?.();
-  await page.goto(destination, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+  const navigationResponse=await page.goto(destination, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+  if(passiveVisit){
+    const observed=await initialPtObservation(page,passivePolicy,target.origin,navigationResponse);
+    if(observed)return observed;
+  }
   if (useExtendedDiscovery) {
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
   }
@@ -1666,11 +1674,21 @@ export async function processTarget(context, target, config, qaRules, logDirecto
 } = {}) {
   const configuredSkip = configuredTargetSkip(target, config);
   if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
+  let passivePolicy;
+  if(isPtExecutionTarget(target,{root:rootDirectory})){
+    try{passivePolicy=ptReadPolicy(target.origin,config);}catch{}
+    if(passivePolicy?.publicAvailabilityUrl){
+      const availability=await readPtPublicAvailability(target.origin,passivePolicy);
+      if(availability)return {...availability,reason:'站点公告正在维护或恢复数据，等待恢复后核验',submissionAttempted:false,
+        operationMode:'safe_history_page',readSafety:'reviewed_passive',attempt:0,candidateHistory:[]};
+    }
+  }
   let lastResult = null;
   const candidateHistory = [];
   let allCandidatesUnsubmitted = true;
-  const candidates = ptReadPolicies[target.origin]?.completionReadFirst
-    ? [...new Set([target.origin+'/index.php', ...target.candidates])]
+  const candidates = passivePolicy&&!passivePolicy.nativeMainChrome&&!passivePolicy.selfProfileHeader&&
+    (passivePolicy.dailyHeader||passivePolicy.openCdHeader||ptReadPolicies[target.origin]?.completionReadFirst)
+    ? [...new Set([passivePolicy.url, ...target.candidates])]
     : target.candidates;
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
     const page = await context.newPage();

@@ -15,6 +15,8 @@ def classify(message):
         return 'not_signed'
     if re.search(r'已签到|已簽到|重复操作|already.*(?:signed|checked)', message, re.I):
         return 'already_signed'
+    if re.fullmatch(r'您今天已经在其他地方签到了哦[！!。]?', message.strip()):
+        return 'already_signed'
     if re.search(r'签到成功|簽到成功|check.?in success', message, re.I):
         return 'signed'
     # Site-specific positive receipts observed in Harvest's daily sign_info.
@@ -67,13 +69,22 @@ def export(db_path, now=None):
     day = now.date().isoformat()
     conn = sqlite3.connect('file:' + db_path + '?mode=ro', uri=True, timeout=5)
     conn.execute('PRAGMA query_only=ON')
-    rows = conn.execute('SELECT mirror,nickname,user_id,username,sign_info FROM mysite_mysite').fetchall()
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(mysite_mysite)')}
+    ownership_columns = {'available', 'sign_in'}.issubset(columns)
+    ownership_select = ',available,sign_in' if ownership_columns else ',NULL,NULL'
+    rows = conn.execute('SELECT mirror,nickname,user_id,username,sign_info' + ownership_select + ' FROM mysite_mysite').fetchall()
     task_completion = completed_daily_task(conn, now, day)
     conn.close()
     sites = []
-    for mirror, name, uid, username, raw in rows:
+    inventory_complete = ownership_columns
+    for mirror, name, uid, username, raw, available, sign_in in rows:
+        flags_known = type(available) in (int, bool) and available in (0, 1) and type(sign_in) in (int, bool) and sign_in in (0, 1)
+        if not flags_known:
+            inventory_complete = False
         url = urlsplit(mirror or '')
         if url.scheme != 'https' or not url.hostname or url.username or url.password:
+            if not flags_known or available and sign_in:
+                inventory_complete = False
             continue
         try:
             record = json.loads(raw or '{}').get(day) or {}
@@ -88,6 +99,7 @@ def export(db_path, now=None):
         sites.append({
             'origin': 'https://' + url.netloc, 'displayName': str(name or '')[:80],
             'username': str(username or '')[:80], 'userId': str(uid or '')[:40],
+            **({'checkinEnabled': bool(available and sign_in)} if flags_known else {}),
             'status': status, 'observedAt': stamp.isoformat() if valid else None,
             'evidence': {'source': 'harvest', 'authoritative': status in ('signed', 'already_signed'),
                          'summary': 'Harvest 当日签到回执' if status in ('signed', 'already_signed')
@@ -96,7 +108,8 @@ def export(db_path, now=None):
                          else 'Harvest 暂无可确认的今日签到记录'}
         })
     return {'schemaVersion': 1, 'source': 'harvest', 'businessDate': day,
-            'generatedAt': now.isoformat(), 'taskCompletion': task_completion, 'sites': sites}
+            'generatedAt': now.isoformat(), 'taskCompletion': task_completion,
+            'checkinInventoryComplete': inventory_complete, 'sites': sites}
 
 
 if __name__ == '__main__':

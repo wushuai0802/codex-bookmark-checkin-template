@@ -1,6 +1,8 @@
+import {canonicalPtOrigin} from './pt-coordination.generated.mjs';
+
 export function siteIdentityIndex({catalog=null,planTargets=[]}={}){
   const index=new Map();
-  const originOf=value=>{try{const url=new URL(value);return url.protocol==='https:'&&!url.username&&!url.password?url.origin:null;}catch{return null;}};
+  const originOf=value=>{try{const url=new URL(value);return url.protocol==='https:'&&!url.username&&!url.password?canonicalPtOrigin(url.origin):null;}catch{return null;}};
   const ensure=origin=>{if(!index.has(origin))index.set(origin,{origin,kind:'service',monitored:false,targets:[],accountKeys:[],ambiguous:false});return index.get(origin);};
   for(const site of catalog?.sites??[]){
     const origin=originOf(site.origin);if(!origin)continue;

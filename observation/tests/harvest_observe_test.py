@@ -14,6 +14,7 @@ class HarvestEvidenceTest(unittest.TestCase):
     def test_success_requires_explicit_positive_evidence(self):
         self.assertEqual(observer.classify('签到成功 这是第 1 次'), 'signed')
         self.assertEqual(observer.classify('已签到，请勿重复操作'), 'already_signed')
+        self.assertEqual(observer.classify('您今天已经在其他地方签到了哦！'), 'already_signed')
         self.assertEqual(observer.classify('成功,已连续签到81天,魔力值加170'), 'signed')
         self.assertEqual(observer.classify('今日签到排名：1 / 1 这是您的第209次签到，已连续签到209天，本次签到获得1000个'), 'signed')
         self.assertEqual(observer.classify('未签到'), 'not_signed')
@@ -48,6 +49,23 @@ class HarvestEvidenceTest(unittest.TestCase):
         self.assertEqual(statuses['https://absent.example']['status'], 'unknown')
         self.assertEqual(result['taskCompletion']['status'], 'completed')
         self.assertEqual(result['taskCompletion']['resultId'], 5)
+        self.assertFalse(result['checkinInventoryComplete'])
+
+    def test_live_site_switches_are_exported_without_account_credentials(self):
+        shanghai = datetime.timezone(datetime.timedelta(hours=8))
+        now = datetime.datetime(2026, 10, 2, 9, 0, tzinfo=shanghai)
+        with tempfile.TemporaryDirectory() as folder:
+            database = Path(folder) / 'harvest.sqlite'
+            conn = sqlite3.connect(database)
+            conn.execute('CREATE TABLE mysite_mysite(mirror TEXT,nickname TEXT,user_id TEXT,username TEXT,sign_info TEXT,available INTEGER,sign_in INTEGER)')
+            for origin, available, enabled in [('https://managed.example', 1, 1), ('https://disabled.example', 1, 0), ('https://unavailable.example', 0, 1)]:
+                conn.execute('INSERT INTO mysite_mysite VALUES(?,?,?,?,?,?,?)', (origin, 'fixture', '7', 'fixture', '{}', available, enabled))
+            conn.commit(); conn.close()
+            with patch.object(observer, 'ZoneInfo', return_value=shanghai):
+                result = observer.export(str(database), now=now)
+        self.assertTrue(result['checkinInventoryComplete'])
+        self.assertEqual([s['checkinEnabled'] for s in result['sites']], [True, False, False])
+        self.assertIsNone(result['taskCompletion'])
 
 class HarvestActivityTests(unittest.TestCase):
     def setUp(self):

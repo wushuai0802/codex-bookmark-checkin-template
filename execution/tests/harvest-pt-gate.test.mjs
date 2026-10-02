@@ -57,3 +57,24 @@ test('private opt-in binds one exact PT origin and account without a network cal
   assert.equal(checkHarvestPtBeforeWrite(target,{root,now,probe}).status,'deferred');
   assert.equal(probes,1);
 });
+
+test('live assignment distinguishes disabled and absent sites from Harvest-managed sites',()=>{
+  const current={...report(),checkinInventoryComplete:true,taskCompletion:null,
+    sites:[{...report().sites[0],checkinEnabled:false}]};
+  assert.equal(harvestPtDecision({report:current,target,now}),null);
+  assert.equal(harvestPtDecision({report:{...current,sites:[]},target,now}),null);
+  current.sites[0].checkinEnabled=true;
+  assert.equal(harvestPtDecision({report:current,target,now}).retryCause,'harvest_waiting');
+  current.sites[0].checkinEnabled='false';
+  assert.equal(harvestPtDecision({report:current,target,now}).status,'deferred');
+  assert.equal(harvestPtDecision({report:{...current,sites:[],checkinInventoryComplete:false},target,now}).status,'deferred');
+});
+
+test('OpenCD known alias consumes dated success without waiting or inferring Harvest user identity',()=>{
+  const current={...report(),checkinInventoryComplete:true,taskCompletion:null,sites:[{origin:'https://www.open.cd',
+    checkinEnabled:true,userId:'harvest-owner',status:'signed',observedAt:'2026-09-29T01:59:00Z',evidence:{authoritative:true}}]};
+  const result=harvestPtDecision({report:current,target:{...target,origin:'https://open.cd'},now});
+  assert.equal(result.status,'already_signed');assert.equal(result.submissionAttempted,false);
+  current.sites.push({...current.sites[0],origin:'https://open.cd'});
+  assert.equal(harvestPtDecision({report:current,target:{...target,origin:'https://open.cd'},now}).status,'deferred');
+});

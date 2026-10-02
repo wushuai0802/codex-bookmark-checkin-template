@@ -92,6 +92,23 @@ Expired observations are discarded when serving the dashboard.
 
 ## Retry and publication
 
+Harvest ownership comes from its live `available` and `sign_in` switches, not
+membership in the PT bookmark catalog. The observer exports `checkinEnabled`
+per site and `checkinInventoryComplete` for verified full coverage. Disabled
+sites and origins absent from a complete inventory use the execution layer
+without waiting for Harvest's daily job. Unknown ownership and duplicate
+accounts remain blocked; older reports retain their conservative daily gate.
+The known OpenCD www alias is explicit in the shared contract.
+
+Current positive Harvest receipts are status-only even before the rest of the
+batch completes. A reviewed initial GET can confirm an authenticated daily
+header or maintenance before considering submission. The existing reviewed
+passive page reader checks completion before the formal attendance URL. The
+existing guard rechecks live Harvest ownership before every actual PT write.
+An ownership change during queued fallback defers that site. Unrelated Harvest
+job changes do not block an independently owned site. Existing profiles,
+account bindings and all exact-scope PT fallback capabilities are preserved.
+
 Harvest waiting and proven preflight refusals do not consume submission
 attempts. Due per-account wakeups have a separate bounded scheduler budget,
 including reserved late upstream probes. A login-recovered timestamp is a

@@ -7,6 +7,7 @@
   },
   "externalRetryCauses": ["upstream_unavailable", "rate_limit", "harvest_waiting"],
   "ptSiteDisplayNames": {"https://ptsbao.club": "骚包"},
+  "ptOriginAliases": {"https://www.open.cd": "https://open.cd"},
   "nativePtHeaderOrigins": ["https://audiences.me", "https://ourbits.club", "https://piggo.me", "https://www.hdkyl.in"],
   "conditionLabels": {
     "site_maintenance": "站点维护",
@@ -43,6 +44,7 @@
   },
   "ptRetryCauses": ["upstream_unavailable", "rate_limit", "login_required", "harvest_waiting"],
   "ptReadPolicies": {
+    "https://p.t-baozi.cc": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "signedRewardControl": true, "dailyHeader": true},
     "https://dstudio.me": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "dailyHeader": true, "signedTexts": ["今日已完成已签到"], "completionReadFirst": true},
     "https://ourbits.club": {"selector": "#info_block", "selfProfileHeader": true},
     "https://cspt.top": {"selector": ".menu-base-info", "actionPath": "/attendance.php", "unsignedText": "签到得金元宝", "signedRewardControl": true, "dailyHeader": true},

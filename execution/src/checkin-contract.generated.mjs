@@ -21,6 +21,9 @@ export const externalRetryCauses = Object.freeze([
 export const ptSiteDisplayNames = Object.freeze({
   "https://ptsbao.club": "骚包"
 });
+export const ptOriginAliases = Object.freeze({
+  "https://www.open.cd": "https://open.cd"
+});
 export const nativePtHeaderOrigins = Object.freeze([
   "https://audiences.me",
   "https://ourbits.club",
@@ -102,6 +105,13 @@ export const ptRetryCauses = Object.freeze([
   "harvest_waiting"
 ]);
 export const ptReadPolicies = Object.freeze({
+  "https://p.t-baozi.cc": {
+    "selector": "#info_block",
+    "actionPath": "/attendance.php",
+    "unsignedText": "签到",
+    "signedRewardControl": true,
+    "dailyHeader": true
+  },
   "https://dstudio.me": {
     "selector": "#info_block",
     "actionPath": "/attendance.php",
