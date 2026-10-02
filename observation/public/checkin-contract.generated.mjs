@@ -151,7 +151,12 @@ export const ptReadPolicies = Object.freeze({
     "openCdHeader": true
   },
   "https://ptsbao.club": {
-    "selector": "body",
+    "selector": "#info_block",
+    "actionPath": "/attendance.php",
+    "unsignedText": "签到",
+    "signedRewardControl": true,
+    "dailyHeader": true,
+    "loginPath": "/login.php",
     "publicAvailabilityUrl": "https://ptsbao.club/claim/"
   }
 });

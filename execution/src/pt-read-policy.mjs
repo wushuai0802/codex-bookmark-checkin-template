@@ -45,7 +45,7 @@ export function ptReadPolicy(origin,config={}){
   }:null);
   const unsafe=()=>{const e=Error('PT read-only capability is not reviewed for this site');e.code='PT_READONLY_UNSAFE';return e;};
   if(!policy||policy.reviewed!==true||policy.mode!=='safe_history_page'||typeof policy.selector!=='string'||
-    !policy.selector||policy.selector.length>150)throw unsafe();
+    !policy.selector||policy.selector.length>150||policy.loginPath!==undefined&&policy.loginPath!=='/login.php')throw unsafe();
   let url;try{url=new URL(policy.url);}catch{throw unsafe();}
   if(url.protocol!=='https:'||url.origin!==origin||url.username||url.password||url.hash||
      /attendance|check[-_]?in|sign[_-]?(?:in|out)|logout|delete|submit|confirm|claim/i.test(decodeURIComponent(url.pathname))||
@@ -70,6 +70,9 @@ export async function readPtPublicAvailability(origin,policy,{fetchPage=fetch}={
 
 export function classifyPtPassivePage({origin,url,policy,bodyText,controls=[],authenticated=false,httpStatus=200,now=new Date()}){
   const classification=classifyPageText({url,bodyText});
+  if(classification.status==='login_required'&&httpStatus===200){
+    try{if(new URL(url).origin===origin)return {...classification,submissionAttempted:false};}catch{}
+  }
   if(url!==policy.url||httpStatus!==200)return {status:'unknown',failureCode:'network_error'};
   if(classification.status==='login_required')return {...classification,submissionAttempted:false};
   if(classification.retryCause==='upstream_unavailable')return {...classification,
@@ -106,15 +109,22 @@ export async function readPtPassivePage(page,policy,{origin,now=new Date(),httpS
 
 export async function installPtReadFirewall(context,policy){
   // JS and service workers are disabled at context creation. Allow a single
-  // approved main document GET; block scripts, POST, XHR, popups and redirects.
-  let consumed=false;
+  // approved main document GET and its reviewed login redirect. Block scripts,
+  // POST, XHR, popups and all other redirects, including attendance actions.
+  let consumed=false,loginConsumed=false;
   await context.route('**/*',async route=>{
     const request=route.request();
     let allowed=false;
-    try{allowed=!consumed&&request.method()==='GET'&&request.url()===policy.url&&
-      request.resourceType()==='document'&&request.isNavigationRequest()&&
-      request.frame()===request.frame().page().mainFrame();}catch{/* deny unbound requests */}
+    try{
+      const mainDocument=request.method()==='GET'&&request.resourceType()==='document'&&request.isNavigationRequest()&&
+        request.frame()===request.frame().page().mainFrame();
+      if(mainDocument&&!consumed&&request.url()===policy.url){consumed=true;allowed=true;}
+      else if(mainDocument&&consumed&&!loginConsumed&&policy.loginPath==='/login.php'&&
+        request.url()===new URL(policy.loginPath,policy.url).href&&request.redirectedFrom()?.url()===policy.url){
+        loginConsumed=true;allowed=true;
+      }
+    }catch{/* deny unbound requests */}
     if(!allowed)return route.abort('blockedbyclient');
-    consumed=true;return route.continue();
+    return route.continue();
   });
 }

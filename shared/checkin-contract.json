@@ -51,6 +51,6 @@
     "https://pt.xingyungept.org": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到得星焱", "signedRewardControl": true, "dailyHeader": true},
     "https://u2.dmhy.org": {"selector": "#info_block", "actionPath": "/showup.php", "unsignedText": "立即簽到", "dailyHeader": true},
     "https://open.cd": {"selector": "body", "openCdHeader": true},
-    "https://ptsbao.club": {"selector": "body", "publicAvailabilityUrl": "https://ptsbao.club/claim/"}
+    "https://ptsbao.club": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "signedRewardControl": true, "dailyHeader": true, "loginPath": "/login.php", "publicAvailabilityUrl": "https://ptsbao.club/claim/"}
   }
 }

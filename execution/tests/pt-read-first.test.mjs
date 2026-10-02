@@ -6,7 +6,7 @@ import {processTarget} from '../src/browser.mjs';
 test('authenticated daily completion stops the real browser flow before any attendance request',async()=>{
   const browser=await chromium.launch({headless:true,channel:'chrome'});
   try{
-    for(const [origin,control] of [['https://dstudio.me','今日已完成已签到'],['https://p.t-baozi.cc','[签到已得3000, 补签卡: 0]']]){
+    for(const [origin,control] of [['https://dstudio.me','今日已完成已签到'],['https://p.t-baozi.cc','[签到已得3000, 补签卡: 0]'],['https://ptsbao.club','[签到已得3000, 补签卡: 0]']]){
     const context=await browser.newContext({javaScriptEnabled:false,serviceWorkers:'block'}),visited=[];
     await context.route('**/*',async route=>{
       visited.push({url:route.request().url(),method:route.request().method()});
