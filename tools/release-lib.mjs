@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-const managed=/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/;
+const managed=/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|observation\/Dockerfile$|(?:execution|observation)\/package(?:-lock)?\.json$)/;
 export const fileHash=file=>fs.existsSync(file)?crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'):null;
 function safeFile(root,relative){
   if(!/^[A-Za-z0-9_.\/-]+$/.test(relative)||relative.split('/').some(p=>p==='..'||p==='.'||!p))throw Error('unsafe release path');
