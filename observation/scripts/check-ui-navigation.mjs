@@ -7,6 +7,7 @@ import { chromium } from 'playwright-core';
 import { buildSnapshot } from '../src/bridge.mjs';
 import {createLedgerRecord} from '../src/shadow-ledger.mjs';
 import { createDashboardServer } from '../src/dashboard-server.mjs';
+import {overviewMetrics,projectOverviewSnapshot} from '../public/overview-model.mjs';
 
 const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-ui-navigation-'));
 const dataDir = path.join(artifacts, 'synthetic-data');
@@ -79,6 +80,11 @@ try {
       page.on('response', response => { if (response.status() >= 400) failedResponses.push(`${new URL(response.url()).pathname}:${response.status()}`); });
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+      const overviewData=await fetch(base+'/api/overview').then(response=>response.json());
+      const overviewRate=overviewMetrics(projectOverviewSnapshot(overviewData)).rate;
+      assert.equal(await page.locator('#daily-summary .daily-progress strong').textContent(),overviewRate===null?'—':`${overviewRate}%`);
+      assert.equal(await page.locator('#daily-summary .completion-track i').evaluate(node=>node.style.width),`${overviewRate??0}%`);
+      assert.match(await page.locator('#daily-summary .daily-progress').textContent(),/签到成功率/);
       assert.equal(await page.locator('#status-chart .legend-label').filter({hasText:'已签到'}).count(),1);
       assert.doesNotMatch(await page.locator('#status-chart').textContent(),/今日已完成/);
       const mobile = viewport.width <= 700;

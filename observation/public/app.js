@@ -411,9 +411,9 @@ function renderDailySummary(data) {
   if(m.unverifiedUnavailable)facts.append(el('span','summary-fact pending',`${m.unverifiedUnavailable} 未开放待核验`));
   if(m.cancelled)facts.append(el('span','summary-fact neutral',`${m.cancelled} 已取消`));
   const progress = el('div', 'daily-progress');
-  append(progress, el('strong', null, m.executionRate === null ? '—' : `${m.executionRate}%`), el('span', null, previousDay ? '最近业务日执行成功率' : '执行成功率'));
-  progress.title='执行成功项 / 总账号任务数；权威核验数单独列示，未开放项不算成功。';
-  const bar = el('div', 'completion-track'); const fill = el('i'); fill.style.width = `${Math.min(100, m.executionRate ?? 0)}%`; bar.append(fill); progress.append(bar);
+  append(progress, el('strong', null, m.rate === null ? '—' : `${m.rate}%`), el('span', null, previousDay ? '最近业务日签到成功率' : '签到成功率'));
+  progress.title=`已确认签到 ${m.verifiedSuccess} 项 / 需签到 ${m.eligible} 项；分母排除已确认未开放和已取消任务，待补证结果不计成功。`;
+  const bar = el('div', 'completion-track'); const fill = el('i'); fill.style.width = `${Math.min(100, m.rate ?? 0)}%`; bar.append(fill); progress.append(bar);
   const tasksButton = el('button', 'button primary summary-action', m.pending ? '查看待处理' : '查看全部任务');
   tasksButton.type = 'button';
   tasksButton.addEventListener('click', () => openTasks({ status: m.pending ? 'pending' : '' }));
