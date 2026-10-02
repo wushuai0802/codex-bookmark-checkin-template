@@ -98,6 +98,13 @@ export function classifyPtPassivePage({origin,url,policy,bodyText,controls=[],au
 
 export async function readPtPassivePage(page,policy,{origin,now=new Date(),httpStatus=200}={}){
   const bodyText=await page.locator(policy.selector).innerText({timeout:5000}).catch(()=> '');
+  // A reviewed server login redirect is rendered at the passive URL. Body
+  // text may explain login/maintenance, never supply daily completion proof.
+  if(!bodyText&&policy.dailyHeader&&httpStatus===200&&page.url()===policy.url){
+    const diagnostic=classifyPageText({url:page.url(),bodyText:await page.locator('body').innerText({timeout:5000}).catch(()=> '')});
+    if(diagnostic.status==='login_required'||diagnostic.retryCause==='upstream_unavailable')
+      return {...diagnostic,submissionAttempted:false};
+  }
   let controls=[],authenticated=false;
   if(policy.dailyHeader){
     controls=await page.locator(policy.selector+' a').evaluateAll(links=>links.map(a=>({text:a.textContent.trim(),path:new URL(a.href).pathname}))).catch(()=>[]);
@@ -111,7 +118,7 @@ export async function installPtReadFirewall(context,policy){
   // JS and service workers are disabled at context creation. Allow a single
   // approved main document GET and its reviewed login redirect. Block scripts,
   // POST, XHR, popups and all other redirects, including attendance actions.
-  let consumed=false,loginConsumed=false;
+  let consumed=false;
   await context.route('**/*',async route=>{
     const request=route.request();
     let allowed=false;
@@ -119,12 +126,21 @@ export async function installPtReadFirewall(context,policy){
       const mainDocument=request.method()==='GET'&&request.resourceType()==='document'&&request.isNavigationRequest()&&
         request.frame()===request.frame().page().mainFrame();
       if(mainDocument&&!consumed&&request.url()===policy.url){consumed=true;allowed=true;}
-      else if(mainDocument&&consumed&&!loginConsumed&&policy.loginPath==='/login.php'&&
-        request.url()===new URL(policy.loginPath,policy.url).href&&request.redirectedFrom()?.url()===policy.url){
-        loginConsumed=true;allowed=true;
-      }
     }catch{/* deny unbound requests */}
     if(!allowed)return route.abort('blockedbyclient');
-    return route.continue();
+    // Browser routing may not intercept requests after a server redirect.
+    // Fetch each document without automatic redirects before rendering it.
+    const deadline=Date.now()+15000;
+    try{
+      let response=await route.fetch({maxRedirects:0,timeout:15000});
+      if(response.status()>=300&&response.status()<400){
+        const location=response.headers().location;
+        const loginUrl=policy.loginPath==='/login.php'?new URL(policy.loginPath,policy.url).href:null;
+        if(!location||!loginUrl||new URL(location,policy.url).href!==loginUrl)return route.abort('blockedbyclient');
+        response=await route.fetch({url:loginUrl,maxRedirects:0,timeout:Math.max(1,deadline-Date.now())});
+        if(response.status()!==200)return route.abort('blockedbyclient');
+      }
+      return route.fulfill({response});
+    }catch{return route.abort('failed').catch(()=>{});}
   });
 }

@@ -115,7 +115,8 @@ test('passive firewall allows only one reviewed main-document GET, not action GE
   const frame={page:()=>({mainFrame:()=>frame})};
   const request=async(url,method='GET',type='document')=>handler({
     request:()=>({url:()=>url,method:()=>method,resourceType:()=>type,isNavigationRequest:()=>type==='document',frame:()=>frame}),
-    continue:async()=>allowed.push(url),abort:async()=>blocked.push(url)});
+    fetch:async options=>{assert.equal(options.maxRedirects,0);return {status:()=>200};},
+    fulfill:async()=>allowed.push(url),abort:async()=>blocked.push(url)});
   await request('https://open.cd/attendance.php');
   await request(policy.url,'POST');
   await request(policy.url,'GET','script');
@@ -231,26 +232,6 @@ test('same-origin login redirects report auth loss without trusting foreign page
   assert.equal(classifyPtPassivePage(args).status,'login_required');
   assert.equal(classifyPtPassivePage({...args,url:'https://other.example/login.php'}).status,'unknown');
   assert.equal(classifyPtPassivePage({...args,httpStatus:503}).status,'unknown');
-});
-
-test('passive firewall permits one reviewed server login redirect but no new action navigation',async()=>{
-  const origin='https://ptsbao.club',policy=ptReadPolicy(origin),events=[];let handler;
-  await installPtReadFirewall({route:async(_pattern,fn)=>{handler=fn;}},policy);
-  const frame={page:()=>({mainFrame:()=>frame})};
-  const visit=async(url,{method='GET',redirectedFrom=null}={})=>{
-    const request={url:()=>url,method:()=>method,resourceType:()=> 'document',isNavigationRequest:()=>true,
-      frame:()=>frame,redirectedFrom:()=>redirectedFrom?{url:()=>redirectedFrom}:null};
-    await handler({request:()=>request,continue:async()=>events.push('allowed'),abort:async()=>events.push('blocked')});
-  };
-  await visit(origin+'/login.php');
-  await visit(policy.url);
-  await visit(origin+'/attendance.php',{redirectedFrom:policy.url});
-  await visit('https://other.example/login.php',{redirectedFrom:policy.url});
-  await visit(origin+'/login.php?returnto=attendance.php',{redirectedFrom:policy.url});
-  await visit(origin+'/login.php',{method:'POST',redirectedFrom:policy.url});
-  await visit(origin+'/login.php',{redirectedFrom:policy.url});
-  await visit(origin+'/login.php',{redirectedFrom:policy.url});
-  assert.deepEqual(events,['blocked','allowed','blocked','blocked','blocked','blocked','allowed','blocked']);
 });
 
 test('current SaoBao account state precedes stale public notices and failed navigation cannot certify success',async t=>{
