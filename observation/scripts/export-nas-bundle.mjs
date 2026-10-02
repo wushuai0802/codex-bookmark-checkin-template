@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {execFileSync} from 'node:child_process';
+import {releaseInfo} from '../src/release-info.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -34,8 +35,10 @@ fs.rmSync(output, { recursive: true, force: true });
 fs.mkdirSync(output, { recursive: true });
 for (const name of ['Dockerfile', 'compose.nas.yaml', 'compose.worker.yaml', '.dockerignore', 'package.json', 'package-lock.json']) copyRequired(path.join(projectRoot, name), path.join(output, name));
 for (const directory of ['src', 'public']) copyRequired(path.join(projectRoot, directory), path.join(output, directory));
-let revision=null;try{revision=execFileSync('git',['rev-parse','HEAD'],{cwd:projectRoot,encoding:'utf8'}).trim();}catch{}
-fs.writeFileSync(path.join(output,'release.json'),JSON.stringify({version:JSON.parse(fs.readFileSync(path.join(projectRoot,'package.json'),'utf8')).version,revision,deployedAt:new Date().toISOString()}));
+const release=releaseInfo();
+let revision=release.revision;
+if(!revision)try{revision=execFileSync('git',['rev-parse','HEAD'],{cwd:projectRoot,encoding:'utf8'}).trim();}catch{}
+fs.writeFileSync(path.join(output,'release.json'),JSON.stringify({version:release.version,revision,deployedAt:new Date().toISOString()}));
 fs.mkdirSync(path.join(output, 'nas-data'), { recursive: true });
 fs.writeFileSync(path.join(output, 'nas-data', '.gitkeep'), '', 'utf8');
 fs.mkdirSync(path.join(output, 'secrets'), { recursive: true });
