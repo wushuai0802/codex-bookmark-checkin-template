@@ -59,6 +59,8 @@ export function ptReadPolicy(origin,config={}){
   if(url.protocol!=='https:'||url.origin!==origin||url.username||url.password||url.hash||
      /attendance|check[-_]?in|sign[_-]?(?:in|out)|logout|delete|submit|confirm|claim/i.test(decodeURIComponent(url.pathname))||
      [...url.searchParams].some(([key,value])=>!['id','page'].includes(key)||!/^\d{1,12}$/.test(value)))throw unsafe();
+  if(policy.hddolbyHeader===true&&(origin!=='https://www.hddolby.com'||url.href!==origin+'/log.php'||
+    policy.selector!=='#info_block'||policy.nativeMainChrome||policy.selfProfileHeader))throw unsafe();
   ptReadProxy({ptPassiveReadOnly:true,ptReadProxyServer:policy.proxyServer});
   return {...policy,url:url.href};
 }
@@ -90,7 +92,7 @@ export function classifyPtPassivePage({origin,url,policy,bodyText,controls=[],au
   if(policy.dailyHeader){
     if(!authenticated)return {status:'unknown',failureCode:'authoritative_status_unavailable'};
     const actions=controls.filter(c=>c.path===policy.actionPath).map(c=>String(c.text).trim().replace(/^[\[【]|[\]】]$/g,''));
-    const unsigned=actions.includes(policy.unsignedText);
+    const unsigned=actions.some(text=>[policy.unsignedText,...(policy.unsignedTexts??[])].includes(text));
     // On these reviewed headers the action itself switches from "签到得…"
     // to "签到已得…" after success. A counter elsewhere is not this control.
     const signed=actions.some(text=>/^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$/.test(text)||

@@ -7,6 +7,7 @@ import {ptExecutionBinding,ptReadPolicy,installPtReadFirewall,readPtPassivePage,
 import {ptDiagnostic} from './pt-diagnostics.mjs';
 import {nativePtReadBinding,inspectNativePtHeader} from './native-pt-read.mjs';
 import {readOurbitsProfile} from './pt-profile-read.mjs';
+import {readHddolbyHeader} from './hddolby-readonly.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
@@ -53,6 +54,7 @@ export function publicSupplementResult(origin,result,now=new Date()){
   const diagnostic=ptDiagnostic(result);
   return {origin,status,observedAt:now.toISOString(),
     ...(!authoritative?{failureCode:diagnostic.failureCode,...(diagnostic.siteCondition?{siteCondition:diagnostic.siteCondition}:{})}:{}),
+    ...(!authoritative&&diagnostic.underlyingFailureCode?{underlyingFailureCode:diagnostic.underlyingFailureCode}:{}),
     ...(diagnostic.retryCause?{retryCause:diagnostic.retryCause,
       ...(Number.isFinite(Date.parse(result.nextEligibleAt))?{nextEligibleAt:new Date(result.nextEligibleAt).toISOString()}:{} )}:{}),
     operationMode:result?.operationMode??'unknown',readSafety:result?.readSafety??'unknown',
@@ -62,7 +64,7 @@ export function publicSupplementResult(origin,result,now=new Date()){
       ...(Number.isFinite(confirmedAt)?{confirmedAt:new Date(confirmedAt).toISOString()}:{}),
       ...(result?.evidence?.businessDate?{businessDate:result.evidence.businessDate}:{}),
       ...(result?.evidence?.statusSignal?{statusSignal:result.evidence.statusSignal}:{}),
-      ...(['/index.php','/','/userdetails.php'].includes(result?.evidence?.pagePath)?{pagePath:result.evidence.pagePath}:{}),
+      ...(['/index.php','/','/userdetails.php','/log.php'].includes(result?.evidence?.pagePath)?{pagePath:result.evidence.pagePath}:{}),
       evidenceScope:'site_account_day',summary:authoritative?(claimed==='not_signed'?'已登录首页确认今日尚未签到':'执行层确认今日签到'):
       terminal.has(claimed)&&result?.evidence?.statusSignal==='cumulative_reward'?'检测到签到已得，疑似已签到；尚缺今日回执':
       terminal.has(claimed)?'执行层返回完成状态，仍需权威证据复核':
@@ -135,6 +137,11 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     }
     context=await launch({...safeConfig,ptPassiveReadOnly:readOnly||verifyBeforeSubmit});
     await validateScope();
+    if(readOnly&&policy.hddolbyHeader===true){
+      const result=await readHddolbyHeader(context,{origin:target.origin,now:clock()});
+      if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during account header readback');
+      return publicSupplementResult(target.origin,{...metadata,...result},clock());
+    }
     if(readOnly&&policy.selfProfileHeader===true){
       const result=await readOurbitsProfile(context,{origin:target.origin,now:clock()});
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during profile readback');

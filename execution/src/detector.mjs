@@ -77,7 +77,9 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
       reason: "站点公告维护中，今日暂停自动提交，次日再核验" };
   }
   if (/(connection timed out|error code\s*52[0-9]|host error|origin (?:is )?unreachable|bad gateway|service unavailable|scheduled maintenance|服务暂时不可用|服務暫時不可用|(?:正在|系统|系統).{0,8}(?:维护|維護)|(?:维护|維護).{0,8}(?:进行中|進行中)|号池用尽)/i.test(text)) {
-    return { status: "deferred", retryCause: "upstream_unavailable", reason: "站点服务器暂时不可用，已安排自动重试" };
+    return { status: "deferred", retryCause: "upstream_unavailable",
+      ...(/^https:\/\//i.test(String(url))?{failureCode:'site_server_error'}:{}),
+      reason: "站点服务器暂时不可用，已安排自动重试" };
   }
 
   if ((/(^|\s)(登录|登入)(\s|$)/.test(text) && /注册/.test(text)) || (/(^|\s)log[ -]?in(\s|$)/i.test(text) && /sign[ -]?up/i.test(text))) {

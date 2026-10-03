@@ -98,7 +98,9 @@ export const ptFailureMessages = Object.freeze({
   "account_mismatch": "页面账号与执行绑定不一致",
   "harvest_waiting": "Harvest 当日任务尚未完成，暂缓补签",
   "network_error": "页面访问失败，尚未取得签到状态",
-  "authoritative_status_unavailable": "页面尚无可确认的今日签到证据"
+  "authoritative_status_unavailable": "页面尚无可确认的今日签到证据",
+  "accessibility_unavailable": "浏览器未提供可读网页正文，等待任务窗口重新核验",
+  "site_server_error": "站点服务端返回故障，等待恢复后核验"
 });
 export const ptRetryCauses = Object.freeze([
   "upstream_unavailable",
@@ -111,6 +113,10 @@ export const ptReadPolicies = Object.freeze({
     "selector": "#info_block",
     "actionPath": "/attendance.php",
     "unsignedText": "签到",
+    "unsignedTexts": [
+      "签到",
+      "签到得魔力"
+    ],
     "signedRewardControl": true,
     "dailyHeader": true
   },
@@ -152,10 +158,18 @@ export const ptReadPolicies = Object.freeze({
     "selector": "body",
     "openCdHeader": true
   },
+  "https://www.hddolby.com": {
+    "selector": "#info_block",
+    "hddolbyHeader": true
+  },
   "https://ptsbao.club": {
     "selector": "#info_block",
     "actionPath": "/attendance.php",
     "unsignedText": "签到",
+    "unsignedTexts": [
+      "签到",
+      "签到得魔力"
+    ],
     "signedRewardControl": true,
     "dailyHeader": true,
     "loginPath": "/login.php",

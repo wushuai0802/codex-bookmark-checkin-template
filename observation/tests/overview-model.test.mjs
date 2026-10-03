@@ -16,6 +16,29 @@ test('both successful outcomes share one chart category for live and historical 
   assert.equal(JSON.stringify(data),original);
 });
 
+test('confirmed site faults leave the success denominator while local failures and unknown outcomes remain',()=>{
+  const tasks=[{observedStatus:'signed'},
+    {observedStatus:'deferred',condition:'upstream_unavailable',failureCode:'tls_certificate_invalid'},
+    {observedStatus:'deferred',condition:'site_maintenance'},
+    {observedStatus:'deferred',condition:'rate_limit'},
+    {observedStatus:'deferred',condition:'upstream_unavailable',failureCode:'network_error'},
+    {observedStatus:'needs_attention',condition:'submission_outcome_unknown'},
+    {observedStatus:'login_required'},
+    {observedStatus:'deferred',condition:'harvest_waiting'}];
+  const data={counts:{executionUnits:tasks.length},tasks,evidenceQuality:{verifiedSuccess:1}};
+  const original=JSON.stringify(data),result=overviewMetrics(data);
+  assert.equal(result.excludedSiteIssues,3);assert.equal(result.eligible,5);assert.equal(result.rate,20);
+  assert.equal(result.pending,7);assert.equal(result.allResolved,false);
+  assert.equal(JSON.stringify(data),original);
+  const sitesOnly={generatedAt:new Date().toISOString(),counts:{executionUnits:2},tasks:tasks.slice(0,2),evidenceQuality:{verifiedSuccess:1}};
+  assert.equal(overviewMetrics(sitesOnly).rate,100);
+  assert.equal(overviewMetrics(sitesOnly).allResolved,false);
+  assert.equal(dailySummaryTitle(overviewMetrics(sitesOnly)),'项目签到已完成 · 1 个站点待恢复');
+  assert.equal(overviewMetrics({...sitesOnly,tasks:tasks.slice(0,1)}).excludedSiteIssues,0);
+  const noExecutable={counts:{executionUnits:1},tasks:tasks.slice(1,2)};
+  assert.equal(overviewMetrics(noExecutable).rate,null);
+});
+
 test('overview separates maintenance, active uncertainty and deferred work without inflating completion',()=>{
   const data={counts:{executionUnits:5},status:{signed:1,needs_attention:2,deferred:1,not_available:1},
     evidenceQuality:{verifiedSuccess:1,verifiedUnavailable:1},tasks:[

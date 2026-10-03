@@ -21,6 +21,7 @@ import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mj
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
 import {ptReadPolicy,readPtPassivePage,ptReadProxy} from './pt-read-policy.mjs';
 import {initialPtObservation} from './pt-initial-observation.mjs';
+import {readHddolbyHeader,hddolbyDailyProof} from './hddolby-readonly.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -979,7 +980,7 @@ export async function tryNewApiCheckin(page) {
       return { status: "login_required", reason: "签到接口拒绝当前登录会话", submissionAttempted: false };
     }
     if (statusResponse.status === 429) return { status: "deferred", retryCause: "rate_limit", reason: "签到接口请求受限" };
-    if (statusResponse.status >= 500) return { status: "deferred", retryCause: "upstream_unavailable", reason: "签到接口服务暂时不可用" };
+    if (statusResponse.status >= 500) return { status: "deferred", retryCause: "upstream_unavailable", failureCode:'site_server_error',submissionAttempted:false,reason: "签到接口服务暂时不可用" };
     if (statusResponse.status >= 400) return null;
     const message = String(statusBody?.message || "");
     if (!statusBody?.success) {
@@ -1115,23 +1116,14 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
     failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false };
 }
 
-async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config) {
+export async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config,read=readHddolbyHeader) {
   if (expectedOrigin !== "https://www.hddolby.com") return null;
   const current = new URL(page.url());
-  if (current.pathname !== "/take2fa.php") return null;
+  if (current.origin !== expectedOrigin || current.pathname !== "/take2fa.php") return null;
 
-  await page.goto(`${expectedOrigin}/index.php`, {
-    waitUntil: "domcontentloaded",
-    timeout: config.navigationTimeoutMs,
-  });
-  await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
-  const state = await snapshotState(page);
-  if (["signed", "already_signed"].includes(state.status)) {
-    return {
-      ...state,
-      reason: "HDDolby 首页确认今日签到奖励已到账",
-    };
-  }
+  const state=await read(page.context(),{origin:expectedOrigin});
+  if(hddolbyDailyProof(state))
+    return {...state,reason:'HDDolby 当前账户栏确认今日签到已完成'};
   return {
     status: "needs_attention",
     reason: "HDDolby 要求完成两步验证，且首页未显示今日签到",
@@ -1419,14 +1411,13 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
   }
   let state = await waitForManagedChallenge(page, config);
   state = await classifyManualAttention(page, state, activeOrigin, config);
+  const hddolbyResult = await tryHddolbyPostRedirectVerification(page, activeOrigin, config);
+  if (hddolbyResult) return { ...hddolbyResult, url: safeLogUrl(page.url()) };
   if (state.status !== "ready") return { ...state, url: safeLogUrl(page.url()) };
   await dismissBlockingModal(page, config);
 
   const directLoginCompletion = configuredLoginCompletion(activeOrigin, config);
   if (directLoginCompletion) return { ...directLoginCompletion, url: safeLogUrl(page.url()) };
-
-  const hddolbyResult = await tryHddolbyPostRedirectVerification(page, activeOrigin, config);
-  if (hddolbyResult) return { ...hddolbyResult, url: safeLogUrl(page.url()) };
 
   const activeBenefit = await detectActiveQuotaBenefit(page, activeOrigin, config);
   if (activeBenefit) return { ...activeBenefit, url: safeLogUrl(page.url()) };

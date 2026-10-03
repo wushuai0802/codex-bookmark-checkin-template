@@ -35,6 +35,7 @@ test("native unsigned evidence requires the authenticated exact SaoBao daily con
   };
   const cases = [
     { snapshot: base, expected: true },
+    { snapshot: { ...base, unsignedControl: '签到得魔力' }, expected: true },
     ...[
       { authenticated: false }, { sameOrigin: false }, { siteBodyLoaded: false },
       { waf: true }, { securityVerification: true }, { loginRoute: true },
@@ -86,12 +87,14 @@ namespace System.Windows.Automation {
     public ControlType(string name) { ProgrammaticName="ControlType."+name; }
     public static ControlType Edit=new ControlType("Edit");
   }
+  public enum TreeScope { Descendants }
+  public class Condition { public static Condition TrueCondition=new Condition(); }
 }
 '@
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('${quote(scripts + "Invoke-MainChromeCheckinAccessibility.ps1")}',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'Native reader syntax error'}
-foreach($functionName in @('Read-PageSnapshot','Test-EquivalentOrigin')){
+foreach($functionName in @('Get-WindowPageElements','Read-PageSnapshot','Test-EquivalentOrigin')){
   $definition=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $functionName},$true)|Select-Object -First 1
   . ([scriptblock]::Create($definition.Extent.Text))
 }
@@ -106,11 +109,16 @@ $rows=@(foreach($scenario in @('unique','toolbar_only','duplicate','signed_confl
     (New-FixtureControl '退出' 'Hyperlink'),(New-FixtureControl '控制面板' 'Hyperlink'),
     (New-FixtureControl ('site fixture content ' * 10) 'Text'),(New-FixtureControl '签到' 'Button')
   )
-  if($scenario -ne 'browser_chrome_only'){$script:elements+=(New-FixtureControl '网页内容' 'Document')}
   if($scenario -ne 'toolbar_only'){$script:elements+=(New-FixtureControl '[签到]' 'Hyperlink')}
   if($scenario -eq 'duplicate'){$script:elements+=(New-FixtureControl '签到' 'Hyperlink')}
   if($scenario -in @('signed_conflict','multiple_signed')){$script:elements+=(New-FixtureControl '签到已得10, 补签卡: 0' 'Hyperlink')}
   if($scenario -eq 'multiple_signed'){$script:elements+=(New-FixtureControl '签到已得20, 补签卡: 0' 'Hyperlink')}
+  $script:pageElements=@($script:elements)
+  if($scenario -ne 'browser_chrome_only'){
+    $document=New-FixtureControl '网页内容' 'Document'
+    $document | Add-Member ScriptMethod FindAll {param($scope,$condition) $script:pageElements}
+    $script:elements=@((New-FixtureControl '签到已得999, 补签卡: 0' 'Hyperlink'),$document)+$script:pageElements
+  }
   $snapshot=Read-PageSnapshot $null
   $evidence=Get-ConfirmedNativeUnsignedEvidence $snapshot $targetUri.AbsoluteUri
   [pscustomobject]@{scenario=$scenario;unsignedCount=$snapshot.unsignedControlCount;signedCount=$snapshot.signedControlCount;authoritative=($null -ne $evidence);loaded=$snapshot.siteBodyLoaded;authenticated=$snapshot.authenticated;pageContentAvailable=$snapshot.pageContentAvailable}

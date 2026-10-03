@@ -35,6 +35,8 @@ test('native evidence is created only from same-site daily or action-confirmed p
     {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',bodyText:'首页',authenticated:true,successControl:'已签到'},url:'https://ourbits.club/index.php',expected:true,signal:'nexus_daily_header_signed'},
     {snapshot:{...base,currentUrl:'https://ptsbao.club/index.php',bodyText:'首页',authenticated:true,successControl:'[签到已得10, 补签卡: 0]'},url:'https://ptsbao.club/index.php',expected:true,signal:'nexus_daily_header_signed'},
     {snapshot:{...base,currentUrl:'https://ptsbao.club/index.php',bodyText:'首页',authenticated:false,successControl:'[签到已得10, 补签卡: 0]'},url:'https://ptsbao.club/index.php',expected:false},
+    {snapshot:{...base,currentUrl:'https://ptsbao.club/index.php',bodyText:'首页',authenticated:true,successControl:'[签到已得10, 补签卡: 0]',signedControlCount:1,unsignedControlCount:1},url:'https://ptsbao.club/index.php',expected:false},
+    {snapshot:{...base,currentUrl:'https://ptsbao.club/index.php',bodyText:'首页',authenticated:true,successControl:'[签到已得10, 补签卡: 0]',signedControlCount:2,unsignedControlCount:0},url:'https://ptsbao.club/index.php',expected:false},
     {snapshot:{...base,currentUrl:'https://ptsbao.club/index.php',bodyText:'首页',authenticated:true,successControl:'历史签到已得10'},url:'https://ptsbao.club/index.php',expected:false},
     {snapshot:{...base,currentUrl:'https://piggo.me/index.php',bodyText:'首页',authenticated:true,successControl:'签到已得25'},url:'https://piggo.me/index.php',expected:false},
     {snapshot:{...base,currentUrl:'https://ourbits.club/index.php',authenticated:false,successControl:'已签到'},url:'https://ourbits.club/index.php',expected:false},

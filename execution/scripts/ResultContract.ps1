@@ -63,6 +63,12 @@ function Test-NativeDailyControl([string]$Origin, [string]$Control) {
         $text -match '^(?:签到已得|簽到已得)[0-9,.]+(?:,\s*补签卡:\s*\d+)?$'
 }
 
+function Test-NativeUnsignedControl([string]$Origin, [string]$Control) {
+    $text = ($Control -replace '^[\[【]|[\]】]$', '').Trim()
+    return $CheckinNativePtUnsignedLabels.ContainsKey($Origin) -and
+        $text -cin $CheckinNativePtUnsignedLabels[$Origin]
+}
+
 function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$Clicked = $false, [datetimeoffset]$Now = [datetimeoffset]::UtcNow, [bool]$FormalVisit = $false) {
     if ($null -eq $Snapshot -or $Snapshot.sameOrigin -ne $true -or
         $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute) { return $null }
@@ -77,6 +83,8 @@ function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$C
     $reviewedHeader = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($headerOrigin -replace '^https://www\.', 'https://') }).Count -gt 0
     $header = $reviewedHeader -and $Snapshot.authenticated -eq $true -and
         $actual.AbsolutePath -in @('/', '/index.php') -and -not $actual.Query -and
+        ($null -eq $Snapshot.signedControlCount -or $Snapshot.signedControlCount -eq 1) -and
+        ($null -eq $Snapshot.unsignedControlCount -or $Snapshot.unsignedControlCount -eq 0) -and
         (Test-NativeDailyControl $headerOrigin ([string]$Snapshot.successControl))
     if (-not $header -and $actual.AbsolutePath -notmatch '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$') { return $null }
     $body = if ($Snapshot.successText) { [string]$Snapshot.successText } else { [string]$Snapshot.bodyText }
@@ -108,7 +116,7 @@ function Get-ConfirmedNativeUnsignedEvidence($Snapshot, [string]$TargetUrl, [dat
         $Snapshot.siteBodyLoaded -ne $true -or $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute -or
         $Snapshot.success -ne $false -or $Snapshot.successText -or $Snapshot.successControl -or
         $Snapshot.signedControlCount -ne 0 -or $Snapshot.unsignedControlCount -ne 1 -or
-        [string]$Snapshot.unsignedControl -cne '签到') { return $null }
+        -not (Test-NativeUnsignedControl 'https://ptsbao.club' ([string]$Snapshot.unsignedControl))) { return $null }
     try {
         $expected = [uri]$TargetUrl
         $actual = [uri][string]$Snapshot.currentUrl
