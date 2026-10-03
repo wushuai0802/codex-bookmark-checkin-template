@@ -19,7 +19,7 @@ import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
 import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
-import {ptReadPolicy,readPtPassivePage} from './pt-read-policy.mjs';
+import {ptReadPolicy,readPtPassivePage,ptReadProxy} from './pt-read-policy.mjs';
 import {initialPtObservation} from './pt-initial-observation.mjs';
 
 const require = createRequire(import.meta.url);
@@ -1673,6 +1673,7 @@ export async function launchAutomationContext(config) {
     timezoneId: "Asia/Shanghai",
     viewport: config.headless ? { width: 1365, height: 900 } : null,
     acceptDownloads: false,
+    proxy: ptReadProxy(config),
     serviceWorkers: config.ptPassiveReadOnly === true ? "block" : "allow",
     javaScriptEnabled: config.ptPassiveReadOnly !== true,
     args: [

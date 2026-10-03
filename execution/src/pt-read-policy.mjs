@@ -33,6 +33,15 @@ export function ptExecutionBinding(config,root,target){
 
 // OpenCD index supplies the passive server-rendered header. CAPTCHA submission
 // stays in the formal runner. Bookmark folder names never grant capabilities.
+export function ptReadProxy(config = {}) {
+  if(config.ptPassiveReadOnly!==true||!config.ptReadProxyServer)return undefined;
+  const proxy=new URL(config.ptReadProxyServer);
+  if(proxy.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(proxy.hostname)||!proxy.port||
+    proxy.username||proxy.password||proxy.pathname!=='/'||proxy.search||proxy.hash)
+    throw Error('PT read proxy must be a credential-free local HTTP proxy');
+  return {server:proxy.origin};
+}
+
 export function ptReadPolicy(origin,config={}){
   const nativeOrigin=value=>new URL(value).origin.replace(/^https:\/\/www\./,'https://');
   // Registration is validated against the exact current bookmark catalog by
@@ -50,6 +59,7 @@ export function ptReadPolicy(origin,config={}){
   if(url.protocol!=='https:'||url.origin!==origin||url.username||url.password||url.hash||
      /attendance|check[-_]?in|sign[_-]?(?:in|out)|logout|delete|submit|confirm|claim/i.test(decodeURIComponent(url.pathname))||
      [...url.searchParams].some(([key,value])=>!['id','page'].includes(key)||!/^\d{1,12}$/.test(value)))throw unsafe();
+  ptReadProxy({ptPassiveReadOnly:true,ptReadProxyServer:policy.proxyServer});
   return {...policy,url:url.href};
 }
 
