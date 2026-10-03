@@ -80,7 +80,7 @@ ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
 test("native snapshot counts actual links and rejects duplicate or contradictory daily controls", async () => {
   const command = preamble + `
 Add-Type @'
-namespace System.Windows.Automation {
+namespace CheckinFixture.Automation {
   public class AutomationElement { }
   public class ControlType {
     public string ProgrammaticName;
@@ -96,12 +96,12 @@ $ast=[Management.Automation.Language.Parser]::ParseFile('${quote(scripts + "Invo
 if($errors.Count){throw 'Native reader syntax error'}
 foreach($functionName in @('Get-WindowPageElements','Read-PageSnapshot','Test-EquivalentOrigin')){
   $definition=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $functionName},$true)|Select-Object -First 1
-  . ([scriptblock]::Create($definition.Extent.Text))
+  . ([scriptblock]::Create($definition.Extent.Text.Replace('[System.Windows.Automation.', '[CheckinFixture.Automation.')))
 }
 function Get-WindowElements {$script:elements}
 function Get-CurrentUri {[uri]'https://ptsbao.club/index.php'}
 function New-FixtureControl([string]$Name,[string]$Type){
-  [pscustomobject]@{Current=[pscustomobject]@{Name=$Name;ControlType=[System.Windows.Automation.ControlType]::new($Type)}}
+  [pscustomobject]@{Current=[pscustomobject]@{Name=$Name;ControlType=[CheckinFixture.Automation.ControlType]::new($Type)}}
 }
 $originValue='https://ptsbao.club';$targetUri=[uri]'https://ptsbao.club/index.php'
 $rows=@(foreach($scenario in @('unique','toolbar_only','duplicate','signed_conflict','multiple_signed','browser_chrome_only')){
@@ -144,4 +144,20 @@ test("unsigned readback is reachable only in the explicit read-only branch", asy
   assert.match(source, /if \(\$ReadOnly\) \{\s+\$unsignedEvidence = Get-ConfirmedNativeUnsignedEvidence \$last \$Url/);
   assert.match(source, /status = 'not_signed'[\s\S]{0,180}submissionAttempted = \$false/);
   assert.match(source, /\$ReadOnly -and \$result.status -eq 'not_signed'/);
+});
+
+test('an authenticated attendance Error stops another entry click without becoming success or a diagnosed server fault',async()=>{
+  const base={currentUrl:'https://ptsbao.club/attendance.php',sameOrigin:true,authenticated:true,pageContentAvailable:true,
+    bodyText:'account header [签到得魔力] Error 这里',success:false,waf:false,securityVerification:false,loginRoute:false};
+  const cases=[{snapshot:base,expected:true},...[{authenticated:false},{sameOrigin:false},{pageContentAvailable:false},
+    {waf:true},{securityVerification:true},{loginRoute:true},{success:true},{currentUrl:'https://ptsbao.club/index.php'},
+    {currentUrl:'https://other.example/attendance.php'},{bodyText:'普通站点页面'}]
+    .map(change=>({snapshot:{...base,...change},expected:false}))];
+  const command=preamble+`$cases='${quote(JSON.stringify(cases))}' | ConvertFrom-Json
+$rows=@(foreach($case in $cases){Test-NativeAttendanceError $case.snapshot 'https://ptsbao.club'})
+ConvertTo-Json -InputObject $rows -Compress`;
+  for(const shell of shells)assert.deepEqual(await runFixture(shell,command),cases.map(value=>value.expected));
+  const source=await fs.readFile(scripts+'Invoke-MainChromeCheckinAccessibility.ps1','utf8');
+  assert.ok(source.indexOf('Test-NativeAttendanceError $last')<source.indexOf('$clicked = Invoke-UniqueCheckinButton'));
+  assert.match(source,/diagnosticStage = 'attendance_error_page'/);
 });

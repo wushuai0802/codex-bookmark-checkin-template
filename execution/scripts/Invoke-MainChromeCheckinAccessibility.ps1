@@ -215,7 +215,9 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
         try {
             $name = ([string]$element.Current.Name).Trim()
             $type = [string]$element.Current.ControlType.ProgrammaticName
-            if ($type -in @('ControlType.Text', 'ControlType.Hyperlink', 'ControlType.Button', 'ControlType.Document') -and $name) {
+            $pageTextType = $type -in @('ControlType.Text', 'ControlType.Hyperlink', 'ControlType.Button', 'ControlType.Document') -or
+                ($originValue -eq 'https://ptsbao.club' -and $type -in @('ControlType.DataItem', 'ControlType.Custom', 'ControlType.ListItem'))
+            if ($pageTextType -and $name) {
                 $names += $name
             }
             if ($type -in @('ControlType.Hyperlink', 'ControlType.Button') -and $name) { $controlNames += $name }
@@ -247,6 +249,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
         currentUrl = if ($currentUri) { $currentUri.AbsoluteUri } else { '' }
         pageContentAvailable = [bool]$pageContentAvailable
         bodyText = $bodyText.Substring(0, [Math]::Min(2000, $bodyText.Length))
+        checkinContext = @([regex]::Matches($bodyText, '.{0,20}(?:签到|簽到|心情|验证码).{0,100}') | Select-Object -First 8 | ForEach-Object { $_.Value })
         successText = Get-NativeSuccessText $bodyText
         successControl = if ($signedControls.Count -eq 1) { $signedControls[0] } else { '' }
         signedControlCount = $signedControls.Count
@@ -471,6 +474,17 @@ try {
             if ($last.currentUrl) {
                 try { $currentUri = [uri][string]$last.currentUrl } catch { }
             }
+            if (-not $ReadOnly -and (Test-NativeAttendanceError $last $originValue)) {
+                $result = [pscustomobject]@{
+                    status = 'needs_attention'
+                    failureCode = 'authoritative_status_unavailable'
+                    diagnosticStage = 'attendance_error_page'
+                    reason = '签到页返回 Error，停止再次点击入口，先核对站点提示'
+                    clicked = $clicked
+                    inspection = $last
+                }
+                break
+            }
             if (-not $ReadOnly -and $oauthProvider -eq 'LinuxDO' -and $null -ne $currentUri -and
                 $currentUri.Host -eq 'connect.linux.do') {
                 if (-not $oauthAuthorizeClicked) {
@@ -514,6 +528,15 @@ try {
                 break
             }
             if (-not $ReadOnly -and -not $last.success -and -not $script:checkinClickAttempted -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
+                if ($originValue -eq 'https://ptsbao.club' -and -not $readWindowRestored) {
+                    # Chrome may expose a cached document for a minimized
+                    # window while its page action remains suspended. Restore
+                    # only our task window without activation before dispatch.
+                    [void][CheckinWindowNative]::ShowWindow($taskHandle, 4)
+                    $readWindowRestored = $true
+                    Start-Sleep -Milliseconds 750
+                    continue
+                }
                 $clicked = Invoke-UniqueCheckinButton $taskWindow
                 if ($clicked) { Start-Sleep -Seconds 2; continue }
             }

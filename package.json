@@ -1,7 +1,7 @@
 {
   "name": "checkin-fabric",
   "private": true,
-  "version": "1.1.19",
+  "version": "1.1.20",
   "scripts": {
     "test": "npm --prefix execution test && npm --prefix observation test",
     "lint": "node tools/generate-contracts.mjs --check && npm --prefix observation run lint:all && npm --prefix observation run check:structure",

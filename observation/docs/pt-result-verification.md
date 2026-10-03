@@ -4,13 +4,17 @@ The unified executor keeps a submitted action distinct from a confirmed daily re
 
 ## BurnBao
 
-Use the registered site's HTTPS `/index.php` in its existing main Chrome profile. Read only the web document, not the browser toolbar. If a minimized task window withholds its document, restore that task-created window without activating or modifying the user's other windows.
+Use the registered site's HTTPS `/index.php` in its configured existing execution profile. The standard runner retains the mature NexusPHP CAPTCHA and OCR flow. A reviewed native main-Chrome fallback reads only the web document, not the browser toolbar. If a minimized task window withholds its document, restore that task-created window without activating or modifying the user's other windows.
 
 Completion requires a logged-in account header with one daily control showing `已签到` or `签到已得<amount>` (with the optional supplementary-card count). Do not accept a public forum message, a historical total, a login page, a challenge page, another origin, or simultaneous signed/unsigned controls.
 
-Non-completion requires the same authenticated header to show exactly one reviewed `签到` or `签到得魔力` link and no successful daily signal. Its receipt must match the configured profile/account, current Shanghai business day and passive-read mode. A fresh unsigned read after the unknown action permits one guarded recovery; a new success read stops it. A missing control is unknown, not not-signed.
+Non-completion requires the same authenticated header to show exactly one reviewed `签到` or `签到得魔力` link and no successful daily signal. Its receipt must match the configured profile/account, current Shanghai business day and passive-read mode. Recovery requires a read strictly newer than the applicable successful receipts and pending action intents. A success recorded after that read wins even while the unsigned proof is still fresh. The proof permits one guarded recovery; another attempt needs a newer read, and a site cooldown still applies. A missing control is unknown, not not-signed.
 
 Mutation remains behind the live Harvest gate, controller lease and execution locks. Persist intent before navigation/click and never automatically replay an uncertain invocation. Recheck the resulting authoritative daily state. Maintenance announcements explain unavailability but cannot confirm account completion.
+
+A fresh bound passive non-completion may close an older native intent from the same business day as `resolved_not_signed`, with its original actions and the readback proof retained. Today's proof does not rewrite a historical unknown outcome. This audit update dispatches no new action and does not claim that no request was sent. A later recovery still passes the live submission gates.
+
+Native document text includes the site's table and custom text cells. An authenticated attendance `Error` page stops another entry click and preserves uncertainty. `图片代码无效` is a CAPTCHA rejection, not a diagnosed site outage or success. Reuse the existing NexusPHP CAPTCHA flow rather than repeatedly invoking a header link with no answer. Private routing can return to an already authenticated execution profile after the current account's non-completion is verified; never copy browser sessions or replace account bindings to do so.
 
 ## HDDolby
 

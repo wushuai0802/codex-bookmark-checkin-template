@@ -69,6 +69,18 @@ function Test-NativeUnsignedControl([string]$Origin, [string]$Control) {
         $text -cin $CheckinNativePtUnsignedLabels[$Origin]
 }
 
+function Test-NativeAttendanceError($Snapshot, [string]$Origin) {
+    if ($Origin -cne 'https://ptsbao.club' -or $null -eq $Snapshot -or
+        $Snapshot.sameOrigin -ne $true -or $Snapshot.authenticated -ne $true -or
+        $Snapshot.pageContentAvailable -ne $true -or $Snapshot.waf -or
+        $Snapshot.securityVerification -or $Snapshot.loginRoute -or $Snapshot.success) { return $false }
+    try {
+        $uri = [uri][string]$Snapshot.currentUrl
+        return $uri.AbsoluteUri -ceq ($Origin + '/attendance.php') -and
+            [string]$Snapshot.bodyText -cmatch '(?:^|\s)Error(?:\s|$)'
+    } catch { return $false }
+}
+
 function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$Clicked = $false, [datetimeoffset]$Now = [datetimeoffset]::UtcNow, [bool]$FormalVisit = $false) {
     if ($null -eq $Snapshot -or $Snapshot.sameOrigin -ne $true -or
         $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute) { return $null }
