@@ -6,6 +6,16 @@ const businessDay = (value) => new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai",
 }).format(new Date(value));
 
+// Results have already passed currentNativePreflightResults. A successful
+// readback may repair an earlier lost response even when replay is disabled.
+// Origin-scoped native receipts must never resolve another OAuth account.
+export function completedNativeRecovery(target, prior, results) {
+  if (!prior || successful.has(prior.status)
+    || (target?.accountKey && target.accountKey !== 'site-default')) return null;
+  const receipt = results.get(target.origin);
+  return successful.has(receipt?.status) && receipt.evidence?.authoritative === true ? receipt : null;
+}
+
 function unverifiedCompletion(result) {
   const submitted = result.submissionAttempted === true;
   return {

@@ -32,6 +32,7 @@ export async function inspectNativePtHeader({root,origin,url,execute=runFile}){
   const diagnostic={origin,observedAt:new Date().toISOString(),status:value.status,failureCode:value.failureCode??null,
     sameOrigin:inspected.sameOrigin===true,authenticated:inspected.authenticated===true,waf:inspected.waf===true,
     loginRoute:inspected.loginRoute===true,siteBodyLoaded:inspected.siteBodyLoaded===true,
+    pageContentAvailable:inspected.pageContentAvailable===true,
     hasDailySignal:Boolean(inspected.successText),hasSignedControl:Boolean(inspected.successControl)};
   try{
     fs.mkdirSync(path.join(root,'logs'),{recursive:true});

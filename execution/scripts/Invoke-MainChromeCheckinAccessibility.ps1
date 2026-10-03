@@ -186,6 +186,13 @@ function Test-EquivalentOrigin([uri]$ExpectedUri, [uri]$ActualUri) {
 
 function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window) {
     $elements = @(Get-WindowElements $Window)
+    $pageContentAvailable = @($elements | Where-Object {
+        try { $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Document' } catch { $false }
+    }).Count -gt 0
+    # An existing Chrome process may expose only its toolbar when the renderer
+    # accessibility flag could not be applied at process startup. Toolbar text
+    # is not page content and cannot prove a loaded site or login state.
+    if (-not $pageContentAvailable) { $elements = @() }
     $names = @()
     $controlNames = @()
     $linkNames = @()
@@ -224,6 +231,7 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $loginRoute = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)'
     [pscustomobject]@{
         currentUrl = if ($currentUri) { $currentUri.AbsoluteUri } else { '' }
+        pageContentAvailable = [bool]$pageContentAvailable
         bodyText = $bodyText.Substring(0, [Math]::Min(2000, $bodyText.Length))
         successText = Get-NativeSuccessText $bodyText
         successControl = if ($signedControls.Count -eq 1) { $signedControls[0] } else { '' }
@@ -488,7 +496,7 @@ try {
         if ($null -eq $result) {
             $failureCode = if ($last.waf) {
                 $null
-            } elseif (-not $last.currentUrl) {
+            } elseif (-not $last.currentUrl -or -not $last.pageContentAvailable) {
                 'accessibility_unavailable'
             } elseif (-not $last.sameOrigin) {
                 'target_not_loaded'
