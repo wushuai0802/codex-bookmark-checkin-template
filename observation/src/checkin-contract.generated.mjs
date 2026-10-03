@@ -100,7 +100,9 @@ export const ptFailureMessages = Object.freeze({
   "network_error": "页面访问失败，尚未取得签到状态",
   "authoritative_status_unavailable": "页面尚无可确认的今日签到证据",
   "accessibility_unavailable": "浏览器未提供可读网页正文，等待任务窗口重新核验",
-  "site_server_error": "站点服务端返回故障，等待恢复后核验"
+  "site_server_error": "站点服务端返回故障，等待恢复后核验",
+  "tls_certificate_invalid": "站点 TLS 证书无效，等待站点续证",
+  "tls_handshake_failed": "站点 TLS 握手失败，等待站点恢复"
 });
 export const ptRetryCauses = Object.freeze([
   "upstream_unavailable",
