@@ -199,6 +199,8 @@ test("invalid site certificates are deferred without bypassing TLS or retrying l
   assert.equal(result.failureCode, "tls_certificate_invalid");
   assert.match(result.reason, /TLS 证书/);
   assert.ok(result.nextEligibleAt);
+  assert.equal(result.retryableLoginRecovery, false);
+  assert.equal(shouldRefreshAutomationContext(result), false);
 });
 
 test("AnyRouter 使用动态地址与 ESA 校验专用 API 通道，不能回退为普通页面点击", async () => {

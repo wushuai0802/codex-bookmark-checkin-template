@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { currentNativePreflightResults } from "../src/native-preflight-receipt.mjs";
+import { currentNativePreflightResults, completedNativeRecovery } from "../src/native-preflight-receipt.mjs";
 import { isTerminalResult } from "../src/result-contract.mjs";
 import { reuseRecentNotAvailable } from "../src/site-state.mjs";
 
@@ -29,6 +29,24 @@ test("native preflight retains authoritative same-day completion in the configur
     assert.equal(isTerminalResult(read([result]).get(origin)), true);
   }
   assert.equal(read([completed({ origin: "https://outside.example" })]).size, 0);
+});
+
+test('a dated native completion repairs a lost response without making the old submission retryable', () => {
+  const prior={origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,retryable:false};
+  const receipt=completed();
+  assert.equal(completedNativeRecovery({origin},prior,read([receipt])),receipt);
+  assert.equal(prior.status,'needs_attention');
+  assert.equal(prior.retryable,false);
+  assert.equal(completedNativeRecovery({origin,accountKey:'other-account'},prior,read([receipt])),null);
+  assert.equal(completedNativeRecovery({origin},{...prior,status:'already_signed'},read([receipt])),null);
+});
+
+test('invalid native completion cannot reopen the recovery path for an uncertain submission', () => {
+  const prior={origin,status:'needs_attention',submissionAttempted:true,retryable:false};
+  for(const evidence of [undefined,{...completed().evidence,authoritative:false},
+    {...completed().evidence,businessDate:'2026-10-01',confirmedAt:'2026-10-01T03:59:58.000Z'}]){
+    assert.equal(completedNativeRecovery({origin},prior,read([completed({evidence})])),null);
+  }
 });
 
 test("a native report from two seconds before midnight cannot complete the new Shanghai day", () => {

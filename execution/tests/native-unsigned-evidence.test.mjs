@@ -101,28 +101,33 @@ function New-FixtureControl([string]$Name,[string]$Type){
   [pscustomobject]@{Current=[pscustomobject]@{Name=$Name;ControlType=[System.Windows.Automation.ControlType]::new($Type)}}
 }
 $originValue='https://ptsbao.club';$targetUri=[uri]'https://ptsbao.club/index.php'
-$rows=@(foreach($scenario in @('unique','toolbar_only','duplicate','signed_conflict','multiple_signed')){
+$rows=@(foreach($scenario in @('unique','toolbar_only','duplicate','signed_conflict','multiple_signed','browser_chrome_only')){
   $script:elements=@(
     (New-FixtureControl '退出' 'Hyperlink'),(New-FixtureControl '控制面板' 'Hyperlink'),
     (New-FixtureControl ('site fixture content ' * 10) 'Text'),(New-FixtureControl '签到' 'Button')
   )
+  if($scenario -ne 'browser_chrome_only'){$script:elements+=(New-FixtureControl '网页内容' 'Document')}
   if($scenario -ne 'toolbar_only'){$script:elements+=(New-FixtureControl '[签到]' 'Hyperlink')}
   if($scenario -eq 'duplicate'){$script:elements+=(New-FixtureControl '签到' 'Hyperlink')}
   if($scenario -in @('signed_conflict','multiple_signed')){$script:elements+=(New-FixtureControl '签到已得10, 补签卡: 0' 'Hyperlink')}
   if($scenario -eq 'multiple_signed'){$script:elements+=(New-FixtureControl '签到已得20, 补签卡: 0' 'Hyperlink')}
   $snapshot=Read-PageSnapshot $null
   $evidence=Get-ConfirmedNativeUnsignedEvidence $snapshot $targetUri.AbsoluteUri
-  [pscustomobject]@{scenario=$scenario;unsignedCount=$snapshot.unsignedControlCount;signedCount=$snapshot.signedControlCount;authoritative=($null -ne $evidence)}
+  [pscustomobject]@{scenario=$scenario;unsignedCount=$snapshot.unsignedControlCount;signedCount=$snapshot.signedControlCount;authoritative=($null -ne $evidence);loaded=$snapshot.siteBodyLoaded;authenticated=$snapshot.authenticated;pageContentAvailable=$snapshot.pageContentAvailable}
 })
 ConvertTo-Json -InputObject $rows -Depth 6 -Compress`;
   for (const shell of shells) {
     const results = await runFixture(shell, command);
     assert.deepEqual(results.map((result) => [result.scenario, result.authoritative]), [
       ["unique", true], ["toolbar_only", false], ["duplicate", false],
-      ["signed_conflict", false], ["multiple_signed", false],
+      ["signed_conflict", false], ["multiple_signed", false], ["browser_chrome_only", false],
     ], shell);
     assert.equal(results.find((row) => row.scenario === "duplicate").unsignedCount, 2);
     assert.equal(results.find((row) => row.scenario === "multiple_signed").signedCount, 2);
+    const unavailable=results.find(row=>row.scenario==='browser_chrome_only');
+    assert.equal(unavailable.loaded,false);
+    assert.equal(unavailable.authenticated,false);
+    assert.equal(unavailable.pageContentAvailable,false);
   }
 });
 

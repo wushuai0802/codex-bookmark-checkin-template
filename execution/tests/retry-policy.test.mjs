@@ -512,6 +512,12 @@ test('invalid TLS certificates pause same-day retries and do not trigger login r
   assert.equal(scheduled.retryExhaustedForDay,true);
   assert.match(scheduled.reason,/TLS 证书无效/);
   assert.equal(isRetryEligible(scheduled,now),false);
+  const advanced=advanceDeferredRetry(scheduled,{retrySequence:4,retrySequenceDate:'20261003'},
+    {schedule:'08:05',upstreamUnavailableMaxDailyAttempts:1,upstreamUnavailableLateRetryTime:'21:05'},now);
+  const grouped=applyUpstreamGroupCircuitBreakers([advanced],{upstreamFailureGroupMaxDailyAttempts:1},now)[0];
+  assert.equal(grouped.nextEligibleAt,'2026-10-04T00:05:00.000Z');
+  assert.equal(grouped.retryExhaustedForDay,true);
+  assert.equal(isRetryEligible(grouped,now),false);
 });
 
 test("暂不可用的当日终态在次日会重新进入目标计划", () => {

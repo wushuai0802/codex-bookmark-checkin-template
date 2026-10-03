@@ -1601,6 +1601,7 @@ export async function resultFromPageFailure(page, error, config) {
       retryCause: "upstream_unavailable",
       failureCode: "tls_certificate_invalid",
       reason: "站点 TLS 证书已过期、日期无效或主机名不匹配；未尝试重新登录",
+      retryableLoginRecovery: false,
       url: safeLogUrl(page.url()),
     }, config);
   }
@@ -1644,7 +1645,8 @@ export function isTransientNavigationFailure(error) {
 // underlying host remains reachable. The caller may recreate the shared
 // context once, preserving the same profile and its login state.
 export function shouldRefreshAutomationContext(result) {
-  return result?.status === "deferred" && result?.retryCause === "upstream_unavailable";
+  return result?.status === "deferred" && result?.retryCause === "upstream_unavailable"
+    && result.failureCode !== "tls_certificate_invalid";
 }
 
 export async function launchAutomationContext(config) {

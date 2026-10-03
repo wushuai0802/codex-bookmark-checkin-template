@@ -46,7 +46,7 @@ import {
 } from "./result-identity.mjs";
 import { closeSharedContexts } from "./shared-context-lifecycle.mjs";
 import { nativePreflightFailure } from "./native-preflight-result.mjs";
-import { currentNativePreflightResults } from "./native-preflight-receipt.mjs";
+import { currentNativePreflightResults, completedNativeRecovery } from "./native-preflight-receipt.mjs";
 import {
   configuredOAuthAccounts,
   runOAuthAccount,
@@ -341,6 +341,7 @@ try {
         const prior = compatiblePriorResult(target, resumeBase.results);
         return !prior
           || isRetryEligible(prior)
+          || completedNativeRecovery(target, prior, nativeWafPreflight)
           || terminalResultReenabled(prior, target, config)
           || (config.disabledCheckinOrigins ?? []).includes(target.origin)
           || (config.disabledAccountKeys ?? []).includes(String(target.accountKey ?? '').trim());
@@ -621,7 +622,10 @@ try {
           if(observed)guardedQuotaClaim={...guardedQuotaClaim,...observed};
         }
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
-        const targetResult = guardedQuotaClaim
+        const nativeRecovered = completedNativeRecovery(target, prior, nativeWafPreflight);
+        const targetResult = nativeRecovered
+          ? { ...nativeRecovered, attempt: 0, nativePreflight: true, durationMs: 0 }
+          : guardedQuotaClaim
           ? guardedQuotaClaim
           : explicitSelection && prior && isTerminalResult(prior)
           && !reenabledTerminal
