@@ -29,10 +29,16 @@ export function nativeCurrentSuccess(result,now=new Date()){
 const safeEvidence=e=>({source:e.source,authoritative:true,confirmedAt:e.confirmedAt,businessDate:e.businessDate,
   ...(e.pagePath?{pagePath:e.pagePath}:{}),...(e.statusSignal?{statusSignal:e.statusSignal}:{})});
 export function nativePtDecision({prior,pending,receipt,unsigned=false,reportedToday=false,now=new Date()}={}){
+  // A fresh, bound passive not-signed proof is newer than any persisted
+  // success receipt. It explicitly authorizes one guarded recovery; a pending
+  // unknown action still blocks replay. Never let an older success hide it.
+  if(unsigned){
+    return null;
+  }
   if(nativeCurrentSuccess(receipt,now))return {...receipt,nativeGate:true,submissionAttempted:false};
   if(nativeCurrentSuccess(prior,now))return {...prior,nativeGate:true,submissionAttempted:false};
-  if(!unsigned&&(pending||prior?.submissionAttempted===true&&!success(prior)||prior?.failureCode==='submission_outcome_unknown'))return unknown();
-  if(!unsigned&&reportedToday&&success(prior))return {status:'needs_attention',failureCode:'authoritative_status_unavailable',
+  if(pending||prior?.submissionAttempted===true&&!success(prior)||prior?.failureCode==='submission_outcome_unknown')return unknown();
+  if(reportedToday&&success(prior))return {status:'needs_attention',failureCode:'authoritative_status_unavailable',
     submissionAttempted:false,nativeGate:true,retryable:false,reason:'今日已有成功记录，先补齐只读证据，不重复提交'};
   const until=Date.parse(prior?.nextEligibleAt??'');
   if(Number.isFinite(until)&&until>now.getTime())return {...prior,nativeGate:true,submissionAttempted:false};
