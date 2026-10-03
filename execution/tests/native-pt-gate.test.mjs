@@ -27,6 +27,8 @@ test('native selection refuses unknown submissions and future cooldown before op
   const readback={status:'already_signed',evidence:proof(now)};
   assert.equal(nativePtDecision({pending:true,receipt:readback,now}).status,'already_signed');
   assert.equal(nativePtDecision({pending:true,unsigned:true,now}),null);
+  assert.equal(nativePtDecision({prior:{status:'already_signed'},receipt:{status:'already_signed',evidence:proof(now)},unsigned:true,now}),null);
+  assert.equal(nativePtDecision({pending:true,prior:{status:'already_signed'},receipt:{status:'already_signed',evidence:proof(now)},unsigned:true,now}),null);
   assert.equal(nativePtDecision({prior:{status:'signed'},reportedToday:true,now}).failureCode,'authoritative_status_unavailable');
   assert.equal(nativePtDecision({prior:{status:'signed'},reportedToday:false,now}),null);
   assert.equal(nativePtNavigationRisk('https://native.example/index.php'),false);
