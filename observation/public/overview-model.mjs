@@ -1,4 +1,4 @@
-import {taskDisplayStatus} from './dashboard-model.mjs';
+import {taskDisplayStatus,siteSideTask} from './dashboard-model.mjs';
 
 export function projectOverviewSnapshot(data={}) {
   return {...(data.snapshot??{}),tasks:data.tasks??[],ptStatus:data.ptStatus,readiness:data.readiness,
@@ -44,6 +44,9 @@ export function overviewMetrics(data = {}, now = Date.now()) {
   const verifiedUnavailable = Math.min(unavailable, count(data.evidenceQuality?.verifiedUnavailable));
   const unverifiedUnavailable = unavailable - verifiedUnavailable;
   const pending = Math.max(0, total - success - unavailable - cancelled);
+  const excludedSiteIssues=Array.isArray(data.tasks)&&data.tasks.length===total
+    ?Math.min(pending,data.tasks.filter(siteSideTask).length):0;
+  const eligible=Math.max(0,total-verifiedUnavailable-cancelled-excludedSiteIssues);
   const manual = count(status.needs_attention) + count(status.login_required) + count(status.failed) + count(status.verification);
   const age = now - Date.parse(data.generatedAt ?? '');
   const healthAge = now - Date.parse(data.health?.sourceCheckedAt ?? '');
@@ -54,11 +57,11 @@ export function overviewMetrics(data = {}, now = Date.now()) {
   const healthFresh = data.health?.freshness?.fresh === true && Number.isFinite(healthAge)
     && healthAge >= -60_000 && healthAge <= 26 * 3_600_000;
   return {
-    total, success, unavailable, cancelled, pending, manual, verifiedSuccess, unverifiedSuccess, verifiedUnavailable, unverifiedUnavailable,
+    total, success, unavailable, cancelled, pending, manual, verifiedSuccess, unverifiedSuccess, verifiedUnavailable, unverifiedUnavailable,excludedSiteIssues,
     executionRate: total ? Math.round(success / total * 100) : null,
     deferred: count(status.deferred),external:count(status.external),
-    eligible: Math.max(0, total - verifiedUnavailable - cancelled),
-    rate: total > verifiedUnavailable + cancelled ? Math.round(verifiedSuccess / (total - verifiedUnavailable - cancelled) * 100) : null,
+    eligible,
+    rate: eligible ? Math.round(verifiedSuccess / eligible * 100) : null,
     fresh, healthFresh,
     healthy: data.health?.healthy === true && healthFresh,
     allResolved: total > 0 && pending === 0 && unverifiedSuccess === 0 && unverifiedUnavailable === 0,
@@ -71,6 +74,13 @@ export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0
   if (previousDay) return '等待今日签到结果';
   if (!metrics.fresh) return '当前数据已过期';
   if (metrics.allResolved) return '今日签到项已全部确认';
+  if(metrics.excludedSiteIssues&&metrics.unverifiedSuccess===0&&metrics.unverifiedUnavailable===0){
+    const localPending=metrics.pending-metrics.excludedSiteIssues;
+    if(localPending===0)return metrics.eligible>0
+      ?`项目签到已完成 · ${metrics.excludedSiteIssues} 个站点待恢复`
+      :`${metrics.excludedSiteIssues} 个站点待恢复`;
+    return `还有 ${localPending} 个项目签到项待处理 · ${metrics.excludedSiteIssues} 个站点待恢复`;
+  }
   if (metrics.pending) return pausedCount
     ? `${metrics.pending} 项未完成 · ${Math.min(pausedCount, metrics.pending)} 项暂缓关注`
     : `还有 ${metrics.pending} 个签到项待处理`;

@@ -7,6 +7,10 @@ export function ptDiagnostic(result={}){
     result.status==='login_required'?'login_required':result.status==='interactive_challenge'?'interactive_challenge':
     result.status==='error'?'network_error':'authoritative_status_unavailable';
   const retryCause=ptRetryCauses.includes(result.retryCause)?result.retryCause:undefined;
+  const underlying=result.underlyingFailureCode!==failureCode&&Object.hasOwn(messages,result.underlyingFailureCode??'')
+    ?result.underlyingFailureCode:null;
   return {failureCode,...(retryCause?{retryCause}:{}),...(maintenance?{siteCondition:'site_maintenance'}:{}),
-    summary:messages[failureCode]+(maintenance&&failureCode==='submission_outcome_unknown'?'；站点当前正在维护':'')};
+    ...(underlying?{underlyingFailureCode:underlying}:{}),
+    summary:messages[failureCode]+(underlying?'；'+messages[underlying]:'')+
+      (maintenance&&failureCode==='submission_outcome_unknown'?'；站点当前正在维护':'')};
 }

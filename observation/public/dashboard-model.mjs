@@ -9,6 +9,14 @@ export function taskStatusLabel(task){return cancelledTask(task)?conditionLabels
 export function externalTask(task){return !['signed','already_signed','not_available'].includes(task?.observedStatus)&&
   [...externalRetryCauses,'site_maintenance','entitlement_expired'].includes(taskStatusCondition(task));}
 
+export function siteSideTask(task){
+  if(['signed','already_signed','not_available'].includes(task?.observedStatus))return false;
+  const condition=taskStatusCondition(task);
+  if(['site_maintenance','rate_limit'].includes(condition))return true;
+  return condition==='upstream_unavailable'&&['tls_certificate_invalid','tls_handshake_failed','site_server_error',
+    'oauth_upstream_unavailable','oauth_upstream_circuit_open'].includes(task.failureCode);
+}
+
 // Charts and their drill-down filters share the same presentation buckets.
 // The original execution enum and receipt remain unchanged.
 export function taskDisplayStatus(task){

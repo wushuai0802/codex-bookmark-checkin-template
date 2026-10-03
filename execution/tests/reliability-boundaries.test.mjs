@@ -58,3 +58,8 @@ test('fallback-only PT gate accepts an opted-in binding but blocks ambiguous own
   fs.writeFileSync(planFile,JSON.stringify({targets:[target,{...target,accountKey:'other'}]}));
   assert.equal(checkHarvestPtBeforeWrite(target,{root,now,probe}).status,'deferred');assert.equal(calls,1);
 });
+test('a two-factor gate after possible submission retains its cause without authorizing replay',async()=>{
+  const result=await guardPtSubmission(async before=>{before();return {status:'needs_attention',failureCode:'two_factor_required'};},()=>null);
+  assert.equal(result.failureCode,'submission_outcome_unknown');assert.equal(result.underlyingFailureCode,'two_factor_required');
+  assert.equal(result.submissionAttempted,true);assert.equal(result.retryable,false);
+});

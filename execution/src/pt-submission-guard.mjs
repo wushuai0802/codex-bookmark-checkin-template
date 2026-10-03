@@ -1,3 +1,5 @@
+import {ptFailureMessages} from './checkin-contract.generated.mjs';
+
 export function knownPtDialogOpener(origin,action){
   const label=String(action?.text??'').trim().replaceAll('[','').replaceAll(']','').trim();
   return origin==='https://open.cd'&&['签到','簽到'].includes(label);
@@ -16,7 +18,10 @@ export async function guardPtSubmission(run, check) {
     const result = await run(beforeSubmit);
     if (attempted && !['signed','already_signed'].includes(result?.status)) {
       if (result?.failureCode === 'captcha_ocr_exhausted' && result?.captchaRejected === true) return { ...result, submissionAttempted: true, retryable: false };
-      return { ...result, ...unknown(), ...(/维护通知|数据恢复|全量恢复/.test(result?.reason??'')?{siteCondition:'site_maintenance'}:{}) };
+      return { ...result, ...unknown(),
+        ...(result?.failureCode!=='submission_outcome_unknown'&&Object.hasOwn(ptFailureMessages,result?.failureCode??'')
+          ?{underlyingFailureCode:result.failureCode}:{}),
+        ...(/维护通知|数据恢复|全量恢复/.test(result?.reason??'')?{siteCondition:'site_maintenance'}:{}) };
     }
     return { ...result, ...(attempted ? { submissionAttempted: true } : {}) };
   } catch (error) {

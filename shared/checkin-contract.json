@@ -41,17 +41,20 @@
     "account_mismatch": "页面账号与执行绑定不一致",
     "harvest_waiting": "Harvest 当日任务尚未完成，暂缓补签",
     "network_error": "页面访问失败，尚未取得签到状态",
-    "authoritative_status_unavailable": "页面尚无可确认的今日签到证据"
+    "authoritative_status_unavailable": "页面尚无可确认的今日签到证据",
+    "accessibility_unavailable": "浏览器未提供可读网页正文，等待任务窗口重新核验",
+    "site_server_error": "站点服务端返回故障，等待恢复后核验"
   },
   "ptRetryCauses": ["upstream_unavailable", "rate_limit", "login_required", "harvest_waiting"],
   "ptReadPolicies": {
-    "https://p.t-baozi.cc": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "signedRewardControl": true, "dailyHeader": true},
+    "https://p.t-baozi.cc": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "unsignedTexts": ["签到", "签到得魔力"], "signedRewardControl": true, "dailyHeader": true},
     "https://dstudio.me": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "dailyHeader": true, "signedTexts": ["今日已完成已签到"], "completionReadFirst": true},
     "https://ourbits.club": {"selector": "#info_block", "selfProfileHeader": true},
     "https://cspt.top": {"selector": ".menu-base-info", "actionPath": "/attendance.php", "unsignedText": "签到得金元宝", "signedRewardControl": true, "dailyHeader": true},
     "https://pt.xingyungept.org": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到得星焱", "signedRewardControl": true, "dailyHeader": true},
     "https://u2.dmhy.org": {"selector": "#info_block", "actionPath": "/showup.php", "unsignedText": "立即簽到", "dailyHeader": true},
     "https://open.cd": {"selector": "body", "openCdHeader": true},
-    "https://ptsbao.club": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "signedRewardControl": true, "dailyHeader": true, "loginPath": "/login.php", "publicAvailabilityUrl": "https://ptsbao.club/claim/"}
+    "https://www.hddolby.com": {"selector": "#info_block", "hddolbyHeader": true},
+    "https://ptsbao.club": {"selector": "#info_block", "actionPath": "/attendance.php", "unsignedText": "签到", "unsignedTexts": ["签到", "签到得魔力"], "signedRewardControl": true, "dailyHeader": true, "loginPath": "/login.php", "publicAvailabilityUrl": "https://ptsbao.club/claim/"}
   }
 }

@@ -38,6 +38,8 @@ namespace System.Windows.Automation {
 }
 '@
 . '${quoted(scripts + "Native-PtGuard.ps1")}'
+. '${quoted(scripts + "CheckinContract.generated.ps1")}'
+$originValue='https://ptsbao.club'
 function Import-ActionFunction([string]$File,[string]$Name) {
   $tokens=$null;$errors=$null
   $ast=[Management.Automation.Language.Parser]::ParseFile($File,[ref]$tokens,[ref]$errors)
@@ -49,6 +51,7 @@ function Import-ActionFunction([string]$File,[string]$Name) {
 . ([scriptblock]::Create((Import-ActionFunction '${quoted(scripts + "Invoke-MainChromeCheckinAccessibility.ps1")}' 'Invoke-UniqueCheckinButton')))
 . ([scriptblock]::Create((Import-ActionFunction '${quoted(scripts + "Invoke-PlainWafAccessibility.ps1")}' 'Invoke-NativeCheckinAction')))
 function Get-WindowElements { if(-not $script:noControl){$script:control} }
+function Get-WindowPageElements { Get-WindowElements $null }
 function Get-AllAutomationElements { if(-not $script:noControl){$script:control} }
 function Start-NativePtWrite([string]$Action) {
   $script:events.Add('guard:'+ $Action)

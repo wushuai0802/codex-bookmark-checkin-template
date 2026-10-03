@@ -184,11 +184,25 @@ function Test-EquivalentOrigin([uri]$ExpectedUri, [uri]$ActualUri) {
     return $expectedHost -eq $actualHost
 }
 
-function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window) {
-    $elements = @(Get-WindowElements $Window)
-    $pageContentAvailable = @($elements | Where-Object {
+function Get-WindowPageElements([System.Windows.Automation.AutomationElement]$Window) {
+    $documents = @(Get-WindowElements $Window | Where-Object {
         try { $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Document' } catch { $false }
-    }).Count -gt 0
+    })
+    $elements = @()
+    if ($documents.Count -gt 0) {
+        try {
+            $elements = @($documents[0]) + @($documents[0].FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+            ))
+        } catch { $elements = @() }
+    }
+    return $elements
+}
+
+function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window) {
+    $elements = @(Get-WindowPageElements $Window)
+    $pageContentAvailable = $elements.Count -gt 1
     # An existing Chrome process may expose only its toolbar when the renderer
     # accessibility flag could not be applied at process startup. Toolbar text
     # is not page content and cannot prove a loaded site or login state.
@@ -223,8 +237,8 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $cloudflareWaf = $bodyText -match '请稍候[.…]*\s*[^ ]+\s*正在进行安全验证|本网站使用安全服务防护恶意自动程序|Just a moment|Performing security verification|Verify you are human|Cloudflare.*performance and security'
     $securityVerification = $bodyText -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b'
     $success = $bodyText -match '签到成功|今日已签到|今天已签到|今天已经签到过|已经签到|已完成今日签到|(?:^|\s)已签到(?:\s|$)|Already checked in|Checked in today'
-    $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeDailyControl $originValue $_ } | Select-Object -Unique)
-    $unsignedControls = @($linkNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { $_ -ceq '签到' })
+    $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeDailyControl $originValue $_ })
+    $unsignedControls = @($linkNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeUnsignedControl $originValue $_ })
     $normalizedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() })
     $authenticated = @($normalizedControls | Where-Object { $_ -match '^(?:退出|退出登录|登出|注销|登出账号|登出帳號|Logout|Log out)$' }).Count -gt 0 -and
         @($normalizedControls | Where-Object { $_ -match '^(?:控制面板|用户中心|用戶中心|个人资料|個人資料|设置|設定|Control Panel|User CP)$' }).Count -gt 0
@@ -264,9 +278,11 @@ function Invoke-UniqueCheckinButton([System.Windows.Automation.AutomationElement
         '签到' = 80
         'Check in' = 80
     }
-    foreach ($element in @(Get-WindowElements $Window)) {
+    foreach ($label in @($CheckinNativePtUnsignedLabels[$originValue])) { if ($label) { $priorities[$label] = 80 } }
+    foreach ($element in @(Get-WindowPageElements $Window)) {
         try {
             $name = ([string]$element.Current.Name).Trim()
+            if ($CheckinNativePtUnsignedLabels.ContainsKey($originValue)) { $name = ($name -replace '^[\[【]|[\]】]$', '').Trim() }
             if ($element.Current.ControlType -notin @(
                 [System.Windows.Automation.ControlType]::Button,
                 [System.Windows.Automation.ControlType]::Hyperlink
@@ -300,7 +316,7 @@ function Get-UniqueNamedControl(
     [string[]]$Labels
 ) {
     $found = @()
-    foreach ($element in @(Get-WindowElements $Window)) {
+    foreach ($element in @(Get-WindowPageElements $Window)) {
         try {
             if (-not $element.Current.IsEnabled -or $element.Current.ControlType -notin @(
                 [System.Windows.Automation.ControlType]::Button,
@@ -412,9 +428,20 @@ try {
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         $oauthLoginClicked = $false
         $oauthAuthorizeClicked = $false
+        $readWindowRestored = $false
         $last = $null
         do {
             $last = Read-PageSnapshot $taskWindow
+            if (-not $last.pageContentAvailable -and -not $readWindowRestored) {
+                # Minimized Chrome may withhold its document tree. Restore only
+                # this task-created window without activating it, then sample
+                # once more. Only this task window is restored; submission
+                # remains protected by the current-day native write gate.
+                [void][CheckinWindowNative]::ShowWindow($taskHandle, 4)
+                $readWindowRestored = $true
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $clicked -FormalVisit:(-not $ReadOnly -and $targetUri.AbsolutePath -match '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$')
             if (Test-NativePageCompletion $last $originValue $pageEvidence) {
                 $result = [pscustomobject]@{

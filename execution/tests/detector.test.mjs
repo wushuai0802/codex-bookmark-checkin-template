@@ -155,3 +155,9 @@ test("普通首页投票不会被当成签到问答", () => {
     submitTexts: ["提交"],
   }), true);
 });
+test('server fault attribution requires a site page, not a Chrome network error document',()=>{
+  const remote=classifyPageText({url:'https://server.example/index.php',title:'502 Bad Gateway',bodyText:'Service Unavailable'});
+  assert.equal(remote.failureCode,'site_server_error');
+  const local=classifyPageText({url:'chrome-error://chromewebdata/',title:'Network error',bodyText:'connection timed out'});
+  assert.equal(local.failureCode,undefined);
+});
