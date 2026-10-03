@@ -504,6 +504,16 @@ test('a maintenance notice waits until the next business day instead of repeated
   assert.equal(grouped.nextEligibleAt,'2026-10-01T00:05:00.000Z');assert.equal(grouped.retryExhaustedForDay,true);
 });
 
+test('invalid TLS certificates pause same-day retries and do not trigger login recovery',()=>{
+  const now=new Date('2026-10-03T02:00:00Z');
+  const value={origin:'https://expired.example',status:'deferred',retryCause:'upstream_unavailable',failureCode:'tls_certificate_invalid'};
+  const scheduled=withRetrySchedule(value,{schedule:'08:05'},now);
+  assert.equal(scheduled.nextEligibleAt,'2026-10-04T00:05:00.000Z');
+  assert.equal(scheduled.retryExhaustedForDay,true);
+  assert.match(scheduled.reason,/TLS 证书无效/);
+  assert.equal(isRetryEligible(scheduled,now),false);
+});
+
 test("暂不可用的当日终态在次日会重新进入目标计划", () => {
   const selected = resumeSelectedOrigins(
     [{ origin: "https://offline.example" }],

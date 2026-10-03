@@ -285,6 +285,12 @@ function stripUpstreamRetrySuffix(reason) {
 
 export function withRetrySchedule(result, config = {}, now = new Date()) {
   if (result?.status !== "deferred") return result;
+  if (result.failureCode === "tls_certificate_invalid") return {
+    ...result,
+    retryExhaustedForDay: true,
+    nextEligibleAt: nextShanghaiTimeNextDay(config.schedule ?? "08:05", now),
+    reason: "站点 TLS 证书无效，今日暂停重试，次日再核验",
+  };
   if(result.siteCondition==='site_maintenance'||result.failureCode==='site_maintenance')return {
     ...result,siteCondition:'site_maintenance',retryExhaustedForDay:true,
     nextEligibleAt:nextShanghaiTimeNextDay(config.schedule??'08:05',now),

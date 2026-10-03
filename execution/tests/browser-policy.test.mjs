@@ -192,6 +192,15 @@ test("TLS handshake failure cannot be reclassified using a stale login page", as
   assert.equal(result.failureCode, "tls_handshake_failed");
 });
 
+test("invalid site certificates are deferred without bypassing TLS or retrying login", async () => {
+  const result = await resultFromPageFailure({ url: () => "https://expired.example.test/console" }, new Error("page.goto: net::ERR_CERT_DATE_INVALID"), {});
+  assert.equal(result.status, "deferred");
+  assert.equal(result.retryCause, "upstream_unavailable");
+  assert.equal(result.failureCode, "tls_certificate_invalid");
+  assert.match(result.reason, /TLS 证书/);
+  assert.ok(result.nextEligibleAt);
+});
+
 test("AnyRouter 使用动态地址与 ESA 校验专用 API 通道，不能回退为普通页面点击", async () => {
   const browser = await fs.readFile(path.join(root, "src", "browser.mjs"), "utf8");
   const api = await fs.readFile(path.join(root, "src", "anyrouter-api-checkin.mjs"), "utf8");

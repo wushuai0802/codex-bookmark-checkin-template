@@ -1590,7 +1590,21 @@ async function snapshotStateAfterNavigation(page) {
 }
 
 export async function resultFromPageFailure(page, error, config) {
-  if (/net::ERR_SSL_(?:VERSION_OR_CIPHER_MISMATCH|PROTOCOL_ERROR)/i.test(String(error?.message ?? error))) {
+  const navigationError = String(error?.message ?? error);
+  if (/net::ERR_CERT_(?:DATE_INVALID|AUTHORITY_INVALID|COMMON_NAME_INVALID|REVOKED|WEAK_SIGNATURE_ALGORITHM)/i.test(navigationError)) {
+    // Chromium rejects an expired or otherwise invalid site certificate before
+    // any page state can be inspected. Treat this as an upstream transport
+    // outage, not a generic task error or a login failure: never bypass TLS
+    // validation and never spend a retry on credentials that cannot be used.
+    return withRetrySchedule({
+      status: "deferred",
+      retryCause: "upstream_unavailable",
+      failureCode: "tls_certificate_invalid",
+      reason: "站点 TLS 证书已过期、日期无效或主机名不匹配；未尝试重新登录",
+      url: safeLogUrl(page.url()),
+    }, config);
+  }
+  if (/net::ERR_SSL_(?:VERSION_OR_CIPHER_MISMATCH|PROTOCOL_ERROR)/i.test(navigationError)) {
     return withRetrySchedule({
       status: "deferred",
       retryCause: "upstream_unavailable",
