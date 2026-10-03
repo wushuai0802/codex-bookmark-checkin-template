@@ -3,7 +3,21 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import {chromium} from 'playwright-core';
 import {processTarget} from '../src/browser.mjs';
-import {installPtReadFirewall,ptReadPolicy,readPtPassivePage} from '../src/pt-read-policy.mjs';
+import {installPtReadFirewall,ptReadPolicy,readPtPassivePage,ptReadProxy} from '../src/pt-read-policy.mjs';
+
+test('a private local proxy applies only to reviewed passive reads and cannot carry credentials',()=>{
+  const configured={ptPassiveReadOnly:true,ptReadProxyServer:'http://127.0.0.1:7890'};
+  assert.deepEqual(ptReadProxy(configured),{server:'http://127.0.0.1:7890'});
+  assert.equal(ptReadProxy({...configured,ptPassiveReadOnly:false}),undefined);
+  assert.equal(ptReadProxy({}),undefined);
+  for(const value of ['http://external.example:7890','http://u:p@127.0.0.1:7890','http://127.0.0.1:7890/path',
+    'http://127.0.0.1:7890?token=x','socks5://127.0.0.1:7890','http://127.0.0.1']){
+    assert.throws(()=>ptReadProxy({...configured,ptReadProxyServer:value}));
+  }
+  const origin='https://u2.dmhy.org',base=ptReadPolicy(origin);
+  assert.equal(ptReadPolicy(origin,{ptReadOnlyPolicies:{[origin]:{...base,proxyServer:configured.ptReadProxyServer}}}).proxyServer,configured.ptReadProxyServer);
+  assert.throws(()=>ptReadPolicy(origin,{ptReadOnlyPolicies:{[origin]:{...base,proxyServer:'http://remote.example:7890'}}}));
+});
 
 test('authenticated daily completion stops the real browser flow before any attendance request',async()=>{
   const browser=await chromium.launch({headless:true,channel:'chrome'});

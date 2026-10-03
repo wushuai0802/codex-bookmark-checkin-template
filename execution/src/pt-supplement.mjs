@@ -119,7 +119,8 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   if(!nativeRead&&!fs.existsSync(path.join(profile,'Local State')))throw Error('execution browser profile is unavailable');
   const readRules=file=>{try{return JSON.parse(fs.readFileSync(path.join(legacyRoot,file),'utf8')).rules??[];}catch(error){if(error.code==='ENOENT')return [];throw error;}};
   const rules=[...readRules('config/qa-rules.json'),...readRules('config/qa-rules.local.json')];
-  const safeConfig={...binding.config,retryCount:0,failureScreenshots:false,capturePtEvidence:true,ptPassiveReadOnly:readOnly};
+  const safeConfig={...binding.config,retryCount:0,failureScreenshots:false,capturePtEvidence:true,ptPassiveReadOnly:readOnly,
+    ...(policy?.proxyServer?{ptReadProxyServer:policy.proxyServer}:{})};
   const metadata={accountKey:binding.accountKey,profileBinding:binding.profileBinding,startedAt:startedAt.toISOString(),
     operationMode:policy?.mode??'legacy_checkin',readSafety:policy?'reviewed_passive':'attendance_page_risk'};
   const lock=await acquire(path.join(legacyRoot,'tmp/run.lock'));
