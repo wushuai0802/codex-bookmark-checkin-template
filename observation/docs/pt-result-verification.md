@@ -12,7 +12,7 @@ Non-completion requires the same authenticated header to show exactly one review
 
 Mutation remains behind the live Harvest gate, controller lease and execution locks. Persist intent before navigation/click and never automatically replay an uncertain invocation. Recheck the resulting authoritative daily state. Maintenance announcements explain unavailability but cannot confirm account completion.
 
-A fresh bound passive non-completion may close an older native intent as `resolved_not_signed`, with its original actions and the readback proof retained. This audit update dispatches no new action and does not claim that no request was sent. A later recovery still passes the live submission gates.
+A fresh bound passive non-completion may close an older native intent from the same business day as `resolved_not_signed`, with its original actions and the readback proof retained. Today's proof does not rewrite a historical unknown outcome. This audit update dispatches no new action and does not claim that no request was sent. A later recovery still passes the live submission gates.
 
 Native document text includes the site's table and custom text cells. An authenticated attendance `Error` page stops another entry click and preserves uncertainty. `图片代码无效` is a CAPTCHA rejection, not a diagnosed site outage or success. Reuse the existing NexusPHP CAPTCHA flow rather than repeatedly invoking a header link with no answer. Private routing can return to an already authenticated execution profile after the current account's non-completion is verified; never copy browser sessions or replace account bindings to do so.
 

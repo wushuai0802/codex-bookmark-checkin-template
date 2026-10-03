@@ -203,3 +203,16 @@ test('a bound newer passive non-completion closes the old intent audit without d
   assert.equal(journal.attempts[0].resolution,'passive_readback_not_signed');
   assert.equal(journal.attempts[0].readbackEvidence.confirmedAt,now.toISOString());
 });
+
+test('today negative readback can authorize today without rewriting a historical unknown outcome',async t=>{
+  const args=fixture(t),initial=crypto.randomUUID(),yesterday=new Date('2026-10-01T03:00:00Z');
+  const started=await runNativePtGate({...args,now:yesterday,phase:'begin',attemptId:initial,action:'click'});
+  const save=attachController(t,args);
+  save(unsignedReceipt(args,started.profileBinding,args.now));
+  assert.equal((await runNativePtGate({...args,phase:'inspect'})).allow,true);
+  assert.equal((await runNativePtGate({...args,phase:'begin',attemptId:crypto.randomUUID(),action:'click'})).allow,true);
+  const journal=JSON.parse(fs.readFileSync(path.join(args.root,'data/native-pt-attempts.json')));
+  assert.equal(journal.attempts.length,2);assert.equal(journal.attempts[0].state,'submitted');
+  assert.equal(journal.attempts[0].businessDate,'2026-10-01');assert.equal(journal.attempts[0].resolvedAt,undefined);
+  assert.equal(journal.attempts[1].businessDate,'2026-10-02');
+});

@@ -162,8 +162,9 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
     if(dayAt(clock())!==dayAt(now))decision=owned?unknown():deferred(clock(),'业务日期已切换，先刷新当日原生核验');
     if(decision)return {managed:true,allow:false,decision:{...decision,nativeGate:true}};
     if(phase==='inspect'){
-      if(unsigned&&pendingEntries.length){
-        for(const previous of pendingEntries){previous.state='resolved_not_signed';previous.resolvedAt=now.toISOString();
+      const sameDayPending=unsigned?pendingEntries.filter(a=>dayAt(a.startedAt)===dayAt(unsigned.confirmedAt)):[];
+      if(sameDayPending.length){
+        for(const previous of sameDayPending){previous.state='resolved_not_signed';previous.resolvedAt=now.toISOString();
           previous.resolution='passive_readback_not_signed';previous.readbackEvidence=safeEvidence(unsigned);}
         writeJournal(file,journal);
       }
@@ -171,7 +172,10 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
     }
     if(!/^[a-f0-9-]{36}$/.test(attemptId??'')||!['navigation','click'].includes(action))throw Error('invalid native attempt action');
     if(owned?.actions.includes(action))return {managed:true,allow:false,decision:unknown()};
-    if(unsigned)for(const previous of pendingEntries){previous.state='resolved_not_signed';previous.resolvedAt=now.toISOString();}
+    if(unsigned)for(const previous of pendingEntries.filter(a=>dayAt(a.startedAt)===dayAt(unsigned.confirmedAt))){
+      previous.state='resolved_not_signed';previous.resolvedAt=now.toISOString();
+      previous.resolution='passive_readback_not_signed';previous.readbackEvidence=safeEvidence(unsigned);
+    }
     const entry=owned??{attemptId,origin:target.origin,accountKey,profileBinding:binding.profileBinding,businessDate:dayAt(now),
       startedAt:now.toISOString(),state:'submitted',actions:[]};
     entry.actions.push(action);if(!owned)journal.attempts.push(entry);
