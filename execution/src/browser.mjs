@@ -1344,7 +1344,7 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
   if(passiveVisit){
     const observed=await initialPtObservation(page,passivePolicy,target.origin,navigationResponse);
     if(observed)return observed;
-    if(target.origin==='https://u2.dmhy.org')return {status:'visited',reason:'每日首页尚未确认完成，继续原有 U2 问卷流程',submissionAttempted:false,url:passivePolicy.url};
+    if(passivePolicy.dailyHeader)return {status:'visited',reason:'账户首页尚未确认今日完成，继续原有签到流程',submissionAttempted:false,url:passivePolicy.url};
   }
   if (useExtendedDiscovery) {
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
