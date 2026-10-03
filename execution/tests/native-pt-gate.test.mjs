@@ -16,6 +16,23 @@ function fixture(t){
   return {root,origin,url,profile,now,readPlan:async()=>({targets:[target]}),harvest:()=>null,verify:()=>null};
 }
 const proof=now=>({source:'page_text',authoritative:true,businessDate:'2026-10-02',confirmedAt:now.toISOString(),pagePath:'/index.php'});
+function attachController(t,args){
+  const controller=path.join(args.root,'controller'),nonce=crypto.randomUUID();
+  for(const dir of ['config','data','outputs'])fs.mkdirSync(path.join(controller,dir),{recursive:true});
+  fs.writeFileSync(path.join(args.root,'data/v2-integration.json'),JSON.stringify({executionEngine:'v1',v2ProjectRoot:controller}));
+  fs.writeFileSync(path.join(controller,'config/runtime.local.json'),JSON.stringify({executionEngine:'v1',legacyRoot:args.root}));
+  fs.writeFileSync(path.join(controller,'data/v2-run.lock'),JSON.stringify({nonce,pid:process.pid}));
+  const oldRoot=process.env.CHECKIN_V2_ENGINE_ROOT,oldLease=process.env.CHECKIN_V2_ENGINE_LEASE;
+  process.env.CHECKIN_V2_ENGINE_ROOT=controller;process.env.CHECKIN_V2_ENGINE_LEASE=nonce;
+  t.after(()=>{if(oldRoot===undefined)delete process.env.CHECKIN_V2_ENGINE_ROOT;else process.env.CHECKIN_V2_ENGINE_ROOT=oldRoot;
+    if(oldLease===undefined)delete process.env.CHECKIN_V2_ENGINE_LEASE;else process.env.CHECKIN_V2_ENGINE_LEASE=oldLease;});
+  return value=>fs.writeFileSync(path.join(controller,'outputs/pt-fallback-results-2026-10-02.json'),
+    JSON.stringify({source:'execution-supplement',businessDate:'2026-10-02',sites:[value]}));
+}
+const unsignedReceipt=(args,binding,now)=>({origin:args.origin,accountKey:'site-default',profileBinding:binding,
+  status:'not_signed',businessDate:'2026-10-02',observedAt:now.toISOString(),submissionAttempted:false,
+  readSafety:'reviewed_passive',operationMode:'safe_history_page',
+  evidence:{...proof(now),evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}});
 
 test('native selection refuses unknown submissions and future cooldown before opening a browser',()=>{
   const now=new Date('2026-10-02T03:00:00Z');
@@ -26,9 +43,14 @@ test('native selection refuses unknown submissions and future cooldown before op
   assert.equal(nativePtDecision({prior:{status:'deferred',nextEligibleAt:'2026-10-02T02:59:00Z'},now}),null);
   const readback={status:'already_signed',evidence:proof(now)};
   assert.equal(nativePtDecision({pending:true,receipt:readback,now}).status,'already_signed');
-  assert.equal(nativePtDecision({pending:true,unsigned:true,now}),null);
-  assert.equal(nativePtDecision({prior:{status:'already_signed'},receipt:{status:'already_signed',evidence:proof(now)},unsigned:true,now}),null);
-  assert.equal(nativePtDecision({pending:true,prior:{status:'already_signed'},receipt:{status:'already_signed',evidence:proof(now)},unsigned:true,now}),null);
+  assert.equal(nativePtDecision({pending:true,unsigned:true,now}).failureCode,'submission_outcome_unknown');
+  const unsigned=proof(new Date(now.getTime()-1000));
+  assert.equal(nativePtDecision({prior:{status:'already_signed'},receipt:{status:'already_signed',evidence:proof(now)},unsigned,now}).status,'already_signed');
+  assert.equal(nativePtDecision({pending:true,receipt:{status:'already_signed',evidence:proof(now)},unsigned,now}).status,'already_signed');
+  assert.equal(nativePtDecision({pending:true,unsigned:proof(now),now}),null);
+  assert.equal(nativePtDecision({pending:true,unsigned:proof(new Date(now.getTime()-300001)),now}).failureCode,'submission_outcome_unknown');
+  assert.equal(nativePtDecision({pending:true,unsigned:proof(new Date(now.getTime()+1)),now}).failureCode,'submission_outcome_unknown');
+  assert.equal(nativePtDecision({prior:{status:'deferred',retryCause:'rate_limit',nextEligibleAt:'2026-10-02T04:00:00Z'},unsigned:proof(now),now}).retryCause,'rate_limit');
   assert.equal(nativePtDecision({prior:{status:'signed'},reportedToday:true,now}).failureCode,'authoritative_status_unavailable');
   assert.equal(nativePtDecision({prior:{status:'signed'},reportedToday:false,now}),null);
   assert.equal(nativePtNavigationRisk('https://native.example/index.php'),false);
@@ -116,4 +138,68 @@ test('fresh bound not-signed proof permits one guarded recovery and retains the 
   const journal=JSON.parse(fs.readFileSync(path.join(args.root,'data/native-pt-attempts.json')));
   assert.equal(journal.attempts.length,2);assert.equal(journal.attempts[0].state,'resolved_not_signed');
   assert.equal(journal.attempts[1].state,'submitted');
+});
+
+test('an older unsigned proof cannot replay after a newer confirmed native success',async t=>{
+  const args=fixture(t),initial=crypto.randomUUID();
+  const started=await runNativePtGate({...args,phase:'begin',attemptId:initial,action:'click'});
+  const save=attachController(t,args),unsignedAt=new Date(args.now.getTime()+2000);
+  save(unsignedReceipt(args,started.profileBinding,unsignedAt));
+  const recovery=crypto.randomUUID();
+  assert.equal((await runNativePtGate({...args,now:unsignedAt,phase:'begin',attemptId:recovery,action:'navigation'})).allow,true);
+  const confirmed=new Date(args.now.getTime()+3000);
+  await runNativePtGate({...args,now:confirmed,phase:'finish',attemptId:recovery,status:'signed',evidence:proof(confirmed)});
+  const blocked=await runNativePtGate({...args,now:new Date(args.now.getTime()+4000),phase:'begin',attemptId:crypto.randomUUID(),action:'click'});
+  assert.equal(blocked.allow,false);assert.equal(blocked.decision.status,'already_signed');
+  const journal=JSON.parse(fs.readFileSync(path.join(args.root,'data/native-pt-attempts.json')));
+  assert.equal(journal.attempts.length,2);assert.equal(journal.attempts[0].state,'resolved_not_signed');
+  assert.equal(journal.attempts[1].state,'confirmed');
+});
+
+test('a newer unsigned proof can supersede an old completion once, then a new intent consumes it',async t=>{
+  const args=fixture(t),initial=crypto.randomUUID();
+  const started=await runNativePtGate({...args,phase:'begin',attemptId:initial,action:'click'});
+  const completeAt=new Date(args.now.getTime()+1000);
+  await runNativePtGate({...args,now:completeAt,phase:'finish',attemptId:initial,status:'signed',evidence:proof(completeAt)});
+  const save=attachController(t,args),unsignedAt=new Date(args.now.getTime()+2000);
+  const staleVerified=()=>({status:'already_signed',profileBinding:started.profileBinding,evidence:proof(args.now)});
+  save(unsignedReceipt(args,started.profileBinding,unsignedAt));
+  const recovery=crypto.randomUUID();
+  assert.equal((await runNativePtGate({...args,verify:staleVerified,now:unsignedAt,phase:'begin',attemptId:recovery,action:'navigation'})).allow,true);
+  assert.equal((await runNativePtGate({...args,verify:staleVerified,now:new Date(args.now.getTime()+3000),phase:'begin',attemptId:recovery,action:'click'})).allow,true);
+  const blocked=await runNativePtGate({...args,now:new Date(args.now.getTime()+4000),phase:'begin',attemptId:crypto.randomUUID(),action:'click'});
+  assert.equal(blocked.allow,false);
+  const journal=JSON.parse(fs.readFileSync(path.join(args.root,'data/native-pt-attempts.json')));
+  assert.equal(journal.attempts.length,2);assert.equal(journal.attempts[0].state,'confirmed');
+  assert.deepEqual(journal.attempts[1].actions,['navigation','click']);
+});
+
+test('newest persisted success wins over an older readback and malformed unsigned receipts',async t=>{
+  const args=fixture(t),initial=crypto.randomUUID();
+  const started=await runNativePtGate({...args,phase:'begin',attemptId:initial,action:'click'});
+  const completeAt=new Date(args.now.getTime()+1000);
+  await runNativePtGate({...args,now:completeAt,phase:'finish',attemptId:initial,status:'signed',evidence:proof(completeAt)});
+  const save=attachController(t,args),unsignedAt=new Date(args.now.getTime()+2000),base=unsignedReceipt(args,started.profileBinding,unsignedAt);
+  const verify=()=>({status:'already_signed',profileBinding:started.profileBinding,evidence:proof(args.now)});
+  for(const value of [{...base,observedAt:'invalid'},
+    {...base,evidence:{...base.evidence,statusSignal:'generic_page_text'}},
+    {...base,profileBinding:'b'.repeat(64)}]){
+    save(value);
+    const result=await runNativePtGate({...args,now:unsignedAt,verify});
+    assert.equal(result.allow,false);assert.equal(result.decision.evidence.confirmedAt,completeAt.toISOString());
+  }
+});
+
+test('a bound newer passive non-completion closes the old intent audit without dispatching a new action',async t=>{
+  const args=fixture(t),initial=crypto.randomUUID();
+  const started=await runNativePtGate({...args,phase:'begin',attemptId:initial,action:'click'});
+  const save=attachController(t,args),now=new Date(args.now.getTime()+2000);
+  save(unsignedReceipt(args,started.profileBinding,now));
+  const result=await runNativePtGate({...args,now,phase:'inspect'});
+  assert.equal(result.allow,true);assert.equal(result.submissionAttempted,undefined);
+  const journal=JSON.parse(fs.readFileSync(path.join(args.root,'data/native-pt-attempts.json')));
+  assert.equal(journal.attempts.length,1);assert.deepEqual(journal.attempts[0].actions,['click']);
+  assert.equal(journal.attempts[0].state,'resolved_not_signed');
+  assert.equal(journal.attempts[0].resolution,'passive_readback_not_signed');
+  assert.equal(journal.attempts[0].readbackEvidence.confirmedAt,now.toISOString());
 });

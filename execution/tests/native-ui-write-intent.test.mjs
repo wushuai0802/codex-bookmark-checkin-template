@@ -27,7 +27,7 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 Add-Type @'
-namespace System.Windows.Automation {
+namespace CheckinFixture.Automation {
   public class AutomationElement { }
   public static class ControlType {
     public static string Button="Button", Hyperlink="Hyperlink", CheckBox="CheckBox";
@@ -46,7 +46,7 @@ function Import-ActionFunction([string]$File,[string]$Name) {
   if($errors.Count){throw 'Native reader syntax error'}
   $definition=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name},$true) | Select-Object -First 1
   if(-not $definition){throw 'Missing action function'}
-  return $definition.Extent.Text
+  return $definition.Extent.Text.Replace('[System.Windows.Automation.', '[CheckinFixture.Automation.')
 }
 . ([scriptblock]::Create((Import-ActionFunction '${quoted(scripts + "Invoke-MainChromeCheckinAccessibility.ps1")}' 'Invoke-UniqueCheckinButton')))
 . ([scriptblock]::Create((Import-ActionFunction '${quoted(scripts + "Invoke-PlainWafAccessibility.ps1")}' 'Invoke-NativeCheckinAction')))
@@ -62,14 +62,14 @@ function Start-NativePtWrite([string]$Action) {
   }
   $script:NativePtGuard.attempted=$true
 }
-$script:pattern=[pscustomobject]@{Current=[pscustomobject]@{ToggleState=[System.Windows.Automation.ToggleState]::Off}}
+$script:pattern=[pscustomobject]@{Current=[pscustomobject]@{ToggleState=[CheckinFixture.Automation.ToggleState]::Off}}
 $script:pattern|Add-Member ScriptMethod Invoke {
   $script:events.Add('invoke')
   if($script:actionThrows){throw 'Mock action failed after dispatch'}
   return (-not $script:actionReturnsFalse)
 }
 $script:pattern|Add-Member ScriptMethod Toggle {$script:events.Add('toggle')}
-$script:control=[pscustomobject]@{Current=[pscustomobject]@{Name='签到';IsEnabled=$true;ControlType=[System.Windows.Automation.ControlType]::Button}}
+$script:control=[pscustomobject]@{Current=[pscustomobject]@{Name='签到';IsEnabled=$true;ControlType=[CheckinFixture.Automation.ControlType]::Button}}
 $script:control|Add-Member ScriptMethod GetCurrentPattern {
   param($kind)
   if($kind -eq 'Invoke' -and -not $script:supportsInvoke){throw 'Pattern unsupported'}

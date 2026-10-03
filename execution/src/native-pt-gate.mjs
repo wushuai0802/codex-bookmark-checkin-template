@@ -29,14 +29,20 @@ export function nativeCurrentSuccess(result,now=new Date()){
 const safeEvidence=e=>({source:e.source,authoritative:true,confirmedAt:e.confirmedAt,businessDate:e.businessDate,
   ...(e.pagePath?{pagePath:e.pagePath}:{}),...(e.statusSignal?{statusSignal:e.statusSignal}:{})});
 export function nativePtDecision({prior,pending,receipt,unsigned=false,reportedToday=false,now=new Date()}={}){
-  // A fresh, bound passive not-signed proof is newer than any persisted
-  // success receipt. It explicitly authorizes one guarded recovery; a pending
-  // unknown action still blocks replay. Never let an older success hide it.
-  if(unsigned){
+  const unsignedAt=Date.parse(unsigned?.confirmedAt??'');
+  const recover=unsigned?.authoritative===true&&unsigned.businessDate===dayAt(now)&&
+    Number.isFinite(unsignedAt)&&dayAt(unsignedAt)===dayAt(now)&&unsignedAt<=now.getTime()&&now.getTime()-unsignedAt<=5*60_000;
+  const completion=[receipt,prior].filter(value=>nativeCurrentSuccess(value,now))
+    .sort((a,b)=>Date.parse(b.evidence.confirmedAt??b.evidence.createdAt)-Date.parse(a.evidence.confirmedAt??a.evidence.createdAt))[0];
+  // An unsigned read can recover an older outcome only. A completion recorded
+  // after that read always wins, even while the unsigned proof is still fresh.
+  if(completion&&(!recover||Date.parse(completion.evidence.confirmedAt??completion.evidence.createdAt)>=unsignedAt))
+    return {...completion,nativeGate:true,submissionAttempted:false};
+  if(recover){
+    const until=Date.parse(prior?.nextEligibleAt??'');
+    if(Number.isFinite(until)&&until>now.getTime())return {...prior,nativeGate:true,submissionAttempted:false};
     return null;
   }
-  if(nativeCurrentSuccess(receipt,now))return {...receipt,nativeGate:true,submissionAttempted:false};
-  if(nativeCurrentSuccess(prior,now))return {...prior,nativeGate:true,submissionAttempted:false};
   if(pending||prior?.submissionAttempted===true&&!success(prior)||prior?.failureCode==='submission_outcome_unknown')return unknown();
   if(reportedToday&&success(prior))return {status:'needs_attention',failureCode:'authoritative_status_unavailable',
     submissionAttempted:false,nativeGate:true,retryable:false,reason:'今日已有成功记录，先补齐只读证据，不重复提交'};
@@ -112,9 +118,11 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
     const verified=verify(root,target,config,now);
     const savedCompletion=journal.attempts.filter(a=>sameAccount(a)&&a.profileBinding===binding.profileBinding&&a.state==='confirmed'&&nativeCurrentSuccess(a,now))
       .sort((a,b)=>Date.parse(b.confirmedAt)-Date.parse(a.confirmedAt))[0];
-    const receipt=verified?.profileBinding===binding.profileBinding?verified:savedCompletion?{
+    const persisted=savedCompletion?{
       status:'already_signed',profileBinding:binding.profileBinding,evidence:savedCompletion.evidence,
       reason:'原生执行的当日持久化回执已确认完成，无需重复提交'}:null;
+    const receipt=[verified,persisted].filter(value=>value?.profileBinding===binding.profileBinding&&nativeCurrentSuccess(value,now))
+      .sort((a,b)=>Date.parse(b.evidence.confirmedAt??b.evidence.createdAt)-Date.parse(a.evidence.confirmedAt??a.evidence.createdAt))[0]??null;
     if(nativeCurrentSuccess(receipt,now)){
       let changed=false;const confirmed=Date.parse(receipt.evidence.confirmedAt);
       for(const previous of journal.attempts){
@@ -127,27 +135,40 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
       if(changed)writeJournal(file,journal);
     }
     const pendingEntries=journal.attempts.filter(a=>sameAccount(a)&&a.state==='submitted'&&a.attemptId!==attemptId);
+    const reportAt=Date.parse(latest?.finishedAt??latest?.generatedAt??'');
+    const reportedToday=Number.isFinite(reportAt)&&dayAt(reportAt)===dayAt(now);
     let unsigned=false;
     if(integration?.v2ProjectRoot){
       const report=read(path.join(integration.v2ProjectRoot,'outputs',`pt-fallback-results-${dayAt(now)}.json`),null);
       const proof=report?.sites?.find(r=>r.origin===target.origin&&r.accountKey===accountKey),at=Date.parse(proof?.evidence?.confirmedAt??'');
       const after=Math.max(0,...pendingEntries.map(a=>Date.parse(a.startedAt)),
-        prior?.failureCode==='submission_outcome_unknown'?Date.parse(latest?.finishedAt??'')||0:0);
-      unsigned=report?.source==='execution-supplement'&&proof?.status==='not_signed'&&proof.profileBinding===binding.profileBinding&&
+        prior?.failureCode==='submission_outcome_unknown'?reportAt||0:0,
+        ...[prior,receipt].filter(value=>nativeCurrentSuccess(value,now)).map(value=>Date.parse(value.evidence.confirmedAt??value.evidence.createdAt)),
+        reportedToday&&success(prior)?reportAt:0);
+      const valid=report?.source==='execution-supplement'&&report.businessDate===dayAt(now)&&proof?.status==='not_signed'&&proof.profileBinding===binding.profileBinding&&
+        pendingEntries.every(a=>a.profileBinding===binding.profileBinding)&&
         proof.submissionAttempted===false&&proof.readSafety==='reviewed_passive'&&proof.operationMode==='safe_history_page'&&
         proof.evidence?.authoritative===true&&proof.evidence.evidenceScope==='site_account_day'&&
+        ['page_text','pt_page'].includes(proof.evidence.source)&&proof.evidence.statusSignal==='nexus_daily_header_unsigned'&&proof.evidence.pagePath==='/index.php'&&
         proof.businessDate===dayAt(now)&&proof.evidence.businessDate===dayAt(now)&&Number.isFinite(at)&&
-        at>=after&&at<=now.getTime()&&now.getTime()-at<=5*60_000;
+        Math.abs(Date.parse(proof.observedAt)-at)<=60_000&&at>after&&at<=now.getTime()&&now.getTime()-at<=5*60_000;
+      if(valid)unsigned=proof.evidence;
     }
-    const reportAt=Date.parse(latest?.finishedAt??latest?.generatedAt??'');
     let decision=nativePtDecision({prior,pending:pendingEntries.length>0,receipt,unsigned,
-      reportedToday:Number.isFinite(reportAt)&&dayAt(reportAt)===dayAt(now),now});
+      reportedToday,now});
     if(owned&&owned.state==='confirmed')decision=unknown();
     if(owned&&(dayAt(owned.startedAt)!==dayAt(now)||now.getTime()-Date.parse(owned.startedAt)>10*60_000))decision=unknown();
     if(!decision)decision=harvest(target,{root,now});
     if(dayAt(clock())!==dayAt(now))decision=owned?unknown():deferred(clock(),'业务日期已切换，先刷新当日原生核验');
     if(decision)return {managed:true,allow:false,decision:{...decision,nativeGate:true}};
-    if(phase==='inspect')return {managed:true,allow:true,navigationRisk:nativePtNavigationRisk(url)};
+    if(phase==='inspect'){
+      if(unsigned&&pendingEntries.length){
+        for(const previous of pendingEntries){previous.state='resolved_not_signed';previous.resolvedAt=now.toISOString();
+          previous.resolution='passive_readback_not_signed';previous.readbackEvidence=safeEvidence(unsigned);}
+        writeJournal(file,journal);
+      }
+      return {managed:true,allow:true,navigationRisk:nativePtNavigationRisk(url)};
+    }
     if(!/^[a-f0-9-]{36}$/.test(attemptId??'')||!['navigation','click'].includes(action))throw Error('invalid native attempt action');
     if(owned?.actions.includes(action))return {managed:true,allow:false,decision:unknown()};
     if(unsigned)for(const previous of pendingEntries){previous.state='resolved_not_signed';previous.resolvedAt=now.toISOString();}

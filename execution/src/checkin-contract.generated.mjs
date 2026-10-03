@@ -161,6 +161,7 @@ export const ptReadPolicies = Object.freeze({
     "openCdHeader": true
   },
   "https://www.hddolby.com": {
+    "url": "https://www.hddolby.com/log.php",
     "selector": "#info_block",
     "hddolbyHeader": true
   },

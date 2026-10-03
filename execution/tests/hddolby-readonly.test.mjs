@@ -60,6 +60,10 @@ test('a take2fa redirect needs real readback and never accepts generic homepage 
     evidence:{...proven.evidence,statusSignal:'generic_page_text'}}))).status,'needs_attention');
 });
 test('HDDolby capability cannot be transplanted to another site or an action page',()=>{
+  const standard=ptReadPolicy(origin);
+  assert.equal(standard.url,origin+'/log.php');
+  assert.equal(standard.hddolbyHeader,true);
+  assert.equal(standard.reviewed,true);
   const base={reviewed:true,mode:'safe_history_page',url:origin+'/log.php',selector:'#info_block',hddolbyHeader:true};
   assert.equal(ptReadPolicy(origin,{ptReadOnlyPolicies:{[origin]:base}}).hddolbyHeader,true);
   for(const rule of [{...base,url:origin+'/attendance.php'},{...base,nativeMainChrome:true},{...base,selector:'body'}])
