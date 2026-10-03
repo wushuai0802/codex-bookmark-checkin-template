@@ -20,7 +20,7 @@ import {
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { pendingOpenCdSubmission, pendingQuotaClaim } from "./quota-claim-guard.mjs";
-import {verifiedPtObservation} from './pt-observation-receipt.mjs';
+import {verifiedPtObservation,recoverablePtHomepage} from './pt-observation-receipt.mjs';
 import {observePendingVibeClaim} from './vibe-readonly.mjs';
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
@@ -342,6 +342,7 @@ try {
         return !prior
           || isRetryEligible(prior)
           || completedNativeRecovery(target, prior, nativeWafPreflight)
+          || recoverablePtHomepage(rootDirectory,target,prior,config,resumeBase.finishedAt)
           || terminalResultReenabled(prior, target, config)
           || (config.disabledCheckinOrigins ?? []).includes(target.origin)
           || (config.disabledAccountKeys ?? []).includes(String(target.accountKey ?? '').trim());
@@ -622,13 +623,14 @@ try {
           if(observed)guardedQuotaClaim={...guardedQuotaClaim,...observed};
         }
         const reenabledTerminal = terminalResultReenabled(prior, target, config);
+        const unsignedHomepage = recoverablePtHomepage(rootDirectory,target,prior,config,resumeBase?.finishedAt);
         const nativeRecovered = completedNativeRecovery(target, prior, nativeWafPreflight);
         const targetResult = nativeRecovered
           ? { ...nativeRecovered, attempt: 0, nativePreflight: true, durationMs: 0 }
           : guardedQuotaClaim
           ? guardedQuotaClaim
           : explicitSelection && prior && isTerminalResult(prior)
-          && !reenabledTerminal
+          && !reenabledTerminal && !unsignedHomepage
           ? prior
           : isolatedPrimaryByIdentity.has(resultIdentity(target))
             ? await runIsolatedPrimaryTarget(target)

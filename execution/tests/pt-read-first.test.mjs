@@ -39,6 +39,25 @@ test('authenticated daily completion stops the real browser flow before any atte
   }finally{await browser.close();}
 });
 
+test('homepage status legends cannot confirm check-in when the authenticated daily control is unsigned',async()=>{
+  const origin='https://p.t-baozi.cc',browser=await chromium.launch({headless:true,channel:'chrome'});
+  try{
+    const context=await browser.newContext({javaScriptEnabled:false,serviceWorkers:'block'}),visited=[];
+    await context.route('**/*',async route=>{
+      visited.push(route.request().url());
+      assert.equal(route.request().url(),origin+'/index.php');
+      await route.fulfill({status:200,contentType:'text/html; charset=utf-8',body:
+        '<a href="/logout.php">退出</a><a href="/usercp.php">设置</a><a href="/userdetails.php?id=7">本人</a>'+
+        '<div id="info_block"><a href="/attendance.php">[签到得魔力]</a></div><footer>状态说明：已签到 / 待签到</footer>'});
+    });
+    const result=await processTarget(context,{origin,allowedOrigins:[origin],folderNames:['PT白名单'],candidates:[origin+'/index.php']},
+      {retryCount:0,navigationTimeoutMs:5000,failureScreenshots:false},{},'unused');
+    assert.equal(result.status,'visited');assert.equal(result.submissionAttempted,false);
+    assert.notEqual(result.evidence?.authoritative,true);assert.deepEqual(visited,[origin+'/index.php']);
+    await context.close();
+  }finally{await browser.close();}
+});
+
 test('real server redirects cannot bypass the passive firewall to attendance; login is read without following another redirect',async()=>{
   const visited=[];let redirect='/attendance.php',loginRedirect=false,browser;
   const server=http.createServer((request,response)=>{
