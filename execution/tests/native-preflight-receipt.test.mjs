@@ -5,6 +5,7 @@ import { isTerminalResult } from "../src/result-contract.mjs";
 import { reuseRecentNotAvailable } from "../src/site-state.mjs";
 
 const origin = "https://pt.example";
+const profileBinding = "a".repeat(64);
 const now = new Date("2026-10-02T04:00:00.000Z");
 const generatedAt = "2026-10-02T03:59:59.000Z";
 function completed(overrides = {}) {
@@ -20,6 +21,24 @@ function completed(overrides = {}) {
 }
 function read(results, options = {}) {
   return currentNativePreflightResults({ generatedAt, results }, { allowedOrigins: [origin], now, ...options });
+}
+
+function journalAttempt(overrides = {}) {
+  return {
+    origin,
+    accountKey: "site-default",
+    profileBinding,
+    businessDate: "2026-10-02",
+    state: "confirmed",
+    status: "already_signed",
+    confirmedAt: "2026-10-02T03:59:58.000Z",
+    evidence: {
+      source: "page_text", authoritative: true,
+      confirmedAt: "2026-10-02T03:59:58.000Z", businessDate: "2026-10-02",
+      pagePath: "/attendance.php", statusSignal: "same_day_page_text",
+    },
+    ...overrides,
+  };
 }
 
 test("native preflight retains authoritative same-day completion in the configured scope", () => {
@@ -39,6 +58,44 @@ test('a dated native completion repairs a lost response without making the old s
   assert.equal(prior.retryable,false);
   assert.equal(completedNativeRecovery({origin,accountKey:'other-account'},prior,read([receipt])),null);
   assert.equal(completedNativeRecovery({origin},{...prior,status:'already_signed'},read([receipt])),null);
+});
+
+test("same-day confirmed native journal completion is imported with an exact profile binding", () => {
+  const map = read([], {
+    journal: { schemaVersion: 1, attempts: [journalAttempt()] },
+    profileBindings: new Map([[origin, profileBinding]]),
+  });
+  const receipt = map.get(origin);
+  assert.equal(receipt.status, "already_signed");
+  assert.equal(receipt.submissionAttempted, false);
+  assert.equal(receipt.profileBinding, profileBinding);
+  assert.equal(completedNativeRecovery({ origin, accountKey: "site-default", profileBinding },
+    { origin, status: "needs_attention", submissionAttempted: true, failureCode: "submission_outcome_unknown" }, map), receipt);
+  assert.equal(completedNativeRecovery({ origin, accountKey: "site-default", profileBinding: "b".repeat(64) },
+    { origin, status: "needs_attention", submissionAttempted: true }, map), null);
+});
+
+test("a submitted native journal entry, including audiences-style unknown outcome, remains blocked", () => {
+  const map = read([], {
+    journal: { schemaVersion: 1, attempts: [journalAttempt({ state: "submitted", status: undefined, evidence: undefined })] },
+    profileBindings: new Map([[origin, profileBinding]]),
+  });
+  assert.equal(map.has(origin), false);
+  assert.equal(completedNativeRecovery({ origin, accountKey: "site-default", profileBinding },
+    { origin, status: "needs_attention", submissionAttempted: true, failureCode: "submission_outcome_unknown" }, map), null);
+});
+
+test("a current journal completion remains usable when the preflight report is stale", () => {
+  const map = currentNativePreflightResults({
+    generatedAt: "2026-10-02T00:00:00.000Z",
+    results: [{ origin, status: "needs_attention", submissionAttempted: true }],
+  }, {
+    allowedOrigins: [origin], now,
+    journal: { schemaVersion: 1, attempts: [journalAttempt()] },
+    profileBindings: new Map([[origin, profileBinding]]),
+  });
+  assert.equal(map.get(origin).status, "already_signed");
+  assert.equal(map.get(origin).evidence.authoritative, true);
 });
 
 test('invalid native completion cannot reopen the recovery path for an uncertain submission', () => {

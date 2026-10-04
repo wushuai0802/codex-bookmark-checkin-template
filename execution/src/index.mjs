@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import fsSync from "node:fs";
+import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -172,7 +173,37 @@ async function readValidatedBookmarkPlan() {
   return plan;
 }
 
-async function readFreshNativeWafPreflight() {
+function nativePreflightProfileBinding(target) {
+  if ((target?.accountKey ?? "site-default") !== "site-default") return null;
+  let origin;
+  try { origin = new URL(target.origin).origin; } catch { return null; }
+  const originOf = value => {
+    try { return new URL(typeof value === "string" ? value : value?.url).origin; } catch { return null; }
+  };
+  const nativeEntry = [
+    ...(config.nativeWafPreflightUrls ?? []),
+    ...(config.nativeChallengePreflight ?? []),
+  ].find(value => originOf(value) === origin);
+  let profile;
+  if (nativeEntry) {
+    const configured = typeof nativeEntry === "string" ? "" : String(nativeEntry.automationUserDataDir ?? "");
+    profile = path.resolve(rootDirectory, configured || String(config.automationUserDataDir ?? ""));
+  } else {
+    const fallback = (config.mainChromeFallbackUrls ?? []).find(value => {
+      const sourceOrigin = typeof value === "string" ? originOf(value) : value?.sourceOrigin;
+      return (sourceOrigin ? originOf(sourceOrigin) : originOf(value)) === origin;
+    });
+    if (!fallback) return null;
+    // Main Chrome fallback uses the profile that owns AccountBookmarks, as in
+    // nativePtReadBinding. The bookmark file itself remains outside the repo.
+    profile = path.dirname(path.resolve(String(config.bookmarksPath ?? "")));
+  }
+  if (!profile || profile === path.parse(profile).root) return null;
+  const key = process.platform === "win32" ? profile.toLowerCase() : profile;
+  return crypto.createHash("sha256").update(key).digest("hex");
+}
+
+async function readFreshNativeWafPreflight(targets = []) {
   if (ignoreNativePreflight) return new Map();
   const configuredOrigins = [
     ...(config.nativeWafPreflightUrls ?? []).map((value) => (
@@ -187,7 +218,15 @@ async function readFreshNativeWafPreflight() {
   const report = await fs.readFile(nativeWafPreflightPath, "utf8")
     .then((text) => JSON.parse(text))
     .catch(() => null);
-  return currentNativePreflightResults(report, { allowedOrigins });
+  const profileBindings = new Map();
+  for (const target of targets) {
+    const profileBinding = nativePreflightProfileBinding(target);
+    if (profileBinding && !profileBindings.has(target.origin)) profileBindings.set(target.origin, profileBinding);
+  }
+  const journal = await fs.readFile(path.join(rootDirectory, "data", "native-pt-attempts.json"), "utf8")
+    .then((text) => JSON.parse(text))
+    .catch(() => null);
+  return currentNativePreflightResults(report, { allowedOrigins, journal, profileBindings });
 }
 
 const activeContexts = new Set();
@@ -318,11 +357,15 @@ try {
     ];
     const results = [];
     let sessionPreflightResults = [];
-    const nativeWafPreflight = await readFreshNativeWafPreflight();
     const nativeWafOrigins = configuredNativeWafOrigins(config);
     const preferredTargets = applyPreferredCandidates(plan.targets, siteState)
-      .map((target) => ({ ...target, ...accountMetadataForOrigin(target.origin, config) }));
+      .map((target) => {
+        const value = { ...target, ...accountMetadataForOrigin(target.origin, config) };
+        const profileBinding = nativePreflightProfileBinding(value);
+        return profileBinding ? { ...value, profileBinding } : value;
+      });
     const plannedTargets = [...preferredTargets, ...supplementalAccounts];
+    const nativeWafPreflight = await readFreshNativeWafPreflight(plannedTargets);
     if (selectedOrigins) {
       const configuredOrigins = new Set(plannedTargets.map((target) => target.origin));
       for (const origin of selectedOrigins) {
