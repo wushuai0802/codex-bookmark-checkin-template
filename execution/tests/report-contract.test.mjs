@@ -255,6 +255,25 @@ test("站点故障单列外部条件，保留有限复核时间而不误报本�
   assert.doesNotMatch(report.summary, /需处理|待重试|❌/);
 });
 
+test("完整签到只剩站点外部故障时仍报告已完成，并保留等待外部说明", async () => {
+  const report = await previewReport({
+    runId: "20261004-external-only",
+    runState: "final",
+    plannedTotal: 3,
+    processedTotal: 3,
+    isComplete: true,
+    results: [
+      { origin: "https://one.example.test", status: "signed" },
+      { origin: "https://two.example.test", status: "already_signed" },
+      { origin: "https://site-fault.example.test", status: "deferred", retryCause: "upstream_unavailable", nextEligibleAt: "2026-10-05T00:05:00Z" },
+    ],
+  });
+  assert.equal(report.status, "success");
+  assert.doesNotMatch(report.summary, /待确认/);
+  assert.match(report.summary, /等待外部 1/);
+  assert.match(report.summary, /已签到 2\/3/);
+});
+
 test('unknown submissions stay in verification even if the site is under maintenance',async()=>{
   const report=await previewReport({runId:'20260930-review',runState:'final',plannedTotal:1,processedTotal:1,isComplete:true,
     results:[{origin:'https://review.example.test',status:'needs_attention',failureCode:'submission_outcome_unknown',

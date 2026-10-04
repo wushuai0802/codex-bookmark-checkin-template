@@ -153,6 +153,12 @@ $attentionProblems = @($localProblems | Where-Object { $_.status -notin $automat
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
+elseif ($isCompleteFinalReport -and $attentionProblems.Count -eq 0 -and $verificationProblems.Count -eq 0 -and
+    $externalProblems.Count -gt 0 -and $done -gt 0) {
+    # The project report is complete. Keep site-side outages in the summary,
+    # but do not label the whole daily receipt as unconfirmed.
+    $status = if ($statuses -contains 'signed') { 'success' } elseif ($statuses -contains 'already_signed') { 'already_done' } else { 'skipped' }
+}
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'signed') { $status = 'success' }
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'already_signed') { $status = 'already_done' }
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0) { $status = 'skipped' }
