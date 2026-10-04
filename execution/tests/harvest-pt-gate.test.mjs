@@ -19,6 +19,11 @@ test('PT gate waits for an exact fresh same-day Harvest completion',()=>{
   assert.equal(harvestPtDecision({report:{...report(),taskCompletion:{...report().taskCompletion,resultId:null}},target,now}).status,'deferred');
 });
 
+test('a same-day failed Harvest task releases Harvest-owned PT sites to the execution layer',()=>{
+  const failedReport={...report(),taskCompletion:{...report().taskCompletion,status:'failed'}};
+  assert.equal(harvestPtDecision({report:failedReport,target,now}),null);
+});
+
 test('Harvest confirmed same-day success is observed once; its user ID is not a PT account ID',()=>{
   const signed={...report(),sites:[{origin:target.origin,userId:'different-harvest-id',status:'signed',
     observedAt:'2026-09-29T01:58:00Z',evidence:{source:'harvest',authoritative:true}}]};

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted} from './pt-coordination.mjs';
+import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted,harvestTaskFailed} from './pt-coordination.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
@@ -41,7 +41,7 @@ export function harvestPtDecision({report,target,now=new Date()}={}){
   }
   if(assignment.owner==='unknown')return wait('Harvest 签到分工尚未确认，先只读核验');
   if(assignment.owner==='execution')return null;
-  if(!harvestTaskCompleted(report,businessDate,now))return wait('Harvest 当日任务未完成或正在重新执行，PT 提交已暂缓');
+  if(!harvestTaskCompleted(report,businessDate,now)&&!harvestTaskFailed(report,businessDate,now))return wait('Harvest 当日任务未完成或正在重新执行，PT 提交已暂缓');
   return null;
 }
 
