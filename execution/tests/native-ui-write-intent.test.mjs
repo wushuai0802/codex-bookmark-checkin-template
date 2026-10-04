@@ -143,6 +143,14 @@ test("both native readers initialize before UI setup and guard navigation before
   }
 });
 
+test("a gated native unknown first gets a read-only main-profile recovery when the site has a fallback", async () => {
+  const source = await fs.readFile(scripts + "Prepare-NativeWafSession.ps1", "utf8");
+  assert.match(source, /function Invoke-MainChromeReadOnlyFallbackResult/);
+  assert.match(source, /failureCode -eq 'submission_outcome_unknown'[\s\S]{0,420}Invoke-MainChromeReadOnlyFallbackResult/);
+  assert.match(source, /-ReadOnly/);
+  assert.match(source, /submissionAttempted -eq \$true/);
+});
+
 test("native completion preserves local submission facts even when no PT journal owns the site", async () => {
   const command = harness + `
 $script:NativePtGuard=@{managed=$false;attempted=$false;readOnly=$false}
