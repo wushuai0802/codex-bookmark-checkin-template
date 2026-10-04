@@ -99,7 +99,7 @@ test('a bookmarked PT site absent from Harvest is reviewed after the daily task 
   assert.equal(preview.eligible[1].kind,'fallback_only');
   assert.equal(preview.eligible[1].trigger,'monitored_pt_status_unobserved');
   f.harvest.taskCompletion.status='failed';
-  assert.equal(planHarvestFallback(f).eligible.length,0);
+  assert.equal(planHarvestFallback(f).eligible.length,2);
   f.harvest.taskCompletion.status='completed';
   f.fallbackOnlyEnabled=false;
   assert.equal(planHarvestFallback(f).blocked.some(item=>item.origin==='https://external.example'&&item.reason==='fallback_only_not_enabled'),true);
@@ -108,7 +108,7 @@ test('unknown Harvest status is reviewed only after its daily task completes',()
   const f=fixture();f.catalog.sites=f.catalog.sites.slice(0,1);f.harvest.sites=[{origin:'https://ourbits.club',userId:'7',status:'unknown',observedAt:null,evidence:{authoritative:false}}];
   const reviewed=planHarvestFallback(f);
   assert.equal(reviewed.eligible[0].trigger,'harvest_task_done_status_unknown');
-  f.harvest.taskCompletion.status='failed';assert.equal(planHarvestFallback(f).blocked[0].reason,'harvest_task_not_complete');
+  f.harvest.taskCompletion.status='failed';assert.equal(planHarvestFallback(f).eligible[0].trigger,'harvest_task_failed');
   f.harvest.taskCompletion.status='completed';f.latest.results[0].status='already_signed';assert.equal(planHarvestFallback(f).eligible.length,0);
   f.latest.results[0].status='needs_attention';assert.equal(planHarvestFallback(f).eligible[0].origin,'https://ourbits.club');
 });

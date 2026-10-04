@@ -31,3 +31,12 @@ export function harvestTaskCompleted(report,businessDate,now=new Date()){
     dayAt(started)===businessDate&&dayAt(ended)===businessDate&&
     (completion.activeTaskCount===undefined||completion.activeTaskCount===0);
 }
+
+export function harvestTaskFailed(report,businessDate,now=new Date()){
+  const completion=report?.taskCompletion,started=Date.parse(completion?.startedAt),ended=Date.parse(completion?.completedAt);
+  const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
+  return completion?.status==='failed'&&Number.isInteger(completion.resultId)&&
+    Number.isFinite(started)&&Number.isFinite(ended)&&started<=ended&&ended<=now.getTime()+60_000&&
+    dayAt(started)===businessDate&&dayAt(ended)===businessDate&&
+    (completion.activeTaskCount===undefined||completion.activeTaskCount===0);
+}

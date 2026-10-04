@@ -63,6 +63,18 @@ function Test-NativeDailyControl([string]$Origin, [string]$Control) {
         $text -match '^(?:签到已得|簽到已得)[0-9,.]+(?:,\s*补签卡:\s*\d+)?$'
 }
 
+function Test-NativeAudiencesDailyHeader($Snapshot, [string]$Origin) {
+    if ($Origin -cne 'https://audiences.me' -or $null -eq $Snapshot -or
+        $Snapshot.sameOrigin -ne $true -or $Snapshot.pageContentAvailable -ne $true -or
+        $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute) { return $false }
+    $body = [string]$Snapshot.bodyText
+    # Audiences renders the authenticated account header as a reward counter
+    # instead of a separate signed control. Require its account-only daily
+    # reward marker plus the stable account statistics before accepting it.
+    return $body -cmatch '(?:^|\s)已签到\s*\+\s*[0-9,.]+' -and
+        $body -cmatch '爆米花' -and $body -cmatch 'H&R'
+}
+
 function Test-NativeUnsignedControl([string]$Origin, [string]$Control) {
     $text = ($Control -replace '^[\[【]|[\]】]$', '').Trim()
     return $CheckinNativePtUnsignedLabels.ContainsKey($Origin) -and
@@ -93,11 +105,13 @@ function Get-ConfirmedNativePageEvidence($Snapshot, [string]$TargetUrl, [bool]$C
     } catch { return $null }
     $headerOrigin = $expected.GetLeftPart([System.UriPartial]::Authority)
     $reviewedHeader = @($CheckinNativePtHeaderOrigins | Where-Object { ($_ -replace '^https://www\.', 'https://') -eq ($headerOrigin -replace '^https://www\.', 'https://') }).Count -gt 0
-    $header = $reviewedHeader -and $Snapshot.authenticated -eq $true -and
+    $audiencesHeader = Test-NativeAudiencesDailyHeader $Snapshot $headerOrigin
+    $header = $reviewedHeader -and ($Snapshot.authenticated -eq $true -or $audiencesHeader) -and
         $actual.AbsolutePath -in @('/', '/index.php') -and -not $actual.Query -and
-        ($null -eq $Snapshot.signedControlCount -or $Snapshot.signedControlCount -eq 1) -and
+        (($audiencesHeader -and $Snapshot.signedControlCount -eq 0) -or
+            $null -eq $Snapshot.signedControlCount -or $Snapshot.signedControlCount -eq 1) -and
         ($null -eq $Snapshot.unsignedControlCount -or $Snapshot.unsignedControlCount -eq 0) -and
-        (Test-NativeDailyControl $headerOrigin ([string]$Snapshot.successControl))
+        ($audiencesHeader -or (Test-NativeDailyControl $headerOrigin ([string]$Snapshot.successControl)))
     if (-not $header -and $actual.AbsolutePath -notmatch '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$') { return $null }
     $body = if ($Snapshot.successText) { [string]$Snapshot.successText } else { [string]$Snapshot.bodyText }
     $daily = $body -match '(?:今日|今天|当日|當日).{0,12}(?:已签到|已簽到|已经签到|已經簽到)|已完成今日签到|already checked[ -]?in today|checked in today'
