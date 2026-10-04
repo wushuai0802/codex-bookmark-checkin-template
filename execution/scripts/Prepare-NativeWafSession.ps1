@@ -251,6 +251,31 @@ function Invoke-MainChromeFallbackResult([string]$Origin, [string]$Url, [int]$Ti
     return $lastResult
 }
 
+function Invoke-MainChromeReadOnlyFallbackResult([string]$Origin, [int]$TimeoutSeconds) {
+    if (-not $mainFallbackByOrigin.ContainsKey($Origin)) { return $null }
+    try {
+        $fallback = $mainFallbackByOrigin[$Origin]
+        $fallbackOrigin = ([uri][string]$fallback.url).GetLeftPart([System.UriPartial]::Authority)
+        $readOnlyUrl = $fallbackOrigin + '/index.php'
+        $powershellExecutable = (Get-Process -Id $PID).Path
+        $arguments = @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+            (Join-Path $PSScriptRoot 'Invoke-MainChromeCheckinAccessibility.ps1'),
+            '-Origin', $Origin, '-Url', $readOnlyUrl, '-ReadOnly',
+            '-TimeoutSeconds', [string]$TimeoutSeconds
+        )
+        $text = & $powershellExecutable @arguments 2>$null
+        if (-not $text) { return $null }
+        $value = $text | ConvertFrom-Json
+        if ([string]$value.status -notin @('signed', 'already_signed') -or
+            $value.submissionAttempted -eq $true -or $value.evidence.authoritative -ne $true) { return $null }
+        $value | Add-Member -NotePropertyName origin -NotePropertyValue $Origin -Force
+        $value | Add-Member -NotePropertyName url -NotePropertyValue $readOnlyUrl -Force
+        $value | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+        return $value
+    } catch { return $null }
+}
+
 function Close-AutomationChrome {
     $targets = @(Get-AutomationChromeProcesses)
     $targetIds = @($targets.ProcessId)
@@ -305,6 +330,13 @@ foreach ($candidate in $items) {
     $candidateProfile = if ($useMain) { Split-Path -Parent ([string]$config.bookmarksPath) } else { [string]$candidate.profilePath }
     $decision = Initialize-NativePtGuard -Root $root -Origin $candidateOrigin -Url $candidateUrl -ProfilePath $candidateProfile -MainProfile:$useMain
     if ($null -ne $decision) {
+        if ([string]$decision.failureCode -eq 'submission_outcome_unknown') {
+            $readback = Invoke-MainChromeReadOnlyFallbackResult $candidateOrigin ([int]$candidate.waitSeconds)
+            if ($null -ne $readback) {
+                $preflightResults += $readback
+                continue
+            }
+        }
         $decision | Add-Member -NotePropertyName origin -NotePropertyValue $candidateOrigin -Force
         $decision | Add-Member -NotePropertyName url -NotePropertyValue $candidateUrl -Force
         $decision | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
