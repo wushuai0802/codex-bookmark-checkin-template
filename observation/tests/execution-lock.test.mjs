@@ -44,6 +44,9 @@ test('two processes cannot both reclaim and hold a dead lease',async t=>{
   assert.deepEqual(results.sort(),['busy','owned']);
   await Promise.all(children.map(child=>new Promise(resolve=>{
     if(child.exitCode!==null){resolve();return;}
-    child.once('exit',resolve);child.stdin.end('release');
+    let settled=false;const finish=()=>{if(!settled){settled=true;resolve();}};
+    child.once('exit',finish);child.stdin.once('error',finish);
+    if(!child.stdin.destroyed){try{child.stdin.end('release');}catch{finish();}}
+    else finish();
   })));
 });
