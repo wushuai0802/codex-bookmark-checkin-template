@@ -47,7 +47,7 @@ export function projectPtSiteResult(value,origin){
       summary:typeof evidence.summary==='string'?evidence.summary.slice(0,160):''},
     ...(value.submissionOutcomeUnknown===true?{submissionOutcomeUnknown:true}:{}),
     ...(value.submissionAttempted===true?{submissionAttempted:true}:{}),
-    ...(value.submissionAttempted===false&&value.submissionOutcomeUnknown!==true?{submissionAttempted:false}:{})};
+    ...(value.submissionAttempted===false?{submissionAttempted:false}:{})};
 }
 
 export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,spawnChild=spawn,timeoutMs=600_000}){

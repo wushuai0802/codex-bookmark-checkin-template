@@ -338,8 +338,10 @@ function safeFailureReason(error) {
 }
 
 function oauthFailureCode(error) {
+  if (error?.failureCode === "two_factor_required") return "two_factor_required";
   const message = safeFailureReason(error);
   if (/账号与配置不匹配|账号不匹配|绑定不匹配/i.test(message)) return "account_mismatch";
+  if (/GitHub.*(?:二次验证|两步验证|双重验证)|sessions\/two-factor|two-factor(?:\/|\b)/i.test(message)) return "two_factor_required";
   if (/需要人工确认一次 .* 登录|登录已失效/i.test(message)) return "upstream_login_required";
   if (/需要人工确认一次 .* 授权|授权步骤超过安全点击上限/i.test(message)) return "upstream_authorization_required";
   if (/验证|turnstile|challenge/i.test(message)) return "managed_challenge";
@@ -496,6 +498,11 @@ try {
       continue;
     }
     if (location.hostname === "github.com") {
+      if (/^\/sessions\/two-factor(?:\/|$)/i.test(location.pathname)) {
+        const error = new Error("GitHub OAuth 需要完成二次验证");
+        error.failureCode = "two_factor_required";
+        throw error;
+      }
       if (/^\/login(?:[/?#]|$)/i.test(location.pathname)) {
         if (await restoreSavedGitHubLogin(page, githubSavedLoginState)) {
           continue;

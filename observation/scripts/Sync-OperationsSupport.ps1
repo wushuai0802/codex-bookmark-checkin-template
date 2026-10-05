@@ -1,5 +1,8 @@
 ﻿# Shared by the private Windows sync scheduler; dot-source after loading its config.
 # The caller supplies Write-SchedulerLog. Notification retries never run a sync.
+$syncTransportPath = Join-Path $PSScriptRoot 'Sync-Transport.ps1'
+if (Test-Path -LiteralPath $syncTransportPath -PathType Leaf) { . $syncTransportPath }
+
 function Get-SyncNotificationValues([string]$Status, [string]$Summary, [string]$EventKey) {
     if ($Status -eq 'completed') { $Status = 'success' }
     if ($Status -notin @('success', 'failed')) { throw 'Unsupported sync notification status' }
@@ -99,9 +102,10 @@ function Set-SyncAttemptOutcome([System.Collections.IDictionary]$State, $Previou
         $State['lastSourceFingerprint'] = $SourceFingerprint
         $State['lastV2Fingerprint'] = $V2Fingerprint
         Write-SchedulerLog 'Scheduled panel sync succeeded.'
-        if ([int]$Previous.failureCount -gt 0) {
+        if ($Previous.syncFailureNotificationSent -eq $true) {
             $State['pendingNotification'] = New-PendingNotification 'success' '面板数据同步已恢复，签到状态与日历已更新。' "fabric-sync-recovered-$($Finished.ToString('yyyyMMdd-HHmmssfff'))" $Finished
         }
+        $State['syncFailureNotificationSent'] = $false
         return
     }
     $failureCount = [Math]::Min(8, [int]$Previous.failureCount + 1)
@@ -113,8 +117,11 @@ function Set-SyncAttemptOutcome([System.Collections.IDictionary]$State, $Previou
     $State['failureCount'] = $failureCount
     $State['nextRetryAt'] = $nextRetry.ToString('o')
     Write-SchedulerLog "Scheduled panel sync failed (exit=$ExitCode; cause=$FailureCause); next probe=$($nextRetry.ToString('o'))."
-    if ($failureCount -eq 1) {
+    # A single transport blip is retried silently. Notify only after three
+    # consecutive failures, then send one recovery notice on the next success.
+    if ($failureCount -ge 3 -and $Previous.syncFailureNotificationSent -ne $true) {
         $State['pendingNotification'] = New-PendingNotification 'failed' '面板数据同步暂时失败，后台将自动重试；签到执行任务继续按原计划运行。' "fabric-sync-failed-$($Finished.ToString('yyyyMMdd-HHmmssfff'))" $Finished
+        $State['syncFailureNotificationSent'] = $true
     }
 }
 
@@ -163,16 +170,13 @@ function Get-SyncTransportFailure([string]$Phase, [int]$ExitCode, [object[]]$Out
 }
 
 function Invoke-SyncRemoteCommand([string]$Executable, [string[]]$Arguments, [string]$Phase) {
-    $ErrorActionPreference = 'Continue'
-    $PSNativeCommandUseErrorActionPreference = $false
-    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-        return [pscustomobject]@{ exitCode = -1; failure = "$Phase failed (exit=-1; cause=executable_missing)" }
+    if (-not (Get-Command Invoke-BoundedSyncProcess -CommandType Function -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ exitCode = -1; failure = "$Phase failed (exit=-1; cause=transport_helper_missing)" }
     }
-    try { $output = @(& $Executable @Arguments 2>&1); $code = $LASTEXITCODE }
-    catch { $output = @(); $code = -1 }
+    $result = Invoke-BoundedSyncProcess $Executable $Arguments $Phase '' 45
     return [pscustomobject]@{
-        exitCode = $code
-        failure = if ($code -ne 0) { Get-SyncTransportFailure $Phase $code $output } else { $null }
+        exitCode = $result.exitCode
+        failure = if ($result.exitCode -ne 0) { $result.failure } else { $null }
     }
 }
 

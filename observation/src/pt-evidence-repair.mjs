@@ -15,8 +15,9 @@ export function ptEvidenceCandidates(snapshot,catalog,state,now=new Date()){
   const receipts=new Map((snapshot.receipts??[]).map(r=>[r.taskId,r]));
   const origins=new Set((catalog.sites??[]).map(s=>s.origin));
   return (snapshot.tasks??[]).filter(t=>{
-    if(!origins.has(t.origin)||!['signed','already_signed'].includes(t.observedStatus)||receipts.get(t.taskId)?.evidence?.authoritative===true)return false;
-    if(t.failureCode==='submission_outcome_unknown')return false;
+    const readbackReview=t.observedStatus==='needs_attention'&&t.failureCode==='submission_outcome_unknown'&&t.submissionAttempted===true;
+    const positiveWithoutEvidence=['signed','already_signed'].includes(t.observedStatus);
+    if(!origins.has(t.origin)||(!positiveWithoutEvidence&&!readbackReview)||receipts.get(t.taskId)?.evidence?.authoritative===true)return false;
     const previous=state.sites?.[t.origin];
     return !previous||previous.businessDate!==today||previous.attempts<2&&Date.parse(previous.nextAttemptAt)<=now.getTime();
   }).map(t=>t.origin).filter((origin,index,all)=>all.indexOf(origin)===index);

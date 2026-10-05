@@ -19,6 +19,7 @@ test('execution binding selects the concrete adapter and only non-secret rules',
   const agent=executionBindingForOrigin({origin:'https://agentrouter.org',config:{oauthReloginCheckinRules:{'https://agentrouter.org':{logType:4,rewardAmount:25}},oauthLoginUrls:{'https://agentrouter.org':'https://agentrouter.org/login'}}});
   assert.equal(agent.adapterId,'oauth-reward.execute.v1');
   assert.equal(agent.adapterRule.logPath,'/api/log/self');
+  assert.equal(agent.adapterRule.forceLogout,false);
   assert.equal(Object.keys(agent.adapterRule).some(key=>/password|cookie|token|profile/i.test(key)),false);
   assert.equal(executionBindingForOrigin({origin:'https://anyrouter.top'}).adapterId,'anyrouter.execute.v1');
   assert.equal(executionBindingForOrigin({origin:'https://piggo.me'}).adapterId,'pt-native.execute.v1');

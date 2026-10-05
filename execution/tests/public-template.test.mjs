@@ -144,7 +144,7 @@ test("AgentRouter 重新 OAuth 后只以当日额度日志确认成功", async (
   const browser = await fs.readFile(new URL("../src/browser.mjs", import.meta.url), "utf8");
   assert.match(browser, /\(\?:用户\\s\*\)\?ID\\s\*\[:：\]\?\\s\*\(\\d\+\)/);
   assert.match(browser, /const discoveredApiResult = await tryNewApiCheckin\(page\)/);
-  assert.equal(agentRouter.forceLogout, true);
+  assert.equal(agentRouter.forceLogout, false);
   assert.equal(agentRouter.nativeBrowser, true);
   assert.equal(agentRouter.logoutPath, "/api/user/logout");
   assert.equal(agentRouter.logPath, "/api/log/self");

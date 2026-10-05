@@ -35,5 +35,7 @@ test("health 与 scheduler 都使用统一的规范身份函数", async () => {
   }
   assert.match(health, /\$latestResultIdentities\.Count\s+-eq\s+\$latestResultIdentityValues\.Count/);
   assert.match(health, /Test-CheckinPlanMatch/);
+  assert.match(health, /\$latestPlanTargets[\s\S]*\$supplementalAccounts\s+\|\s+ForEach-Object\s+\{\s*Get-PlanTargetIdentity/);
+  assert.match(health, /\$currentPlanDefaultOrigins[\s\S]*accountKey\s+-eq\s+'site-default'[\s\S]*\$currentPlanDefaultOrigins/);
   assert.match(classification, /Compare-Object\s+-ReferenceObject\s+\$CurrentPlanIdentities\s+-DifferenceObject\s+\$LatestResultIdentities/);
 });
