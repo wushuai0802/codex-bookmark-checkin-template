@@ -8,8 +8,16 @@ export function currentPassivePtResult(value,now=new Date()){
   const result=projectPtSiteResult(value,value.origin),day=dayAt(now),observed=Date.parse(result.observedAt);
   if(['signed','already_signed','not_signed'].includes(value.status)&&result.status!==value.status)
     throw Error('passive completion or non-completion requires authoritative evidence');
+  // A read-only probe can itself be inconclusive. Preserve that diagnostic as
+  // account-scoped evidence, while keeping the submission gate closed. It is
+  // deliberately limited to the reviewed passive mode and an explicit
+  // non-submission result; an unknown result from a write-capable flow still
+  // fails closed below.
+  const passiveUncertain=result.submissionOutcomeUnknown===true&&
+    ['unknown','needs_attention'].includes(result.status)&&result.submissionAttempted===false&&
+    result.operationMode==='safe_history_page'&&result.readSafety==='reviewed_passive';
   if(result.operationMode!=='safe_history_page'||result.readSafety!=='reviewed_passive'||result.submissionAttempted!==false||
-     result.submissionOutcomeUnknown===true||!/^[a-f0-9]{64}$/.test(result.profileBinding??'')||!result.accountKey||
+     (!passiveUncertain&&result.submissionOutcomeUnknown===true)||!/^[a-f0-9]{64}$/.test(result.profileBinding??'')||!result.accountKey||
      result.businessDate!==day||dayAt(observed)!==day||observed>now.getTime()+60_000||now.getTime()-observed>5*60_000)
     throw Error('current bound passive PT result required');
   if(['signed','already_signed','not_signed'].includes(result.status)){

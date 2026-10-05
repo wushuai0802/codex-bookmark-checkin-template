@@ -145,10 +145,12 @@ function Test-GenericOAuthFailureReason([string]$Reason) {
 }
 
 function Get-OAuthFailureCode([object]$PlainResult, [object]$NativeResult, [string]$Reason) {
+    if (($PlainResult -and $PlainResult.twoFactorRequired -eq $true) -or
+        ($NativeResult -and [string]$NativeResult.failureCode -eq 'two_factor_required')) { return 'two_factor_required' }
     if ($PlainResult -and $PlainResult.upstreamLoginRequired -eq $true) { return 'upstream_login_required' }
     if ($PlainResult -and $PlainResult.authorizationRequired -eq $true) { return 'upstream_authorization_required' }
     foreach ($result in @($PlainResult, $NativeResult)) {
-        if ($result -and [string]$result.failureCode -match '^(account_mismatch|configuration_mismatch|upstream_login_required|upstream_authorization_required|managed_challenge|oauth_timeout|profile_busy|browser_startup|site_flow_changed|oauth_recovery_failed)$') {
+        if ($result -and [string]$result.failureCode -match '^(account_mismatch|configuration_mismatch|upstream_login_required|upstream_authorization_required|two_factor_required|managed_challenge|oauth_timeout|profile_busy|browser_startup|site_flow_changed|oauth_recovery_failed)$') {
             return [string]$result.failureCode
         }
     }

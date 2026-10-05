@@ -65,7 +65,7 @@
   },
   "oauthReloginCheckinRules": {
     "https://agentrouter.org": {
-      "forceLogout": true,
+      "forceLogout": false,
       "nativeBrowser": true,
       "logoutPagePath": "/console",
       "logoutPath": "/api/user/logout",

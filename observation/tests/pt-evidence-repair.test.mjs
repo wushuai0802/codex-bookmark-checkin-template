@@ -34,6 +34,9 @@ test('only same-day reported PT completions without evidence enter passive repai
   assert.deepEqual(ptEvidenceCandidates(snapshot(),catalog,{sites:{}},now),[origin]);
   assert.deepEqual(ptEvidenceCandidates({...snapshot(),businessDate:'2026-09-29'},catalog,{sites:{}},now),[]);
   const wrong=snapshot();wrong.tasks[0].failureCode='submission_outcome_unknown';
+  wrong.tasks[0].observedStatus='needs_attention';wrong.tasks[0].submissionAttempted=true;
+  assert.deepEqual(ptEvidenceCandidates(wrong,catalog,{sites:{}},now),[origin]);
+  wrong.tasks[0].submissionAttempted=false;
   assert.deepEqual(ptEvidenceCandidates(wrong,catalog,{sites:{}},now),[]);
   const verified=snapshot();verified.receipts[0].evidence.authoritative=true;
   assert.deepEqual(ptEvidenceCandidates(verified,catalog,{sites:{}},now),[]);

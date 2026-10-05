@@ -217,6 +217,7 @@ $authorizationClicks = 0
 $challengeInteractions = 0
 $callbackReached = $false
 $upstreamLoginRequired = $false
+$twoFactorRequired = $false
 $authorizationRequired = $false
 $lastAuthorizationAt = [datetime]::MinValue
 
@@ -265,6 +266,10 @@ try {
                 break
             }
             if ($location.Host -eq 'github.com') {
+                if ($location.AbsolutePath -match '^/sessions/two-factor(?:/|$)') {
+                    $twoFactorRequired = $true
+                    break
+                }
                 if ($location.AbsolutePath -match '^/login(?:/|$)') {
                     if (-not $upstreamSavedLoginSubmitAttempted) {
                         $signInControl = Get-UniqueNamedControl @('Sign in', '登录', '登入')
@@ -331,6 +336,9 @@ try {
     $reason = if ($callbackReached) {
         '原生 Chrome 已在后台完成 OAuth 回调，等待权威签到日志复核'
     }
+    elseif ($twoFactorRequired) {
+        'GitHub 上游登录需要完成二次验证'
+    }
     elseif ($upstreamLoginRequired) {
         '隔离 Chrome 的上游登录已失效'
     }
@@ -350,7 +358,9 @@ try {
         authorizationClicks = $authorizationClicks
         challengeInteractions = $challengeInteractions
         upstreamLoginRequired = $upstreamLoginRequired
+        twoFactorRequired = $twoFactorRequired
         authorizationRequired = $authorizationRequired
+        failureCode = if ($twoFactorRequired) { 'two_factor_required' } else { $null }
     } | ConvertTo-Json -Compress
     if (-not $callbackReached) { exit 2 }
 }

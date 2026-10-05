@@ -75,7 +75,7 @@ export function createOAuthRewardExecutionAdapter({origin,rule={}}={}){
   // V1 scans the bounded browser storage namespace because the deployed SPA
   // has changed its user key more than once. Keep named keys as a fast path,
   // then inspect every key without returning values or secrets.
-  const successText=safeText(rule.successText||'每日签到成功，增加额度',120),rewardAmount=Number.isFinite(Number(rule.rewardAmount))?Number(rule.rewardAmount):25,logType=Number.isInteger(Number(rule.logType))?Number(rule.logType):4,provider=safeText(rule.provider||'LinuxDO',40),keys=identityKeys(rule),scanAll=rule.scanAllStorage!==false,maxLogPages=boundedInteger(rule.maxLogPages,3,1,5),verificationWaitMs=boundedInteger(rule.verificationWaitMs,12_000,1000,30_000),forceLogout=rule.forceLogout!==false;
+  const successText=safeText(rule.successText||'每日签到成功，增加额度',120),rewardAmount=Number.isFinite(Number(rule.rewardAmount))?Number(rule.rewardAmount):25,logType=Number.isInteger(Number(rule.logType))?Number(rule.logType):4,provider=safeText(rule.provider||'LinuxDO',40),keys=identityKeys(rule),scanAll=rule.scanAllStorage!==false,maxLogPages=boundedInteger(rule.maxLogPages,3,1,5),verificationWaitMs=boundedInteger(rule.verificationWaitMs,12_000,1000,30_000),forceLogout=rule.forceLogout===true;
   const userHeader=userId=>({'New-Api-User':String(userId??'')});
 
   async function readIdentity(context,expected){

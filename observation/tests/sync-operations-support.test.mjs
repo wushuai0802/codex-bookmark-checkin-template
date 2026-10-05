@@ -71,15 +71,22 @@ $success=Invoke-SyncRemoteCommand $child @('-e',${quote(stderrCode('warning only
 Assert-Sync ($success.exitCode -eq 0 -and $null -eq $success.failure) 'successful remote command misclassified'
 $missing=Invoke-SyncRemoteCommand ${quote(path.join(root,'missing.exe'))} @() 'nas_commit'
 Assert-Sync ($missing.exitCode -eq -1 -and $missing.failure -match 'executable_missing') 'missing executable treated as success'
-$previous=[pscustomobject]@{failureCount=0;lastSuccessAt='previous-success';lastSourceFingerprint='previous-source'}
-$syncState=[ordered]@{lastSuccessAt='previous-success';lastSourceFingerprint='previous-source';pendingNotification=$null}
-Set-SyncAttemptOutcome $syncState $previous 124 $now '15:30' 'unpublished' '' 'sync_timeout'
-Assert-Sync ($syncState.failureCount -eq 1 -and $syncState.lastExitCode -eq 124 -and $syncState.lastFailureCause -eq 'sync_timeout') 'timeout lost failure state'
-Assert-Sync ([datetime]$syncState.nextRetryAt -eq $now.AddMinutes(15) -and $syncState.pendingNotification.status -eq 'failed') 'timeout lost alert or backoff'
-Assert-Sync ($syncState.lastSuccessAt -eq 'previous-success' -and $syncState.lastSourceFingerprint -eq 'previous-source') 'failure advanced successful sync state'
-$previous=[pscustomobject]@{failureCount=1}
-Set-SyncAttemptOutcome $syncState $previous 0 $now.AddMinutes(15) '15:30' 'published' 'fingerprint'
-Assert-Sync ($syncState.failureCount -eq 0 -and $null -eq $syncState.nextRetryAt -and $syncState.pendingNotification.status -eq 'success') 'recovery did not clear backoff or enqueue success'
+  $previous=[pscustomobject]@{failureCount=0;lastSuccessAt='previous-success';lastSourceFingerprint='previous-source';syncFailureNotificationSent=$false}
+  $syncState=[ordered]@{lastSuccessAt='previous-success';lastSourceFingerprint='previous-source';pendingNotification=$null;syncFailureNotificationSent=$false}
+  Set-SyncAttemptOutcome $syncState $previous 124 $now '15:30' 'unpublished' '' 'sync_timeout'
+  Assert-Sync ($syncState.failureCount -eq 1 -and $syncState.lastExitCode -eq 124 -and $syncState.lastFailureCause -eq 'sync_timeout') 'timeout lost failure state'
+  Assert-Sync ([datetime]$syncState.nextRetryAt -eq $now.AddMinutes(15) -and $null -eq $syncState.pendingNotification) 'single timeout should stay silent'
+  $previous=[pscustomobject]@{failureCount=1;syncFailureNotificationSent=$false}
+  Set-SyncAttemptOutcome $syncState $previous 124 $now.AddMinutes(15) '15:30' 'unpublished' '' 'sync_timeout'
+  Assert-Sync ($syncState.failureCount -eq 2 -and $null -eq $syncState.pendingNotification) 'second timeout should stay silent'
+  $previous=[pscustomobject]@{failureCount=2;syncFailureNotificationSent=$false}
+  Set-SyncAttemptOutcome $syncState $previous 124 $now.AddMinutes(30) '15:30' 'unpublished' '' 'sync_timeout'
+  Assert-Sync ($syncState.failureCount -eq 3 -and $syncState.pendingNotification.status -eq 'failed' -and $syncState.syncFailureNotificationSent) 'third timeout did not queue one alert'
+  Assert-Sync ($syncState.lastSuccessAt -eq 'previous-success' -and $syncState.lastSourceFingerprint -eq 'previous-source') 'failure advanced successful sync state'
+  $previous=[pscustomobject]@{failureCount=3;syncFailureNotificationSent=$true}
+  Set-SyncAttemptOutcome $syncState $previous 0 $now.AddMinutes(45) '15:30' 'published' 'fingerprint'
+  Assert-Sync ($syncState.failureCount -eq 0 -and $null -eq $syncState.nextRetryAt -and $syncState.pendingNotification.status -eq 'success') 'recovery did not clear backoff or enqueue success'
+  Assert-Sync (-not $syncState.syncFailureNotificationSent) 'recovery did not clear alert latch'
 'verified'
 `;
     const scriptFile=path.join(root,'verify.ps1');fs.writeFileSync(scriptFile,'\uFEFF'+script);

@@ -154,10 +154,58 @@ test('Harvest completion audits every registered PT task, including one absent f
   f.latest.results.push({origin:'https://unobserved.example',accountKey:'site-default',status:'already_signed'});
   assert.equal(planHarvestFallback(f).eligible.length,1);
 });
-test('uncertain earlier submission remains blocked even after Harvest failure',()=>{
+test('registered PT unknown submission enters a passive review queue after Harvest failure',()=>{
   const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);
   f.latest.results[0].failureCode='submission_outcome_unknown';
-  assert.equal(planHarvestFallback(f).blocked[0].reason,'submission_outcome_unknown');
+  f.latest.results[0].submissionAttempted=true;
+  const preview=planHarvestFallback(f);
+  assert.equal(preview.blocked.length,0);
+  assert.deepEqual(preview.eligible[0],{
+    origin:'https://ourbits.club',accountKey:'site-default',businessDate:'2026-09-20',
+    kind:'registered_review',readOnlyReview:true,observedAt:'2026-09-20T01:55:00.000Z',
+    trigger:'submission_unknown_readonly_review',
+  });
+  assert.deepEqual(preview.assessments.find(item=>item.origin==='https://ourbits.club'),{
+    origin:'https://ourbits.club',state:'readonly_recheck_queued',reason:'submission_outcome_unknown',
+  });
+  f.latest.results[0].submissionAttempted=false;
+  const malformed=planHarvestFallback(f);
+  assert.equal(malformed.eligible.some(item=>item.origin==='https://ourbits.club'),false);
+  assert.equal(malformed.blocked.find(item=>item.origin==='https://ourbits.club').reason,'submission_outcome_unknown');
+});
+
+test('Audiences unknown review records a passive diagnostic and never calls the executor',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-registered-readback-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture();
+  const origin='https://audiences.me';
+  f.harvest.sites=[failed(origin)];
+  f.catalog.sites=[{origin}];
+  f.plan.targets=[{origin,folderNames:['PT白名单']}];
+  f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+  let siteCalls=0,engineCalls=0;
+  const passive={origin,status:'needs_attention',observedAt:f.now.toISOString(),businessDate:'2026-09-20',
+    accountKey:'site-default',profileBinding:'b'.repeat(64),operationMode:'safe_history_page',
+    readSafety:'reviewed_passive',submissionAttempted:false,submissionOutcomeUnknown:true,
+    evidence:{source:'none',authoritative:false,summary:'原生只读结果不明'}};
+  const result=await runHarvestFallback({...f,root,execute:true,
+    runEngine:async()=>{engineCalls++;throw Error('registered unknown must never execute');},
+    runSite:async options=>{siteCalls++;assert.equal(options.origin,origin);assert.equal(options.readOnly,true);return passive;},
+  });
+  assert.equal(siteCalls,1);assert.equal(engineCalls,0);
+  assert.deepEqual(result.outcomes,[{origin,state:'passive_result_unverified',v1Status:'needs_attention',readOnly:true}]);
+  const audit=JSON.parse(fs.readFileSync(path.join(root,'outputs','harvest-fallback-attempts-2026-09-20.json'),'utf8'));
+  assert.equal(audit.attempts.length,0);
+  assert.equal(audit.verifications[0].state,'completed');
+  assert.equal(audit.verifications[0].outcome.status,'needs_attention');
+  assert.equal(audit.verifications[0].outcome.submissionAttempted,false);
+  assert.equal(audit.verifications[0].outcome.submissionOutcomeUnknown,true);
+  const receipt=JSON.parse(fs.readFileSync(path.join(root,'outputs','pt-fallback-results-2026-09-20.json'),'utf8'));
+  assert.equal(receipt.sites[0].status,'needs_attention');
+  assert.equal(receipt.sites[0].submissionAttempted,false);
+  const nextPreview=planHarvestFallback({...f,fallbackReport:receipt});
+  assert.equal(pendingHarvestFallbackAttempts(root,nextPreview,{now:f.now}).length,0);
+  assert.equal(pendingHarvestFallbackAttempts(root,nextPreview,{now:new Date(f.now.getTime()+31*60_000)}).length,1);
 });
 test('an explicit V1 site/account disable and disabled feature cannot enter fallback',()=>{
  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);

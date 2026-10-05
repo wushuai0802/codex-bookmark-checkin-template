@@ -23,7 +23,7 @@ test('Agent adapter uses the OAuth relogin flow instead of a guessed check-in en
     waitForURL:async()=>{},
     waitForTimeout:async()=>{}
   };
-  const context={page},adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{provider:'LinuxDO'}});
+  const context={page},adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{provider:'LinuxDO',forceLogout:true}});
   const result=await adapter.methods.submit_once({identity:{userId:'700001'},context});
   assert.equal(result.state,'accepted');
   assert.ok(calls.some(value=>value.includes('/api/user/logout')));

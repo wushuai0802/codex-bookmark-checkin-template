@@ -104,9 +104,30 @@ $currentPlanIdentities = if ($currentPlan) { @(
     @($currentPlan.targets) | ForEach-Object { Get-PlanTargetIdentity $_ $true }
     $supplementalAccounts | ForEach-Object { Get-PlanTargetIdentity $_ $false }
 ) | Where-Object { $_ } | Sort-Object -Unique } else { @() }
+$currentPlanDefaultOrigins = if ($currentPlan) { @(
+    @($currentPlan.targets) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.accountKey) } | ForEach-Object {
+        try { ([uri][string]$_.origin).GetLeftPart([System.UriPartial]::Authority).TrimEnd('/') } catch { $null }
+    }
+) | Where-Object { $_ } | Sort-Object -Unique } else { @() }
 $latestPlanTargets = if ($latest -and $latest.bookmarkSummary) { @($latest.bookmarkSummary.targets) } else { @() }
-$latestPlanIdentities = @($latestPlanTargets | ForEach-Object { Get-PlanTargetIdentity $_ $false } | Where-Object { $_ } | Sort-Object -Unique)
-$latestResultIdentityValues = if ($latest) { @($latest.results | ForEach-Object { Get-CanonicalResultIdentity $_ }) } else { @() }
+# The legacy report keeps supplemental OAuth accounts in the result list but
+# intentionally leaves them out of bookmarkSummary.targets. Include the same
+# configured supplemental identities when comparing a completed report with
+# today's full plan, otherwise every run with a supplemental account is shown
+# as a plan mismatch even when all results are present.
+$latestPlanIdentities = @(
+    $latestPlanTargets | ForEach-Object { Get-PlanTargetIdentity $_ $false }
+    $supplementalAccounts | ForEach-Object { Get-PlanTargetIdentity $_ $false }
+) | Where-Object { $_ } | Sort-Object -Unique
+$latestResultIdentityValues = if ($latest) { @($latest.results | ForEach-Object {
+    $identity = Get-CanonicalResultIdentity $_
+    $origin = try { ([uri][string]$_.origin).GetLeftPart([System.UriPartial]::Authority).TrimEnd('/') } catch { $null }
+    # PT receipts use the explicit site-default account key while older
+    # bookmark plans represent the same single-account site by origin only.
+    # Normalize that compatibility form for plan comparison; configured
+    # multi-account bindings retain their account-qualified identity.
+    if ([string]$_.accountKey -eq 'site-default' -and $currentPlanDefaultOrigins -contains $origin) { $origin } else { $identity }
+}) } else { @() }
 $latestResultIdentities = @($latestResultIdentityValues | Sort-Object -Unique)
 $currentPlanIdentityReady = $null -ne $currentPlannedTotal -and $currentPlanIdentities.Count -eq $currentPlannedTotal
 $latestPlanIdentityReady = $latest -and $latestPlanIdentities.Count -eq $plannedTotal

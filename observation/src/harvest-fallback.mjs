@@ -102,7 +102,19 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     if(prior?.status==='not_available'){
       block(origin,'v1_feature_or_task_unavailable');continue;
     }
+    if(target&&prior?.failureCode==='submission_outcome_unknown'&&prior.submissionAttempted===true){
+      // A registered PT whose write result is unknown must not be submitted
+      // again by Harvest fallback. Queue a bounded passive review instead;
+      // the review may only produce a readback receipt or a structured
+      // inconclusive diagnostic.
+      eligible.push({origin,accountKey,businessDate,kind:'registered_review',readOnlyReview:true,
+        observedAt:new Date(at).toISOString(),trigger:'submission_unknown_readonly_review'});
+      assessments.push({origin,state:'readonly_recheck_queued',reason:'submission_outcome_unknown'});
+      continue;
+    }
     if(prior?.failureCode==='submission_outcome_unknown'){
+      // Without an explicit non-submission fact, retain the original
+      // quarantine rather than treating a malformed result as retryable.
       block(origin,'submission_outcome_unknown');continue;
     }
     eligible.push({origin,accountKey,businessDate,kind:target?'registered':'fallback_only',...(entryUrl?{entryUrl}:{}),observedAt:new Date(at).toISOString(),
@@ -166,7 +178,9 @@ function unresolvedEarlierAttempt(root,candidate){
 }
 
 function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
-  if(candidate.kind!=='fallback_only'||!readOnlyOrigins.includes(candidate.origin))return false;
+  const reviewOnly=candidate.readOnlyReview===true||
+    (candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin));
+  if(!reviewOnly)return false;
   const probes=(state.verifications??[]).filter(v=>v.origin===candidate.origin&&(v.accountKey??'site-default')===candidate.accountKey);
   const deferred=probe=>['deferred_busy','deferred_preflight'].includes(probe.state);
   if(probes.filter(p=>!deferred(p)).length>=3||probes.filter(deferred).length>=24)return false;
@@ -177,7 +191,8 @@ function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
 
 export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={},readOnlyOrigins=[],now=new Date()}={}){
   const {state}=readAttemptState(root,preview.businessDate);
-  return preview.eligible.filter(candidate=>candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin)
+  return preview.eligible.filter(candidate=>candidate.readOnlyReview===true||
+    (candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin))
     ?passiveVerificationDue(state,candidate,readOnlyOrigins,now)
     :!alreadyAttempted(state,candidate,recoveredAtByAccount,now)&&!unresolvedEarlierAttempt(root,candidate));
 }
@@ -212,7 +227,8 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     const attempted=alreadyAttempted(state,candidate,recoveredAtByAccount,candidateNow);
     const historicalUnknown=unresolvedEarlierAttempt(root,candidate);
     const canVerify=passiveVerificationDue(state,candidate,readOnlyOrigins,candidateNow);
-    if(candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin)&&!canVerify){
+    const readOnlyReview=candidate.readOnlyReview===true;
+    if((readOnlyReview||(candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin)))&&!canVerify){
       outcomes.push({origin:candidate.origin,state:'passive_verification_cooldown'});continue;
     }
     if(attempted&&!canVerify){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
@@ -261,6 +277,13 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         recordPtVerification(root,checked,{now:clock(),lockHeld:true});writeAtomic(stateFile,state);
         if(['signed','already_signed'].includes(checked.status)){
           outcomes.push({origin:candidate.origin,state:'confirmed_by_passive_read',v1Status:checked.status});continue;
+        }
+        if(readOnlyReview){
+          // Registered PT review is intentionally read-only. Even a current
+          // inconclusive result is retained in the verification journal and
+          // never falls through to the legacy executor.
+          outcomes.push({origin:candidate.origin,state:'passive_result_unverified',v1Status:checked.status,
+            ...(checked.failureCode?{failureCode:checked.failureCode}:{}),readOnly:true});continue;
         }
         if(checked.status!=='not_signed'||checked.evidence?.authoritative!==true||
           checked.evidence.statusSignal!=='nexus_daily_header_unsigned'){
