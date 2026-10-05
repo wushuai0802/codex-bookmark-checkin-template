@@ -70,7 +70,7 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
       ||original==='vibe_entitlement_status'&&['claim_not_enabled','claim_not_configured','entitlement_active'].includes(raw.outcome)
       ||original==='pt_page'&&raw.statusSignal==='maintenance';
     const validTime=Number.isFinite(parsed)&&Number.isFinite(reference)&&parsed<=reference+60_000;
-    const taskDisabled=result.availabilityKind==='task_disabled'&&result.disabledByConfig===true&&
+    const taskDisabled=result.availabilityKind==='task_disabled'&&(result.disabledByConfig===true||result.disabledByAccountConfig===true)&&
       rawSource==='configuration'&&raw.authoritative===true&&Number.isFinite(Date.parse(raw.confirmedAt))&&validTime;
     const cachedAgeOk=rawSource!=='cached_confirmation'||(raw.confirmedAt&&reference-parsed<=168*3600000);
     verification=taskDisabled?'task_disabled':raw.authoritative===true&&feature&&(validTime||validDay(raw.businessDate))&&cachedAgeOk?'feature_unavailable':'unverified_unavailable';
