@@ -121,6 +121,8 @@ export async function runOAuthBrowserFlow({context, site, provider, upstreamProv
         const authorize=authPage.getByRole?.('button',{name:/^Authorize /});
         if(await visible(authorize))return unknown('oauth_upstream_authorization_required');
       }
+      if(url?.origin==='https://github.com'&&/^\/sessions\/two-factor(?:\/|$)/i.test(url.pathname))
+        return {...unknown('oauth_upstream_two_factor_required'),failureCode:'two_factor_required'};
       if(url?.origin==='https://github.com'&&/^\/login\/?$/i.test(url.pathname)) {
         if(await restoreSavedGitHubLogin(authPage,githubLoginState)){await sleep(authPage,1000);continue;}
         return unknown('oauth_upstream_login_required');
