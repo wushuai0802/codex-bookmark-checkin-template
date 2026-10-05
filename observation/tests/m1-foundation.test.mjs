@@ -100,6 +100,8 @@ test('only explicit configuration cancellation is resolved without site evidence
    {...result,status:'signed'}, {...result,status:'already_signed'}
  ])assert.notEqual(normalizeEvidence(candidate,context).verification,'task_disabled');
  assert.equal(normalizeEvidence({...result,status:'signed'},context).authoritative,false);
+ const accountDisabled=normalizeEvidence({...result,disabledByConfig:false,disabledByAccountConfig:true},context);
+ assert.equal(accountDisabled.verification,'task_disabled');assert.equal(accountDisabled.authoritative,true);
 });
 test('wrong date, future timestamp, and account mismatch cannot establish success',()=>{
  const context={businessDate:'2026-09-02',referenceAt:now,expectedId:'1'};
