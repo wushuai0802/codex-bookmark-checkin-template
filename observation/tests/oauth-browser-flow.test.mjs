@@ -36,6 +36,13 @@ test('GitHub authorize route can redirect before credentials are requested',asyn
   const f=fixture({destination:'https://github.com/login/oauth/authorize'});
   f.page.waitForTimeout=async()=>{f.page.current=site+'/console';};assert.equal((await runOAuthBrowserFlow(f.options)).state,'triggered');
 });
+test('GitHub two-factor route is terminal and does not become a generic challenge',async()=>{
+  const f=fixture({destination:'https://github.com/sessions/two-factor/app'});
+  const result=await runOAuthBrowserFlow(f.options);
+  assert.equal(result.reason,'oauth_upstream_two_factor_required');
+  assert.equal(result.failureCode,'two_factor_required');
+  assert.equal(result.actionMayHaveHappened,true);
+});
 test('stuck authorization button is clicked only once',async()=>{
   const f=fixture({destination:'https://connect.linux.do/oauth2/authorize',identity:false});let approved=0;
   f.options.provider='LinuxDO';const original=f.page.getByRole;
