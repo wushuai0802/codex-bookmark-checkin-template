@@ -99,6 +99,15 @@ test("旧版无账号结果只迁移到主书签账号", () => {
   }, [{ origin, accountKey: "primary", accountId: "100", status: "signed" }]), null);
 });
 
+test("未标记账号的书签目标复用唯一 site-default 结果", () => {
+  const reused = compatiblePriorResult({ origin, title: "PT target" }, [{
+    origin, accountKey: "site-default", status: "signed", reason: "today confirmed",
+  }]);
+  assert.equal(reused.status, "signed");
+  assert.equal(reused.accountKey, "site-default");
+  assert.equal(reused.migratedDefaultIdentity, true);
+});
+
 test("主账号展示身份与登录校验身份必须一致", () => {
   const metadata = accountMetadataForOrigin(origin, configWith([]));
   assert.deepEqual({

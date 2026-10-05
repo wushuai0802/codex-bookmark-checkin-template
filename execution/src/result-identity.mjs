@@ -85,6 +85,25 @@ export function compatiblePriorResult(target, previousResults = []) {
     };
   }
 
+  // Current bookmark plans may omit accountKey for the single site account,
+  // while the execution report records the explicit site-default selector.
+  // Reuse that one unambiguous result during a targeted resume so untouched
+  // sites keep their authoritative outcome instead of becoming synthetic
+  // "续跑未生成站点结果" errors.
+  if (!String(target?.accountKey ?? '').trim()) {
+    const siteDefaults = previousResults.filter((result) => {
+      return String(result?.accountKey ?? '').trim() === 'site-default'
+        && new URL(String(result?.origin ?? '')).origin === new URL(String(target.origin)).origin;
+    });
+    if (siteDefaults.length === 1) {
+      return {
+        ...siteDefaults[0],
+        ...(target?.title ? { title: target.title } : {}),
+        migratedDefaultIdentity: true,
+      };
+    }
+  }
+
   // Reports written before account-aware identities only had an origin. They
   // can safely migrate to the primary bookmark account, never a supplemental
   // account, when the legacy origin is unambiguous.
