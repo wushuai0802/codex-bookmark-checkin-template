@@ -459,6 +459,8 @@ async function runOAuthFlow(context) {
   const finalUrl = page.url();
   const bodyText = String(await page.locator("body").innerText()).replace(/\s+/g, " ").trim();
   const finalLocation = new URL(finalUrl);
+  const githubTwoFactorRequired = finalLocation.origin === "https://github.com"
+    && /^\/sessions\/two-factor(?:\/|$)/i.test(finalLocation.pathname);
   const browserNavigationFailed = finalLocation.protocol === "chrome-error:";
   const oauthFailure = finalLocation.searchParams.has("error")
     || finalLocation.hash.includes("error=")
@@ -505,7 +507,7 @@ async function runOAuthFlow(context) {
     && finalLocation.origin === origin) {
     dailyCheckin = await tryNewApiCheckin(page);
   }
-  let loggedIn = !browserNavigationFailed && mayClaimOAuthLogin({ origin, finalUrl, callbackEvidence: oauthCallbackEvidence, dailyCheckin, pageLooksAuthenticated: finalLocation.origin === origin
+  let loggedIn = !githubTwoFactorRequired && !browserNavigationFailed && mayClaimOAuthLogin({ origin, finalUrl, callbackEvidence: oauthCallbackEvidence, dailyCheckin, pageLooksAuthenticated: finalLocation.origin === origin
     && !isLoginOrSignInRoute(finalLocation.href)
     && !visiblePassword
     && !visibleProviderLogin
@@ -533,6 +535,8 @@ async function runOAuthFlow(context) {
       ? { failureCode: "oauth_rate_limited" }
       : transferredCallbackRejected
         ? { failureCode: "oauth_upstream_unavailable" }
+      : githubTwoFactorRequired
+        ? { failureCode: "two_factor_required" }
       : browserNavigationFailed
         ? { failureCode: "site_flow_changed", navigationFailureCode: navigationFailureCode ?? "unknown_navigation_failure" }
         : dailyFailureCode

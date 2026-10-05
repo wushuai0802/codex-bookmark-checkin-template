@@ -17,11 +17,14 @@ test("AgentRouter execution defaults to preserving the account session", async (
 
 test("GitHub two-factor pages are terminally classified before generic challenge handling", async () => {
   const native = await read("../src/native-oauth-login.mjs");
+  const generic = await read("../src/oauth-login.mjs");
   const plain = await read("../scripts/Invoke-PlainOAuthAccessibility.ps1");
   const recovery = await read("../scripts/Recover-NativeOAuthLogin.ps1");
   assert.match(native, /sessions\\\/two-factor\(\?:\\\/\|\$\)/);
   assert.match(native, /failureCode = "two_factor_required"/);
   assert.match(native, /error\?\.failureCode === "two_factor_required"/);
+  assert.match(generic, /githubTwoFactorRequired/);
+  assert.match(generic, /failureCode: "two_factor_required"/);
   assert.match(plain, /twoFactorRequired = \$true/);
   assert.match(plain, /failureCode = if \(\$twoFactorRequired\) \{ 'two_factor_required' \}/);
   assert.match(recovery, /\$PlainResult\.twoFactorRequired -eq \$true/);
