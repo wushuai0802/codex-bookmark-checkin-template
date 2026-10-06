@@ -26,6 +26,13 @@ function Write-SchedulerLog([string]$message) {
     Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $message" -Encoding UTF8
 }
 
+function ConvertTo-ShanghaiIso([datetime]$value) {
+    $dto = [datetimeoffset]$value
+    $zone = try { [TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time') }
+        catch { [TimeZoneInfo]::FindSystemTimeZoneById('Asia/Shanghai') }
+    return $dto.ToOffset($zone.GetUtcOffset($dto.UtcDateTime)).ToString('yyyy-MM-ddTHH:mm:sszzz')
+}
+
 function Write-AtomicTextFile([string]$destination, [string]$content) {
     [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
     $nonce = [guid]::NewGuid().ToString('N')
@@ -141,7 +148,7 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
         attemptsToday = [int]$state.attemptsToday
         lastAttemptStartedAt = $state.lastAttemptStartedAt
         lastRunDate = $null
-        lastFinishedAt = $now.ToString('o')
+        lastFinishedAt = ConvertTo-ShanghaiIso $now
         lastExitCode = 1
         reportValid = $false
         reportComplete = $false
@@ -153,12 +160,12 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
         plannedTotal = 0
         processedTotal = 0
         planFingerprint = $state.planFingerprint
-        nextEligibleAt = if ($claimed) { $now.AddMinutes($failureDelay).ToString('o') } else { $state.nextEligibleAt }
+        nextEligibleAt = if ($claimed) { ConvertTo-ShanghaiIso $now.AddMinutes($failureDelay) } else { $state.nextEligibleAt }
         deferredWakeDate = $wakeDate
         deferredWakeTokens = @($wakeTokens)
         lastSchedulerError = $safeMessage
         lastSchedulerErrorHash = $errorHash
-        lastSchedulerErrorAt = $now.ToString('o')
+        lastSchedulerErrorAt = ConvertTo-ShanghaiIso $now
         lastSchedulerErrorNotifiedAt = $state.lastSchedulerErrorNotifiedAt
     }
     Write-SchedulerStateDocument $value
@@ -197,7 +204,7 @@ function Reset-SchedulerForPlanChange($state, [string]$newPlanFingerprint) {
 function Set-SchedulerFailureNotified([string]$errorHash, [datetime]$notifiedAt) {
     $state = Read-SchedulerState
     if ([string]$state.lastSchedulerErrorHash -ne $errorHash) { return }
-    $state | Add-Member -NotePropertyName lastSchedulerErrorNotifiedAt -NotePropertyValue $notifiedAt.ToString('o') -Force
+    $state | Add-Member -NotePropertyName lastSchedulerErrorNotifiedAt -NotePropertyValue (ConvertTo-ShanghaiIso $notifiedAt) -Force
     Write-SchedulerStateDocument $state
 }
 
@@ -421,7 +428,7 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         phase = 'running'
         lastAttemptDate = $today
         attemptsToday = $attemptsToday
-        lastAttemptStartedAt = $startedAt.ToString('o')
+        lastAttemptStartedAt = ConvertTo-ShanghaiIso $startedAt
         lastRunDate = $state.lastRunDate
         lastFinishedAt = $state.lastFinishedAt
         lastExitCode = $state.lastExitCode
@@ -474,14 +481,14 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         # tick a bounded retry instead of treating the day as complete.  The
         # normal daily attempt budget still caps retries, and Run-Checkin's
         # resume/unknown guards remain authoritative for site mutations.
-        $nextEligibleAt = $finishedAt.AddMinutes($failureDelay).ToString('o')
+        $nextEligibleAt = ConvertTo-ShanghaiIso $finishedAt.AddMinutes($failureDelay)
     } elseif (-not $reportState.Complete) {
         $nextEligibleAt = if ($reportState.AutomaticRetryCount -eq 0) {
             $null
         } elseif ($null -ne $reportState.NextEligibleAt) {
-            ([datetimeoffset]$reportState.NextEligibleAt).ToLocalTime().ToString('o')
+            ConvertTo-ShanghaiIso ([datetime]([datetimeoffset]$reportState.NextEligibleAt).UtcDateTime)
         } else {
-            $finishedAt.AddMinutes($failureDelay).ToString('o')
+            ConvertTo-ShanghaiIso $finishedAt.AddMinutes($failureDelay)
         }
     }
     $value = [ordered]@{
@@ -490,7 +497,7 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         attemptsToday = $attemptsToday
         lastAttemptStartedAt = $state.lastAttemptStartedAt
         lastRunDate = if ($reportState.ExecutionComplete) { $finishedDate } else { $null }
-        lastFinishedAt = $finishedAt.ToString('o')
+        lastFinishedAt = ConvertTo-ShanghaiIso $finishedAt
         lastExitCode = $exitCode
         reportValid = $reportValid
         reportComplete = [bool]$reportState.Complete

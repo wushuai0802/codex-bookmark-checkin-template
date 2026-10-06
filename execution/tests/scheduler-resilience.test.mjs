@@ -170,7 +170,7 @@ $scriptPath = Join-Path $env:CHECKIN_TEST_ROOT 'scripts\Start-UserScheduler.ps1'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Scheduler syntax error' }
-foreach ($name in @('Get-NormalizedDeferredWakeTokens', 'Write-SchedulerState', 'Test-SchedulerWaiting')) {
+foreach ($name in @('Get-NormalizedDeferredWakeTokens', 'ConvertTo-ShanghaiIso', 'Write-SchedulerState', 'Test-SchedulerWaiting')) {
   $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
   Invoke-Expression $f.Extent.Text
 }
