@@ -183,8 +183,9 @@ $script:state = [pscustomobject]@{
   planFingerprint = 'fixture'; deferredWakeDate = '2026-10-06'; deferredWakeTokens = @()
 }
 $script:written = $null
+$script:writtenRaw = $null
 function Read-SchedulerState { return $script:state }
-function Write-AtomicTextFile([string]$Destination, [string]$Content) { $script:written = $Content | ConvertFrom-Json }
+function Write-AtomicTextFile([string]$Destination, [string]$Content) { $script:writtenRaw = $Content; $script:written = $Content | ConvertFrom-Json }
 $report = [pscustomobject]@{ Valid = $false; Complete = $false; ExecutionComplete = $false; BusinessComplete = $false; AutomaticRetryCount = $null; NextEligibleAt = $null; RunId = $null; ProblemCount = $null; RunState = $null; PlannedTotal = 0; ProcessedTotal = 0 }
 $finished = [DateTime]::SpecifyKind([datetime]'2026-10-06T00:14:50', [DateTimeKind]::Utc)
 $config = [pscustomobject]@{ schedulerFailureRetryMinutes = 60; schedulerMaxDailyAttempts = 5; taskTimeoutMinutes = 25 }
@@ -195,7 +196,7 @@ $waiting = Test-SchedulerWaiting $script:written $finished.AddMinutes(60) $confi
   runState = $script:written.reportRunState
   retryCount = [int]$script:written.invalidReportRetryCount
   automaticRetryCount = [int]$script:written.automaticRetryCount
-  nextEligibleAt = [datetime]$script:written.nextEligibleAt
+  nextEligibleAt = ([regex]::Match($script:writtenRaw, '"nextEligibleAt"\s*:\s*"([^"]+)"')).Groups[1].Value
   waitingWhenDue = [bool]$waiting
 } | ConvertTo-Json -Compress
 `;
