@@ -67,6 +67,7 @@
     "https://agentrouter.org": {
       "forceLogout": false,
       "nativeBrowser": true,
+      "selfPath": "/api/user/self",
       "logoutPagePath": "/console",
       "logoutPath": "/api/user/logout",
       "logoutLabel": "退出",

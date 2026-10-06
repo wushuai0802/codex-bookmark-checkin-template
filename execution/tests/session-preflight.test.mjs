@@ -1,6 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSessionPreflightPlan, probeSessionPage } from "../src/session-preflight.mjs";
+import { buildSessionPreflightPlan, isSessionPreflightTargetEnabled, probeSessionPage } from "../src/session-preflight.mjs";
+
+test("暂停账号不会启动会话体检或读取其 Profile", () => {
+  const account = { origin: "https://agent.example", accountKey: "paused-account" };
+  assert.equal(isSessionPreflightTargetEnabled(account, { disabledAccountKeys: ["paused-account"] }), false);
+  const plan = buildSessionPreflightPlan({
+    targets: [account],
+    supplementalAccounts: [{ ...account, automationUserDataDir: "D:/fixture/data/paused" }],
+    config: {
+      disabledAccountKeys: ["paused-account"],
+      oauthAccountProbeRules: {
+        "paused-account": { url: "https://agent.example/console", apiUrl: "https://agent.example/api/user/self" },
+      },
+    },
+  });
+  assert.deepEqual(plan, []);
+});
+
+test("停用来源不会触发共享 OAuth Profile 体检", () => {
+  const plan = buildSessionPreflightPlan({
+    targets: [{ origin: "https://one.example" }],
+    sessionProfiles: {
+      profiles: new Map([["shared", "D:/fixture/data/sessions/shared"]]),
+      siteBindings: new Map([["https://one.example", "shared"]]),
+    },
+    config: {
+      disabledCheckinOrigins: ["https://one.example"],
+      oauthSessionProbeRules: { shared: { url: "https://linux.do/my/preferences/account" } },
+    },
+  });
+  assert.deepEqual(plan, []);
+});
 
 test("相同共享 OAuth Profile 只生成一次无副作用会话体检", () => {
   const profiles = new Map([["linuxdo-shared", "D:/fixture/data/sessions/linuxdo-shared"]]);

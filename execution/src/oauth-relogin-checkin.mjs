@@ -8,6 +8,15 @@ export function parseObservedBrowserUrl(value) {
   }
 }
 
+// Only an account-bound missing reward or an explicit session-expired response
+// justifies ending the current account session. Keep the guard explicit so
+// transient log failures, account mismatches, and challenges cannot log out.
+export function shouldForceOAuthRelogin(dailyCheckin, { identityMatches = false } = {}) {
+  if (dailyCheckin?.status !== "login_required" || dailyCheckin?.forceOAuthRelogin !== true) return false;
+  if (dailyCheckin.reloginReason === "session_expired") return true;
+  return identityMatches === true && dailyCheckin.reloginReason === "daily_reward_missing";
+}
+
 function sameOriginHttpsUrl(origin, value, field) {
   const expectedOrigin = new URL(origin).origin;
   const resolved = new URL(String(value || "/"), expectedOrigin);
@@ -39,6 +48,7 @@ export function configuredOAuthReloginRule(origin, config = {}) {
   }
   return {
     origin: expectedOrigin,
+    selfUrl: sameOriginHttpsUrl(expectedOrigin, raw.selfPath || "/api/user/self", "selfPath"),
     logUrl: sameOriginHttpsUrl(expectedOrigin, raw.logPath || DEFAULT_LOG_PATH, "logPath"),
     logPageUrl: sameOriginHttpsUrl(expectedOrigin, raw.logPagePath || "/console/log", "logPagePath"),
     logoutPageUrl: sameOriginHttpsUrl(expectedOrigin, raw.logoutPagePath || "/console", "logoutPagePath"),
@@ -115,22 +125,44 @@ export async function forceConfiguredOAuthLogout(page, rule, config = {}) {
 export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, completedStatus = "already_signed") {
   const rule = configuredOAuthReloginRule(origin, config);
   if (!rule) return null;
-  const observed = await page.evaluate(async ({ logUrl, successText, rewardAmount, logType, expectedAccountId }) => {
-    const findUserId = () => {
-      for (const storage of [localStorage, sessionStorage]) {
-        for (let index = 0; index < storage.length; index += 1) {
-          try {
-            const value = JSON.parse(storage.getItem(storage.key(index)) || "null");
-            const userId = value?.id ?? value?.user?.id ?? value?.state?.user?.id ?? value?.data?.id ?? null;
-            if (userId != null) return String(userId);
-          } catch { /* continue */ }
-        }
+  const observed = await page.evaluate(async ({ selfUrl, logUrl, successText, rewardAmount, logType, expectedAccountId }) => {
+    const challengeText = /aliyun_waf_|captcha|滑动验证|访问验证|verify you are human|安全验证|安全驗證|cf-app-waf|nc-container|turnstile/i;
+    const readJson = async (url, headers = {}) => {
+      let response;
+      try {
+        response = await fetch(url, {
+          credentials: "include",
+          redirect: "error",
+          headers: { Accept: "application/json", ...headers },
+        });
+      } catch {
+        return { status: 0, body: null, text: "", reason: "request_failed" };
       }
-      return null;
+      const text = await response.text().catch(() => "");
+      let body = null;
+      try { body = JSON.parse(text); } catch { /* HTML or an empty body */ }
+      if (challengeText.test(text)) return { status: response.status, body, text, reason: "challenge_required" };
+      return { status: response.status, body, text };
     };
-    const userId = findUserId();
-    if (!userId) return { state: "unauthorized" };
+    const selfResponse = await readJson(selfUrl);
+    if (selfResponse.reason === "challenge_required") return { state: "error", reason: "challenge_required" };
+    if (selfResponse.status === 401 || selfResponse.status === 403) return { state: "session_expired" };
+    if (selfResponse.status === 429) return { state: "error", reason: "http_429" };
+    if (selfResponse.status === 0 || selfResponse.reason === "request_failed" || selfResponse.status >= 500) {
+      return { state: "error", reason: selfResponse.status >= 500 ? `http_${selfResponse.status}` : "request_failed" };
+    }
+    const selfUser = selfResponse.body?.data?.user ?? selfResponse.body?.data ?? selfResponse.body?.user;
+    const userId = selfUser?.id == null ? null : String(selfUser.id);
+    if (selfResponse.status !== 200 || selfResponse.body?.success === false || !userId) {
+      return { state: "error", reason: "invalid_response" };
+    }
     if (expectedAccountId && userId !== expectedAccountId) {
+      return { state: "account_mismatch", accountId: userId, expectedAccountId };
+    }
+    // The same-origin self endpoint is authoritative. A stale storage label
+    // must never override its exact account identity.
+    const identityMatched = !expectedAccountId || userId === expectedAccountId;
+    if (!identityMatched) {
       return { state: "account_mismatch", accountId: userId, expectedAccountId };
     }
     const now = new Date();
@@ -147,18 +179,13 @@ export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, co
       endpoint.searchParams.set("start_timestamp", String(startSeconds));
       endpoint.searchParams.set("end_timestamp", String(endSeconds));
       endpoint.searchParams.set("group", "");
-      let response;
-      try {
-        response = await fetch(endpoint.href, {
-          credentials: "include",
-          headers: { Accept: "application/json", "New-Api-User": userId },
-        });
-      } catch {
-        return { state: "error", reason: "request_failed" };
-      }
-      if (response.status === 401 || response.status === 403) return { state: "unauthorized" };
-      if (!response.ok) return { state: "error", reason: `http_${response.status}` };
-      const body = await response.json().catch(() => null);
+      const response = await readJson(endpoint.href, { "New-Api-User": userId });
+      if (response.reason === "challenge_required") return { state: "error", reason: "challenge_required" };
+      if (response.status === 401 || response.status === 403) return { state: "session_expired" };
+      if (response.status === 0 || response.reason === "request_failed") return { state: "error", reason: "request_failed" };
+      if (!response.status || response.status >= 500 || response.status === 429) return { state: "error", reason: `http_${response.status}` };
+      if (response.status !== 200) return { state: "error", reason: `http_${response.status}` };
+      const body = response.body;
       const items = body?.data?.items;
       if (!Array.isArray(items)) return { state: "error", reason: "invalid_response" };
       const match = items.find((item) => {
@@ -172,10 +199,10 @@ export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, co
           && Number.isFinite(amount)
           && Math.abs(amount - rewardAmount) < 0.000001;
       });
-      if (match) return { state: "confirmed", createdAt: Number(match.created_at), accountId: userId };
+      if (match) return { state: "confirmed", createdAt: Number(match.created_at), accountId: userId, identityMatched: true };
       if (items.length < 100) break;
     }
-    return { state: "missing" };
+    return { state: "missing", identityMatched: true };
   }, rule);
 
   if (observed?.state === "confirmed") {
@@ -198,13 +225,25 @@ export async function tryOAuthReloginCheckinStatus(page, origin, config = {}, co
       status: "login_required",
       reason: `当前登录账号 ${observed.accountId || "unknown"} 与配置账号 ${observed.expectedAccountId} 不符`,
       forceOAuthRelogin: true,
+      reloginReason: "account_mismatch",
     };
   }
-  if (observed?.state === "unauthorized") {
-    return { status: "login_required", reason: "站点会话已退出，需要重新完成 OAuth 登录", forceOAuthRelogin: true };
+  if (observed?.state === "session_expired" || observed?.state === "unauthorized") {
+    return {
+      status: "login_required",
+      reason: "站点会话已过期，需要在当前 Profile 中重新完成 OAuth 登录",
+      forceOAuthRelogin: true,
+      reloginReason: "session_expired",
+    };
   }
   if (observed?.state === "missing") {
-    return { status: "login_required", reason: "今日使用日志没有登录签到额度记录，需要退出后重新登录", forceOAuthRelogin: true };
+    return {
+      status: "login_required",
+      reason: "今日使用日志没有登录签到额度记录，需要退出后重新登录",
+      forceOAuthRelogin: true,
+      reloginReason: "daily_reward_missing",
+      identityMatched: observed.identityMatched === true,
+    };
   }
   if (observed?.state === "error" && observed.reason === "http_429") {
     return { status: "deferred", retryCause: "rate_limit", reason: "使用日志接口触发频率限制，已停止本轮查询" };

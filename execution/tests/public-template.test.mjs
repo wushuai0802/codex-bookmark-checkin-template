@@ -288,7 +288,7 @@ test("用户级调度器包含独立守护并在健康检查中验证三层进�
   assert.match(scheduler, /\$state\.reportValid -ne \$true/);
   assert.doesNotMatch(scheduler, /\$hasNewExternalReport\s*=\s*\$latestReportState\.Valid[\s\S]*?\$state\.reportComplete\s+-ne\s+\$true/);
   assert.match(scheduler, /\[datetimeoffset\]\$_\.nextEligibleAt/);
-  assert.match(scheduler, /\[datetimeoffset\]\$reportState\.NextEligibleAt\)\.ToLocalTime\(\)\.ToString\('o'\)/);
+  assert.match(scheduler, /\[datetimeoffset\]\$reportState\.NextEligibleAt\)\.ToOffset\(\[TimeSpan\]::FromHours\(8\)\)\.ToString\('yyyy-MM-ddTHH:mm:sszzz'\)/);
   assert.match(scheduler, /已接收外部续跑报告/);
 });
 

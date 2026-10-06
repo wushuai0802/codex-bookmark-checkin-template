@@ -8,6 +8,7 @@ import {
   forceConfiguredOAuthLogout,
   parseObservedBrowserUrl,
   readOAuthAccountIdentity,
+  shouldForceOAuthRelogin,
   tryOAuthReloginCheckinStatus,
 } from "./oauth-relogin-checkin.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
@@ -339,6 +340,13 @@ function safeFailureReason(error) {
 
 function oauthFailureCode(error) {
   if (error?.failureCode === "two_factor_required") return "two_factor_required";
+  const explicitCode = String(error?.failureCode ?? "");
+  if ([
+    "account_mismatch",
+    "oauth_rate_limited",
+    "oauth_upstream_unavailable",
+    "two_factor_required",
+  ].includes(explicitCode)) return explicitCode;
   const message = safeFailureReason(error);
   if (/账号与配置不匹配|账号不匹配|绑定不匹配/i.test(message)) return "account_mismatch";
   if (/GitHub.*(?:二次验证|两步验证|双重验证)|sessions\/two-factor|two-factor(?:\/|\b)/i.test(message)) return "two_factor_required";
@@ -383,10 +391,33 @@ try {
   const existingIdentityMatches = existingAccountId === configuredExpectedAccountId;
   const existingDailyCheckin = checkinMode === "new_api"
     ? await checkNewApiAccount(page, origin, configuredExpectedAccountId)
-    : existingIdentityMatches
-      ? await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "already_signed")
-      : null;
+    : await tryOAuthReloginCheckinStatus(page, origin, runtimeConfig, "already_signed");
   const reuseExistingDailyEvidence = ["signed", "already_signed"].includes(existingDailyCheckin?.status);
+  const guardedOAuthRelogin = shouldForceOAuthRelogin(existingDailyCheckin, {
+    identityMatches: existingIdentityMatches || existingDailyCheckin?.identityMatched === true,
+  });
+
+  // Do not turn an unreadable or rate-limited reward endpoint into a logout.
+  // An account-matched, authoritative "missing today" response is handled
+  // below; all other read outcomes must remain read-only for this attempt.
+  if (!reuseExistingDailyEvidence
+    && checkinMode !== "new_api"
+    && existingDailyCheckin
+    && existingDailyCheckin.status !== "login_required") {
+    const error = new Error(existingDailyCheckin.reason || "OAuth 当日奖励状态暂时无法确认");
+    error.failureCode = existingDailyCheckin.retryCause === "rate_limit"
+      ? "oauth_rate_limited"
+      : "oauth_upstream_unavailable";
+    throw error;
+  }
+
+  if (!reuseExistingDailyEvidence
+    && checkinMode !== "new_api"
+    && existingDailyCheckin?.reloginReason === "account_mismatch") {
+    const error = new Error(existingDailyCheckin.reason || "OAuth 登录账号与配置身份不一致");
+    error.failureCode = "account_mismatch";
+    throw error;
+  }
 
   if (reuseExistingDailyEvidence || (checkinMode === "new_api" && existingDailyCheckin?.status !== "login_required")) {
     console.log(JSON.stringify({
@@ -403,7 +434,9 @@ try {
     }));
     if (!reuseExistingDailyEvidence) process.exitCode = 2;
   } else {
-    if (rule.forceLogout) await forceConfiguredOAuthLogout(page, rule, runtimeConfig);
+    if (rule.forceLogout || guardedOAuthRelogin) {
+      await forceConfiguredOAuthLogout(page, rule, runtimeConfig);
+    }
 
     const beginTargetProviderLogin = async (activePage) => {
     await activePage.goto(loginUrl.href, {

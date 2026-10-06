@@ -82,3 +82,36 @@ test('failed release restores old code and retires newly installed files',async 
   assert.equal(fs.readFileSync(path.join(f.root,'backups',backup,'retired/observation/public/app.js'),'utf8'),'new ui');
   assert.equal(fs.readFileSync(f.executionRoot+'/config/config.json','utf8'),'private config');
 });
+
+test('operations runtime receives bounded shadow sync code without replacing its private config',async t=>{
+  const f=fixture(t),opsRoot=f.root+'/operations';fs.mkdirSync(opsRoot+'/scripts',{recursive:true});fs.mkdirSync(opsRoot+'/config',{recursive:true});
+  fs.mkdirSync(f.source+'/observation/scripts',{recursive:true});
+  fs.mkdirSync(f.source+'/execution/scripts',{recursive:true});
+  fs.writeFileSync(f.source+'/observation/scripts/Sync-NasShadow.ps1','new sync');
+  fs.writeFileSync(f.source+'/observation/scripts/Start-NasShadowScheduler.ps1','new scheduler');
+  fs.writeFileSync(f.source+'/execution/scripts/Run-HiddenPowerShell.vbs','new launcher');
+  fs.writeFileSync(f.source+'/observation/scripts/Sync-OperationsSupport.ps1','new support');
+  fs.writeFileSync(f.source+'/observation/scripts/Sync-Transport.ps1','new transport');
+  fs.writeFileSync(opsRoot+'/scripts/Sync-NasShadow.ps1','old sync');
+  fs.writeFileSync(opsRoot+'/scripts/Start-NasShadowScheduler.ps1','old scheduler');
+  fs.writeFileSync(opsRoot+'/scripts/Run-HiddenPowerShell.vbs','old launcher');
+  fs.writeFileSync(opsRoot+'/scripts/Sync-OperationsSupport.ps1','old support');
+  fs.writeFileSync(opsRoot+'/scripts/Sync-Transport.ps1','old transport');
+  fs.writeFileSync(opsRoot+'/config/config.json','private ops config');
+  const plan=planRelease({...f,opsRoot,files:[...f.files,'observation/scripts/Sync-NasShadow.ps1','observation/scripts/Start-NasShadowScheduler.ps1','operations/scripts/Run-HiddenPowerShell.vbs','operations/scripts/Sync-OperationsSupport.ps1','operations/scripts/Sync-Transport.ps1']});
+  const out=await applyRelease(plan,{backupRoot:f.root+'/backups',lock});
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-NasShadow.ps1','utf8'),'new sync');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Start-NasShadowScheduler.ps1','utf8'),'new scheduler');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Run-HiddenPowerShell.vbs','utf8'),'new launcher');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-OperationsSupport.ps1','utf8'),'new support');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-Transport.ps1','utf8'),'new transport');
+  assert.equal(fs.readFileSync(opsRoot+'/config/config.json','utf8'),'private ops config');
+  assert.equal(auditRelease(plan).drift.length,0);
+  await rollbackRelease(out.backup,{lock});
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-NasShadow.ps1','utf8'),'old sync');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Start-NasShadowScheduler.ps1','utf8'),'old scheduler');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Run-HiddenPowerShell.vbs','utf8'),'old launcher');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-OperationsSupport.ps1','utf8'),'old support');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-Transport.ps1','utf8'),'old transport');
+  assert.equal(fs.readFileSync(opsRoot+'/config/config.json','utf8'),'private ops config');
+});

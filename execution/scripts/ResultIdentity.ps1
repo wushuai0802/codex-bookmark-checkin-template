@@ -11,9 +11,34 @@
     return $builder.ToString()
 }
 
+function Get-CanonicalResultOrigin([object]$Value) {
+    return ([uri][string]$Value.origin).GetLeftPart([System.UriPartial]::Authority).TrimEnd('/')
+}
+
+function Get-PlanDefaultOrigins([object[]]$Targets = @()) {
+    return @($Targets | Where-Object {
+        [string]::IsNullOrWhiteSpace([string]$_.accountKey)
+    } | ForEach-Object {
+        try { Get-CanonicalResultOrigin $_ } catch { }
+    } | Where-Object { $_ } | Sort-Object -Unique)
+}
+
 function Get-CanonicalResultIdentity([object]$Value) {
-    $origin = ([uri][string]$Value.origin).GetLeftPart([System.UriPartial]::Authority).TrimEnd('/')
+    $origin = Get-CanonicalResultOrigin $Value
     $accountKey = ([string]$Value.accountKey).Trim()
     if ($accountKey) { return "$origin#account=$(ConvertTo-EncodeURIComponent $accountKey)" }
     return $origin
+}
+
+function Get-PlanCompatibleResultIdentity([object]$Value, [string[]]$DefaultOrigins = @()) {
+    $origin = Get-CanonicalResultOrigin $Value
+    $accountKey = ([string]$Value.accountKey).Trim()
+    # Native PT receipts use the explicit site-default selector, while the
+    # bookmark plan deliberately leaves a single-account site unqualified.
+    # Normalize only when the current plan proves that this origin is one of
+    # those unqualified sites. Explicit multi-account bindings remain exact.
+    if ($accountKey -eq 'site-default' -and @($DefaultOrigins) -contains $origin) {
+        return $origin
+    }
+    return Get-CanonicalResultIdentity $Value
 }

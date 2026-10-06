@@ -26,6 +26,10 @@ function Write-SchedulerLog([string]$message) {
     Add-Content -LiteralPath $schedulerLogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $message" -Encoding UTF8
 }
 
+function ConvertTo-ShanghaiIso([datetime]$value) {
+    return ([datetimeoffset]$value).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
+}
+
 function Write-AtomicTextFile([string]$destination, [string]$content) {
     [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
     $nonce = [guid]::NewGuid().ToString('N')
@@ -141,7 +145,7 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
         attemptsToday = [int]$state.attemptsToday
         lastAttemptStartedAt = $state.lastAttemptStartedAt
         lastRunDate = $null
-        lastFinishedAt = $now.ToString('o')
+        lastFinishedAt = ConvertTo-ShanghaiIso $now
         lastExitCode = 1
         reportValid = $false
         reportComplete = $false
@@ -153,12 +157,12 @@ function Write-SchedulerFailureState([string]$message, $config, [bool]$claimed) 
         plannedTotal = 0
         processedTotal = 0
         planFingerprint = $state.planFingerprint
-        nextEligibleAt = if ($claimed) { $now.AddMinutes($failureDelay).ToString('o') } else { $state.nextEligibleAt }
+        nextEligibleAt = if ($claimed) { ConvertTo-ShanghaiIso $now.AddMinutes($failureDelay) } else { $state.nextEligibleAt }
         deferredWakeDate = $wakeDate
         deferredWakeTokens = @($wakeTokens)
         lastSchedulerError = $safeMessage
         lastSchedulerErrorHash = $errorHash
-        lastSchedulerErrorAt = $now.ToString('o')
+        lastSchedulerErrorAt = ConvertTo-ShanghaiIso $now
         lastSchedulerErrorNotifiedAt = $state.lastSchedulerErrorNotifiedAt
     }
     Write-SchedulerStateDocument $value
@@ -184,6 +188,7 @@ function Reset-SchedulerForPlanChange($state, [string]$newPlanFingerprint) {
     $state | Add-Member -NotePropertyName lastRunId -NotePropertyValue $null -Force
     $state | Add-Member -NotePropertyName problemCount -NotePropertyValue $null -Force
     $state | Add-Member -NotePropertyName automaticRetryCount -NotePropertyValue 0 -Force
+    $state | Add-Member -NotePropertyName invalidReportRetryCount -NotePropertyValue 0 -Force
     $state | Add-Member -NotePropertyName reportRunState -NotePropertyValue $null -Force
     $state | Add-Member -NotePropertyName plannedTotal -NotePropertyValue 0 -Force
     $state | Add-Member -NotePropertyName processedTotal -NotePropertyValue 0 -Force
@@ -196,7 +201,7 @@ function Reset-SchedulerForPlanChange($state, [string]$newPlanFingerprint) {
 function Set-SchedulerFailureNotified([string]$errorHash, [datetime]$notifiedAt) {
     $state = Read-SchedulerState
     if ([string]$state.lastSchedulerErrorHash -ne $errorHash) { return }
-    $state | Add-Member -NotePropertyName lastSchedulerErrorNotifiedAt -NotePropertyValue $notifiedAt.ToString('o') -Force
+    $state | Add-Member -NotePropertyName lastSchedulerErrorNotifiedAt -NotePropertyValue (ConvertTo-ShanghaiIso $notifiedAt) -Force
     Write-SchedulerStateDocument $state
 }
 
@@ -236,14 +241,21 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
         $plannedTotal = if ($null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { 0 }
         $processedTotal = if ($null -ne $latest.processedTotal) { [int]$latest.processedTotal } else { $results.Count }
         $reportPlanFingerprint = [string]$latest.bookmarkSummary.planFingerprint
+        # PT receipts use the explicit site-default selector while the
+        # bookmark plan keeps a single-account site origin-only.  Derive the
+        # compatibility set from this report's own plan metadata so compact
+        # current-plan output does not need to expose private target fields.
+        $defaultOrigins = @(Get-PlanDefaultOrigins @($latest.bookmarkSummary.targets))
         $latestIdentities = @($latest.bookmarkSummary.targets | ForEach-Object {
-            try { Get-CanonicalResultIdentity $_ } catch { }
+            try { Get-PlanCompatibleResultIdentity $_ $defaultOrigins } catch { }
         } | Sort-Object -Unique)
         $planMatches = $null -ne $currentPlan `
             -and [int]$currentPlan.targetCount -eq $plannedTotal `
             -and @($currentPlan.identities).Count -eq $latestIdentities.Count `
             -and @(Compare-Object -ReferenceObject @($currentPlan.identities) -DifferenceObject $latestIdentities).Count -eq 0
-        $resultIdentities = @($results | ForEach-Object { Get-CanonicalResultIdentity $_ })
+        $resultIdentities = @($results | ForEach-Object {
+            Get-PlanCompatibleResultIdentity $_ $defaultOrigins
+        })
         $uniqueResultIdentities = @($resultIdentities | Sort-Object -Unique)
         $resultIdentitiesMatch = $resultIdentities.Count -eq $plannedTotal `
             -and $uniqueResultIdentities.Count -eq $resultIdentities.Count `
@@ -413,7 +425,7 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         phase = 'running'
         lastAttemptDate = $today
         attemptsToday = $attemptsToday
-        lastAttemptStartedAt = $startedAt.ToString('o')
+        lastAttemptStartedAt = ConvertTo-ShanghaiIso $startedAt
         lastRunDate = $state.lastRunDate
         lastFinishedAt = $state.lastFinishedAt
         lastExitCode = $state.lastExitCode
@@ -424,6 +436,7 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         lastRunId = $state.lastRunId
         problemCount = $state.problemCount
         automaticRetryCount = $state.automaticRetryCount
+        invalidReportRetryCount = $state.invalidReportRetryCount
         reportRunState = $state.reportRunState
         plannedTotal = $state.plannedTotal
         processedTotal = $state.processedTotal
@@ -448,14 +461,33 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
     $wakeTokens = if ([string]$state.deferredWakeDate -eq $finishedDate) { @(Get-NormalizedDeferredWakeTokens $state.deferredWakeTokens) } else { @() }
     $failureDelay = if ($null -ne $config.schedulerFailureRetryMinutes) { [int]$config.schedulerFailureRetryMinutes } else { 60 }
     $failureDelay = [Math]::Max(5, [Math]::Min(360, $failureDelay))
+    $reportValid = [bool]$reportState.Valid
+    $invalidReportRetryCount = if (-not $reportValid) {
+        if ([string]$state.lastAttemptDate -eq $finishedDate) {
+            [Math]::Max(0, [int]$state.invalidReportRetryCount) + 1
+        } else {
+            1
+        }
+    } else {
+        0
+    }
     $nextEligibleAt = $null
-    if (-not $reportState.Complete) {
+    if (-not $reportValid) {
+        # A child exit without a report that passes identity/fingerprint
+        # validation is recoverable scheduler state.  Give the next scheduled
+        # tick a bounded retry instead of treating the day as complete.  The
+        # normal daily attempt budget still caps retries, and Run-Checkin's
+        # resume/unknown guards remain authoritative for site mutations.
+        $retryAt = $finishedAt.AddMinutes($failureDelay)
+        $nextEligibleAt = ([datetimeoffset]$retryAt).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    } elseif (-not $reportState.Complete) {
         $nextEligibleAt = if ($reportState.AutomaticRetryCount -eq 0) {
             $null
         } elseif ($null -ne $reportState.NextEligibleAt) {
-            ([datetimeoffset]$reportState.NextEligibleAt).ToLocalTime().ToString('o')
+            ([datetimeoffset]$reportState.NextEligibleAt).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
         } else {
-            $finishedAt.AddMinutes($failureDelay).ToString('o')
+            $retryAt = $finishedAt.AddMinutes($failureDelay)
+            ([datetimeoffset]$retryAt).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
         }
     }
     $value = [ordered]@{
@@ -464,16 +496,17 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         attemptsToday = $attemptsToday
         lastAttemptStartedAt = $state.lastAttemptStartedAt
         lastRunDate = if ($reportState.ExecutionComplete) { $finishedDate } else { $null }
-        lastFinishedAt = $finishedAt.ToString('o')
+        lastFinishedAt = ConvertTo-ShanghaiIso $finishedAt
         lastExitCode = $exitCode
-        reportValid = [bool]$reportState.Valid
+        reportValid = $reportValid
         reportComplete = [bool]$reportState.Complete
         reportExecutionComplete = [bool]$reportState.ExecutionComplete
         reportBusinessComplete = [bool]$reportState.BusinessComplete
         lastRunId = $reportState.RunId
         problemCount = $reportState.ProblemCount
-        automaticRetryCount = $reportState.AutomaticRetryCount
-        reportRunState = $reportState.RunState
+        automaticRetryCount = if ($reportValid) { $reportState.AutomaticRetryCount } else { $invalidReportRetryCount }
+        invalidReportRetryCount = $invalidReportRetryCount
+        reportRunState = if ($reportValid) { $reportState.RunState } else { 'invalid_report' }
         plannedTotal = $reportState.PlannedTotal
         processedTotal = $reportState.ProcessedTotal
         planFingerprint = $state.planFingerprint

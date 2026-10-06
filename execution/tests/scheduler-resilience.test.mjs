@@ -163,6 +163,61 @@ test("子进程非零退出且没有有效报告时补发统一失败通知", as
   assert.doesNotMatch(scheduler, /if\s*\(\$process\.ExitCode\s+-eq\s+0\s+-and\s+-not\s+\$reportState\.Valid\)[\s\S]*?Invoke-SchedulerFailureNotification/);
 });
 
+test("身份校验失败的 final 报告进入有界冷却重试，不进入永久等待", async (context) => {
+  const command = String.raw`
+$ErrorActionPreference = 'Stop'
+$scriptPath = Join-Path $env:CHECKIN_TEST_ROOT 'scripts\Start-UserScheduler.ps1'
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Scheduler syntax error' }
+foreach ($name in @('Get-NormalizedDeferredWakeTokens', 'ConvertTo-ShanghaiIso', 'Write-SchedulerState', 'Test-SchedulerWaiting')) {
+  $f = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
+  Invoke-Expression $f.Extent.Text
+}
+$script:state = [pscustomobject]@{
+  lastAttemptDate = '2026-10-06'; attemptsToday = 1; invalidReportRetryCount = 0
+  lastAttemptStartedAt = '2026-10-06T08:05:00+08:00'; lastFinishedAt = '2026-10-06T08:14:50+08:00'
+  lastRunDate = $null; lastExitCode = 2; reportValid = $false; reportComplete = $false
+  reportExecutionComplete = $false; reportBusinessComplete = $false; lastRunId = $null
+  problemCount = $null; automaticRetryCount = 0; reportRunState = $null; plannedTotal = 0; processedTotal = 0
+  planFingerprint = 'fixture'; deferredWakeDate = '2026-10-06'; deferredWakeTokens = @()
+}
+$script:written = $null
+$script:writtenRaw = $null
+function Read-SchedulerState { return $script:state }
+function Write-AtomicTextFile([string]$Destination, [string]$Content) { $script:writtenRaw = $Content; $script:written = $Content | ConvertFrom-Json }
+$report = [pscustomobject]@{ Valid = $false; Complete = $false; ExecutionComplete = $false; BusinessComplete = $false; AutomaticRetryCount = $null; NextEligibleAt = $null; RunId = $null; ProblemCount = $null; RunState = $null; PlannedTotal = 0; ProcessedTotal = 0 }
+$finished = [DateTime]::SpecifyKind([datetime]'2026-10-06T00:14:50', [DateTimeKind]::Utc)
+$config = [pscustomobject]@{ schedulerFailureRetryMinutes = 60; schedulerMaxDailyAttempts = 5; taskTimeoutMinutes = 25 }
+Write-SchedulerState $finished 2 $report $config
+$waiting = Test-SchedulerWaiting $script:written $finished.AddMinutes(60) $config @()
+[ordered]@{
+  valid = $script:written.reportValid
+  runState = $script:written.reportRunState
+  retryCount = [int]$script:written.invalidReportRetryCount
+  automaticRetryCount = [int]$script:written.automaticRetryCount
+  nextEligibleAt = ([regex]::Match($script:writtenRaw, '"nextEligibleAt"\s*:\s*"([^"]+)"')).Groups[1].Value
+  waitingWhenDue = [bool]$waiting
+} | ConvertTo-Json -Compress
+`;
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(powershell, ["-NoProfile", "-NonInteractive", "-Command", command], {
+      cwd: root, encoding: "utf8", env: { ...process.env, CHECKIN_TEST_ROOT: root },
+    }));
+  } catch (error) {
+    if (error?.code === "ENOENT") return context.skip("PowerShell unavailable");
+    throw error;
+  }
+  const observed = JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
+  assert.equal(observed.valid, false);
+  assert.equal(observed.runState, "invalid_report");
+  assert.equal(observed.retryCount, 1);
+  assert.equal(observed.automaticRetryCount, 1);
+  assert.equal(observed.nextEligibleAt, "2026-10-06T09:14:50+08:00");
+  assert.equal(observed.waitingWhenDue, false);
+});
+
 test("延迟站点用身份和时间窗令牌获得有界补跑机会", async () => {
   const scheduler = await schedulerSource();
   assert.match(scheduler, /function Get-UnclaimedDeferredWakeups/);
@@ -202,7 +257,8 @@ test("外部报告元数据变化时同步调度状态但不重复通知", async
 
 test("调度器拒绝结果身份重复或缺失的伪完整报告", async () => {
   const scheduler = await schedulerSource();
-  assert.match(scheduler, /\$resultIdentities\s*=\s*@\(\$results[\s\S]*?Get-CanonicalResultIdentity/);
+  assert.match(scheduler, /\$resultIdentities\s*=\s*@\(\$results[\s\S]*?Get-PlanCompatibleResultIdentity/);
+  assert.match(scheduler, /Get-PlanDefaultOrigins\s+@\(\$latest\.bookmarkSummary\.targets\)/);
   assert.match(scheduler, /\$uniqueResultIdentities\.Count\s+-eq\s+\$resultIdentities\.Count/);
   assert.match(scheduler, /Compare-Object\s+-ReferenceObject\s+@\(\$currentPlan\.identities\)\s+-DifferenceObject\s+\$uniqueResultIdentities/);
   assert.match(scheduler, /-and\s+\$resultIdentitiesMatch/);
