@@ -184,6 +184,7 @@ function Reset-SchedulerForPlanChange($state, [string]$newPlanFingerprint) {
     $state | Add-Member -NotePropertyName lastRunId -NotePropertyValue $null -Force
     $state | Add-Member -NotePropertyName problemCount -NotePropertyValue $null -Force
     $state | Add-Member -NotePropertyName automaticRetryCount -NotePropertyValue 0 -Force
+    $state | Add-Member -NotePropertyName invalidReportRetryCount -NotePropertyValue 0 -Force
     $state | Add-Member -NotePropertyName reportRunState -NotePropertyValue $null -Force
     $state | Add-Member -NotePropertyName plannedTotal -NotePropertyValue 0 -Force
     $state | Add-Member -NotePropertyName processedTotal -NotePropertyValue 0 -Force
@@ -236,14 +237,21 @@ function Get-LatestReportState([datetime]$now, $config, $currentPlan, [Nullable[
         $plannedTotal = if ($null -ne $latest.plannedTotal) { [int]$latest.plannedTotal } else { 0 }
         $processedTotal = if ($null -ne $latest.processedTotal) { [int]$latest.processedTotal } else { $results.Count }
         $reportPlanFingerprint = [string]$latest.bookmarkSummary.planFingerprint
+        # PT receipts use the explicit site-default selector while the
+        # bookmark plan keeps a single-account site origin-only.  Derive the
+        # compatibility set from this report's own plan metadata so compact
+        # current-plan output does not need to expose private target fields.
+        $defaultOrigins = @(Get-PlanDefaultOrigins @($latest.bookmarkSummary.targets))
         $latestIdentities = @($latest.bookmarkSummary.targets | ForEach-Object {
-            try { Get-CanonicalResultIdentity $_ } catch { }
+            try { Get-PlanCompatibleResultIdentity $_ $defaultOrigins } catch { }
         } | Sort-Object -Unique)
         $planMatches = $null -ne $currentPlan `
             -and [int]$currentPlan.targetCount -eq $plannedTotal `
             -and @($currentPlan.identities).Count -eq $latestIdentities.Count `
             -and @(Compare-Object -ReferenceObject @($currentPlan.identities) -DifferenceObject $latestIdentities).Count -eq 0
-        $resultIdentities = @($results | ForEach-Object { Get-CanonicalResultIdentity $_ })
+        $resultIdentities = @($results | ForEach-Object {
+            Get-PlanCompatibleResultIdentity $_ $defaultOrigins
+        })
         $uniqueResultIdentities = @($resultIdentities | Sort-Object -Unique)
         $resultIdentitiesMatch = $resultIdentities.Count -eq $plannedTotal `
             -and $uniqueResultIdentities.Count -eq $resultIdentities.Count `
@@ -424,6 +432,7 @@ function Write-SchedulerClaim([datetime]$startedAt, [object[]]$deferredWakeups =
         lastRunId = $state.lastRunId
         problemCount = $state.problemCount
         automaticRetryCount = $state.automaticRetryCount
+        invalidReportRetryCount = $state.invalidReportRetryCount
         reportRunState = $state.reportRunState
         plannedTotal = $state.plannedTotal
         processedTotal = $state.processedTotal
@@ -448,8 +457,25 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
     $wakeTokens = if ([string]$state.deferredWakeDate -eq $finishedDate) { @(Get-NormalizedDeferredWakeTokens $state.deferredWakeTokens) } else { @() }
     $failureDelay = if ($null -ne $config.schedulerFailureRetryMinutes) { [int]$config.schedulerFailureRetryMinutes } else { 60 }
     $failureDelay = [Math]::Max(5, [Math]::Min(360, $failureDelay))
+    $reportValid = [bool]$reportState.Valid
+    $invalidReportRetryCount = if (-not $reportValid) {
+        if ([string]$state.lastAttemptDate -eq $finishedDate) {
+            [Math]::Max(0, [int]$state.invalidReportRetryCount) + 1
+        } else {
+            1
+        }
+    } else {
+        0
+    }
     $nextEligibleAt = $null
-    if (-not $reportState.Complete) {
+    if (-not $reportValid) {
+        # A child exit without a report that passes identity/fingerprint
+        # validation is recoverable scheduler state.  Give the next scheduled
+        # tick a bounded retry instead of treating the day as complete.  The
+        # normal daily attempt budget still caps retries, and Run-Checkin's
+        # resume/unknown guards remain authoritative for site mutations.
+        $nextEligibleAt = $finishedAt.AddMinutes($failureDelay).ToString('o')
+    } elseif (-not $reportState.Complete) {
         $nextEligibleAt = if ($reportState.AutomaticRetryCount -eq 0) {
             $null
         } elseif ($null -ne $reportState.NextEligibleAt) {
@@ -466,14 +492,15 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         lastRunDate = if ($reportState.ExecutionComplete) { $finishedDate } else { $null }
         lastFinishedAt = $finishedAt.ToString('o')
         lastExitCode = $exitCode
-        reportValid = [bool]$reportState.Valid
+        reportValid = $reportValid
         reportComplete = [bool]$reportState.Complete
         reportExecutionComplete = [bool]$reportState.ExecutionComplete
         reportBusinessComplete = [bool]$reportState.BusinessComplete
         lastRunId = $reportState.RunId
         problemCount = $reportState.ProblemCount
-        automaticRetryCount = $reportState.AutomaticRetryCount
-        reportRunState = $reportState.RunState
+        automaticRetryCount = if ($reportValid) { $reportState.AutomaticRetryCount } else { $invalidReportRetryCount }
+        invalidReportRetryCount = $invalidReportRetryCount
+        reportRunState = if ($reportValid) { $reportState.RunState } else { 'invalid_report' }
         plannedTotal = $reportState.PlannedTotal
         processedTotal = $reportState.ProcessedTotal
         planFingerprint = $state.planFingerprint

@@ -36,6 +36,24 @@ test("health 与 scheduler 都使用统一的规范身份函数", async () => {
   assert.match(health, /\$latestResultIdentities\.Count\s+-eq\s+\$latestResultIdentityValues\.Count/);
   assert.match(health, /Test-CheckinPlanMatch/);
   assert.match(health, /\$latestPlanTargets[\s\S]*\$supplementalAccounts\s+\|\s+ForEach-Object\s+\{\s*Get-PlanTargetIdentity/);
-  assert.match(health, /\$currentPlanDefaultOrigins[\s\S]*accountKey\s+-eq\s+'site-default'[\s\S]*\$currentPlanDefaultOrigins/);
+  assert.match(scheduler, /Get-PlanCompatibleResultIdentity/);
+  assert.match(health, /Get-PlanCompatibleResultIdentity/);
+  assert.match(health, /Get-PlanDefaultOrigins/);
   assert.match(classification, /Compare-Object\s+-ReferenceObject\s+\$CurrentPlanIdentities\s+-DifferenceObject\s+\$LatestResultIdentities/);
+});
+
+test("site-default PT receipt only migrates to an origin-only plan when that origin is unqualified", async (context) => {
+  const command = `. '${helper}'; @(
+    (Get-PlanCompatibleResultIdentity ([pscustomobject]@{ origin = 'https://pt.example/path'; accountKey = 'site-default' }) @('https://pt.example')),
+    (Get-PlanCompatibleResultIdentity ([pscustomobject]@{ origin = 'https://pt.example'; accountKey = 'site-default' }) @('https://other.example')),
+    (Get-PlanCompatibleResultIdentity ([pscustomobject]@{ origin = 'https://pt.example'; accountKey = 'secondary' }) @('https://pt.example'))
+  ) -join '|'`;
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(powershell, ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" }));
+  } catch (error) {
+    if (error?.code === "ENOENT") return context.skip("PowerShell unavailable");
+    throw error;
+  }
+  assert.equal(stdout.trim(), "https://pt.example|https://pt.example#account=site-default|https://pt.example#account=secondary");
 });

@@ -17,6 +17,17 @@ function readPath(value, configuredPath) {
   );
 }
 
+export function isSessionPreflightTargetEnabled(target, config = {}) {
+  const origin = String(target?.origin ?? '').trim();
+  if ((config.disabledCheckinOrigins ?? []).includes(origin)) return false;
+  const accountKey = String(target?.accountKey ?? '').trim();
+  if (!accountKey) return true;
+  if ((config.disabledAccountKeys ?? []).includes(accountKey)) return false;
+  return !(config.disabledAccountBindings ?? []).some((binding) => (
+    binding?.origin === origin && binding?.accountKey === accountKey
+  ));
+}
+
 export function buildSessionPreflightPlan({
   targets = [],
   isolatedPrimaryAccounts = [],
@@ -30,6 +41,7 @@ export function buildSessionPreflightPlan({
   const sharedRules = config.oauthSessionProbeRules ?? {};
   const usedSessions = new Set();
   for (const target of targets) {
+    if (!isSessionPreflightTargetEnabled(target, config)) continue;
     const sessionKey = sessionProfiles?.siteBindings?.get(target.origin);
     if (!sessionKey || usedSessions.has(sessionKey) || !sharedRules[sessionKey]) continue;
     const profilePath = sessionProfiles.profiles.get(sessionKey);
@@ -52,6 +64,7 @@ export function buildSessionPreflightPlan({
   }
   const accountRules = config.oauthAccountProbeRules ?? {};
   for (const account of [...isolatedPrimaryAccounts, ...supplementalAccounts]) {
+    if (!isSessionPreflightTargetEnabled(account, config)) continue;
     if (!selectedIdentities.has(resultIdentity(account)) || !accountRules[account.accountKey]) continue;
     const rule = accountRules[account.accountKey];
     const apiUrl = rule.apiUrl
