@@ -64,3 +64,53 @@ test('repair never submits or erases a reported completion; unresolved evidence 
   assert.equal(state.sites[origin].outcome,'verified');
   assert.deepEqual(ptEvidenceCandidates(snapshot(),catalog,state,later),[]);
 });
+
+test('fair queue advances to the next registered PT after a bounded review',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-fair-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');
+  const audiences='https://audiences.example',dstudio='https://dstudio.example';
+  const value={businessDate:'2026-09-30',tasks:[
+    {taskId:'a',origin:audiences,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true},
+    {taskId:'d',origin:dstudio,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}
+  ],receipts:[{taskId:'a',evidence:{authoritative:false}},{taskId:'d',evidence:{authoritative:false}}]};
+  fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(value));
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify({sites:[{origin:audiences},{origin:dstudio}]}));
+  const seen=[];
+  const runSite=async input=>{seen.push(input.origin);assert.equal(input.readOnly,true);return {origin:input.origin,status:'unknown',evidence:{authoritative:false}};};
+  await repairPtEvidence({root,catalogFile,maxSites:1,refreshCatalog:()=>catalogFile,clock:()=>now,runSite});
+  await repairPtEvidence({root,catalogFile,maxSites:1,refreshCatalog:()=>catalogFile,clock:()=>now,runSite});
+  assert.deepEqual(seen,[audiences,dstudio]);
+  const audit=fs.readFileSync(root+'/data/pt-evidence-repair-audit-2026-09-30.jsonl','utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(audit.map(item=>item.origin),[audiences,dstudio]);
+  assert.ok(audit.every(item=>item.readOnly===true&&item.submissionAttempted===false&&item.errorStage==='readback'));
+  const marker=JSON.parse(fs.readFileSync(root+'/outputs/pt-evidence-repair-dirty-2026-09-30.json'));
+  assert.equal(marker.needsDashboardSync,true);assert.equal(marker.resultCount,1);
+});
+
+test('completion invokes a dashboard rebuild callback after passive verification',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-rebuild-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot()));
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify(catalog));
+  let rebuilt=null;
+  const result=await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,clock:()=>now,
+    runSite:async input=>({origin,status:'already_signed',observedAt:now.toISOString(),accountKey:'site-default',profileBinding:'a'.repeat(64),
+      operationMode:'safe_history_page',readSafety:'reviewed_passive',evidence:{source:'page_text',authoritative:true,confirmedAt:now.toISOString(),businessDate:'2026-09-30',evidenceScope:'site_account_day'}}),
+    record:()=>({recorded:true}),rebuild:async value=>{rebuilt=value;return {rebuilt:true,snapshotId:'snap_test'};}});
+  assert.equal(result.rebuild.rebuilt,true);assert.equal(rebuilt.results[0].origin,origin);
+  assert.equal(result.dirtyMarker,'pt-evidence-repair-dirty-2026-09-30.json');
+});
+
+test('an empty evidence pass does not create a recurring publication marker',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-empty-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot()));
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify({sites:[]}));
+  const result=await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,clock:()=>now,runSite:async()=>{
+    throw new Error('runSite must not be called for an empty candidate set');
+  }});
+  assert.equal(result.results.length,0);
+  assert.equal(result.dirtyMarker,null);
+  assert.equal(fs.existsSync(root+'/outputs/pt-evidence-repair-dirty-2026-09-30.json'),false);
+});

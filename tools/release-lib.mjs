@@ -11,7 +11,15 @@ const publicRuntimeFiles=new Set([
   'observation/Dockerfile','observation/compose.nas.yaml',
   'observation/compose.worker.yaml','observation/.dockerignore'
 ]);
-const managed={test:file=>publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
+// The installed scheduler retains its old operations entrypoint paths. Publish
+// the exact same canonical code there, rather than maintaining an untracked
+// production-only repair. No config/data or unrelated operations script joins.
+const operationsSources=new Map([
+  ['operations/scripts/Sync-NasShadow.ps1','observation/scripts/Sync-NasShadow.ps1'],
+  ['operations/scripts/Start-NasShadowScheduler.ps1','observation/scripts/Start-NasShadowScheduler.ps1']
+]);
+const managed={test:file=>operationsSources.has(file)||publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
+const sourceFile=file=>operationsSources.get(file)??file;
 export const fileHash=file=>fs.existsSync(file)?crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'):null;
 function safeFile(root,relative){
   if(!/^[A-Za-z0-9_.\/-]+$/.test(relative)||relative.split('/').some(p=>p==='..'||p==='.'||!p))throw Error('unsafe release path');
@@ -25,21 +33,23 @@ function safeFile(root,relative){
 function destination(roots,file){const [layer,...parts]=file.split('/');if(!roots[layer]||!managed.test(file))throw Error('file outside release scope');return safeFile(roots[layer],parts.join('/'));}
 const protectedPaths=roots=>[
   path.join(roots.execution,'config/config.json'),path.join(roots.execution,'config/config.local.json'),
-  path.join(roots.execution,'data/v2-integration.json'),path.join(roots.observation,'config/runtime.local.json')];
+  path.join(roots.execution,'data/v2-integration.json'),path.join(roots.observation,'config/runtime.local.json'),
+  ...(roots.operations?[path.join(roots.operations,'config/config.json'),path.join(roots.operations,'config/pt-monitor.local.json')]:[])];
 const marker=root=>path.join(root,'release.json');
 function atomic(file,bytes){fs.mkdirSync(path.dirname(file),{recursive:true});const temp=file+'.'+crypto.randomUUID()+'.tmp';
   try{fs.writeFileSync(temp,bytes,{mode:0o600});fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}}
 
-export function planRelease({source,executionRoot,observationRoot,files,revision,version}={}){
-  const roots={execution:path.resolve(executionRoot),observation:path.resolve(observationRoot)};
+export function planRelease({source,executionRoot,observationRoot,opsRoot,files,revision,version}={}){
+  const roots={execution:path.resolve(executionRoot),observation:path.resolve(observationRoot),...(opsRoot?{operations:path.resolve(opsRoot)}:{})};
   for(const root of Object.values(roots))if(root===path.parse(root).root)throw Error('runtime root cannot be a drive root');
   const canonical=value=>process.platform==='win32'?value.toLowerCase():value;
-  if(canonical(roots.execution)===canonical(roots.observation))throw Error('execution and observation roots must be distinct');
+  if(new Set(Object.values(roots).map(canonical)).size!==Object.values(roots).length)throw Error('execution, observation and operations roots must be distinct');
   source=path.resolve(source);
   files??=execFileSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:source,encoding:'utf8'}).trim().split(/\r?\n/).filter(file=>managed.test(file));
+  if(roots.operations)files=[...files,...operationsSources.keys()];
   const entries=[...new Set(files)].sort().map(file=>{
     if(!managed.test(file))throw Error('file outside release scope');
-    const from=safeFile(source,file),to=destination(roots,file),afterHash=fileHash(from);
+    const from=safeFile(source,sourceFile(file)),to=destination(roots,file),afterHash=fileHash(from);
     if(!afterHash)throw Error('release source missing: '+file);
     return {file,beforeHash:fileHash(to),afterHash};
   });
@@ -63,7 +73,7 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
   if(fs.existsSync(backup))throw Error('release backup already exists');
   return lock(plan,async()=>{
     const prepared=plan.files.map(entry=>{
-      const from=safeFile(plan.source,entry.file),to=destination(plan.roots,entry.file);
+      const from=safeFile(plan.source,sourceFile(entry.file)),to=destination(plan.roots,entry.file);
       if(fileHash(from)!==entry.afterHash||fileHash(to)!==entry.beforeHash)throw Error('release drift: '+entry.file);
       return {...entry,to,bytes:fs.readFileSync(from)};
     }).sort((a,b)=>{

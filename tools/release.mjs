@@ -5,10 +5,10 @@ import {planRelease,applyRelease,rollbackRelease,auditRelease} from './release-l
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const [command,...args]=process.argv.slice(2),options={};
 try{
-  for(let i=0;i<args.length;i+=2){if(!['--execution-root','--observation-root','--out','--manifest','--backup-root','--backup'].includes(args[i])||!args[i+1])throw Error('invalid release arguments');options[args[i]]=args[i+1];}
+  for(let i=0;i<args.length;i+=2){if(!['--execution-root','--observation-root','--ops-root','--out','--manifest','--backup-root','--backup'].includes(args[i])||!args[i+1])throw Error('invalid release arguments');options[args[i]]=args[i+1];}
   if(command==='plan'){
     if(!options['--execution-root']||!options['--observation-root']||!options['--out'])throw Error('plan needs runtime roots and --out');
-    const plan=planRelease({source,executionRoot:options['--execution-root'],observationRoot:options['--observation-root']});
+    const plan=planRelease({source,executionRoot:options['--execution-root'],observationRoot:options['--observation-root'],opsRoot:options['--ops-root']});
     const file=path.resolve(options['--out']);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(plan,null,2),{mode:0o600});
     console.log(JSON.stringify({manifest:file,files:plan.files.length,changed:plan.files.filter(f=>f.beforeHash!==f.afterHash).map(f=>f.file)}));
   }else if(command==='apply'||command==='audit'){

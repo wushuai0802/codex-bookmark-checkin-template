@@ -36,12 +36,22 @@ and bounded retry path as other sync failures.
 
 `Invoke-PtEvidenceRepair.ps1 -CatalogFile <current-catalog>` can run from the same
 existing probe. It defaults to one reviewed PT page per probe (`-MaxSites` permits
-1–4 sequential reads) and twice per site
-per business day, only for reported completions whose evidence is missing. It
-holds execution locks, never calls a submission path, publishes only authoritative
-positive readbacks, and leaves original completion reports intact when a read fails.
-Native browser fallback is limited to configured single-account profiles and the
-reviewed index pages in the shared contract. No new scheduled task is needed.
+1–4 sequential reads) and twice per site per business day, only for reported
+completions whose evidence is missing. The wrapper waits for the worker to finish
+and the worker invokes the read-only dashboard rebuild callback while holding the
+PT repair lease; the rebuild also takes the global V1/V2 lease, so a concurrent
+daily publication returns a bounded `runner_busy` result instead of mixing
+generations. A dated `outputs/pt-evidence-repair-dirty-YYYY-MM-DD.json` marker is
+written after every worker completion. The scheduler or NAS sync layer should use
+that marker to schedule its normal status sync; the worker never uploads, sends a
+notification, or submits a check-in.
+
+The worker holds execution locks, never calls a submission path, publishes only
+authoritative positive readbacks, and leaves original completion reports intact
+when a read fails. Each attempt also writes a redacted, structured audit line with
+`status`, `errorStage`, `errorCode`, and `submissionAttempted:false`. Native browser
+fallback is limited to configured single-account profiles and the reviewed index
+pages in the shared contract. No new scheduled task is needed.
 
 `Invoke-SyncRemoteCommand` captures SSH stderr and returns an exit code plus a
 safe failure category. Pass `-o ConnectTimeout=15 -o ServerAliveInterval=15
