@@ -478,14 +478,16 @@ function Write-SchedulerState([datetime]$finishedAt, [int]$exitCode, $reportStat
         # tick a bounded retry instead of treating the day as complete.  The
         # normal daily attempt budget still caps retries, and Run-Checkin's
         # resume/unknown guards remain authoritative for site mutations.
-        $nextEligibleAt = ConvertTo-ShanghaiIso $finishedAt.AddMinutes($failureDelay)
+        $retryAt = $finishedAt.AddMinutes($failureDelay)
+        $nextEligibleAt = ([datetimeoffset]$retryAt).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
     } elseif (-not $reportState.Complete) {
         $nextEligibleAt = if ($reportState.AutomaticRetryCount -eq 0) {
             $null
         } elseif ($null -ne $reportState.NextEligibleAt) {
-            ConvertTo-ShanghaiIso ([datetime]([datetimeoffset]$reportState.NextEligibleAt).UtcDateTime)
+            ([datetimeoffset]$reportState.NextEligibleAt).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
         } else {
-            ConvertTo-ShanghaiIso $finishedAt.AddMinutes($failureDelay)
+            $retryAt = $finishedAt.AddMinutes($failureDelay)
+            ([datetimeoffset]$retryAt).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
         }
     }
     $value = [ordered]@{
