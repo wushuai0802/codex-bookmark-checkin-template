@@ -186,7 +186,7 @@ $script:written = $null
 function Read-SchedulerState { return $script:state }
 function Write-AtomicTextFile([string]$Destination, [string]$Content) { $script:written = $Content | ConvertFrom-Json }
 $report = [pscustomobject]@{ Valid = $false; Complete = $false; ExecutionComplete = $false; BusinessComplete = $false; AutomaticRetryCount = $null; NextEligibleAt = $null; RunId = $null; ProblemCount = $null; RunState = $null; PlannedTotal = 0; ProcessedTotal = 0 }
-$finished = [datetime]'2026-10-06T08:14:50+08:00'
+$finished = [DateTime]::SpecifyKind([datetime]'2026-10-06T00:14:50', [DateTimeKind]::Utc)
 $config = [pscustomobject]@{ schedulerFailureRetryMinutes = 60; schedulerMaxDailyAttempts = 5; taskTimeoutMinutes = 25 }
 Write-SchedulerState $finished 2 $report $config
 $waiting = Test-SchedulerWaiting $script:written $finished.AddMinutes(60) $config @()
