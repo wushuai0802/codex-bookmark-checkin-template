@@ -25,6 +25,7 @@ import {
 import {
   configuredOAuthReloginRule,
   forceConfiguredOAuthLogout,
+  shouldForceOAuthRelogin,
   tryOAuthReloginCheckinStatus,
 } from "./oauth-relogin-checkin.mjs";
 import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
@@ -45,6 +46,13 @@ const sessionConfig = configForOAuthSession(isolatedConfig, oauthSessionProfiles
 const runtimeConfig = configForOAuthRecoveryAccount(sessionConfig, rootDirectory, bookmarkOrigin, provider);
 
 function classifyOAuthRecoveryFailure(error) {
+  const explicitCode = String(error?.failureCode ?? "");
+  if ([
+    "account_mismatch",
+    "oauth_rate_limited",
+    "oauth_upstream_unavailable",
+    "oauth_recovery_failed",
+  ].includes(explicitCode)) return explicitCode;
   const message = String(error?.message ?? "");
   if (/429|too many requests|请求次数过多|頻率限制/i.test(message)) return "oauth_rate_limited";
   if (/timeout|timed out|超时|超時/i.test(message)) return "oauth_timeout";
@@ -281,7 +289,46 @@ async function runOAuthFlow(context) {
     return;
   }
   const reloginRule = configuredOAuthReloginRule(origin, config);
-  if (reloginRule?.forceLogout) await forceConfiguredOAuthLogout(page, reloginRule, config);
+  let preflightReloginStatus = null;
+  if (reloginRule) {
+    let currentOrigin = null;
+    try { currentOrigin = new URL(page.url()).origin; } catch { /* wait for the target page below */ }
+    if (currentOrigin === origin) {
+      preflightReloginStatus = await tryOAuthReloginCheckinStatus(page, origin, config, "already_signed");
+    }
+  }
+  if (["signed", "already_signed"].includes(preflightReloginStatus?.status)) {
+    console.log(JSON.stringify({
+      origin,
+      provider,
+      status: "logged_in",
+      finalUrl: safeLogUrl(page.url()),
+      title: await page.title(),
+      dailyCheckin: preflightReloginStatus,
+      reusedExistingDailyEvidence: true,
+    }, null, 2));
+    return;
+  }
+  if (preflightReloginStatus?.reloginReason === "account_mismatch") {
+    const error = new Error(preflightReloginStatus.reason || "OAuth 登录账号与配置身份不一致");
+    error.failureCode = "account_mismatch";
+    throw error;
+  }
+  if (["deferred", "unconfirmed"].includes(preflightReloginStatus?.status)) {
+    const error = new Error(preflightReloginStatus.reason || "OAuth 当日奖励状态暂时无法确认");
+    error.failureCode = preflightReloginStatus.retryCause === "rate_limit"
+      ? "oauth_rate_limited"
+      : "oauth_upstream_unavailable";
+    throw error;
+  }
+  const guardedOAuthRelogin = shouldForceOAuthRelogin(preflightReloginStatus, {
+    // The helper marks a self endpoint response only after matching the
+    // configured account ID, so the logout remains account-bound.
+    identityMatches: preflightReloginStatus?.identityMatched === true,
+  });
+  if (reloginRule?.forceLogout || guardedOAuthRelogin) {
+    await forceConfiguredOAuthLogout(page, reloginRule, config);
+  }
   const configuredLoginUrl = config.oauthLoginUrls?.[origin] ?? `${origin}/login`;
   const loginUrl = new URL(configuredLoginUrl);
   if (loginUrl.origin !== origin || loginUrl.protocol !== "https:") throw new Error("OAuth 登录入口不属于目标站点");
@@ -299,6 +346,33 @@ async function runOAuthFlow(context) {
     }
   }
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+  // The target login route may redirect an already authenticated session back
+  // to /console. Re-read the account-bound reward log after that navigation
+  // before looking for a provider button; a missing button is not a flow
+  // change when the session is simply still active.
+  if (reloginRule && new URL(page.url()).origin === origin) {
+    const postNavigationStatus = await tryOAuthReloginCheckinStatus(page, origin, config, "already_signed");
+    if (["signed", "already_signed"].includes(postNavigationStatus?.status)) {
+      console.log(JSON.stringify({origin,provider,status:"logged_in",finalUrl:safeLogUrl(page.url()),title:await page.title(),dailyCheckin:postNavigationStatus,reusedExistingDailyEvidence:true}, null, 2));
+      return;
+    }
+    if (postNavigationStatus?.reloginReason === "account_mismatch") {
+      const error = new Error(postNavigationStatus.reason || "OAuth 登录账号与配置身份不一致");
+      error.failureCode = "account_mismatch";
+      throw error;
+    }
+    if (["deferred", "unconfirmed"].includes(postNavigationStatus?.status)) {
+      const error = new Error(postNavigationStatus.reason || "OAuth 当日奖励状态暂时无法确认");
+      error.failureCode = postNavigationStatus.retryCause === "rate_limit" ? "oauth_rate_limited" : "oauth_upstream_unavailable";
+      throw error;
+    }
+    const guardedPostNavigation = shouldForceOAuthRelogin(postNavigationStatus, {identityMatches:true});
+    if (reloginRule.forceLogout || guardedPostNavigation) {
+      await forceConfiguredOAuthLogout(page, reloginRule, config);
+      await page.goto(loginUrl.href, {waitUntil:"domcontentloaded", timeout:config.navigationTimeoutMs});
+      await page.waitForLoadState("networkidle", {timeout:8000}).catch(() => {});
+    }
+  }
   let existingDailyCheckin = await tryNewApiSignIn(page, origin, config);
   if (!["signed", "already_signed"].includes(existingDailyCheckin?.status)) {
     existingDailyCheckin = await tryOAuthApiCheckin(page, origin, config);

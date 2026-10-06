@@ -15,6 +15,37 @@ test("AgentRouter execution defaults to preserving the account session", async (
   assert.match(adapter, /forceLogout=rule\.forceLogout===true/);
 });
 
+test("OAuth recovery only logs out after an account-bound missing daily reward", async () => {
+  const native = await read("../src/native-oauth-login.mjs");
+  const generic = await read("../src/oauth-login.mjs");
+  for (const source of [native, generic]) {
+    assert.match(source, /shouldForceOAuthRelogin/);
+    assert.match(source, /guardedOAuthRelogin/);
+  }
+  const guard = await read("../src/oauth-relogin-checkin.mjs");
+  assert.match(guard, /reloginReason === "daily_reward_missing"/);
+  assert.match(guard, /reloginReason === "session_expired"/);
+  assert.match(guard, /selfUrl: sameOriginHttpsUrl/);
+  assert.match(native, /rule\.forceLogout \|\| guardedOAuthRelogin/);
+  assert.match(generic, /reloginRule\?\.forceLogout \|\| guardedOAuthRelogin/);
+  assert.match(native, /existingIdentityMatches/);
+  assert.match(native, /existingDailyCheckin\.status !== "login_required"/);
+  assert.match(generic, /preflightReloginStatus/);
+  assert.match(generic, /postNavigationStatus/);
+  assert.match(generic, /guardedPostNavigation/);
+});
+
+test("OAuth recovery stops on unreadable reward status before opening a provider flow", async () => {
+  const native = await read("../src/native-oauth-login.mjs");
+  const generic = await read("../src/oauth-login.mjs");
+  assert.match(native, /existingDailyCheckin\.status !== "login_required"/);
+  assert.match(generic, /\["deferred", "unconfirmed"\]\.includes\(preflightReloginStatus\?\.status\)/);
+  assert.match(native, /oauth_rate_limited/);
+  assert.match(generic, /oauth_upstream_unavailable/);
+  assert.match(await read("../src/oauth-relogin-checkin.mjs"), /selfResponse\.status === 401 \|\| selfResponse\.status === 403/);
+  assert.match(await read("../src/oauth-relogin-checkin.mjs"), /reason === "challenge_required"/);
+});
+
 test("GitHub two-factor pages are terminally classified before generic challenge handling", async () => {
   const native = await read("../src/native-oauth-login.mjs");
   const generic = await read("../src/oauth-login.mjs");

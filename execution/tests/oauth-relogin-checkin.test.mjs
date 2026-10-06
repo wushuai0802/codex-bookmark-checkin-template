@@ -4,6 +4,7 @@ import {
   configuredOAuthReloginRule,
   forceConfiguredOAuthLogout,
   parseObservedBrowserUrl,
+  shouldForceOAuthRelogin,
   tryOAuthReloginCheckinStatus,
 } from "../src/oauth-relogin-checkin.mjs";
 
@@ -34,6 +35,7 @@ test("OAuth 弹窗的临时空地址不会中断恢复流程", () => {
 
 test("OAuth 重登录签到规则只接受同源 HTTPS 地址", () => {
   const rule = configuredOAuthReloginRule(origin, config);
+  assert.equal(rule.selfUrl, "https://agentrouter.org/api/user/self");
   assert.equal(rule.logUrl, "https://agentrouter.org/api/log/self");
   assert.equal(rule.logoutPageUrl, "https://agentrouter.org/console");
   assert.equal(rule.logoutUrl, "https://agentrouter.org/api/user/logout");
@@ -90,7 +92,10 @@ test("缺失奖励日志时要求强制 OAuth 重登录且不误报成功", asyn
   const missing = await tryOAuthReloginCheckinStatus(missingPage, origin, config);
   assert.equal(missing.status, "login_required");
   assert.equal(missing.forceOAuthRelogin, true);
+  assert.equal(missing.reloginReason, "daily_reward_missing");
   assert.match(missing.reason, /退出后重新登录/);
+  assert.equal(shouldForceOAuthRelogin(missing, { identityMatches: true }), true);
+  assert.equal(shouldForceOAuthRelogin(missing, { identityMatches: false }), false);
 
   const failedPage = { evaluate: async () => ({ state: "error", reason: "invalid_response" }) };
   const failed = await tryOAuthReloginCheckinStatus(failedPage, origin, config);
@@ -133,5 +138,28 @@ test("OAuth 登录账号不符时拒绝使用其他账号的奖励记录", async
   assert.equal(observedRule.expectedAccountId, "20002");
   assert.equal(result.status, "login_required");
   assert.equal(result.forceOAuthRelogin, true);
+  assert.equal(result.reloginReason, "account_mismatch");
+  assert.equal(shouldForceOAuthRelogin(result, { identityMatches: true }), false);
   assert.match(result.reason, /10001.*20002/);
+});
+
+test("OAuth 重登录不会把已失效会话或未知奖励状态变成退出动作", async () => {
+  const unauthorized = await tryOAuthReloginCheckinStatus({
+    evaluate: async () => ({ state: "unauthorized" }),
+  }, origin, config);
+  assert.equal(unauthorized.reloginReason, "session_expired");
+  assert.equal(shouldForceOAuthRelogin(unauthorized, { identityMatches: false }), true);
+
+  const expired = {
+    status: "login_required",
+    forceOAuthRelogin: true,
+    reloginReason: "session_expired",
+  };
+  assert.equal(shouldForceOAuthRelogin(expired, { identityMatches: false }), true);
+
+  const unknown = await tryOAuthReloginCheckinStatus({
+    evaluate: async () => ({ state: "error", reason: "http_503" }),
+  }, origin, config);
+  assert.equal(unknown.status, "deferred");
+  assert.equal(shouldForceOAuthRelogin(unknown, { identityMatches: true }), false);
 });
