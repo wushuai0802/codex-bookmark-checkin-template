@@ -65,6 +65,14 @@ function Get-ObservationPublicationFingerprint([string]$ProjectRoot) {
         Sort-Object Name | ForEach-Object { "$($_.Name):$($_.Length):$($_.LastWriteTimeUtc.Ticks)" }) -join '|'
 }
 
+function Get-PendingEvidenceMarkers([string]$ProjectRoot) {
+    $outputRoot = Join-Path $ProjectRoot 'outputs'
+    if (-not (Test-Path -LiteralPath $outputRoot -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $outputRoot -File -Filter 'pt-evidence-repair-dirty-*.json' -ErrorAction SilentlyContinue |
+        Where-Object Name -Match '^pt-evidence-repair-dirty-\d{4}-\d{2}-\d{2}\.json$' |
+        Sort-Object Name)
+}
+
 
 $created = $false
 $mutex = [System.Threading.Mutex]::new($true, 'Local\CodexCheckinFabricV2NasShadowScheduler', [ref]$created)
@@ -82,6 +90,8 @@ try {
             $state = Read-State
             $newState = Convert-StateToMap $state
             $stateChanged = $false
+            $normalSyncAttempted = $false
+            $normalSyncSucceeded = $false
             $retryAt = try { [datetime]$state.nextRetryAt } catch { $null }
             $sourceFingerprint = Get-CurrentFinalResultFingerprint ([string]$config.legacyRoot)
             $sourceChanged = $sourceFingerprint -and [string]$state.lastSourceFingerprint -ne $sourceFingerprint
@@ -93,9 +103,11 @@ try {
             $monitorDue = $monitorEnabled -and ($now - $lastSyncAt).TotalMinutes -ge 30
             $due = $sourceChanged -or $v2Changed -or $dailyDue -or $monitorDue
             if ($ForceSync -or ($due -and ($null -eq $retryAt -or $now -ge $retryAt))) {
+                $normalSyncAttempted = $true
                 Write-Heartbeat 'syncing'
                 $trigger = if ($ForceSync) { 'manual_sync' } elseif ($sourceChanged) { 'final_result_changed' } elseif ($v2Changed) { 'v2_status_changed' } elseif ($dailyDue) { 'daily_fallback' } else { 'pt_observation_refresh' }
                 Write-SchedulerLog "Starting shadow sync (trigger=$trigger)."
+                try {
                 $shell = (Get-Command pwsh.exe,powershell.exe,pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
                 if (-not $shell) { throw 'PowerShell executable was not found' }
                 $arguments = @(
@@ -122,7 +134,9 @@ try {
                 try {
                     $process = Start-Process -FilePath $wscript -ArgumentList $launcherArguments -WindowStyle Hidden -PassThru
                     if (-not $process.WaitForExit(300000)) {
-                        try { $process.Kill($true) } catch { try { $process.Kill() } catch { } }
+                        try { $process.Kill($true) } catch {
+                            try { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null } catch { try { $process.Kill() } catch { } }
+                        }
                         $syncExitCode = 124
                         $syncFailureCause = 'sync_timeout'
                     } else {
@@ -135,7 +149,15 @@ try {
                 } finally {
                     if ($process) { try { $process.Dispose() } catch { } }
                 }
-                Set-SyncAttemptOutcome $newState $state $syncExitCode (Get-Date) ([string]$config.dailyTime) $sourceFingerprint $v2Fingerprint $syncFailureCause
+                } catch {
+                    $syncExitCode = 1
+                    $syncFailureCause = 'process_start_or_wait_failed'
+                }
+                $normalSyncSucceeded = $syncExitCode -eq 0
+                $publishedFingerprint = if ($normalSyncSucceeded) {
+                    Get-ObservationPublicationFingerprint ([string]$config.v2ProjectRoot)
+                } else { $v2Fingerprint }
+                Set-SyncAttemptOutcome $newState $state $syncExitCode (Get-Date) ([string]$config.dailyTime) $sourceFingerprint $publishedFingerprint $syncFailureCause
                 Write-Heartbeat $(if ($syncExitCode -eq 0) { 'idle' } else { 'error' })
                 # Persist the sync outcome before any notification or worker can block.
                 Write-AtomicJson $statePath $newState
@@ -157,8 +179,13 @@ try {
             $afterEvidence = Get-ObservationPublicationFingerprint ([string]$config.v2ProjectRoot)
             # Publish a completed passive read in the same scheduler turn. No
             # check-in fallback is queued by this second, observation-only pass.
-            $dirtyMarkerPath = Join-Path ([string]$config.v2ProjectRoot) ("outputs/pt-evidence-repair-dirty-$(Get-Date -Format 'yyyy-MM-dd').json")
-            if (($afterEvidence -ne $beforeEvidence -or (Test-Path -LiteralPath $dirtyMarkerPath)) -and ($null -eq $retryAt -or (Get-Date) -ge $retryAt -or $ForceSync)) {
+            $dirtyMarkers = Get-PendingEvidenceMarkers ([string]$config.v2ProjectRoot)
+            # A failed normal sync has already scheduled its bounded retry. Do
+            # not run a second SSH publication in the same turn for evidence.
+            $currentRetryAt = try { [datetime]$newState.nextRetryAt } catch { $null }
+            $evidenceRetryAllowed = -not $normalSyncAttempted -or $normalSyncSucceeded
+            if (($afterEvidence -ne $beforeEvidence -or $dirtyMarkers.Count -gt 0) -and $evidenceRetryAllowed -and
+                ($ForceSync -or $null -eq $currentRetryAt -or (Get-Date) -ge $currentRetryAt)) {
                 try {
                     $shell = (Get-Command pwsh.exe,powershell.exe,pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source
                     if (-not $shell) { throw 'PowerShell executable was not found' }
@@ -167,10 +194,24 @@ try {
                         '-OpsRoot',$opsRoot,'-SshTarget',[string]$config.sshTarget,'-SkipHarvestFallback')
                     $afterRepairSync = Invoke-BoundedSyncProcess $shell $syncArguments 'evidence_dashboard_sync' '' 180
                     $previousSyncState = [pscustomobject]$newState
-                    Set-SyncAttemptOutcome $newState $previousSyncState $afterRepairSync.exitCode (Get-Date) ([string]$config.dailyTime) $sourceFingerprint $afterEvidence $(if ($afterRepairSync.exitCode -eq 0) { '' } else { 'evidence_dashboard_sync_failed' })
+                    if ($afterRepairSync.exitCode -eq 0) {
+                        # Remove every dated marker only after this publication
+                        # completes. A prior-day marker must not disappear at
+                        # midnight before its ledger is uploaded.
+                        foreach ($marker in (Get-PendingEvidenceMarkers ([string]$config.v2ProjectRoot))) {
+                            Remove-Item -LiteralPath $marker.FullName -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    $publishedEvidenceFingerprint = Get-ObservationPublicationFingerprint ([string]$config.v2ProjectRoot)
+                    Set-SyncAttemptOutcome $newState $previousSyncState $afterRepairSync.exitCode (Get-Date) ([string]$config.dailyTime) $sourceFingerprint $publishedEvidenceFingerprint $(if ($afterRepairSync.exitCode -eq 0) { '' } else { 'evidence_dashboard_sync_failed' })
                     $stateChanged = $true
-                    if ($afterRepairSync.exitCode -eq 0) { Remove-Item -LiteralPath $dirtyMarkerPath -Force -ErrorAction SilentlyContinue }
-                } catch { Write-SchedulerLog 'Passive receipt saved; its bounded dashboard publication will retry later.' }
+                } catch {
+                    Write-SchedulerLog 'Passive receipt saved; its bounded dashboard publication will retry later.'
+                    $failedAt = Get-Date
+                    $previousSyncState = [pscustomobject]$newState
+                    Set-SyncAttemptOutcome $newState $previousSyncState 1 $failedAt ([string]$config.dailyTime) $sourceFingerprint $afterEvidence 'evidence_dashboard_sync_failed'
+                    $stateChanged = $true
+                }
             }
             if (Test-Path -LiteralPath $dryWorkerDispatch) {
                 try { & $dryWorkerDispatch -OpsRoot $opsRoot | Out-Null }

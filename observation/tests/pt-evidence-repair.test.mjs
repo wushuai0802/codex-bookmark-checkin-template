@@ -3,13 +3,22 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {ptEvidenceCandidates,repairPtEvidence,refreshEvidenceCatalog} from '../src/pt-evidence-repair.mjs';
+import {ptEvidenceCandidates,repairPtEvidence,refreshEvidenceCatalog,previousEvidenceHealth} from '../src/pt-evidence-repair.mjs';
 import {boundMonitorCatalog,validateCurrentPtCatalog} from '../src/monitor-catalog.mjs';
+import {acquireExecutionLock,releaseExecutionLock} from '../src/execution-lock.mjs';
+import {rebuildDashboardAfterEvidence} from '../src/pt-evidence-repair.mjs';
 
 const now=new Date('2026-09-30T12:00:00Z'),origin='https://pt.example';
 function snapshot(){return {businessDate:'2026-09-30',tasks:[{taskId:'t',origin,observedStatus:'signed',submissionAttempted:true}],
   receipts:[{taskId:'t',evidence:{authoritative:false}}]};}
 const catalog={sites:[{origin}]};
+
+test('evidence rebuild carries forward the previous health source when a fresh probe is unavailable',()=>{
+  const health=previousEvidenceHealth({health:{healthy:true,sourceCheckedAt:'2026-09-30T11:55:00.000Z',
+    failedCheckCount:2,reason:'ok'}});
+  assert.equal(health.healthy,true);assert.equal(health.checkedAt,'2026-09-30T11:55:00.000Z');
+  assert.equal(health.failedChecks.length,2);assert.equal(health.reason,'ok');
+});
 
 test('refreshing a catalog keeps its exact folder while rebinding harmless bookmark changes',t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-evidence-catalog-'));
@@ -113,4 +122,58 @@ test('an empty evidence pass does not create a recurring publication marker',asy
   assert.equal(result.results.length,0);
   assert.equal(result.dirtyMarker,null);
   assert.equal(fs.existsSync(root+'/outputs/pt-evidence-repair-dirty-2026-09-30.json'),false);
+});
+
+test('busy passive reviews have a separate bounded wakeup budget',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-busy-budget-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot()));
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify(catalog));
+  let calls=0;
+  const runSite=async()=>{calls++;throw Error('V2 runner is already active');};
+  for(let index=0;index<24;index++){
+    const at=new Date(now.getTime()+index*5*60_000);
+    await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,clock:()=>at,runSite});
+  }
+  const state=JSON.parse(fs.readFileSync(root+'/data/pt-evidence-repair.json'));
+  assert.equal(calls,24);assert.equal(state.sites[origin].wakeups,24);
+  assert.equal(state.sites[origin].outcome,'busy_budget_exhausted');
+  await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,
+    clock:()=>new Date(now.getTime()+25*5*60_000),runSite});
+  assert.equal(calls,24,'busy wakeups must stop after the daily bound');
+});
+
+test('malformed passive state is normalized and cannot bypass the attempt bound',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-state-guard-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');fs.mkdirSync(root+'/data');
+  fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot()));
+  fs.writeFileSync(root+'/data/pt-evidence-repair.json',JSON.stringify({schemaVersion:1,sites:{[origin]:{
+    businessDate:'2026-09-30',nextAttemptAt:'not-a-date'
+  }}}));
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify(catalog));
+  let calls=0;const runSite=async()=>{calls++;return {origin,status:'unknown',evidence:{authoritative:false}};};
+  await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,clock:()=>now,runSite});
+  await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,
+    clock:()=>new Date(now.getTime()+2*3600000),runSite});
+  await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,
+    clock:()=>new Date(now.getTime()+4*3600000),runSite});
+  const state=JSON.parse(fs.readFileSync(root+'/data/pt-evidence-repair.json'));
+  assert.equal(calls,2);assert.equal(state.sites[origin].attempts,2);
+  assert.ok(Number.isFinite(Date.parse(state.sites[origin].nextAttemptAt)));
+});
+
+test('busy publication rebuild releases the engine lease before deferring',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-lock-release-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/config',{recursive:true});fs.mkdirSync(root+'/outputs');fs.mkdirSync(root+'/data');
+  const legacy=root+'/legacy';fs.mkdirSync(legacy);
+  fs.writeFileSync(root+'/config/runtime.local.json',JSON.stringify({legacyRoot:legacy}));
+  fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot()));
+  const publication=acquireExecutionLock(root,{name:'shadow-publication.lock'});
+  try {
+    const result=rebuildDashboardAfterEvidence({root,catalogFile:root+'/catalog.json',now});
+    assert.equal(result.reason,'runner_busy');
+    assert.equal(fs.existsSync(root+'/data/v2-run.lock'),false);
+  } finally { releaseExecutionLock(publication); }
 });

@@ -37,6 +37,67 @@ function Replace-File([string]$Source, [string]$Destination) {
     else { [System.IO.File]::Move($Source, $Destination) }
 }
 
+function Acquire-ShadowPublicationLease([string]$ProjectRoot) {
+    $file = Join-Path $ProjectRoot 'data\shadow-publication.lock'
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $file)) | Out-Null
+    $owner = [ordered]@{
+        schemaVersion = 1
+        pid = $PID
+        startedAt = (Get-Date).ToUniversalTime().ToString('o')
+        nonce = [guid]::NewGuid().ToString('D')
+    }
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $stream = [System.IO.File]::Open($file, [System.IO.FileMode]::CreateNew,
+                [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            try {
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes(($owner | ConvertTo-Json -Compress -Depth 4))
+                $stream.Write($bytes, 0, $bytes.Length)
+            }
+            finally { $stream.Dispose() }
+            return [pscustomobject]@{ file = $file; nonce = [string]$owner.nonce }
+        }
+        catch {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+            $current = $null
+            try { $current = Get-Content -Raw -Encoding UTF8 -LiteralPath $file | ConvertFrom-Json }
+            catch { throw 'shadow publication lock is unreadable' }
+            $alive = $false
+            try { Get-Process -Id ([int]$current.pid) -ErrorAction Stop | Out-Null; $alive = $true } catch { }
+            if ($alive) { throw 'shadow publication lock is already active' }
+            $guard = "$file.reclaim"
+            try {
+                $guardStream = [System.IO.File]::Open($guard, [System.IO.FileMode]::CreateNew,
+                    [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+                $guardStream.Dispose()
+            }
+            catch { throw 'shadow publication lock is already active' }
+            try {
+                $latest = Get-Content -Raw -Encoding UTF8 -LiteralPath $file | ConvertFrom-Json
+                $latestAlive = $false
+                try { Get-Process -Id ([int]$latest.pid) -ErrorAction Stop | Out-Null; $latestAlive = $true } catch { }
+                if ($latestAlive -or [string]$latest.nonce -ne [string]$current.nonce) {
+                    throw 'shadow publication lock is already active'
+                }
+                Remove-Item -LiteralPath $file -Force -ErrorAction Stop
+            }
+            finally { Remove-Item -LiteralPath $guard -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    throw 'shadow publication lock could not be acquired'
+}
+
+function Release-ShadowPublicationLease([object]$Lease) {
+    if (-not $Lease) { return }
+    try {
+        $current = Get-Content -Raw -Encoding UTF8 -LiteralPath $Lease.file | ConvertFrom-Json
+        if ([string]$current.nonce -eq [string]$Lease.nonce) {
+            Remove-Item -LiteralPath $Lease.file -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch { }
+}
+
 function Invoke-BoundedDashboardStatusSync([string]$StatusScript, [string]$SshTarget, [string]$NasDataDir, [string]$LogRoot) {
     $shell = Get-Command pwsh.exe,powershell.exe,pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $shell) { throw 'PowerShell executable for dashboard status sync was not found' }
@@ -46,6 +107,24 @@ function Invoke-BoundedDashboardStatusSync([string]$StatusScript, [string]$SshTa
     )
     $result = Invoke-BoundedSyncProcess $shell.Source $arguments 'dashboard_status_sync' '' 90
     if ($result.exitCode -ne 0) { throw $result.failure }
+}
+
+function Remove-StaleHarvestFallbackPending([string]$ProjectRoot, [int]$RetentionDays = 14) {
+    $pendingRoot = Join-Path $ProjectRoot 'data\harvest-fallback-pending'
+    if (-not (Test-Path -LiteralPath $pendingRoot -PathType Container)) { return }
+    $cutoff = (Get-Date).ToUniversalTime().AddDays(-[Math]::Max(7, $RetentionDays))
+    $activeCommands = @()
+    try { $activeCommands = @(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object { [string]$_.CommandLine }) } catch { }
+    foreach ($directory in @(Get-ChildItem -LiteralPath $pendingRoot -Directory -ErrorAction SilentlyContinue)) {
+        if ($directory.LastWriteTimeUtc -gt $cutoff) { continue }
+        $full = [IO.Path]::GetFullPath($directory.FullName)
+        if ($activeCommands | Where-Object { $_ -and $_.IndexOf($full, [StringComparison]::OrdinalIgnoreCase) -ge 0 }) {
+            Write-Log "Retaining active Harvest fallback input beyond retention window."
+            continue
+        }
+        try { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop; Write-Log 'Removed expired Harvest fallback input.' }
+        catch { Write-Log 'Expired Harvest fallback input cleanup deferred.' }
+    }
 }
 
 $resolvedOpsRoot = if ($OpsRoot) { [System.IO.Path]::GetFullPath($OpsRoot) } else { Split-Path -Parent $PSScriptRoot }
@@ -96,7 +175,13 @@ if (-not $mutex.WaitOne(0)) {
     Write-Log 'Another sync process is running; skipped.'
     exit 0
 }
+$publicationLease = $null
 try {
+    # Evidence rebuilds and this full sync share this lease. The existing
+    # scheduler mutex only serializes two PowerShell sync processes; it cannot
+    # fence a Node evidence worker.
+    $publicationLease = Acquire-ShadowPublicationLease $resolvedProjectRoot
+    Remove-StaleHarvestFallbackPending $resolvedProjectRoot
     Remove-Item -LiteralPath $temporarySnapshot,$temporaryLedger,$temporaryHealth,$temporaryHealthError -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $canonicalLedger -PathType Leaf) { Copy-Item -LiteralPath $canonicalLedger -Destination $temporaryLedger -Force }
     $healthScript = Join-Path $resolvedLegacyRoot 'scripts\Test-CheckinHealth.ps1'
@@ -158,9 +243,13 @@ try {
                             $catalogHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $pendingCatalog).Hash.ToLowerInvariant()
                             $fallbackLog = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.log"
                             $fallbackError = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.err.log"
-                            $arguments = @('"' + $fallbackScript + '"', '--apply', '--report-file', '"' + $pendingFile + '"', '--catalog-file', '"' + $pendingCatalog + '"', '--report-sha256', $reportHash, '--catalog-sha256', $catalogHash, '--harvest-ssh-target', $SshTarget, '--harvest-db-path', $monitorConfig.harvestDatabase)
-                            Start-Process -FilePath $NodePath -ArgumentList $arguments -WorkingDirectory $resolvedProjectRoot -WindowStyle Hidden -RedirectStandardOutput $fallbackLog -RedirectStandardError $fallbackError | Out-Null
-                            Write-Log "Queued bounded execution-layer fallback for $([int]$preview.newAttempts) unattempted PT site(s)."
+                            $arguments = @($fallbackScript, '--apply', '--report-file', $pendingFile, '--catalog-file', $pendingCatalog, '--report-sha256', $reportHash, '--catalog-sha256', $catalogHash, '--harvest-ssh-target', $SshTarget, '--harvest-db-path', $monitorConfig.harvestDatabase)
+                            $fallbackResult = Invoke-BoundedSyncProcess $NodePath $arguments 'harvest_fallback' '' 180
+                            if ($fallbackResult.exitCode -eq 0) {
+                                Write-Log "Execution-layer fallback completed for $([int]$preview.newAttempts) unattempted PT site(s)."
+                            } else {
+                                Write-Log 'Execution-layer fallback was bounded and deferred after a non-success result.'
+                            }
                         }
                     } catch { Write-Log "Harvest fallback unavailable; read-only PT status remains visible: $($_.Exception.Message)" }
                 }
@@ -241,6 +330,7 @@ finally {
     if ($archivePath) { Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $temporaryGeneration -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $temporarySnapshot,$temporaryLedger,$temporaryHealth,$temporaryHealthError -Force -ErrorAction SilentlyContinue
+    Release-ShadowPublicationLease $publicationLease
     $mutex.ReleaseMutex()
     $mutex.Dispose()
 }

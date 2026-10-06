@@ -11,6 +11,13 @@ test('V2 execution lock is exclusive and releases its owner',()=>{
   assert.throws(()=>acquireExecutionLock(root),/already active/);assert.equal(releaseExecutionLock(lease),true);assert.equal(releaseExecutionLock(lease),false);
 });
 
+test('shadow publication lock is independent and exclusive across the shared lock helper',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'publication-lock-'));
+  const lease=acquireExecutionLock(root,{name:'shadow-publication.lock'});
+  assert.throws(()=>acquireExecutionLock(root,{name:'shadow-publication.lock'}),/already active/);
+  assert.equal(releaseExecutionLock(lease),true);
+});
+
 test('dead V2 execution lock is recoverable',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'v2-lock-')),file=path.join(root,'data','v2-run.lock');fs.mkdirSync(path.dirname(file),{recursive:true});
   fs.writeFileSync(file,JSON.stringify({schemaVersion:1,pid:2147483647,nonce:'stale'}));const lease=acquireExecutionLock(root);assert.equal(releaseExecutionLock(lease),true);

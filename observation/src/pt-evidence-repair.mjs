@@ -7,6 +7,7 @@ import {recordPtVerification} from './pt-verification.mjs';
 import {boundMonitorCatalog} from './monitor-catalog.mjs';
 import {loadEffectiveConfig} from './effective-config.mjs';
 import {loadRuntimeConfig} from './runtime-config.mjs';
+import {readLegacyHealth} from './legacy-engine.mjs';
 import {buildSnapshot,writeSnapshot} from './bridge.mjs';
 import {createLedgerRecord,appendLedgerRecord} from './shadow-ledger.mjs';
 import {commitDashboardGeneration} from './dashboard-generation.mjs';
@@ -14,6 +15,26 @@ import {loadPtRecoveryDiagnostics} from './pt-reconciliation.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
 const readOptional=file=>fs.existsSync(file)?read(file):null;
+const MAX_PASSIVE_ATTEMPTS=2;
+const MAX_BUSY_WAKEUPS=24;
+
+function boundedCount(value,max){
+  const count=Number(value);
+  return Number.isSafeInteger(count)&&count>=0?Math.min(count,max):0;
+}
+
+function previousHealthReport(previous){
+  const health=previous?.health;
+  if(!health||typeof health!=='object'||!health.sourceCheckedAt)return undefined;
+  const count=boundedCount(health.failedCheckCount,1000);
+  return {healthy:health.healthy===true,checkedAt:health.sourceCheckedAt,
+    reason:typeof health.reason==='string'?health.reason:undefined,
+    failedChecks:Array.from({length:count},()=>({}))};
+}
+
+export function previousEvidenceHealth(previous){
+  return previousHealthReport(previous);
+}
 
 const identityKey=(origin,accountKey='site-default')=>accountKey==='site-default'
   ? origin
@@ -82,9 +103,17 @@ export function rebuildDashboardAfterEvidence({root,catalogFile,now=new Date()}=
   if(!legacyRoot)throw Error('legacy root unavailable for evidence dashboard rebuild');
   const day=dayAt(now),snapshotFile=path.join(root,'outputs','shadow-beta-snapshot.json');
   const ledgerFile=path.join(root,'outputs','shadow-ledger.jsonl');
-  let lease;
-  try{lease=acquireExecutionLock(root,{name:'v2-run.lock'});}
+  let lease,publicationLease;
+  try{
+    lease=acquireExecutionLock(root,{name:'v2-run.lock'});
+    // The NAS sync process takes the same publication lease before it reads or
+    // replaces the local generation.  Keeping this as a second lease (after
+    // the engine lease) prevents snapshot/ledger writes from racing the sync.
+    publicationLease=acquireExecutionLock(root,{name:'shadow-publication.lock'});
+  }
   catch(error){
+    if(publicationLease){releaseExecutionLock(publicationLease);publicationLease=null;}
+    if(lease){releaseExecutionLock(lease);lease=null;}
     if(/already active|正在运行|正在启动|占用/i.test(error.message))
       return {rebuilt:false,reason:'runner_busy',errorStage:'lock',errorCode:'runner_busy',businessDate:day};
     throw error;
@@ -94,8 +123,12 @@ export function rebuildDashboardAfterEvidence({root,catalogFile,now=new Date()}=
   if(previous.businessDate!==day)return {rebuilt:false,reason:'business_day_changed',businessDate:previous.businessDate};
   const fallback=readOptional(path.join(root,'outputs',`pt-fallback-results-${day}.json`));
   const catalog=readOptional(catalogFile);
-  const health=readOptional(path.join(legacyRoot,'health.json'));
-  const snapshot=buildSnapshot({legacyRoot,generatedAt:now.toISOString(),healthReport:health,
+  let health=null;
+  try{health=readLegacyHealth({root,legacyRoot});}catch{}
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:now.toISOString(),
+    // If a fresh health probe is unavailable, re-evaluate the previous source
+    // timestamp instead of converting a previously healthy panel to false.
+    healthReport:health??previousHealthReport(previous),
     ptStatusReport:extractHarvestReport(previous,day),ptFallbackReport:fallback,
     monitorCatalog:catalog,ptFallbackOnlyEnabled:runtime.ptFallbackOnlyEnabled,
     ptRecoveryReport:loadPtRecoveryDiagnostics(root,day)});
@@ -106,7 +139,10 @@ export function rebuildDashboardAfterEvidence({root,catalogFile,now=new Date()}=
   writeSnapshot(snapshot,snapshotFile,legacyRoot);
   commitDashboardGeneration({snapshot,snapshotFile,ledgerFile});
   return {rebuilt:true,businessDate:day,snapshotId:snapshot.snapshotId,generatedAt:snapshot.generatedAt};
-  }finally{releaseExecutionLock(lease);}
+  }finally{
+    if(publicationLease)releaseExecutionLock(publicationLease);
+    if(lease)releaseExecutionLock(lease);
+  }
 }
 
 function candidateRecords(snapshot,catalog,state,now=new Date()){
@@ -127,9 +163,11 @@ function candidateRecords(snapshot,catalog,state,now=new Date()){
   for(const item of unique.values()){
     const previous=previousFor(state,item.origin,item.accountKey);
     if(previous&&previous.businessDate===today){
-      const attempts=Number(previous.attempts??0);
+      const attempts=boundedCount(previous.attempts,MAX_PASSIVE_ATTEMPTS);
+      const wakeups=boundedCount(previous.wakeups,MAX_BUSY_WAKEUPS);
       const next=Date.parse(previous.nextAttemptAt??'');
-      if(attempts>=2||(Number.isFinite(next)&&next>now.getTime()))continue;
+      if(attempts>=MAX_PASSIVE_ATTEMPTS||wakeups>=MAX_BUSY_WAKEUPS||
+        (Number.isFinite(next)&&next>now.getTime()))continue;
     }
     due.push({...item,previous});
   }
@@ -169,14 +207,23 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
     if(snapshot.businessDate!==dayAt(clock()))return {businessDate:snapshot.businessDate,results:[]};
     let currentCatalog=refreshCatalog(root,catalogFile,clock()),catalog=read(currentCatalog);
     const stateFile=path.join(root,'data/pt-evidence-repair.json');
-    const state=fs.existsSync(stateFile)?read(stateFile):{schemaVersion:1,sites:{}};
+    const loadedState=fs.existsSync(stateFile)?read(stateFile):null;
+    const state=loadedState&&typeof loadedState==='object'&&!Array.isArray(loadedState)
+      ?loadedState:{schemaVersion:1,sites:{}};
+    if(!state.sites||typeof state.sites!=='object'||Array.isArray(state.sites))state.sites={};
     const now=clock(),candidates=candidateRecords(snapshot,catalog,state,now).slice(0,maxSites),results=[];
     for(const candidate of candidates){
       const origin=candidate.origin,accountKey=candidate.accountKey;
       if(dayAt(clock())!==snapshot.businessDate)break;
       currentCatalog=refreshCatalog(root,catalogFile,clock());
       const hash=crypto.createHash('sha256').update(fs.readFileSync(currentCatalog)).digest('hex');
-      const old=previousFor(state,origin,accountKey),attempts=old?.businessDate===snapshot.businessDate?old.attempts+1:1;
+      const old=previousFor(state,origin,accountKey);
+      const previousAttempts=old?.businessDate===snapshot.businessDate
+        ?boundedCount(old.attempts,MAX_PASSIVE_ATTEMPTS):0;
+      const previousWakeups=old?.businessDate===snapshot.businessDate
+        ?boundedCount(old.wakeups,MAX_BUSY_WAKEUPS):0;
+      const attempts=old?.businessDate===snapshot.businessDate
+        ?Math.min(MAX_PASSIVE_ATTEMPTS,previousAttempts+1):1;
       let outcome='evidence_unavailable',errorInfo={errorStage:'readback',errorCode:'authoritative_readback_missing'},auditStatus='inconclusive';
       const startedAt=clock();
       try{
@@ -202,10 +249,22 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
           auditStatus='inconclusive';
         }
       }
-      const checkedAt=clock(),nextDelay=outcome==='busy'?5*60_000:2*3600000;
-      const stateKey=identityKey(origin,accountKey),recordedAttempts=outcome==='busy'?Number(old?.attempts??0):attempts;
+      const checkedAt=clock();
+      let wakeups=previousWakeups;
+      if(outcome==='busy'){
+        wakeups=Math.min(MAX_BUSY_WAKEUPS,previousWakeups+1);
+        if(wakeups>=MAX_BUSY_WAKEUPS){
+          outcome='busy_budget_exhausted';
+          errorInfo={errorStage:'lock',errorCode:'runner_busy_budget_exhausted'};
+          auditStatus='deferred';
+        }
+      }
+      const nextDelay=outcome==='busy'?5*60_000:2*3600000;
+      const stateKey=identityKey(origin,accountKey),recordedAttempts=outcome==='busy'||outcome==='busy_budget_exhausted'
+        ?previousAttempts:attempts;
       const entry={businessDate:snapshot.businessDate,accountKey,attempts:['verified','existing_receipt'].includes(outcome)?2:recordedAttempts,
-        outcome,status:auditStatus,errorStage:errorInfo.errorStage,errorCode:errorInfo.errorCode,checkedAt:checkedAt.toISOString(),nextAttemptAt:new Date(checkedAt.getTime()+nextDelay).toISOString()};
+        wakeups,outcome,status:auditStatus,errorStage:errorInfo.errorStage,errorCode:errorInfo.errorCode,
+        checkedAt:checkedAt.toISOString(),nextAttemptAt:new Date(checkedAt.getTime()+nextDelay).toISOString()};
       state.sites[stateKey]=entry;
       const audit={schemaVersion:1,businessDate:snapshot.businessDate,origin,accountKey,attempt:entry.attempts,
         startedAt:startedAt.toISOString(),finishedAt:checkedAt.toISOString(),status:auditStatus,outcome,readOnly:true,submissionAttempted:false,

@@ -8,5 +8,5 @@ try{
   const result=await repairPtEvidence({root,catalogFile:path.resolve(catalogFile),maxSites:Number(maxSites),
     rebuild:({now})=>rebuildDashboardAfterEvidence({root,catalogFile:path.resolve(catalogFile),now})});
   console.log(JSON.stringify(result));
-  if(result.rebuild?.rebuilt===false&&result.rebuild.reason==='dashboard_rebuild_failed')process.exitCode=1;
+  if(result.rebuild?.rebuilt===false&&result.rebuild.reason!=='runner_busy')process.exitCode=1;
 }catch(error){console.error('PT evidence readback deferred: '+error.message);process.exitCode=/already active/.test(error.message)?0:1;}

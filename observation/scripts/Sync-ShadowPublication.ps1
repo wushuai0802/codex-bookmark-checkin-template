@@ -8,7 +8,8 @@ function New-ShadowPublicationPlan([string]$NasStagingDir, [string]$NasDataDir, 
     $stage = "$NasStagingDir-$TransactionId"
     $archive = "$stage/payload.tar.gz"
     $names = @('shadow-ledger.jsonl', 'shadow-beta-snapshot.json', 'dashboard-generation.json')
-    $checks = "test -d '$project' && test ! -L '$project' && test -d '$NasDataDir' && test ! -L '$NasDataDir' && test ! -e '$stage' && install -d -m 0700 '$stage'"
+    $gc = "for candidate in '$project'/.shadow-sync-stage-*; do test -d `$candidate || continue; name=`$(basename `$candidate); case `$name in .shadow-sync-stage-????????????????????????????????) if test -n `$(find `$candidate -maxdepth 0 -mmin +1440 -print); then rm -rf -- `$candidate; fi;; esac; done"
+    $checks = "set -eu; test -d '$project' && test ! -L '$project' && test -w '$project' && test -d '$NasDataDir' && test ! -L '$NasDataDir' && $gc && test ! -e '$stage' && install -d -m 0700 '$stage'"
     $extract = "set -eu; test ! -L '$stage'; tar -tzf '$archive' | LC_ALL=C sort > '$stage/archive-list'; printf '%s\n' dashboard-generation.json shadow-beta-snapshot.json shadow-ledger.jsonl > '$stage/expected-list'; cmp '$stage/archive-list' '$stage/expected-list'; tar -xzf '$archive' -C '$stage'"
     $commands = @("set -eu", "test -d '$stage' && test ! -L '$stage' && test ! -L '$NasDataDir'")
     foreach ($name in $names) {

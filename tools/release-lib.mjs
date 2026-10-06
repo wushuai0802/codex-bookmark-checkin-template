@@ -16,7 +16,10 @@ const publicRuntimeFiles=new Set([
 // production-only repair. No config/data or unrelated operations script joins.
 const operationsSources=new Map([
   ['operations/scripts/Sync-NasShadow.ps1','observation/scripts/Sync-NasShadow.ps1'],
-  ['operations/scripts/Start-NasShadowScheduler.ps1','observation/scripts/Start-NasShadowScheduler.ps1']
+  ['operations/scripts/Start-NasShadowScheduler.ps1','observation/scripts/Start-NasShadowScheduler.ps1'],
+  ['operations/scripts/Run-HiddenPowerShell.vbs','execution/scripts/Run-HiddenPowerShell.vbs'],
+  ['operations/scripts/Sync-OperationsSupport.ps1','observation/scripts/Sync-OperationsSupport.ps1'],
+  ['operations/scripts/Sync-Transport.ps1','observation/scripts/Sync-Transport.ps1']
 ]);
 const managed={test:file=>operationsSources.has(file)||publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
 const sourceFile=file=>operationsSources.get(file)??file;
