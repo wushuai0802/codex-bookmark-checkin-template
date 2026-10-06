@@ -27,10 +27,7 @@ function Write-SchedulerLog([string]$message) {
 }
 
 function ConvertTo-ShanghaiIso([datetime]$value) {
-    $dto = [datetimeoffset]$value
-    $zone = try { [TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time') }
-        catch { [TimeZoneInfo]::FindSystemTimeZoneById('Asia/Shanghai') }
-    return $dto.ToOffset($zone.GetUtcOffset($dto.UtcDateTime)).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    return ([datetimeoffset]$value).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-ddTHH:mm:sszzz')
 }
 
 function Write-AtomicTextFile([string]$destination, [string]$content) {
