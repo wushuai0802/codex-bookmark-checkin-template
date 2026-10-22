@@ -44,8 +44,11 @@ function positionMenu() {
     Math.max(box.width, window.innerWidth <= 700 ? 320 : 260));
   menu.style.width = width + 'px';
   menu.style.maxHeight = height + 'px';
-  menu.style.left = Math.min(window.innerWidth - width - margin, Math.max(margin, box.left)) + 'px';
+  const left = Math.min(window.innerWidth - width - margin, Math.max(margin, box.left));
+  menu.style.left = left + 'px';
   menu.style.top = (openAbove ? Math.max(margin, box.top - height - 6) : box.bottom + 6) + 'px';
+  const origin = Math.max(16, Math.min(width - 16, box.left + box.width / 2 - left));
+  menu.style.transformOrigin = `${origin}px ${openAbove ? 'bottom' : 'top'}`;
 }
 
 function openMenu(select, trigger) {
@@ -129,9 +132,10 @@ function openMenu(select, trigger) {
   active = { menu, trigger };
   positionMenu();
   focus(Math.max(0, options.findIndex(option => option.selected && !option.disabled)));
-  const shift=menu.dataset.placement==='above'?'4px':'-4px';
-  void playMotion(menu,[{opacity:0,transform:'translateY('+shift+') scale(.985)'},
-    {opacity:1,transform:'translateY(0) scale(1)'}],MOTION.base);
+  const shift=menu.dataset.placement==='above'?'6px':'-6px';
+  void playMotion(menu,[{opacity:0,transform:'translateY('+shift+') scale(.95)'},
+    {opacity:1,transform:'translateY(0) scale(1.008)',offset:.76},
+    {opacity:1,transform:'translateY(0) scale(1)'}],MOTION.panel);
 }
 
 document.addEventListener('pointerdown', event => {

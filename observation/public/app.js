@@ -32,6 +32,69 @@ try { recentViews = JSON.parse(localStorage.getItem('fabricRecentViews') ?? '[]'
 
 const $ = (selector) => document.querySelector(selector);
 
+let navigationFrame = 0;
+function syncNavigationSurfaces(animate = true) {
+  const primaryViews = ['overview', 'tasks', 'calendar'];
+  for (const button of document.querySelectorAll('.dock-item')) {
+    const selected = button.dataset.view === (primaryViews.includes(state.view) ? state.view : 'more');
+    button.classList.toggle('active', selected);
+    if (selected && button.dataset.view !== 'more') button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  for (const item of document.querySelectorAll('.sidebar .nav-item')) {
+    if (item.classList.contains('active')) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  }
+  for (const container of [$('.sidebar .nav'), $('#mobile-dock')]) {
+    const indicator = container?.querySelector('.nav-indicator');
+    const selected = container?.querySelector('button.active');
+    if (!indicator || !selected || !container.getClientRects().length) continue;
+    const box = selected.getBoundingClientRect(), parent = container.getBoundingClientRect();
+    const previous = getComputedStyle(indicator).transform;
+    const transform = `translate(${box.left - parent.left + container.scrollLeft - container.clientLeft}px,${box.top - parent.top + container.scrollTop - container.clientTop}px)`;
+    const initialized = indicator.dataset.ready === 'true';
+    Object.assign(indicator.style, { width:`${box.width}px`, height:`${box.height}px`, transform });
+    indicator.dataset.ready = 'true';
+    if (animate && initialized && previous !== 'none') {
+      void playMotion(indicator, [{transform:previous}, {transform}], MOTION.panel);
+    } else stopMotion(indicator);
+  }
+}
+
+function scheduleNavigationSurfaces() {
+  cancelAnimationFrame(navigationFrame);
+  navigationFrame = requestAnimationFrame(() => syncNavigationSurfaces(false));
+}
+
+function installNavigationSurfaces() {
+  const dock = $('#mobile-dock');
+  for (const container of [$('.sidebar .nav'), dock]) {
+    const indicator = el('span', 'nav-indicator');
+    indicator.setAttribute('aria-hidden', 'true');
+    container.prepend(indicator);
+  }
+  for (const [view, label, source] of [['overview','总览','overview'],['tasks','任务','tasks'],['calendar','日历','calendar'],['more','更多','settings']]) {
+    const button = el('button', 'dock-item'); button.type = 'button'; button.dataset.view = view;
+    const icon = $(`.sidebar .nav-item[data-view="${source}"] .nav-glyph`).cloneNode(true);
+    append(button, icon, el('span', null, label));
+    if (view === 'more') {
+      button.setAttribute('aria-controls', 'main-sidebar'); button.setAttribute('aria-expanded', 'false');
+      button.addEventListener('click', () => setSidebarOpen(true));
+    } else button.addEventListener('click', () => switchView(view));
+    dock.append(button);
+  }
+  const syncInput = () => document.body.classList.toggle('dock-input-active',
+    Boolean(document.activeElement?.matches('input:not([type="checkbox"]):not([type="radio"]),textarea,[contenteditable="true"]')
+      && document.activeElement.getClientRects().length));
+  document.addEventListener('focusin', syncInput);
+  document.addEventListener('focusout', () => queueMicrotask(syncInput));
+  window.addEventListener('resize', scheduleNavigationSurfaces);
+  const observer = new ResizeObserver(scheduleNavigationSurfaces);
+  observer.observe($('.sidebar .nav')); observer.observe(dock);
+  document.fonts?.ready.then(scheduleNavigationSurfaces);
+  scheduleNavigationSurfaces();
+}
+
 function text(value, fallback = '—') {
   return value === null || value === undefined || value === '' ? fallback : String(value);
 }
@@ -126,6 +189,7 @@ function renderSidebar(open) {
   const toggle = $('#menu-toggle');
   const close = $('#sidebar-close');
   const mobile = matchMedia('(max-width:700px)').matches;
+  $('#mobile-dock .dock-item[data-view="more"]')?.setAttribute('aria-expanded', String(mobile && open));
   if (toggle) {
     const collapsed = document.body.classList.contains('sidebar-collapsed');
     toggle.setAttribute('aria-expanded', String(mobile ? open : !collapsed));
@@ -196,6 +260,7 @@ function setSidebarCollapsed(collapsed) {
     toggle.title = toggle.getAttribute('aria-label');
   }
   try { localStorage.setItem('fabricSidebarCollapsed', collapsed ? '1' : '0'); } catch { }
+  scheduleNavigationSurfaces();
 }
 
 function mountDialog(dialog, previousFocus) {
@@ -1034,6 +1099,7 @@ function renderView(view) {
   if(view==='calendar'&&state.data)void loadCalendarHistory({force:true});
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
   document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active-view', item.id === `view-${view}`));
+  syncNavigationSurfaces();
   const titles = { overview: '签到运行总览', calendar: '签到日历', tasks: '任务管理', 'pt-status': 'PT 状态', sites: '站点管理', accounts: '账户管理', ledger: '运行记录', settings: '运行设置' };
   $('#page-title').textContent = titles[view] ?? titles.overview;
   renderRecentPages(view);
@@ -1127,6 +1193,7 @@ function setupTaskStatusFilter() {
 
 document.addEventListener('DOMContentLoaded', () => {
   renderRecentPages(state.view);
+  installNavigationSurfaces();
   installCompactTopbar({topbar:document.querySelector('.topbar')});
   const accountFilter = el('select'); accountFilter.id = 'task-account'; accountFilter.setAttribute('aria-label', '筛选账号');
   $('#task-status').after(accountFilter); accountFilter.addEventListener('change', applyTaskFilter);

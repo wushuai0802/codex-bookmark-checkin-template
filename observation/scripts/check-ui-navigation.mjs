@@ -176,11 +176,13 @@ try {
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       await page.locator('#daily-summary .daily-progress').click();
       await page.locator('dialog.formula-drawer[open]').waitFor();
+      if(mobile)assert.equal(await page.locator('#mobile-dock').isVisible(),false,'dock must not cover an open detail dialog');
       assert.match(await page.locator('dialog.formula-drawer').textContent(),/核验率口径/);
       assert.match(await page.locator('dialog.formula-drawer .formula-equation').textContent(),/÷ \(/);
       await page.keyboard.press('Escape');
       await page.locator('dialog.formula-drawer[open]').waitFor({state:'hidden'});
       assert.equal(await page.locator('#daily-summary .daily-progress').evaluate(node=>node===document.activeElement),true);
+      if(mobile)assert.equal(await page.locator('#mobile-dock').isVisible(),true);
       // The queue row, status legend and plan link must keep drilling into tasks.
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
@@ -469,6 +471,33 @@ try {
       await page.waitForFunction(() => !document.body.classList.contains('sidebar-open')
         && !document.body.classList.contains('sidebar-exiting')
         && !document.querySelector('.main-content').inert);
+      if(mobile){
+        const dock=page.locator('#mobile-dock');
+        assert.equal(await dock.isVisible(),true);
+        await dock.locator('[data-view="tasks"]').click();
+        await page.waitForFunction(()=>document.querySelector('#view-tasks').classList.contains('active-view'));
+        assert.equal(await dock.locator('[data-view="tasks"]').getAttribute('aria-current'),'page');
+        await page.locator('#task-search').focus();
+        assert.equal(await dock.isVisible(),false,'dock hides while entering text');
+        await page.locator('#task-search').blur();
+        await dock.waitFor({state:'visible'});
+        await dock.locator('[data-view="calendar"]').click();
+        await page.waitForFunction(()=>document.querySelector('#view-calendar').classList.contains('active-view'));
+        await page.evaluate(()=>history.back());
+        await page.waitForFunction(()=>document.querySelector('#view-tasks').classList.contains('active-view'));
+        assert.equal(await dock.locator('[data-view="tasks"]').getAttribute('aria-current'),'page');
+        await dock.locator('[data-view="more"]').click();
+        await page.waitForFunction(()=>document.body.classList.contains('sidebar-open'));
+        assert.equal(await dock.locator('[data-view="more"]').getAttribute('aria-expanded'),'true');
+        assert.equal(await dock.isVisible(),false);
+        await page.locator('.sidebar .nav-item[data-view="settings"]').click();
+        await page.waitForFunction(()=>!document.body.classList.contains('sidebar-exiting')
+          && document.querySelector('#view-settings').classList.contains('active-view'));
+        assert.equal(await dock.locator('[data-view="more"]').getAttribute('aria-expanded'),'false');
+        assert.equal(await dock.locator('[data-view="more"]').evaluate(node=>node.classList.contains('active')),true);
+        await dock.locator('[data-view="overview"]').click();
+        await page.waitForFunction(()=>document.querySelector('#view-overview').classList.contains('active-view'));
+      }else assert.equal(await page.locator('#mobile-dock').isVisible(),false);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.screenshot({ path: path.join(artifacts, `attention-${viewport.width}.png`), fullPage: true });
       assert.equal(await page.locator('#app-error').isVisible(), false);

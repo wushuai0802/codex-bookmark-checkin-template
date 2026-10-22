@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="Check-in Fabric 签到执行与观测控制台">
   <title>Check-in Fabric · 控制台</title>
   <script src="/theme.js"></script>
@@ -43,6 +43,7 @@
       <div class="sidebar-footer"><span class="status-dot"></span><span id="service-status">正在连接</span></div>
     </aside>
     <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭导航"></button>
+    <nav id="mobile-dock" class="mobile-dock" aria-label="快捷导航"></nav>
     <main class="main-content">
       <div class="topbar-shell no-recents">
       <header class="topbar no-recents"><div class="topbar-heading"><button id="menu-toggle" class="icon-button menu-toggle" type="button" aria-label="打开导航" aria-controls="main-sidebar" aria-expanded="false">☰</button><div><p class="eyebrow">CHECK-IN CONTROL PLANE</p><h1 id="page-title">签到运行总览</h1><span id="topbar-context" class="topbar-context">执行层回执 · 观测层对账</span></div></div><nav class="top-nav" aria-label="最近访问页面"></nav><div class="top-actions"><button id="attention-jump" class="icon-button notification-button" type="button" aria-label="查看需关注事项" title="查看需关注事项"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/></svg><b id="attention-badge">0</b></button><span class="mode-pill" id="mode-pill">执行层 + 观测层</span><button id="refresh-btn" class="button secondary">刷新数据</button></div></header>
