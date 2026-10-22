@@ -1,11 +1,11 @@
 export const APPEARANCE_KEY='fabricAppearance';
-export const APPEARANCE_DEFAULTS=Object.freeze({mode:'ultra',cards:true,motion:true,refraction:70,transparency:70});
+export const APPEARANCE_DEFAULTS=Object.freeze({mode:'ultra',cards:true,motion:true,smoothMotion:true,refraction:70,transparency:70});
 const percentage=(value,fallback)=>Number.isFinite(Number(value))&&value!==null
   ? Math.min(100,Math.max(0,Math.round(Number(value)))):fallback;
 export function normalizeAppearance(value){
   const input=value&&typeof value==='object'?value:{};
   return {mode:['none','standard','ultra'].includes(input.mode)?input.mode:APPEARANCE_DEFAULTS.mode,
-    cards:input.cards!==false,motion:input.motion!==false,
+    cards:input.cards!==false,motion:input.motion!==false,smoothMotion:input.smoothMotion!==false,
     refraction:percentage(input.refraction,70),transparency:percentage(input.transparency,70)};
 }
 export function readAppearance(){
@@ -22,7 +22,7 @@ export function applyAppearance(value){
   for(const button of document.querySelectorAll('[data-glass-mode-choice]')){
     button.setAttribute('aria-pressed',String(button.dataset.glassModeChoice===current.mode));
   }
-  for(const key of ['cards','motion','refraction','transparency']){
+  for(const key of ['cards','motion','smoothMotion','refraction','transparency']){
     const control=document.getElementById('glass-'+key);if(!control)continue;
     if(control.type==='checkbox')control.checked=current[key];else control.value=String(current[key]);
     if(control.type==='range')control.disabled=current.mode==='none';
@@ -41,7 +41,7 @@ export function installAppearanceControls(){
   for(const button of document.querySelectorAll('[data-glass-mode-choice]')){
     button.addEventListener('click',()=>setAppearance({mode:button.dataset.glassModeChoice}));
   }
-  for(const key of ['cards','motion','refraction','transparency']){
+  for(const key of ['cards','motion','smoothMotion','refraction','transparency']){
     const control=document.getElementById('glass-'+key);
     control?.addEventListener(control.type==='range'?'input':'change',()=>setAppearance({[key]:control.type==='checkbox'?control.checked:Number(control.value)}));
   }

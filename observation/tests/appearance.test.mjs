@@ -5,7 +5,7 @@ import {displacementField} from '../public/glass-geometry.mjs';
 
 test('appearance accepts only known modes and bounds local preference values',()=>{
   assert.deepEqual(normalizeAppearance({mode:'injected',cards:false,motion:false,refraction:999,transparency:-8}),
-    {mode:'ultra',cards:false,motion:false,refraction:100,transparency:0});
+    {mode:'ultra',cards:false,motion:false,smoothMotion:true,refraction:100,transparency:0});
   assert.equal(normalizeAppearance({mode:'none'}).mode,'none');
   assert.equal(normalizeAppearance({mode:'standard',refraction:'bad'}).refraction,70);
   assert.equal(normalizeAppearance(null).mode,'ultra');
@@ -16,6 +16,7 @@ test('lens field is neutral at the center and samples inward at opposite edges',
   assert.ok(pixel(2,40)[0]>128);assert.ok(pixel(117,40)[0]<128);
   assert.ok(pixel(60,2)[1]>128);assert.ok(pixel(60,77)[1]<128);
   assert.ok(pixel(2,40)[2]>0,'bevel mask must be nonzero near the rim');
+  assert.equal(pixel(0,0)[3],0,'rounded corners must be transparent in the optical mask');
 });
 test('large lenses use a bounded map without changing target geometry',()=>{
   const map=displacementField(2400,1600,24);

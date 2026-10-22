@@ -533,6 +533,12 @@ function renderAttention(tasks) {
   $('#attention-count').textContent=`${pending.length} ${labels[filter]}${pausedCount?` · ${pausedCount} 暂缓`:''}`;
   const allNotices=Object.values(queues).flatMap(queue=>queue.all);
   const unread = allNotices.filter(task => !notices.isRead(task)).length;
+  const markEvery = $('#mark-all-notices-read');
+  if(markEvery){
+    markEvery.textContent=unread?'一键已读':'全部已读';markEvery.disabled=unread===0;
+    markEvery.title='标记所有分类的关注事项为已读，不改变签到结果';
+    markEvery.onclick=()=>{notices.markRead(allNotices);renderAttention(tasks);};
+  }
   const badge = $('#attention-badge');
   if (badge) { badge.textContent = String(unread); badge.hidden = unread === 0; badge.style.display = unread ? '' : 'none'; }
   $('#attention-jump')?.setAttribute('aria-label', unread ? `查看需关注事项，${unread} 项未读` : '查看需关注事项');
@@ -1168,7 +1174,10 @@ function applyRoute(route, { restoreScroll = true } = {}) {
     if (route.overlay?.type === 'formula')renderFormulaDetails(projectOverviewSnapshot(state.data));
   }
   if (restoreScroll && Math.abs(window.scrollY - route.scrollY) > 1) window.scrollTo({ top: route.scrollY, behavior: 'instant' });
-  if (changedView && hasRenderedData) playMotion($(`#view-${route.view}`), [{opacity:0,transform:'translateY(6px)'}, {opacity:1,transform:'translateY(0)'}], 180);
+  if(changedView&&hasRenderedData){
+    if(document.documentElement.dataset.liquidGlass!=='none')void playMotion($('#page-title'),[{opacity:.65},{opacity:1}],MOTION.fast);
+    else void playMotion($(`#view-${route.view}`),[{opacity:0,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}],MOTION.base);
+  }
 }
 
 function applyTaskFilter() {

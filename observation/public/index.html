@@ -57,7 +57,7 @@
         <div class="sync-strip"><span id="sync-age">正在读取快照…</span><label><input id="auto-refresh" type="checkbox" checked> 每分钟自动刷新</label></div>
         <div id="kpi-grid" class="kpi-grid"></div>
         <section class="overview-workspace">
-          <div class="overview-main-stack"><article class="panel attention-panel"><div class="panel-heading"><h2>优先处理</h2><span id="attention-count" class="badge warn">—</span></div><div id="attention-list" class="attention-list"></div></article>
+          <div class="overview-main-stack"><article class="panel attention-panel"><div class="panel-heading"><h2>优先处理</h2><div class="attention-heading-actions"><span id="attention-count" class="badge warn">—</span><button id="mark-all-notices-read" class="mark-all-read-btn" type="button">一键已读</button></div></div><div id="attention-list" class="attention-list"></div></article>
           </div>
           <article class="panel run-panel"><div class="panel-heading"><h2>运行概况</h2><span id="health-badge" class="badge">—</span></div><div id="readiness-content" class="health-content"></div><details class="health-details"><summary>查看来源健康详情</summary><div id="health-content" class="health-content"></div></details></article>
         </section>
@@ -79,6 +79,7 @@
           </div>
           <label class="glass-setting" for="glass-cards"><span>内容卡片使用玻璃</span><input id="glass-cards" type="checkbox" checked></label>
           <label class="glass-setting" for="glass-motion"><span>弹性反馈</span><input id="glass-motion" type="checkbox" checked></label>
+          <label class="glass-setting" for="glass-smoothMotion"><span>滑动时优先流畅</span><input id="glass-smoothMotion" type="checkbox" checked></label>
           <label class="glass-setting" for="glass-refraction"><span>折射强度</span><output id="glass-refraction-value" for="glass-refraction">70%</output><input id="glass-refraction" type="range" min="0" max="100" value="70"></label>
           <label class="glass-setting" for="glass-transparency"><span>通透程度</span><output id="glass-transparency-value" for="glass-transparency">70%</output><input id="glass-transparency" type="range" min="0" max="100" value="70"></label>
           <p id="glass-capability" class="glass-capability"></p><button id="glass-reset" type="button" class="button secondary">恢复默认效果</button>

@@ -51,6 +51,7 @@ body{margin:0;background:#eff5fd!important;font-family:system-ui;color:#19314b}.
     const edgeDifference=edge/edgeN,centerDifference=center/centerN;
     assert.ok(edgeDifference>2,'background pixels must move when refraction is enabled');
     assert.ok(edgeDifference>centerDifference*2,'distortion should concentrate at the bevel');
+    assert.match(await page.locator('.panel > .liquid-sheen').evaluate(node=>getComputedStyle(node).maskImage),/^url\(/,'optical output needs its own rounded alpha mask');
     console.log(`PASS optical pixels: edge=${edgeDifference.toFixed(2)}, center=${centerDifference.toFixed(2)}`);
   }finally{await optical.close();}
 
@@ -71,31 +72,49 @@ body{margin:0;background:#eff5fd!important;font-family:system-ui;color:#19314b}.
     await page.waitForFunction(()=>document.querySelectorAll('.liquid-definitions [data-channel]').length>0);
     await page.locator('#glass-refraction').focus();await page.keyboard.press('Home');await page.keyboard.press('ArrowRight');
     assert.equal(await page.locator('#glass-refraction-value').textContent(),'1%');
-    await page.locator('#glass-cards').uncheck();await page.locator('#glass-motion').uncheck();
+    await page.locator('#glass-cards').uncheck();await page.locator('#glass-motion').uncheck();await page.locator('#glass-smoothMotion').uncheck();
     await page.waitForFunction(()=>!document.querySelector('.appearance-panel').classList.contains('liquid-surface'));
     assert.equal(await page.locator('.topbar').evaluate(node=>node.classList.contains('liquid-surface')),true);
     await page.reload();await page.waitForFunction(()=>document.querySelector('#service-status').textContent.includes('已连接'));
     assert.equal(await page.locator('#glass-refraction').inputValue(),'1');
     assert.equal(await page.locator('#glass-cards').isChecked(),false);
     assert.equal(await page.locator('#glass-motion').isChecked(),false);
+    assert.equal(await page.locator('#glass-smoothMotion').isChecked(),false);
     await page.locator('#glass-reset').click();
     await page.waitForFunction(()=>document.documentElement.dataset.liquidMotion==='true');
     assert.equal(await page.locator('#glass-refraction').inputValue(),'70');
     assert.equal(await page.locator('#glass-cards').isChecked(),true);
+    assert.equal(await page.locator('#glass-smoothMotion').isChecked(),true);
+    await page.mouse.wheel(0,120);
+    await page.waitForFunction(()=>document.documentElement.dataset.liquidMoving==='true');
+    await page.waitForFunction(()=>document.documentElement.dataset.liquidMoving!=='true');
     await page.locator('#mobile-dock [data-view="overview"]').click();
     await page.locator('#refresh-btn').click();
     await page.waitForFunction(()=>!document.querySelector('#refresh-btn').disabled&&document.querySelector('#daily-summary').classList.contains('liquid-surface'));
     assert.equal(await page.locator('#daily-summary > .liquid-sheen').evaluate(node=>getComputedStyle(node).position),'absolute');
+    await page.locator('#daily-summary .button.primary').evaluate(node=>{node.textContent='测试操作';});
+    await page.waitForFunction(()=>document.querySelector('#daily-summary .button.primary > .liquid-sheen'));
     await page.locator('#mobile-dock [data-view="tasks"]').click();
+    const filterBaseline=await page.locator('.liquid-definitions filter').count();
     for(let i=0;i<5;i++){
       await page.locator('.ui-select[data-for="task-status"] .ui-select-trigger').click();
       await page.getByRole('listbox').waitFor();await page.keyboard.press('Escape');
       await page.getByRole('listbox').waitFor({state:'hidden'});
     }
     await page.waitForFunction(()=>!document.querySelector('.ui-select-menu'));
-    assert.ok(await page.locator('.liquid-definitions filter').count()<40,'closed surfaces must release optical filters');
+    await page.waitForFunction(maximum=>document.querySelectorAll('.liquid-definitions filter').length<=maximum,filterBaseline+2);
+    await page.locator('#mobile-dock [data-view="overview"]').click();
+    await page.locator('.attention-tabs [data-queue="external"]').click();
+    assert.match(await page.locator('#attention-count').textContent(),/^0 /);
+    const markEvery=page.locator('#mark-all-notices-read');
+    assert.equal(await markEvery.isVisible(),true);assert.equal(await markEvery.isEnabled(),true);
+    const statuses=await page.evaluate(async()=>{const data=await fetch('/api/overview').then(response=>response.json());return data.tasks.map(task=>[task.taskId,task.observedStatus]);});
+    await markEvery.click();assert.equal(await page.locator('#attention-badge').isVisible(),false);
+    await page.reload();await page.waitForFunction(()=>document.querySelector('#service-status').textContent.includes('已连接'));
+    assert.equal(await page.locator('#mark-all-notices-read').isDisabled(),true);
+    assert.deepEqual(await page.evaluate(async()=>{const data=await fetch('/api/overview').then(response=>response.json());return data.tasks.map(task=>[task.taskId,task.observedStatus]);}),statuses);
     assert.deepEqual(errors,[]);
-    console.log('PASS glass settings: quality modes, keyboard sliders, persistence, reset, refresh and cleanup');
+    console.log('PASS glass settings: quality, persistence, rounded masks, motion, cleanup and global read acknowledgement');
   }finally{await context.close();}
   console.log(`Synthetic liquid-glass screenshots: ${artifacts}`);
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}

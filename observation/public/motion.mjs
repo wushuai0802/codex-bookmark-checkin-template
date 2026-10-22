@@ -13,6 +13,7 @@ export function stopMotion(node) {
 export async function playMotion(node, frames, duration = MOTION.panel) {
   stopMotion(node);
   if (reducedMotion() || !node.animate) return true;
+  globalThis.window?.dispatchEvent(new CustomEvent('fabricmotionstart',{detail:{duration}}));
   const animation = node.animate(frames, { duration, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'both' });
   active.set(node, animation);
   try {

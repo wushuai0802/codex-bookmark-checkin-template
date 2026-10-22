@@ -21,11 +21,16 @@
   backdrop-filter:none; -webkit-backdrop-filter:none;
 }
 :root[data-workspace="cpam"] .liquid-surface > .liquid-sheen {
-  position:absolute; z-index:-1; inset:0; display:block; border-radius:inherit; pointer-events:none;
+  position:absolute; z-index:-1; inset:0; display:block; border-radius:var(--liquid-radius,inherit); pointer-events:none; overflow:hidden;
   background:linear-gradient(155deg,rgba(255,255,255,.12),transparent 38%,rgba(255,255,255,.03) 72%,rgba(255,255,255,.10));
   clip-path:inset(0 round var(--liquid-radius,20px));
+  mask-image:var(--liquid-mask,none); -webkit-mask-image:var(--liquid-mask,none); mask-mode:alpha;
   backdrop-filter:var(--liquid-filter,blur(8px)) saturate(1.12);
   -webkit-backdrop-filter:var(--liquid-filter,blur(8px)) saturate(1.12);
+}
+:root[data-workspace="cpam"][data-liquid-moving="true"] .liquid-sheen {
+  backdrop-filter:var(--liquid-filter-fast,var(--liquid-filter,blur(8px))) saturate(1.12);
+  -webkit-backdrop-filter:var(--liquid-filter-fast,var(--liquid-filter,blur(8px))) saturate(1.12);
 }
 :root[data-workspace="cpam"] .liquid-sheen::before {
   content:''; position:absolute; inset:0; padding:1px; border-radius:inherit;

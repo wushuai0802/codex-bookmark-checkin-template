@@ -220,6 +220,10 @@
 :root[data-workspace="cpam"] .attention-item[data-priority="urgent"] { border-left-color:var(--red); }
 :root[data-workspace="cpam"] .attention-item[data-priority="review"] { border-left-color:var(--amber); }
 :root[data-workspace="cpam"] .attention-panel { scroll-margin-top:90px; }
+:root[data-workspace="cpam"] .attention-panel > .panel-heading { flex-wrap:wrap; }
+:root[data-workspace="cpam"] .attention-heading-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+:root[data-workspace="cpam"] #mark-all-notices-read { min-height:36px; white-space:nowrap; }
+:root[data-workspace="cpam"] #mark-all-notices-read:disabled { opacity:.55; cursor:default; }
 :root[data-workspace="cpam"] .attention-tabs .mark-all-read-btn { margin:0 0 0 auto; min-height:40px; padding:6px 2px; border:0; background:transparent; color:var(--muted); font-size:11px; }
 :root[data-workspace="cpam"] .mark-all-read-btn,
 :root[data-workspace="cpam"] .attention-view-all {

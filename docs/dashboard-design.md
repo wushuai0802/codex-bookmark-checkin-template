@@ -3,6 +3,8 @@
 The dashboard offers off, standard and enhanced liquid-glass modes in Settings
 under Appearance. Card coverage, refraction strength, transparency and elastic
 feedback can be changed independently and persist in the current browser.
+The Smooth scrolling preference temporarily uses the same lens geometry with
+one RGB sample during movement, restoring enhanced dispersion when motion ends.
 The visual and interaction study references [FlClash's UI update](https://github.com/chen08209/FlClash/commit/7c9627fffb35f2615fbfaa64b4b3a0c5834c52ed);
 the browser implementation is independently authored and does not include its
 Dart, capture pipeline or shaders.
@@ -44,6 +46,17 @@ mode separates RGB samples for edge dispersion. A bevel mask combines a clear
 refractive rim with a hazier center. A separate sheen responds to press position
 without moving text. Visible surfaces receive filters; detached and offscreen
 surfaces release them, and geometry textures use a bounded cache.
+
+The optical texture also supplies a rounded alpha mask. It clips the filter
+output to the inner border curve rather than relying only on backdrop-filter
+clipping. Engine-generated DOM changes do not trigger a fresh document scan,
+and unchanged filter attributes are not rewritten. View changes animate the
+title while glass backgrounds remain stable.
+
+The overview heading always provides Mark all read across actionable,
+proof-pending and external-condition groups, including when the selected group
+is empty. Existing per-group acknowledgement remains available. Both use only
+the browser's reading state and never change execution results.
 
 SVG backdrop displacement is enabled on Chromium browsers with the relevant
 CSS support. Other engines use a compatible blur and highlight surface, and

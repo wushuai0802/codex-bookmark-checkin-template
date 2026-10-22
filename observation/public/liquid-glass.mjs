@@ -23,8 +23,36 @@ function texture(width,height,radius,bevel){
 }
 
 function dropFilter(entry){
-  entry.filter?.remove();entry.filter=null;entry.geometry='';
-  entry.node.style.removeProperty('--liquid-filter');delete entry.node.dataset.liquidLens;
+  entry.filter?.remove();entry.fastFilter?.remove();entry.filter=null;entry.fastFilter=null;entry.maps=[];entry.geometry='';
+  if(entry.node.style.getPropertyValue('--liquid-filter'))entry.node.style.removeProperty('--liquid-filter');
+  if(entry.node.style.getPropertyValue('--liquid-filter-fast'))entry.node.style.removeProperty('--liquid-filter-fast');
+  if(entry.node.dataset.liquidLens)delete entry.node.dataset.liquidLens;
+}
+
+function opticalFilter(width,height,image,rgb,haze,saturation){
+  const id='fabric-liquid-'+(++serial),maps=[];
+  const filter=svg('filter',{id,x:'0%',y:'0%',width:'100%',height:'100%',filterUnits:'objectBoundingBox',primitiveUnits:'userSpaceOnUse','color-interpolation-filters':'sRGB'});
+  filter.append(svg('feImage',{href:image,x:0,y:0,width,height,preserveAspectRatio:'none',result:'lens'}));
+  filter.append(svg('feGaussianBlur',{in:'SourceGraphic',stdDeviation:.65,result:'base'}));
+  filter.append(svg('feGaussianBlur',{in:'SourceGraphic',stdDeviation:haze,result:'haze'}));
+  if(rgb){
+    for(const [name,channel] of [['red',0],['green',1],['blue',2]]){
+      const map=svg('feDisplacementMap',{in:'base',in2:'lens',scale:0,xChannelSelector:'R',yChannelSelector:'G',result:name+'Shift','data-channel':name});maps.push(map);filter.append(map);
+      const matrix=Array(20).fill(0);matrix[channel*5+channel]=1;matrix[19]=1;
+      filter.append(svg('feColorMatrix',{in:name+'Shift',type:'matrix',values:matrix.join(' '),result:name}));
+    }
+    filter.append(svg('feBlend',{in:'red',in2:'green',mode:'screen',result:'rg'}));
+    filter.append(svg('feBlend',{in:'rg',in2:'blue',mode:'screen',result:'rgb'}));
+    filter.append(svg('feComposite',{in:'rgb',in2:'base',operator:'in',result:'glass'}));
+  }else{
+    const map=svg('feDisplacementMap',{in:'base',in2:'lens',scale:0,xChannelSelector:'R',yChannelSelector:'G',result:'glass'});maps.push(map);filter.append(map);
+  }
+  filter.append(svg('feColorMatrix',{in:'lens',type:'matrix',values:'0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 1 0 0',result:'edgeMask'}));
+  filter.append(svg('feComposite',{in:'glass',in2:'edgeMask',operator:'in',result:'edgeGlass'}));
+  filter.append(svg('feComposite',{in:'haze',in2:'edgeMask',operator:'out',result:'centerGlass'}));
+  filter.append(svg('feComposite',{in:'edgeGlass',in2:'centerGlass',operator:'arithmetic',k2:1,k3:1,result:'combined'}));
+  filter.append(svg('feColorMatrix',{in:'combined',type:'saturate',values:saturation}));
+  defs.append(filter);return {filter,maps,id};
 }
 
 function update(entry){
@@ -32,45 +60,33 @@ function update(entry){
   if(!entry.visible||!node.isConnected||preferences.mode==='none'||(isCard(node)&&!preferences.cards)){
     dropFilter(entry);return;
   }
-  const width=Math.round(node.offsetWidth),height=Math.round(node.offsetHeight);
+  const width=Math.round(node.clientWidth),height=Math.round(node.clientHeight);
   if(width<4||height<4){dropFilter(entry);return;}
-  if(!svgBackdrop()){node.dataset.liquidLens='compatible';return;}
-  const radius=Math.min(parseFloat(getComputedStyle(node).borderTopLeftRadius)||0,width/2,height/2);
-  node.style.setProperty('--liquid-radius',`${radius}px`);
+  const style=getComputedStyle(node);
+  const radius=Math.min(Math.max(0,(parseFloat(style.borderTopLeftRadius)||0)-(parseFloat(style.borderTopWidth)||0)),width/2,height/2);
   const ultra=preferences.mode==='ultra',bevel=Math.min(ultra?24:17,Math.max(5,radius));
-  const geometry=[width,height,radius,bevel,ultra].join(':');
+  const geometry=[width,height,radius,bevel,ultra,preferences.smoothMotion].join(':');
   if(entry.geometry!==geometry){
     dropFilter(entry);
-    const id='fabric-liquid-'+(++serial);
-    const filter=svg('filter',{id,x:'0%',y:'0%',width:'100%',height:'100%',filterUnits:'objectBoundingBox',primitiveUnits:'userSpaceOnUse','color-interpolation-filters':'sRGB'});
-    filter.append(svg('feImage',{href:texture(width,height,radius,bevel),x:0,y:0,width,height,preserveAspectRatio:'none',result:'lens'}));
-    filter.append(svg('feGaussianBlur',{in:'SourceGraphic',stdDeviation:.65,result:'base'}));
+    const image=texture(width,height,radius,bevel);
+    node.style.setProperty('--liquid-radius',`${radius}px`);node.style.setProperty('--liquid-mask',`url("${image}")`);
+    if(!svgBackdrop()){entry.geometry=geometry;node.dataset.liquidLens='compatible';return;}
     const haze=node.matches('.mobile-dock,.sidebar .nav')?7:node.matches('.ui-select-menu,.topbar')?4.5:isCard(node)?1.6:1.2;
-    filter.append(svg('feGaussianBlur',{in:'SourceGraphic',stdDeviation:haze,result:'haze'}));
-    if(ultra){
-      for(const [name,channel] of [['red',0],['green',1],['blue',2]]){
-        filter.append(svg('feDisplacementMap',{in:'base',in2:'lens',scale:0,xChannelSelector:'R',yChannelSelector:'G',result:name+'Shift','data-channel':name}));
-        const matrix=Array(20).fill(0);matrix[channel*5+channel]=1;matrix[19]=1;
-        filter.append(svg('feColorMatrix',{in:name+'Shift',type:'matrix',values:matrix.join(' '),result:name}));
-      }
-      filter.append(svg('feBlend',{in:'red',in2:'green',mode:'screen',result:'rg'}));
-      filter.append(svg('feBlend',{in:'rg',in2:'blue',mode:'screen',result:'rgb'}));
-      filter.append(svg('feComposite',{in:'rgb',in2:'base',operator:'in',result:'glass'}));
-    }else filter.append(svg('feDisplacementMap',{in:'base',in2:'lens',scale:0,xChannelSelector:'R',yChannelSelector:'G',result:'glass'}));
-    filter.append(svg('feColorMatrix',{in:'lens',type:'matrix',values:'0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 1 0 0',result:'edgeMask'}));
-    filter.append(svg('feComposite',{in:'glass',in2:'edgeMask',operator:'in',result:'edgeGlass'}));
-    filter.append(svg('feComposite',{in:'haze',in2:'edgeMask',operator:'out',result:'centerGlass'}));
-    filter.append(svg('feComposite',{in:'edgeGlass',in2:'centerGlass',operator:'arithmetic',k2:1,k3:1,result:'combined'}));
-    filter.append(svg('feColorMatrix',{in:'combined',type:'saturate',values:ultra?1.18:1.08}));
-    defs.append(filter);entry.filter=filter;entry.geometry=geometry;
-    node.style.setProperty('--liquid-filter',`url("#${id}")`);
+    const full=opticalFilter(width,height,image,ultra,haze,ultra?1.18:1.08);
+    entry.filter=full.filter;entry.maps=full.maps;entry.geometry=geometry;
+    node.style.setProperty('--liquid-filter',`url("#${full.id}")`);
+    if(ultra&&preferences.smoothMotion){
+      const fast=opticalFilter(width,height,image,false,haze,1.18);entry.fastFilter=fast.filter;entry.maps.push(...fast.maps);
+      node.style.setProperty('--liquid-filter-fast',`url("#${fast.id}")`);
+    }
   }
+  if(!entry.filter)return;
   const strength=preferences.refraction/100*Math.min(ultra?38:25,Math.min(width,height)*.45);
-  for(const map of entry.filter.querySelectorAll('feDisplacementMap')){
+  for(const map of entry.maps){
     const dispersion=map.dataset.channel==='red'?1.035:map.dataset.channel==='blue'?.965:1;
-    map.setAttribute('scale',String(strength*dispersion));
+    const scale=String(strength*dispersion);if(map.getAttribute('scale')!==scale)map.setAttribute('scale',scale);
   }
-  node.dataset.liquidLens='refractive';
+  if(node.dataset.liquidLens!=='refractive')node.dataset.liquidLens='refractive';
 }
 
 function scan(){
@@ -80,9 +96,10 @@ function scan(){
     for(const [node,entry] of entries){
       if(!node.isConnected||!enabled||(isCard(node)&&!preferences.cards)){
         intersection.unobserve(node);resize.unobserve(node);dropFilter(entry);entry.sheen.remove();
+        node.style.removeProperty('--liquid-mask');node.style.removeProperty('--liquid-radius');
         node.classList.remove('liquid-surface');entries.delete(node);
       }else{
-        node.classList.add('liquid-surface');
+        if(!node.classList.contains('liquid-surface'))node.classList.add('liquid-surface');
         if(entry.sheen.parentNode!==node)node.prepend(entry.sheen);
       }
     }
@@ -103,8 +120,26 @@ export function installLiquidGlass(){
   defs=svg('defs');root.append(defs);document.body.append(root);
   intersection=new IntersectionObserver(records=>{for(const record of records){const entry=entries.get(record.target);if(entry){entry.visible=record.isIntersecting;update(entry);}}},{rootMargin:'80px'});
   resize=new ResizeObserver(records=>{for(const record of records){const entry=entries.get(record.target);if(entry)update(entry);}});
-  const observer=new MutationObserver(scan);observer.observe(document.body,{childList:true,subtree:true});
-  window.addEventListener('fabricappearancechange',event=>{preferences=event.detail;scan();});
+  const observer=new MutationObserver(records=>{
+    const changed=records.some(record=>{
+      if(record.target.closest?.('.liquid-definitions,.liquid-sheen'))return false;
+      const entry=entries.get(record.target);
+      if(entry&&record.target.isConnected&&entry.sheen.parentNode!==record.target)record.target.prepend(entry.sheen);
+      return [...record.addedNodes,...record.removedNodes].some(node=>node.nodeType===1&&!node.matches('.liquid-sheen,.liquid-definitions'));
+    });
+    if(changed)scan();
+  });observer.observe(document.body,{childList:true,subtree:true});
+  let motionTimer=0;
+  const finishMotion=()=>{clearTimeout(motionTimer);delete document.documentElement.dataset.liquidMoving;};
+  const moving=(duration=140)=>{
+    if(!preferences.smoothMotion||preferences.mode!=='ultra')return;
+    if(document.documentElement.dataset.liquidMoving!=='true')document.documentElement.dataset.liquidMoving='true';
+    clearTimeout(motionTimer);motionTimer=setTimeout(finishMotion,Math.max(140,duration+40));
+  };
+  window.addEventListener('scroll',()=>moving(),{passive:true,capture:true});
+  document.addEventListener('wheel',()=>moving(),{passive:true});document.addEventListener('touchmove',()=>moving(),{passive:true});
+  window.addEventListener('fabricmotionstart',event=>moving(event.detail.duration));
+  window.addEventListener('fabricappearancechange',event=>{preferences=event.detail;finishMotion();scan();});
   const status=document.getElementById('glass-capability');
   if(status)status.textContent=svgBackdrop()?'当前浏览器支持背景折射':'当前浏览器使用兼容材质';
   let pressed=null,pressFrame=0;
