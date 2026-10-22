@@ -10,6 +10,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'ResultIdentity.ps1')
 . (Join-Path $PSScriptRoot 'ResultContract.ps1')
@@ -66,6 +68,14 @@ function Get-RetryTimeText($Result) {
     } catch { return '等待调度' }
 }
 
+function Test-ObservedSecondaryVerification($Result) {
+    if ((Get-CheckinAttentionClass $Result) -ne 'verification' -or [string]$Result.underlyingFailureCode -ne 'two_factor_required') { return $false }
+    $diagnostic = $Result.nativeSecurityDiagnostic
+    $diagnosticFields = @('verificationRoute', 'otpInputPresent', 'scopedOtpInputPresent', 'passwordInputPresent', 'sameOrigin', 'pageContentAvailable', 'waf')
+    $validDiagnostic = $null -ne $diagnostic -and @($diagnosticFields | Where-Object { $diagnostic.$_ -isnot [bool] }).Count -eq 0
+    return [bool]($validDiagnostic -and ($diagnostic.otpInputPresent -eq $true -or $diagnostic.scopedOtpInputPresent -eq $true))
+}
+
 function Get-LogicalStatusPriority($Result) {
     $status = [string]$Result.status
     if ($status -eq 'signed') { return 100 }
@@ -98,7 +108,36 @@ if ($ReportPath) {
     $results = @($report.results)
 }
 
-$reportingResults = @(Merge-LogicalResults $results)
+$effectiveResults = @($results)
+$notificationView = $null
+if ($null -ne $report -and $ReportPath) {
+    try {
+        . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
+        $node = Resolve-CheckinNode $config
+        $viewArguments = @((Join-Path $root 'src/notification-reconciliation.mjs'), '--report', $resolvedReport)
+        if (-not $Preview -and [string]$config.notification.mode -eq 'command') { $viewArguments += '--persist' }
+        $notificationView = (& $node @viewArguments 2>$null) | ConvertFrom-Json
+        $effectiveResults = @($results | ForEach-Object {
+            $original = $_
+            $account = if ($original.accountKey) { [string]$original.accountKey } else { 'site-default' }
+            $matched = @($notificationView.overrides | Where-Object { $_.origin -ceq $original.origin -and $_.accountKey -ceq $account })
+            $availability = @($notificationView.availability | Where-Object { $_.origin -ceq $original.origin -and $_.accountKey -ceq $account })
+            if ($matched.Count -ne 1 -and $availability.Count -ne 1) { return $original }
+            $copy = [ordered]@{}
+            foreach ($property in $original.PSObject.Properties) { $copy[$property.Name] = $property.Value }
+            if ($matched.Count -eq 1) {
+                $copy.status = 'already_signed'; $copy.evidence = $matched[0].evidence
+                $copy.reason = '当日权威回执已确认签到完成'
+                foreach ($name in @('failureCode','underlyingFailureCode','retryCause','nextEligibleAt','condition','siteCondition','retryExhaustedForDay')) { $copy.Remove($name) }
+            } else {
+                $copy.availability = $availability[0]
+                $copy.notificationAvailabilityObserved = $true
+            }
+            [pscustomobject]$copy
+        })
+    } catch { $notificationView = [pscustomobject]@{bound=$true;ready=$false}; $effectiveResults = @($results) }
+}
+$reportingResults = @(Merge-LogicalResults $effectiveResults)
 $statuses = @($reportingResults | ForEach-Object { [string]$_.status })
 $reportRunState = if ($null -ne $report) { [string]$report.runState } else { '' }
 $plannedTotal = if ($null -ne $report -and $null -ne $report.plannedTotal) { [int]$report.plannedTotal } else { $results.Count }
@@ -127,7 +166,7 @@ $isCompleteFinalReport = $null -ne $report `
     -and $reportIdentityContractValid
 $isPartialReport = $null -ne $report -and -not $isCompleteFinalReport
 $executionComplete = [bool]$isCompleteFinalReport
-$businessComplete = $executionComplete -and @($results | Where-Object { -not (Test-TerminalCheckinResult $_) }).Count -eq 0
+$businessComplete = $executionComplete -and @($effectiveResults | Where-Object { -not (Test-TerminalCheckinResult $_) }).Count -eq 0
 $logicalPlannedTotal = if ($null -ne $report -and $null -ne $report.bookmarkSummary -and $null -ne $report.bookmarkSummary.targets) {
     @($report.bookmarkSummary.targets | ForEach-Object { Get-LogicalSiteKey $_ } | Select-Object -Unique).Count
 }
@@ -153,7 +192,7 @@ $attentionProblems = @($localProblems | Where-Object { $_.status -notin $automat
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
-elseif ($isCompleteFinalReport -and $attentionProblems.Count -eq 0 -and $verificationProblems.Count -eq 0 -and
+elseif ($isCompleteFinalReport -and $localProblems.Count -eq 0 -and $verificationProblems.Count -eq 0 -and
     $externalProblems.Count -gt 0 -and $done -gt 0) {
     # The project report is complete. Keep site-side outages in the summary,
     # but do not label the whole daily receipt as unconfirmed.
@@ -163,19 +202,26 @@ elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses 
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0 -and $statuses -contains 'already_signed') { $status = 'already_done' }
 elseif ($reportingResults.Count -gt 0 -and $problems.Count -eq 0) { $status = 'skipped' }
 elseif ($reportingResults.Count -gt 0 -and $attentionProblems.Count -gt 0) { $status = 'needs_attention' }
-elseif ($reportingResults.Count -gt 0 -and ($externalProblems.Count -gt 0 -or $verificationProblems.Count -gt 0)) { $status = 'unconfirmed' }
-elseif ($reportingResults.Count -gt 0 -and $automaticRetryProblems.Count -eq $problems.Count) { $status = 'retrying' }
+elseif ($reportingResults.Count -gt 0 -and $verificationProblems.Count -gt 0) { $status = 'unconfirmed' }
+elseif ($reportingResults.Count -gt 0 -and $automaticRetryProblems.Count -gt 0 -and
+    $automaticRetryProblems.Count -eq $localProblems.Count) { $status = 'retrying' }
+elseif ($reportingResults.Count -gt 0 -and $externalProblems.Count -gt 0) { $status = 'unconfirmed' }
 elseif ($reportingResults.Count -gt 0) { $status = 'unconfirmed' }
 elseif ($RunnerStatus -eq 'failed') { $status = 'failed' }
 elseif ($RunnerStatus -eq 'skipped') { $status = 'skipped' }
 else { $status = 'unconfirmed' }
 
 $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
-    $counts = @("已签到 $done/$logicalPlannedTotal")
+    $counts = @("今日完成 $done 项")
+    if ($verificationProblems.Count -gt 0) { $counts += "待复核 $($verificationProblems.Count)" }
+    $loginCount = @($localProblems | Where-Object { $_.status -eq 'login_required' -or $_.retryCause -eq 'login_required' }).Count
+    if ($loginCount -gt 0) { $counts += "登录恢复 $loginCount" }
+    $otherLocalCount = $localProblems.Count - $loginCount
+    if ($otherLocalCount -gt 0) { $counts += "待处理 $otherLocalCount" }
+    if ($externalProblems.Count -gt 0) { $counts += "上游异常 $($externalProblems.Count)" }
     if ($notAvailable -gt 0) { $counts += "未开放 $notAvailable" }
     if ($temporarilyUnavailable -gt 0) { $counts += "暂不可用 $temporarilyUnavailable（今日暂停）" }
-    if ($disabled -gt 0) { $counts += "已取消 $disabled" }
-    if ($problems.Count -gt 0) { $counts += "待处理 $($problems.Count)" }
+    if ($disabled -gt 0) { $counts += "已暂停 $disabled" }
     $summaryValue = $counts -join ' · '
     if (-not $isCompleteFinalReport) { $summaryValue += "`n任务未完成：已处理 $logicalProcessedTotal/$logicalPlannedTotal 项" }
     $summaryValue
@@ -204,7 +250,11 @@ if ($attentionProblems.Count -gt 0) {
 if ($verificationProblems.Count -gt 0) {
     $summary += "`n`n待核验 $($verificationProblems.Count)（不重复提交）"
     foreach ($problem in $verificationProblems) {
-        $reason = if ([string]$problem.evidence.source -eq 'vibe_entitlement_status' -and
+        $reason = if ([string]$problem.underlyingFailureCode -in @('site_migration','bookmark_origin_changed')) {
+            '站点地址已变化，请先核对书签；原提交保留待核验'
+        } elseif (Test-ObservedSecondaryVerification $problem) {
+            '提交结果未确认，需完成二次验证，完成后自动复核'
+        } elseif ([string]$problem.evidence.source -eq 'vibe_entitlement_status' -and
             ([string]$problem.evidence.outcome -eq 'entitlement_expired' -or [string]$problem.evidence.statusSignal -eq 'expired_subscription')) {
             '权益已过期，历史提交待核验'
         } else { '提交结果未确认，等待只读复核' }
@@ -214,9 +264,10 @@ if ($verificationProblems.Count -gt 0) {
 if ($externalProblems.Count -gt 0) {
     $summary += "`n`n等待外部 $($externalProblems.Count)"
     foreach ($problem in $externalProblems) {
-        $reason = if ([string]$problem.siteCondition -eq 'site_maintenance' -or [string]$problem.failureCode -eq 'site_maintenance') {
-            '站点维护，次日复核'
-        } elseif ([string]$problem.retryCause -eq 'harvest_waiting') { '待本项目续跑，先复核 Harvest' }
+        $reason = if ([string]$problem.availability.condition -eq 'site_maintenance' -or [string]$problem.siteCondition -eq 'site_maintenance' -or [string]$problem.failureCode -eq 'site_maintenance') {
+            '站点维护，恢复后只读核验'
+        } elseif ([string]$problem.failureCode -in @('site_migration','bookmark_origin_changed')) { '站点地址已变化，请核对并更新书签' }
+        elseif ([string]$problem.retryCause -eq 'harvest_waiting') { '待本项目续跑，先复核 Harvest' }
         elseif ([string]$problem.retryCause -in @('upstream_unavailable', 'rate_limit')) {
             "$(if([string]$problem.retryCause -eq 'rate_limit'){'站点限频'}else{'上游暂不可用'}) · $(Get-RetryTimeText $problem)"
         } else { '外部条件未满足，暂停提交' }
@@ -289,7 +340,9 @@ $source = if ($notification.source) { [string]$notification.source } else { 'bro
 
 $stateParts = @($reportingResults | Sort-Object { Get-LogicalSiteKey $_ } | ForEach-Object {
     $evidenceSource = if ($_.status -eq 'not_available') { [string]$_.evidence.source } else { '' }
-    "$(Get-LogicalSiteKey $_)=$([string]$_.status):$([string]$_.retryCause):$([string]$_.availabilityKind):$evidenceSource`:$([string]$_.cleanupFailureCode):$([string]$_.retryExhaustedForDay):$([string]$_.retryable):$([string]$_.failureCode)"
+    $secondaryNotice = if (Test-ObservedSecondaryVerification $_) { ':otp_observed' } else { '' }
+    $availabilityNotice = if ($_.notificationAvailabilityObserved -eq $true) { ":$([string]$_.availability.condition)" } else { '' }
+    "$(Get-LogicalSiteKey $_)=$([string]$_.status):$([string]$_.retryCause):$([string]$_.availabilityKind):$evidenceSource`:$([string]$_.cleanupFailureCode):$([string]$_.retryExhaustedForDay):$([string]$_.retryable):$([string]$_.failureCode)$secondaryNotice$availabilityNotice"
 })
 $stateMaterial = if ($stateParts.Count -gt 0) { "$status|$reportRunState|$($stateParts -join '|')" } else { "$status|$RunnerStatus" }
 $stateBytes = [System.Text.Encoding]::UTF8.GetBytes($stateMaterial)
@@ -309,12 +362,18 @@ $payload = [ordered]@{
     isComplete = [bool]$isCompleteFinalReport
     executionComplete = $executionComplete
     businessComplete = $businessComplete
+    reconciliationReady = ($null -eq $notificationView -or $notificationView.ready -eq $true)
     eventKey = $eventKey
     mode = $mode
 }
 if ($Preview -or $mode -eq 'none') {
     $payload.accepted = $false
     $payload.preview = [bool]$Preview
+    $payload | ConvertTo-Json -Compress
+    return
+}
+if ($null -ne $notificationView -and $notificationView.bound -eq $true -and $notificationView.ready -ne $true) {
+    $payload.accepted = $false; $payload.enqueued = $false; $payload.deferred = $true
     $payload | ConvertTo-Json -Compress
     return
 }

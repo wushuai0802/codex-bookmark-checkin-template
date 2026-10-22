@@ -7,7 +7,7 @@ import {
 } from "./credential-session-verification.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
 import { safeLogUrl } from "./security.mjs";
-import { classifyPageText } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -75,7 +75,8 @@ try {
     await page.waitForTimeout(1000).catch(() => {});
   }
   const password = page.locator('input[type="password"]:visible');
-  const initialState = classifyPageText({ url: page.url(), bodyText: initialText, hasPassword: passwordCount > 0 });
+  const initialState = classifyPageText({ url: page.url(), bodyText: initialText, hasPassword: passwordCount > 0,
+    ...await readPageTwoFactorStructure(page) });
   if (initialState.failureCode === "two_factor_required") {
     status = "needs_attention";
     failureCode = initialState.failureCode;
@@ -146,6 +147,7 @@ try {
           url: page.url(),
           bodyText: text,
           hasPassword: await page.locator('input[type="password"]:visible').count() > 0,
+          ...await readPageTwoFactorStructure(page),
         });
         if (submittedState.failureCode === "two_factor_required") {
           status = "needs_attention";

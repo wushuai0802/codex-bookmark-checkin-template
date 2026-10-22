@@ -22,6 +22,8 @@ import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {releaseInfo} from './release-info.mjs';
 import {operationTargets,enqueueOperation,operationView} from './dashboard-operations.mjs';
 import {matchesTask,cancelledTask} from '../public/dashboard-model.mjs';
+import {classifyPtEvidenceState,ptUnknownReconciled} from './pt-status.mjs';
+import {confirmedPtByTask} from './daily-reconciliation.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -205,7 +207,14 @@ function publicPtEvidence(evidence) {
     authoritative: evidence.authoritative === true,
     summary: typeof evidence.summary === 'string' ? evidence.summary.slice(0, 240) : '',
     redacted: evidence.redacted === true,
-    statusVerified: evidence.statusVerified === true
+    statusVerified: evidence.statusVerified === true,
+    ...(Number.isFinite(Date.parse(evidence.confirmedAt))?{confirmedAt:new Date(evidence.confirmedAt).toISOString()}:{}),
+    ...(/^\d{4}-\d{2}-\d{2}$/.test(evidence.businessDate??'')?{businessDate:evidence.businessDate}:{}),
+    ...(evidence.evidenceScope==='site_account_day'?{evidenceScope:evidence.evidenceScope}:{}),
+    ...(evidence.verification==='task_disabled'?{verification:'task_disabled'}:{}),
+    ...(evidence.readSafety==='reviewed_passive'?{readSafety:'reviewed_passive'}:{}),
+    ...(/^[a-z0-9_]{1,80}$/.test(evidence.statusSignal??'')?{statusSignal:evidence.statusSignal}:{}),
+    ...(/^[a-f0-9]{64}$/.test(evidence.profileBinding??'')?{profileBinding:evidence.profileBinding}:{})
   };
 }
 
@@ -221,13 +230,14 @@ export function publicPtStatus(ptStatus) {
       const effective = site.effective && typeof site.effective === 'object' ? site.effective : null;
       const sourceStatuses = (Array.isArray(site.sourceStatuses) ? site.sourceStatuses : []).flatMap((item) => {
         const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
-        if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
-        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true }];
+        if (typeof item?.source !== 'string' || (item?.observedAt!==null&&typeof item?.observedAt !== 'string')) return [];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt?.slice(0, 64)??null, fresh: item.fresh === true && freshPt(item.observedAt), authoritative: item.authoritative === true }];
       });
       const observations = (Array.isArray(site.observations) ? site.observations : []).flatMap((item) => {
         const status = PT_STATUS_VALUES.has(item?.status) ? item.status : 'unknown';
-        if (typeof item?.source !== 'string' || typeof item?.observedAt !== 'string') return [];
-        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt.slice(0, 64), fresh: item.fresh === true && timestampFresh(item.observedAt, now), authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence),...projectPtDiagnostic(item) }];
+        if (typeof item?.source !== 'string' || (item?.observedAt!==null&&typeof item?.observedAt !== 'string')) return [];
+        return [{ source: item.source.slice(0, 40), status, observedAt: item.observedAt?.slice(0, 64)??null, fresh: item.fresh === true && freshPt(item.observedAt), authoritative: item.authoritative === true, evidence: publicPtEvidence(item.evidence),...projectPtDiagnostic(item),
+          ...(typeof item.submissionAttempted==='boolean'?{submissionAttempted:item.submissionAttempted}:{}) }];
       });
       return [{
         siteRef: typeof site.siteRef === 'string' && /^pt_[a-f0-9]{16}$/.test(site.siteRef) ? site.siteRef : null,
@@ -243,6 +253,7 @@ export function publicPtStatus(ptStatus) {
         effective: effective && typeof effective.source === 'string' ? {
           source: effective.source.slice(0, 40),
           ...projectPtDiagnostic(effective),
+          ...(typeof effective.submissionAttempted==='boolean'?{submissionAttempted:effective.submissionAttempted}:{}),
           status: PT_STATUS_VALUES.has(effective.status) ? effective.status : 'unknown',
           observedAt: typeof effective.observedAt === 'string' ? effective.observedAt.slice(0, 64) : null,
           fresh: effective.fresh === true && freshPt(effective.observedAt),
@@ -257,6 +268,12 @@ export function publicPtStatus(ptStatus) {
       }];
     } catch { return []; }
   });
+  for(const site of sites){
+    // Reclassify after current-day freshness and diagnostic sanitization so
+    // older snapshots work, and a yesterday confirmed category cannot stick.
+    site.evidenceState=classifyPtEvidenceState(site);
+    if(ptUnknownReconciled(site,ptStatus.businessDate))site.reconciledFromUnknown=true;
+  }
   const counts = ptStatus.counts && typeof ptStatus.counts === 'object' ? ptStatus.counts : {};
   const safeCount = (value, fallback) => Number.isInteger(value) && value >= 0 ? value : fallback;
   const status = Object.fromEntries([...PT_STATUS_VALUES].map((key) => [key, safeCount(counts.status?.[key], sites.filter((site) => site.effective?.status === key).length)]));
@@ -274,6 +291,11 @@ export function publicPtStatus(ptStatus) {
       fresh: sites.filter((site) => site.effective?.fresh).length,
       discrepancies: safeCount(counts.discrepancies, sites.filter((site) => site.discrepancy).length),
       supplementCandidates: sites.filter((site) => site.supplementCandidate).length,
+      monitorOnlyUnconfirmed: sites.filter(site=>site.evidenceState==='monitor_only_unconfirmed').length,
+      guardedReadNeeded: sites.filter(site=>site.evidenceState==='guarded_read_needed').length,
+      verificationPending: sites.filter(site=>site.evidenceState==='verification_pending').length,
+      externalBlocked: sites.filter(site=>site.evidenceState==='external_blocked').length,
+      notSignedConfirmed: sites.filter(site=>site.evidenceState==='not_signed_confirmed').length,
       status
     },
     executionEnabled: false,
@@ -349,23 +371,6 @@ function mergeCanaryTask(task, receipt, canary){
 }
 
 function liveCanaryByTask(canaryResults){const map=new Map();for(const item of canaryResults??[])if(item?.taskId)map.set(item.taskId,chooseCanaryResult(map.get(item.taskId),item));return map;}
-
-function confirmedPtByTask(snapshot){
-  if(snapshot?.ptStatus?.businessDate!==snapshot?.businessDate)return new Map();
-  const counts=new Map();
-  for(const task of snapshot?.tasks??[])counts.set(task.origin,(counts.get(task.origin)??0)+1);
-  const verified=new Map();
-  for(const site of snapshot?.ptStatus?.sites??[]){
-    const current=site?.effective,at=Date.parse(current?.observedAt??'');
-    if(!['signed','already_signed'].includes(current?.status)||current?.authoritative!==true||
-       current?.evidence?.authoritative!==true||
-       current?.fresh!==true||!Number.isFinite(at)||at>Date.parse(snapshot.generatedAt)+60_000||
-       new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(at))!==snapshot.businessDate)continue;
-    if(!site.accountRef&&counts.get(site.origin)!==1)continue;
-    verified.set(site.origin+'|'+(site.accountRef??'site-default'),current);
-  }
-  return verified;
-}
 
 function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   const receiptByTask = new Map((snapshot?.receipts ?? []).map((receipt) => [receipt.taskId, receipt]));

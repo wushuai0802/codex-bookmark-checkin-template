@@ -2,7 +2,13 @@ import {ptFailureMessages} from './checkin-contract.generated.mjs';
 
 export function knownPtDialogOpener(origin,action){
   const label=String(action?.text??'').trim().replaceAll('[','').replaceAll(']','').trim();
-  return origin==='https://open.cd'&&['签到','簽到'].includes(label);
+  if(origin==='https://open.cd')return ['签到','簽到'].includes(label);
+  if(origin!=='https://u2.dmhy.org'||action?.tagName!=='A'||action.formAction||
+    !['立即签到','立即簽到'].includes(String(action.text??'').trim()))return false;
+  try{
+    const destination=new URL(action.href);
+    return !destination.username&&!destination.password&&destination.href===origin+'/showup.php';
+  }catch{return false;}
 }
 
 export async function guardPtSubmission(run, check) {

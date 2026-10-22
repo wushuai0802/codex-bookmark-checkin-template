@@ -1,4 +1,5 @@
 import {canonicalPtOrigin} from './pt-coordination.generated.mjs';
+import {reviewedPtOrigin} from './monitor-catalog.mjs';
 
 export function siteIdentityIndex({catalog=null,planTargets=[]}={}){
   const index=new Map();
@@ -11,7 +12,7 @@ export function siteIdentityIndex({catalog=null,planTargets=[]}={}){
   for(const target of planTargets){
     const origin=originOf(target.origin);if(!origin)continue;
     const entry=ensure(origin);entry.targets.push(target);
-    if((target.folderNames??[]).some(folder=>typeof folder==='string'&&/pt/i.test(folder)))entry.kind='pt';
+    if(reviewedPtOrigin(origin)||(target.folderNames??[]).some(folder=>typeof folder==='string'&&/pt/i.test(folder)))entry.kind='pt';
     entry.accountKeys=[...new Set(entry.targets.map(item=>String(item.accountKey??'').trim()||'site-default'))];
     entry.ambiguous=entry.targets.length>1;
   }

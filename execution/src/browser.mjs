@@ -3,15 +3,18 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText, ptPageEvidence } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText, ptPageEvidence } from "./detector.mjs";
 export { ptPageEvidence } from "./detector.mjs";
 import { assertBookmarkNavigation, safeErrorMessage, safeLogUrl } from "./security.mjs";
 import { newApiCaptchaCandidates, recognizeNewApiCaptcha, recognizeNexusCaptcha, recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
 import { solveU2VisualChallenge } from "./u2-vision.mjs";
+import { createU2ReferenceFetch } from "./u2-reference-fetch.mjs";
 import { resolveQaByWebSearch } from "./qa-solver.mjs";
 import { withRetrySchedule } from "./retry-policy.mjs";
 import { tryOAuthReloginCheckinStatus } from "./oauth-relogin-checkin.mjs";
 import { tryOAuthApiCheckin } from "./oauth-api-checkin.mjs";
+import { clickCheckinCandidate,checkinClickStarted } from "./checkin-click.mjs";
+import {inspectSiteMigration,classifySiteMigration,providerLoginPage,bookmarkReviewRequired} from './site-migration.mjs';
 import { tryNewApiCaptchaCheckin, tryNewApiSignIn } from "./new-api-signin.mjs";
 import { isTerminalResult } from "./result-contract.mjs";
 import { applyOptionalBaiduSecondOpinion } from "./baidu-ocr.mjs";
@@ -21,7 +24,9 @@ import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mj
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
 import {ptReadPolicy,readPtPassivePage,ptReadProxy} from './pt-read-policy.mjs';
 import {initialPtObservation} from './pt-initial-observation.mjs';
-import {readHddolbyHeader,hddolbyDailyProof} from './hddolby-readonly.mjs';
+import {readHddolbyHeader,hddolbyDailyProof,hddolbyDailyStatusProof} from './hddolby-readonly.mjs';
+import {recoverHddolbyTwoFactor} from './hddolby-two-factor.mjs';
+import { awaitOffscreenWindow, installOffscreenWindows } from "./offscreen-windows.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -166,6 +171,7 @@ async function snapshotState(page) {
     bodyText: state.bodyText,
     hasPassword: state.passwordInputs,
     challengeSelectors: state.challengeSelectors,
+    ...await readPageTwoFactorStructure(page),
   });
 }
 
@@ -454,11 +460,6 @@ async function findCheckinAction(page, allowedOrigins, excludedAction = null) {
       && candidate.href === excludedAction.href
     ))
     .sort((a, b) => b.score - a.score)[0] ?? null;
-}
-
-async function clickCandidate(page, candidate) {
-  const locator = page.locator('button, a, [role="button"], input[type="button"], input[type="submit"]').nth(candidate.index);
-  await locator.click({ timeout: 10000 });
 }
 
 async function detectActiveQuotaBenefit(page, activeOrigin, config, status = "already_signed") {
@@ -1116,25 +1117,79 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
     failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false };
 }
 
-export async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config,read=readHddolbyHeader) {
+export async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config,read=readHddolbyHeader,recover=recoverHddolbyTwoFactor) {
   if (expectedOrigin !== "https://www.hddolby.com") return null;
   const current = new URL(page.url());
   if (current.origin !== expectedOrigin || current.pathname !== "/take2fa.php") return null;
 
-  const state=await read(page.context(),{origin:expectedOrigin});
+  const state=await read(page.context(),{origin:expectedOrigin,
+    expectedAccountId:config.siteTwoFactorRecovery?.[expectedOrigin]?.expectedAccountId});
   if(hddolbyDailyProof(state))
     return {...state,reason:'HDDolby 当前账户栏确认今日签到已完成'};
+  const recovery=await recover({page,root:rootDirectory,config});
+  if(hddolbyDailyProof(recovery?.readback))
+    return {...recovery.readback,
+      ...(recovery.twoFactorRecovery?.attempted===true?{status:'signed',submissionAttempted:true}:{}),
+      ...(recovery.twoFactorRecovery?{twoFactorRecovery:recovery.twoFactorRecovery}:{}),
+      reason:'HDDolby 两步验证后，当前账户栏确认今日签到已完成'};
+  if(recovery?.twoFactorRecovery?.accepted===true&&recovery.readback?.status==='not_signed'&&
+    hddolbyDailyStatusProof(recovery.readback)){
+    // Authentication may return to the ordinary homepage. Resume only after
+    // a fresh negative receipt; an unknown check-in is never replayed here.
+    config.beforePtSubmit?.();
+    await page.goto(expectedOrigin+'/attendance.php',{waitUntil:'domcontentloaded',timeout:15000});
+    return {continueCheckin:true,twoFactorRecovery:recovery.twoFactorRecovery};
+  }
   return {
     status: "needs_attention",
     reason: "HDDolby 要求完成两步验证，且首页未显示今日签到",
     failureCode: "two_factor_required",
     attentionKind: "trusted_device_initialization",
     retryableLoginRecovery: false,
+    ...(recovery?.twoFactorRecovery&&recovery.twoFactorRecovery.reason!=='disabled'?{twoFactorRecovery:recovery.twoFactorRecovery}:{}),
   };
 }
 
 export function isNexusCaptchaRejectedText(value) {
   return /图片代码无效|圖片代碼無效|验证码无效|驗證碼無效|invalid\s+(?:image\s+)?code|captcha\s+invalid/i.test(String(value ?? ""));
+}
+
+async function readNexusPostSubmitProof(page, checkinUrl, config) {
+  let policy;
+  try { policy = ptReadPolicy(new URL(checkinUrl).origin, config); } catch { return null; }
+  if (!policy?.dailyHeader) return null;
+  try {
+    const response = await page.goto(policy.url, { waitUntil: "domcontentloaded", timeout: 15000 });
+    if (!response || response.status() !== 200) return null;
+    const proof = await readPtPassivePage(page, policy, {
+      origin: new URL(checkinUrl).origin,
+      now: new Date(),
+      httpStatus: response.status(),
+    });
+    return ["signed", "already_signed"].includes(proof?.status) && proof.evidence?.authoritative === true
+      ? proof : null;
+  } catch { return null; }
+}
+
+async function confirmNexusPostSubmit(page, checkinUrl, config, fallback, responseText) {
+  let policy;
+  try { policy = ptReadPolicy(new URL(checkinUrl).origin, config); } catch { }
+  // Reviewed daily headers belong to this account. A generic signed legend
+  // elsewhere on the response must never override its unsigned control.
+  const proof = policy?.dailyHeader
+    ? await readNexusPostSubmitProof(page, checkinUrl, config)
+    : { status: fallback.status, evidence: ptPageEvidence({origin:new URL(checkinUrl).origin,
+      url:page.url(),bodyText:responseText,status:fallback.status}) };
+  if (!proof?.evidence?.authoritative) return null;
+  return {
+    ...fallback,
+    status: proof.status,
+    reason: `${proof.evidence.summary || "签到页确认今日完成"}；已通过提交后当日页面复核`,
+    evidence: proof.evidence,
+    operationMode: "legacy_checkin",
+    readSafety: "attendance_page_risk",
+    submissionAttempted: true,
+  };
 }
 
 export async function tryNexusImageCaptcha(page, config = {}, {
@@ -1204,45 +1259,56 @@ export async function tryNexusImageCaptcha(page, config = {}, {
     config.beforePtSubmit?.();
     await submit.click();
     await sleep(3000);
+    const responseText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+    // Read rejection before any navigation: an old signed header can coexist
+    // with an explicitly refused CAPTCHA. Only refusal allows a fresh retry.
+    if (isNexusCaptchaRejectedText(responseText)) {
+      if (attempt === maxAttempts) return {
+        status: "needs_attention", reason: "NexusPHP 图片验证码连续被站点拒绝，已停止本轮提交",
+        captchaRejected: true, failureCode: "captcha_ocr_exhausted", submissionAttempted: true, retryable: false,
+      };
+      await page.goto(checkinUrl, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+      await sleep(750);
+      continue;
+    }
     const state = await snapshotState(page);
     if (["signed", "already_signed"].includes(state.status)) {
-      return { ...state, reason: `${state.reason}；图片验证码置信度 ${Math.round(recognition.confidence)}，第 ${attempt} 次识别` };
+      const confirmed = await confirmNexusPostSubmit(page, checkinUrl, config, {
+        ...state,
+        reason: `${state.reason}；图片验证码置信度 ${Math.round(recognition.confidence)}，第 ${attempt} 次识别`,
+      }, responseText);
+      if (confirmed) return confirmed;
+      return {status:"needs_attention",reason:"验证码已提交，尚未确认当前账号今日完成",
+        failureCode:"submission_outcome_unknown",submissionAttempted:true,retryable:false};
     }
     const showup = page.locator("#showup");
     if (await showup.count() === 1) {
       const showupText = String(await showup.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
       if (/已签到|已簽到|showed up/i.test(showupText)) {
-        return { status: "signed", reason: `NexusPHP 图片验证码识别成功（置信度 ${Math.round(recognition.confidence)}，第 ${attempt} 次识别）` };
+        const confirmed = await confirmNexusPostSubmit(page, checkinUrl, config, {
+          status: "signed",
+          reason: `NexusPHP 图片验证码识别成功（置信度 ${Math.round(recognition.confidence)}，第 ${attempt} 次识别）`,
+        }, responseText);
+        if (confirmed) return confirmed;
+        return {status:"needs_attention",reason:"验证码已提交，尚未确认当前账号今日完成",
+          failureCode:"submission_outcome_unknown",submissionAttempted:true,retryable:false};
       }
-    }
-    const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
-    if (isNexusCaptchaRejectedText(bodyText)) {
-      if (attempt === maxAttempts) return {
-        status: "needs_attention",
-        reason: "NexusPHP 图片验证码连续被站点拒绝，已停止本轮提交",
-        captchaRejected: true,
-        failureCode: "captcha_ocr_exhausted",
-        submissionAttempted: true,
-        retryable: false,
-      };
-      await page.goto(checkinUrl, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
-      await sleep(750);
-      continue;
     }
     if (await page.locator('#showupimg, img[alt="CAPTCHA" i][src*="image.php"], img[src*="/image.php"]').count() === 0) {
       for (let verification = 0; verification < 4; verification += 1) {
         if (verification > 0) await sleep(750);
         const verified = await snapshotState(page);
         if (["signed", "already_signed"].includes(verified.status)) {
-          return { ...verified, reason: `${verified.reason}；NexusPHP 图片验证码第 ${attempt} 次识别完成` };
+          const confirmed = await confirmNexusPostSubmit(page, checkinUrl, config, {
+            ...verified,
+            reason: `${verified.reason}；NexusPHP 图片验证码第 ${attempt} 次识别完成`,
+          }, await page.locator("body").innerText({timeout:3000}).catch(()=>""));
+          if (confirmed) return confirmed;
+          break;
         }
       }
-      await page.goto(checkinUrl, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
-      await sleep(750);
-      const verified = await snapshotState(page);
-      if (["signed", "already_signed"].includes(verified.status)) {
-        return { ...verified, reason: `${verified.reason}；NexusPHP 图片验证码第 ${attempt} 次识别完成` };
-      }
+      // Do not revisit the attendance URL after an unconfirmed submission;
+      // some Nexus implementations perform the check-in on that GET itself.
       return {
         status: "needs_attention",
         reason: "NexusPHP 验证码已提交，但页面与签到页均未提供权威结果",
@@ -1284,7 +1350,8 @@ export async function tryU2Captcha(page, expectedOrigin, config, {solve=solveU2V
     text: element.value,
   })));
   const screenshot = await image.screenshot();
-  const solution = await solve(screenshot, options);
+  const transport = createU2ReferenceFetch(config);
+  const solution = await solve(screenshot, options, {fetchImpl:transport.fetchImpl});
   if (!solution.answer?.name) {
     return { status: "interactive_challenge", reason: `U2 本地视觉识别未得出可靠答案：${solution.reason}`,submissionAttempted:false };
   }
@@ -1333,10 +1400,12 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
   const u2Question=target.origin==='https://u2.dmhy.org'&&new URL(destination).pathname==='/showup.php';
   if(!u2Question&&/attendance|check[-_]?in|showup/i.test(new URL(destination).pathname))config.beforePtSubmit?.();
   const navigationResponse=await page.goto(destination, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
+  const migrated=await inspectSiteMigration(page,allowedOrigins);
+  if(migrated)return migrated;
   if(passiveVisit){
     const observed=await initialPtObservation(page,passivePolicy,target.origin,navigationResponse);
-    if(observed)return observed;
-    if(passivePolicy.dailyHeader)return {status:'visited',reason:'账户首页尚未确认今日完成，继续原有签到流程',submissionAttempted:false,url:passivePolicy.url};
+    if(observed&&!(observed.status==='not_signed'&&config.ptFallbackRecheck===true))return observed;
+    if(passivePolicy.dailyHeader&&!(observed?.status==='not_signed'&&config.ptFallbackRecheck===true))return {status:'visited',reason:'账户首页尚未确认今日完成，继续原有签到流程',submissionAttempted:false,url:passivePolicy.url};
   }
   if (useExtendedDiscovery) {
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
@@ -1412,7 +1481,10 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
   let state = await waitForManagedChallenge(page, config);
   state = await classifyManualAttention(page, state, activeOrigin, config);
   const hddolbyResult = await tryHddolbyPostRedirectVerification(page, activeOrigin, config);
-  if (hddolbyResult) return { ...hddolbyResult, url: safeLogUrl(page.url()) };
+  if(hddolbyResult?.continueCheckin===true){
+    state=await waitForManagedChallenge(page,config);
+    state=await classifyManualAttention(page,state,activeOrigin,config);
+  }else if(hddolbyResult)return {...hddolbyResult,url:safeLogUrl(page.url())};
   if (state.status !== "ready") return { ...state, url: safeLogUrl(page.url()) };
   await dismissBlockingModal(page, config);
 
@@ -1465,6 +1537,8 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
       await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
       activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
       activeOrigin = new URL(activeUrl).origin;
+      const discoveredU2Result = await tryU2Captcha(page, activeOrigin, config);
+      if (discoveredU2Result) return { ...discoveredU2Result, url: safeLogUrl(page.url()) };
       if (useNewApiCheckin) {
         const discoveredApiResult = await tryNewApiCheckin(page);
         if (discoveredApiResult && (discoveredApiResult.status !== "not_available" || isTerminalResult(discoveredApiResult))) {
@@ -1484,11 +1558,14 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
     if(beforeClick)return beforeClick;
     // OpenCD's first control opens its CAPTCHA dialog; the actual form
     // submission is guarded inside tryOpenCdCaptcha after OCR succeeds.
-    if(!knownPtDialogOpener(activeOrigin,action))config.beforePtSubmit?.();
-    await clickCandidate(page, action);
+    const clickResult=await clickCheckinCandidate(page,action,{allowedOrigins,beforeSubmit:config.beforePtSubmit,
+      opensDialog:knownPtDialogOpener(activeOrigin,action)});
+    if(clickResult)return {...clickResult,url:safeLogUrl(page.url())};
     await sleep(config.actionWaitMs);
     activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
     activeOrigin = new URL(activeUrl).origin;
+    const actionU2Result = await tryU2Captcha(page, activeOrigin, config);
+    if (actionU2Result) return { ...actionU2Result, action: action.text, url: safeLogUrl(page.url()) };
     state = await waitForManagedChallenge(page, config);
     state = await classifyManualAttention(page, state, activeOrigin, config);
     const confirmedBmapiStatus = await tryBmapiCheckinStatus(page, activeOrigin, "signed");
@@ -1516,11 +1593,13 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
     if (secondAction) {
       const beforeSecondClick=checkPt();
       if(beforeSecondClick)return beforeSecondClick;
-      config.beforePtSubmit?.();
-      await clickCandidate(page, secondAction);
+      const secondClick=await clickCheckinCandidate(page,secondAction,{allowedOrigins,beforeSubmit:config.beforePtSubmit});
+      if(secondClick)return {...secondClick,url:safeLogUrl(page.url())};
       await sleep(/转动|轉動/.test(secondAction.text) ? Math.max(config.actionWaitMs, 8000) : config.actionWaitMs);
       activeUrl = assertBookmarkNavigation(page.url(), allowedOrigins);
       activeOrigin = new URL(activeUrl).origin;
+      const secondU2Result = await tryU2Captcha(page, activeOrigin, config);
+      if (secondU2Result) return { ...secondU2Result, action: `${action.text} → ${secondAction.text}`, url: safeLogUrl(page.url()) };
       state = await waitForManagedChallenge(page, config);
       state = await classifyManualAttention(page, state, activeOrigin, config);
       if (["signed", "already_signed", "login_required", "needs_attention", "interactive_challenge", "managed_challenge_timeout", "deferred"].includes(state.status)) {
@@ -1582,6 +1661,11 @@ async function snapshotStateAfterNavigation(page) {
 
 export async function resultFromPageFailure(page, error, config) {
   const navigationError = String(error?.message ?? error);
+  if(checkinClickStarted(page))return {status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,retryable:false,
+    reason:'签到点击已开始但页面未返回可确认结果，先只读核验'};
+  const redirect=classifySiteMigration({url:page.url(),allowedOrigins:config.bookmarkAllowedOrigins??[]});
+  if(config.bookmarkAllowedOrigins&&redirect)return redirect;
+  if(config.bookmarkAllowedOrigins&&providerLoginPage(page.url()))return {status:'login_required',submissionAttempted:false,reason:'目标站点需要恢复 OAuth 登录会话'};
   if (/net::ERR_CERT_(?:DATE_INVALID|AUTHORITY_INVALID|COMMON_NAME_INVALID|REVOKED|WEAK_SIGNATURE_ALGORITHM)/i.test(navigationError)) {
     // Chromium rejects an expired or otherwise invalid site certificate before
     // any page state can be inspected. Treat this as an upstream transport
@@ -1680,6 +1764,12 @@ export async function launchAutomationContext(config) {
       ...(config.backgroundWindowMode === "visible" ? ["--window-position=80,80", "--window-size=1365,900"] : []),
     ],
   });
+  try {
+    await installOffscreenWindows(context, config);
+  } catch (error) {
+    await context.close().catch(() => {});
+    throw error;
+  }
   return context;
 }
 
@@ -1701,6 +1791,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
     : target.candidates;
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
     const page = await context.newPage();
+    await awaitOffscreenWindow(page);
     let attemptResult = null;
     try {
       for (const candidateUrl of candidates) {
@@ -1711,7 +1802,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
             config,
           );
         } catch (error) {
-          result = await resultFromPageFailure(page, error, config);
+          result = await resultFromPageFailure(page, error, {...config,bookmarkAllowedOrigins:target.allowedOrigins??[target.origin]});
         }
         if (result?.submissionAttempted !== false) allCandidatesUnsubmitted = false;
         candidateHistory.push(candidateHistoryEntry(candidateUrl, result, attempt + 1));
@@ -1721,7 +1812,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         // public/API URL may require login while another dedicated check-in
         // URL already has a valid session, so only a completed result should
         // prevent trying the remaining candidates.
-        if (isTerminalResult(result) || result?.submissionAttempted === true) break;
+        if (isTerminalResult(result) || result?.submissionAttempted === true || bookmarkReviewRequired(result)) break;
       }
 
       const effectiveResult = preferCandidateResult(lastResult, attemptResult);
@@ -1751,7 +1842,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
       }
     } catch (error) {
-      const result = await resultFromPageFailure(page, error, config);
+      const result = await resultFromPageFailure(page, error, {...config,bookmarkAllowedOrigins:target.allowedOrigins??[target.origin]});
       allCandidatesUnsubmitted = false;
       candidateHistory.push(candidateHistoryEntry(page.url(), result, attempt + 1));
       attemptResult = preferCandidateResult(attemptResult, result);

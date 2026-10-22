@@ -177,7 +177,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
 
   assert.deepEqual(publicRules.nativeWafPreflightUrls, [
     { url: "https://piggo.me/attendance.php", waitSeconds: 120, passiveOnly: true, trustAsSigned: false, automationUserDataDir: "data/sites/piggo/chrome-user-data" },
-    { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 90, passiveOnly: true, trustAsSigned: false, windowMode: "minimized" },
+    { url: "https://www.hdkyl.in/attendance.php", waitSeconds: 90, passiveOnly: true, trustAsSigned: false, windowMode: "offscreen" },
     { url: "https://ubits.club/attendance.php", waitSeconds: 120, passiveOnly: true },
   ]);
   assert.deepEqual(publicRules.nativeChallengePreflight.slice(0, 2), [
@@ -214,7 +214,7 @@ test("原生预热规则使用被动等待或离屏签到且最长检查两分�
   assert.match(inspector, /challengeSubmitAttempted\s*=\s*true/);
   assert.doesNotMatch(inspector, /lastCheckboxClickAt/);
   assert.match(preflightScript, /reloadOnChallengeAfterSeconds/);
-  assert.match(preflightScript, /\$windowMode\s*=\s*if\s*\(\$_\.windowMode\)[\s\S]*?'offscreen'/);
+  assert.match(preflightScript, /\$windowMode\s*=\s*Resolve-UnattendedNativeWindowMode/);
   assert.match(preflightScript, /windowMode\s*=\s*\$windowMode/);
   assert.match(preflightScript, /\$inspectionMode \(\[int\]\$item\.reloadOnChallengeAfterSeconds\)/);
   assert.match(inspector, /challengeReloaded/);
@@ -335,14 +335,17 @@ test("主 Chrome 回退严格限制白名单并只关闭任务创建的窗口", 
   assert.match(helper, /WindowPattern/);
   assert.doesNotMatch(helper, /Stop-Process|Kill\(/);
   assert.doesNotMatch(helper, /RemoteDebuggingPort|remote-debugging-port/);
-  assert.doesNotMatch(helper, /--window-position=-32000,-32000/);
-  assert.match(helper, /ShowWindow\(\$taskHandle, 7\)/);
-  assert.match(helper, /SetWindowPos\(\$handle, \[IntPtr\]::Zero, 80, 80, 1400, 900/);
+  assert.match(helper, /--window-position=\$\(\[CheckinWindowNative\]::OffscreenX\)/);
+  assert.match(helper, /RenderOffscreen\(\$taskHandle, \$previousForegroundWindow\)/);
+  assert.match(helper, /SetWindowPos\(window, IntPtr\.Zero, OffscreenX, OffscreenY, 1400, 900, 0x0054\)/);
+  assert.match(helper, /ShowWindow\(window, 0\)/);
+  assert.match(helper, /NormalPosition = new Rect \{ Left = 80, Top = 80/);
+  assert.match(helper, /GetForegroundWindow\(\) == window/);
+  assert.doesNotMatch(helper, /ShowWindow\(\$taskHandle, [47]\)/);
   assert.match(helper, /签到成功\|今日已签到\|今天已签到/);
   assert.match(helper, /\$topMatches\.Count -ne 1/);
   for (const forbidden of [
     /System\.Windows\.Forms/,
-    /SetForegroundWindow/,
     /keybd_event/,
     /SendKeys/,
     /Send-VirtualKey/,

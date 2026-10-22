@@ -1,4 +1,5 @@
 import {classifyEvidence,redactText} from './contracts.mjs';
+import {ptReadPolicies} from './checkin-contract.generated.mjs';
 
 const typedSources=new Set([
   'page_text','api','usage_log','new_api_checkin_calendar','new_api_checkin_status',
@@ -40,7 +41,16 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
   const success=['signed','already_signed'].includes(result?.status),
     openCdDailyControl=result?.origin==='https://open.cd'&&rawSource==='pt_page'&&
       raw.statusSignal==='open_cd_daily_record_entry'&&raw.pagePath==='/index.php'&&raw.businessDate===businessDate,
-    structuredLegacy=hasStructuredEvidence(raw,rawSource,businessDate)||openCdDailyControl,
+    // The executor validates this passive receipt against the configured
+    // Profile before importing it. Public receipts omit the site's numeric
+    // user ID, so preserve the validated single-account binding on readback.
+    boundPassivePt=rawSource==='pt_page'&&ptReadPolicies[result?.origin]?.dailyHeader===true&&
+      raw.statusSignal==='nexus_daily_header_signed'&&raw.pagePath==='/index.php'&&raw.businessDate===businessDate&&
+      raw.evidenceScope==='site_account_day'&&/^[a-f0-9]{64}$/.test(result?.profileBinding??'')&&
+      result?.operationMode==='safe_history_page'&&result?.readSafety==='reviewed_passive'&&
+      result?.submissionAttempted===false&&result?.reconciliation?.kind==='confirmed_external'&&
+      result?.reconciliation?.accountKey==='site-default'&&!expectedId,
+    structuredLegacy=hasStructuredEvidence(raw,rawSource,businessDate)||openCdDailyControl||boundPassivePt,
     legacySignedResponse=rawSource==='sign_in_response'&&raw.authoritative===true;
   const inferredAuthority=success&&raw.authoritative!==false&&(
     rawSource==='usage_log'&&structuredLegacy&&Number.isFinite(Number(raw.rewardAmount))&&Number(raw.rewardAmount)>0||

@@ -1,5 +1,5 @@
 import { isCredentialLoginRoute } from "./url-routes.mjs";
-import { classifyPageText } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
 
 const LOGGED_OUT_TEXT = /(?:未登录|尚未登录|请先登录|請先登入|必须登录后|必須登入後|登录后(?:才|方|可)|登入後(?:才|方|可)|not logged in|sign in to continue|login required|authentication required)/i;
 const CHALLENGE_TEXT = /(?:Just a moment|正在进行安全验证|Performing security verification|当前环境正在被调试|verify you are human)/i;
@@ -21,6 +21,9 @@ export function classifyCredentialVerification({
   statusCode,
   passwordVisible,
   bodyText,
+  hasOtpInput = false,
+  hasOtpForm = false,
+  hasRequiredOtpInput = false,
 }) {
   let location;
   try { location = new URL(finalUrl); }
@@ -32,6 +35,11 @@ export function classifyCredentialVerification({
   if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 400) {
     return { authenticated: false, failureCode: "verification_http_error" };
   }
+  const pageState = classifyPageText({ url: location.href, bodyText: text, hasPassword: passwordVisible,
+    hasOtpInput, hasOtpForm, hasRequiredOtpInput });
+  if (pageState.failureCode === 'two_factor_required') {
+    return { authenticated: false, failureCode: pageState.failureCode };
+  }
   if (isCredentialLoginRoute(location.href)) {
     return { authenticated: false, failureCode: "login_route" };
   }
@@ -39,7 +47,6 @@ export function classifyCredentialVerification({
   if (CHALLENGE_TEXT.test(text)) return { authenticated: false, failureCode: "challenge" };
   if (LOGGED_OUT_TEXT.test(text)) return { authenticated: false, failureCode: "logged_out_text" };
   if (text.trim().length < 20) return { authenticated: false, failureCode: "empty_page" };
-  const pageState = classifyPageText({ url: location.href, bodyText: text, hasPassword: false });
   const dailyCheckin = ["signed", "already_signed"].includes(pageState.status)
     ? {
       status: pageState.status,
@@ -69,6 +76,7 @@ export async function verifyCredentialSession(page, {
     statusCode: response?.status() ?? 0,
     passwordVisible,
     bodyText,
+    ...await readPageTwoFactorStructure(page),
   });
   return {
     ...evidence,

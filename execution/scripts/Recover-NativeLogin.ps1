@@ -40,8 +40,17 @@ try {
     $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
     $loginSucceeded = $false
     for ($loginAttempt = 1; $loginAttempt -le 3 -and -not $loginSucceeded; $loginAttempt++) {
-        & $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue
-        $loginSucceeded = $LASTEXITCODE -eq 0
+        $nativeLoginOutput = @(& $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue $profilePath)
+        $nativeLoginExitCode = $LASTEXITCODE
+        $nativeLoginOutput | Write-Output
+        $loginSucceeded = $nativeLoginExitCode -eq 0
+        if (-not $loginSucceeded -and $originValue -ceq 'https://hhanclub.net') {
+            $nativeLoginResult = $null
+            try { $nativeLoginResult = ($nativeLoginOutput -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop } catch {}
+            $factor = $nativeLoginResult.siteTwoFactorRecovery
+            $factorHandled = $null -ne $factor -and $factor.attempted -is [bool] -and $factor.accepted -is [bool]
+            if ($factorHandled -or [string]$nativeLoginResult.failureCode -ceq 'two_factor_required' -or $null -eq $nativeLoginResult) { break }
+        }
         if (-not $loginSucceeded -and $loginAttempt -lt 3) {
             # The account password store can take a few seconds to become
             # available after a cold native Chrome launch.  Reuse the same

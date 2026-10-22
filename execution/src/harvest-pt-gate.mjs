@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted,harvestTaskFailed} from './pt-coordination.mjs';
+import {canonicalPtOrigin,harvestSiteAssignment} from './pt-coordination.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
@@ -21,27 +21,37 @@ const exactOrigin=value=>{try{const u=new URL(value);return u.protocol==='https:
 
 export function harvestPtDecision({report,target,now=new Date()}={}){
   const wait=reason=>delay(now,reason);
+  const fallback=process.env.CHECKIN_PT_FALLBACK_RECHECK==='1';
   const businessDate=dayAt(now);
   if(report?.schemaVersion!==1||report.source!=='harvest'||report.businessDate!==businessDate||
     !Array.isArray(report.sites)||
     !Number.isFinite(Date.parse(report.generatedAt))||
     Date.parse(report.generatedAt)>now.getTime()+60_000||
-    now.getTime()-Date.parse(report.generatedAt)>2*60_000)return wait('Harvest 当日状态未刷新，PT 提交已暂缓');
+    now.getTime()-Date.parse(report.generatedAt)>2*60_000)return fallback?null:wait('Harvest 当日状态未刷新，PT 提交已暂缓');
   const assignment=harvestSiteAssignment(report,target.origin),site=assignment.site;
   if(assignment.owner==='ambiguous')return wait('Harvest 同站身份不明确，PT 提交已暂缓');
   if(site&&['signed','already_signed'].includes(site.status)){
     const at=Date.parse(site.observedAt);
     if(site.evidence?.authoritative!==true||!Number.isFinite(at)||dayAt(new Date(at))!==businessDate||
-      at>now.getTime()+60_000)return wait('Harvest 报告完成但缺少当日确认，PT 提交已暂缓');
+      at>now.getTime()+60_000)
+      return fallback?null:wait('Harvest 报告完成但缺少当日确认，PT 提交已暂缓');
     // Harvest's user ID must not be treated as this PT account's identity.
     // The separate PT status report holds the authoritative external receipt.
     return {status:'already_signed',reason:'Harvest 当日同站签到已完成，执行器只获取状态',
       submissionAttempted:false,evidence:{source:'harvest',authoritative:false,
         confirmedAt:new Date(at).toISOString(),businessDate}};
   }
+  const siteStatus=String(site?.status??'').trim().toLowerCase();
+  const external=site?.siteCondition==='site_maintenance'||
+    ['site_maintenance','maintenance','tls_certificate_invalid','tls_handshake_failed','unreachable','external','error'].includes(siteStatus)||
+    ['site_maintenance','tls_certificate_invalid','tls_handshake_failed','site_server_error','upstream_unavailable'].includes(String(site?.failureCode??''));
+  if(external)return {status:'deferred',retryCause:'upstream_unavailable',siteCondition:'site_maintenance',submissionAttempted:false,
+    reason:'Harvest 观察到站点外部条件，PT 复核延后'};
   if(assignment.owner==='unknown')return wait('Harvest 签到分工尚未确认，先只读核验');
   if(assignment.owner==='execution')return null;
-  if(!harvestTaskCompleted(report,businessDate,now)&&!harvestTaskFailed(report,businessDate,now))return wait('Harvest 当日任务未完成或正在重新执行，PT 提交已暂缓');
+  if(fallback)return null;
+  if(!report.taskCompletion||!['completed','failed'].includes(report.taskCompletion.status))
+    return wait('Harvest 当日任务未完成或正在重新执行，PT 提交已暂缓');
   return null;
 }
 
@@ -86,5 +96,5 @@ export function checkHarvestPtBeforeWrite(target,{root,now=new Date(),probe}={})
       return JSON.parse(child.stdout);
     })();
     return harvestPtDecision({report,target,now:probe?now:new Date()});
-  }catch{return delay(now,'Harvest 实时只读查询失败，PT 提交已暂缓');}
+  }catch{return process.env.CHECKIN_PT_FALLBACK_RECHECK==='1'?null:delay(now,'Harvest 实时只读查询失败，PT 提交已暂缓');}
 }

@@ -6,6 +6,7 @@
     { "title": "Example", "url": "https://example.com/account/check-in", "folderName": "已确认的目标文件夹名" }
   ],
   "disabledCheckinOrigins": [],
+  "disabledAccountKeys": [],
   "upstreamUnavailableMaxDailyAttempts": 3,
   "upstreamUnavailableLateRetryTime": "21:05",
   "upstreamFailureGroupMaxDailyAttempts": 3,

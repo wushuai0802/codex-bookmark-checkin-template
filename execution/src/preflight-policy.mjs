@@ -28,6 +28,8 @@ export function configuredNativeWafOrigins(config = {}) {
 }
 
 export function requiresTrustedDeviceInitialization(preflight) {
+  if(preflight?.failureCode==='submission_outcome_unknown'||['signed','already_signed'].includes(preflight?.status)||
+    ['submissionAttempted','clicked','checkinClicked','checkinClickAttempted'].some(key=>preflight?.[key]===true))return false;
   return preflight?.failureCode === "two_factor_required"
     || (preflight?.attentionKind === "trusted_device_initialization"
       && preflight?.retryableLoginRecovery === false);

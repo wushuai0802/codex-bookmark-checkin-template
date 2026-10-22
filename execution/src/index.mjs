@@ -21,7 +21,8 @@ import {
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { pendingOpenCdSubmission, pendingQuotaClaim } from "./quota-claim-guard.mjs";
-import {verifiedPtObservation,recoverablePtHomepage} from './pt-observation-receipt.mjs';
+import {verifiedPtObservation,recoverablePtHomepage,ptObservationBinding} from './pt-observation-receipt.mjs';
+import {reconcilePendingPtObservations,claimPtUnsignedRecovery} from './pt-submission-closure.mjs';
 import {observePendingVibeClaim} from './vibe-readonly.mjs';
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
@@ -43,10 +44,12 @@ import {
   compatiblePriorResult,
   planFingerprint,
   resultIdentity,
+  resultForPlanTarget,
+  preserveResultObservationTimes,
   resumePlanMatches,
 } from "./result-identity.mjs";
 import { closeSharedContexts } from "./shared-context-lifecycle.mjs";
-import { nativePreflightFailure } from "./native-preflight-result.mjs";
+import { nativePreflightFailure, nativeUnconfirmedSubmission } from "./native-preflight-result.mjs";
 import { currentNativePreflightResults, completedNativeRecovery } from "./native-preflight-receipt.mjs";
 import {
   configuredOAuthAccounts,
@@ -79,11 +82,15 @@ import { normalizeResultReasons } from "./report-reason.mjs";
 import { isTerminalResult, normalizeResultContract } from "./result-contract.mjs";
 import { nativeWafProfileForOrigin } from "./native-waf-profile.mjs";
 import {oauthRecoveryProvider} from './oauth-recovery-target.mjs';
+import {nativePtReadRoute,nativePtReadBinding} from './native-pt-read.mjs';
+import {ptExecutionBinding} from './pt-read-policy.mjs';
+import {isPtExecutionTarget} from './harvest-pt-gate.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
 const execFileAsync = promisify(execFile);
 const config = JSON.parse(await fs.readFile(path.join(rootDirectory, "config", "config.json"), "utf8"));
+if (process.env.CHECKIN_PT_FALLBACK_RECHECK === "1") config.ptFallbackRecheck = true;
 const integrationSelection = (() => {
   try { return JSON.parse(fsSync.readFileSync(path.join(rootDirectory, "data", "v2-integration.json"), "utf8")); }
   catch { return {}; }
@@ -177,6 +184,9 @@ function nativePreflightProfileBinding(target) {
   if ((target?.accountKey ?? "site-default") !== "site-default") return null;
   let origin;
   try { origin = new URL(target.origin).origin; } catch { return null; }
+  const nativeRoute=nativePtReadRoute(config,origin);
+  if(nativeRoute)return nativePtReadBinding(config,{...target,accountKey:'site-default'},
+    {root:rootDirectory,isolated:!nativeRoute.mainProfile}).profileBinding;
   const originOf = value => {
     try { return new URL(typeof value === "string" ? value : value?.url).origin; } catch { return null; }
   };
@@ -297,6 +307,7 @@ try {
       if (!resolvedResume.startsWith(`${resolvedLogs}${path.sep}`)) throw new Error("续跑报告必须位于本任务 logs 目录内");
       resumeBase = JSON.parse(await fs.readFile(resolvedResume, "utf8"));
       if (!Array.isArray(resumeBase?.results)) throw new Error("续跑报告缺少站点结果");
+      resumeBase = {...resumeBase, results:preserveResultObservationTimes(resumeBase.results, resumeBase.finishedAt)};
       if (!isCurrentLocalRunId(resumeBase.runId)) throw new Error("续跑报告不是今天生成的，拒绝复用旧签到结果");
       const exactResumeRequired = selectedOrigins !== null
         || selectedAccountKeys !== null
@@ -341,12 +352,12 @@ try {
     await cleanupOldLogs(logsRoot, config.logRetentionDays);
     const runLog = await createRunLog(logsRoot);
     const startedAt = new Date();
-    const siteState = await loadSiteState(siteStatePath);
+    let siteState = await loadSiteState(siteStatePath);
     let previousFinalReport = null;
     try {
       const latest = JSON.parse(await fs.readFile(path.join(logsRoot, "latest.json"), "utf8"));
       if (latest.runState === "final" && latest.isComplete === true && Array.isArray(latest.results)) {
-        previousFinalReport = latest;
+        previousFinalReport = {...latest, results:preserveResultObservationTimes(latest.results, latest.finishedAt)};
       }
     } catch { /* a persisted pending claim still blocks when latest is unreadable */ }
     const qaCache = await loadQaCache(qaCachePath);
@@ -361,8 +372,13 @@ try {
     const preferredTargets = applyPreferredCandidates(plan.targets, siteState)
       .map((target) => {
         const value = { ...target, ...accountMetadataForOrigin(target.origin, config) };
-        const profileBinding = nativePreflightProfileBinding(value);
-        return profileBinding ? { ...value, profileBinding } : value;
+        let profileBinding = nativePreflightProfileBinding(value);
+        let closureBindingError;
+        if(!profileBinding&&isPtExecutionTarget(value,{root:rootDirectory})){
+          try{profileBinding=ptExecutionBinding(config,rootDirectory,value).profileBinding;}
+          catch{closureBindingError='pt_profile_binding_unavailable';}
+        }
+        return {...value,...(profileBinding?{profileBinding}:{}),...(closureBindingError?{closureBindingError}:{})};
       });
     const plannedTargets = [...preferredTargets, ...supplementalAccounts];
     const nativeWafPreflight = await readFreshNativeWafPreflight(plannedTargets);
@@ -386,6 +402,7 @@ try {
           || isRetryEligible(prior)
           || completedNativeRecovery(target, prior, nativeWafPreflight)
           || recoverablePtHomepage(rootDirectory,target,prior,config,resumeBase.finishedAt)
+          || (target.origin==='https://open.cd'&&Number.isFinite(Date.parse(siteState.sites?.[target.origin]?.pendingOpenCdAt??'')))
           || terminalResultReenabled(prior, target, config)
           || (config.disabledCheckinOrigins ?? []).includes(target.origin)
           || (config.disabledAccountKeys ?? []).includes(String(target.accountKey ?? '').trim());
@@ -404,6 +421,8 @@ try {
     const selectedTargets = preferredTargets.filter((target) => selectedIdentities.has(resultIdentity(target)));
     const selectedSupplementalAccounts = supplementalAccounts
       .filter((account) => selectedIdentities.has(resultIdentity(account)));
+    ({state:siteState}=await reconcilePendingPtObservations({root:rootDirectory,targets:selectedTargets,
+      config,state:siteState,now:new Date(),lockLease}));
     const plannedTotal = plannedTargets.length;
     const priorLogicalResults = resumeBase
       ? preferredTargets.map((target) => compatiblePriorResult(target, resumeBase.results)).filter(Boolean)
@@ -533,6 +552,10 @@ try {
       }
       const result = await runWithRecentNotAvailableCache(target, siteState, config, async () => {
         const preflight = nativeWafPreflight.get(target.origin);
+        const submitted = nativeUnconfirmedSubmission(preflight);
+        if (nativeWafOrigins.has(target.origin) && submitted) return {
+          ...submitted,url:submitted.url||target.candidates?.[0]||target.origin,attempt:preflight.nativeGate===true?0:1,nativePreflight:true,
+        };
         if (preflight?.nativeGate === true) return { ...preflight, attempt: 0, nativePreflight: true };
         if (isTerminalResult(preflight)) {
           return { ...preflight, attempt: 1, nativePreflight: true };
@@ -559,19 +582,6 @@ try {
             attempt: 1,
             nativePreflight: true,
             inspectionStatus: "login_required",
-          };
-        }
-        if (nativeWafOrigins.has(target.origin) && preflight?.submissionAttempted === true) {
-          return {
-            status: "needs_attention",
-            reason: preflight.reason || "签到动作已提交，但无调试原生 Chrome 未取得权威结果",
-            failureCode: "submission_outcome_unknown",
-            submissionAttempted: true,
-            retryable: false,
-            url: preflight.url || target.candidates?.[0] || target.origin,
-            attempt: 1,
-            nativePreflight: true,
-            inspectionStatus: preflight.inspectionStatus || preflight.status,
           };
         }
         // A configured native-WAF target must never fall back to the CDP
@@ -656,9 +666,21 @@ try {
         const target = selectedTargets[index];
         console.log(`[${index + 1}/${selectedTargets.length}] ${target.origin}`);
         const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
-        let guardedQuotaClaim = verifiedPtObservation(rootDirectory,target,config)
+        let guardedQuotaClaim = target.closureBindingError
+          ? {status:'needs_attention',failureCode:'authoritative_status_unavailable',submissionAttempted:false,retryable:false,
+            reason:'OpenCD 当前执行 Profile 绑定不可用，已停止签到'}
+          : verifiedPtObservation(rootDirectory,target,config)
           ?? pendingQuotaClaim(target, siteState, previousFinalReport, config)
-          ?? pendingOpenCdSubmission(target, siteState, previousFinalReport);
+          ?? pendingOpenCdSubmission(target, siteState, previousFinalReport,
+            {now:new Date(),profileBinding:target.profileBinding});
+        let ptRecovery=null;
+        if(target.origin==='https://open.cd'&&guardedQuotaClaim?.failureCode==='submission_outcome_unknown'){
+          const claimed=await claimPtUnsignedRecovery({root:rootDirectory,target,config,state:siteState,
+            previousReport:previousFinalReport,now:new Date(),lockLease,profileBinding:target.profileBinding,
+            allowInactiveRecovery:true});
+          siteState=claimed.state;
+          if(claimed.allowed){guardedQuotaClaim=null;ptRecovery=claimed.recovery;}
+        }
         if(target.origin==='https://new.sharedchat.cc'&&guardedQuotaClaim?.failureCode==='submission_outcome_unknown'){
           await closeSharedContexts(sharedContexts,activeContexts);
           const readConfig=configForOAuthExecutionAccount(configForOAuthSession(config,oauthSessionProfiles,target.origin),rootDirectory,target.origin);
@@ -685,7 +707,10 @@ try {
           title: target.title,
           folderNames: target.folderNames,
           ...accountMetadataForOrigin(target.origin, config),
-          ...targetResult,
+          ...resultForPlanTarget(target,targetResult),
+          ...(target.profileBinding?{profileBinding:target.profileBinding}:{}),
+          ...(ptRecovery?{ptRecovery:{claimId:ptRecovery.claimId,businessDate:ptRecovery.businessDate,
+            profileBinding:ptRecovery.profileBinding,proofConfirmedAt:ptRecovery.proofConfirmedAt}}:{}),
         });
         await writeProgress("checkin");
     }
@@ -829,7 +854,7 @@ try {
               timeout: 180000,
               maxBuffer: 1024 * 1024,
             });
-            const outcome = loginHelperOutcome(helperOutput.stdout);
+            const outcome = loginHelperOutcome(helperOutput.stdout,'failed',helperOutput.stderr);
             attempts.push({ method: method.method, ...outcome });
             if (outcome.status === "invalid_credential") {
               terminalLoginFailure = "invalid_credential";
@@ -846,8 +871,8 @@ try {
             }
           } catch (error) {
             const fallback = error?.code === "ETIMEDOUT" ? "timeout" : "failed";
-            const outcome = loginHelperOutcome(`${error?.stdout ?? ""}\n${error?.stderr ?? ""}`, fallback);
-            const failedOutcome = outcome.status === "logged_in" ? loginHelperOutcome("", fallback) : outcome;
+            const outcome = loginHelperOutcome(error?.stdout??'', fallback,error?.stderr??'');
+            const failedOutcome = outcome.status === "logged_in" ? loginHelperOutcome("", fallback,error?.stderr??'') : outcome;
             attempts.push({
               method: method.method,
               ...failedOutcome,
@@ -956,9 +981,11 @@ try {
             origin: target.origin,
             title: target.title,
             folderNames: target.folderNames,
-            ...accountMetadataForOrigin(target.origin, config),
-            ...recoveredResult,
-            recovery: {
+             ...accountMetadataForOrigin(target.origin, config),
+             ...resultForPlanTarget(target,recoveredResult),
+             ...(initialResult.profileBinding?{profileBinding:initialResult.profileBinding}:target.profileBinding?{profileBinding:target.profileBinding}:{}),
+             ...(initialResult.ptRecovery?{ptRecovery:initialResult.ptRecovery}:{}),
+             recovery: {
               attempted: true,
               initialStatus: initialResult.recovery?.initialStatus ?? initialResult.status,
               history: [...priorHistory, {
@@ -1025,13 +1052,13 @@ try {
     const logicallyResolvedResults = normalizeResultReasons(
       applyLogicalCompletionReuse(assembledResults, config.logicalCheckinGroups),
     ).map(normalizeResultContract);
-    const finalResults = advanceAttemptedDeferredRetries(
+    const finalResults = preserveResultObservationTimes(advanceAttemptedDeferredRetries(
       logicallyResolvedResults.map((result) => currentOrigins.has(resultIdentity(result)) ? deferUnresolvedLogin(result, config, finishedAt) : result),
       currentOrigins,
       resumeBase?.results,
       config,
       finishedAt,
-    );
+    ), finishedAt.toISOString());
     const summary = Object.fromEntries(
       [...new Set(finalResults.map((result) => result.status))].map((status) => [status, finalResults.filter((result) => result.status === status).length])
     );

@@ -1,4 +1,4 @@
-import { classifyPageText } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
 import { safeLogUrl } from "./security.mjs";
 import { resultIdentity } from "./result-identity.mjs";
 
@@ -156,9 +156,11 @@ export async function probeSessionPage(context, probe, timeoutMs = 15000) {
         title: await page.title().catch(() => ""),
         bodyText: snapshot.bodyText,
         hasPassword: snapshot.hasPassword,
+        ...await readPageTwoFactorStructure(page),
       });
-      if (pageState.status === "login_required") {
-        return { key: probe.key, kind: probe.kind, status: "login_required", checkedUrl: safeLogUrl(page.url()) };
+      if (pageState.status === "login_required" || pageState.failureCode === 'two_factor_required') {
+        return { key: probe.key, kind: probe.kind, status: "login_required", checkedUrl: safeLogUrl(page.url()),
+          ...(pageState.failureCode === 'two_factor_required' ? { failureCode: pageState.failureCode } : {}) };
       }
       const storageIdentity = await page.evaluate(() => {
         for (const storage of [localStorage, sessionStorage]) {
@@ -225,15 +227,17 @@ export async function probeSessionPage(context, probe, timeoutMs = 15000) {
       title: await page.title(),
       bodyText: snapshot.bodyText,
       hasPassword: snapshot.hasPassword,
+      ...await readPageTwoFactorStructure(page),
     });
-    const status = state.status === "login_required"
+    const status = state.status === "login_required" || state.failureCode === 'two_factor_required'
       ? "login_required"
       : ["interactive_challenge", "managed_challenge"].includes(state.status)
         ? "challenge"
         : state.status === "deferred"
           ? "unavailable"
           : "authenticated";
-    return { key: probe.key, kind: probe.kind, status, checkedUrl: safeLogUrl(page.url()) };
+    return { key: probe.key, kind: probe.kind, status, checkedUrl: safeLogUrl(page.url()),
+      ...(state.failureCode === 'two_factor_required' ? { failureCode: state.failureCode } : {}) };
   } catch {
     return { key: probe.key, kind: probe.kind, status: "unavailable", checkedUrl: safeLogUrl(probe.probeUrl) };
   } finally {

@@ -87,6 +87,11 @@
           "type": "integer",
           "minimum": 0
         },
+        "monitorOnlyUnconfirmed": { "type": "integer", "minimum": 0 },
+        "guardedReadNeeded": { "type": "integer", "minimum": 0 },
+        "verificationPending": { "type": "integer", "minimum": 0 },
+        "externalBlocked": { "type": "integer", "minimum": 0 },
+        "notSignedConfirmed": { "type": "integer", "minimum": 0 },
         "status": {
           "type": "object",
           "additionalProperties": {
@@ -127,7 +132,9 @@
         "businessDate": { "type": "string", "format": "date" },
         "evidenceScope": { "const": "site_account_day" },
         "statusSignal": { "type": "string", "pattern": "^[a-z0-9_]{1,80}$" },
-        "profileBinding": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        "profileBinding": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "verification": { "const": "task_disabled" },
+        "readSafety": { "const": "reviewed_passive" }
       },
       "additionalProperties": false
     },
@@ -220,6 +227,8 @@
           "$ref": "#/$defs/evidence"
         },
         "failureCode": { "type": "string", "pattern": "^[a-z0-9_]{1,80}$" },
+        "underlyingFailureCode": { "type": "string", "pattern": "^[a-z0-9_]{1,80}$" },
+        "submissionAttempted": { "type": "boolean" },
         "retryCause": { "enum": ["upstream_unavailable", "rate_limit", "login_required", "harvest_waiting"] },
         "siteCondition": { "const": "site_maintenance" }
       },
@@ -269,6 +278,8 @@
           "maxLength": 80
         },
         "fallbackEnabled": { "type": "boolean" },
+        "evidenceState": { "enum": ["confirmed", "guarded_read_needed", "not_signed_confirmed", "verification_pending", "monitor_only_unconfirmed", "external_blocked", "unavailable", "disabled", "unconfirmed"] },
+        "reconciledFromUnknown": { "type": "boolean" },
         "recovery": {
           "type": "object",
           "required": ["code", "blockedSince", "summary"],

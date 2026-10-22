@@ -45,12 +45,15 @@ if ($ReadOnly) {
 }
 
 . (Join-Path $PSScriptRoot 'Native-PtGuard.ps1')
+. (Join-Path $PSScriptRoot 'Native-PtChromeProxy.ps1')
 $script:nativeLocalSubmissionAttempted = $false
 $script:checkinClickAttempted = $false
 try {
+    $nativePtProxyServer = Resolve-NativePtChromeProxy $config $originValue
     $nativeDecision = Initialize-NativePtGuard -Root $root -Origin $originValue -Url $Url -ProfilePath $profilePath -ReadOnly:$ReadOnly
 } catch {
-    $nativeDecision = Get-NativePtFailure -ErrorRecord $_
+    $nativeDecision = Get-NativePtChromeProxyFailure $_
+    if ($null -eq $nativeDecision) { $nativeDecision = Get-NativePtFailure -ErrorRecord $_ }
 }
 if ($null -ne $nativeDecision) {
     $nativeDecision | Complete-NativePtResult | ConvertTo-Json -Depth 8
@@ -157,17 +160,30 @@ function Test-EquivalentWafOrigin([uri]$ExpectedUri, [uri]$ActualUri) {
 }
 
 function Read-PageSnapshot {
-    $elements = @(Get-AllAutomationElements)
+    $allElements = @(Get-AllAutomationElements)
+    $elements = @()
+    foreach ($document in @($allElements | Where-Object { [string]$_.Current.ControlType.ProgrammaticName -eq 'ControlType.Document' })) {
+        try { $elements += @($document.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) } catch { }
+    }
+    $pageContentAvailable = $elements.Count -gt 1
+    if (-not $pageContentAvailable) { $elements = @() }
     $names = @()
+    $controlNames = @()
+    $linkNames = @()
     $documents = @()
     $nonAddressEdits = 0
+    $otpInputPresent = $false; $passwordInputPresent = $false; $scopedOtpInputPresent = $false
     foreach ($element in $elements) {
         try {
             $name = ([string]$element.Current.Name).Trim()
             $type = [string]$element.Current.ControlType.ProgrammaticName
-            if ($type -in @('ControlType.Text', 'ControlType.Hyperlink', 'ControlType.Button', 'ControlType.Document') -and $name) {
+            $reviewedPt = $originValue -in $CheckinNativePtHeaderOrigins
+            if (($type -in @('ControlType.Text', 'ControlType.Hyperlink', 'ControlType.Button', 'ControlType.Document') -or
+                ($reviewedPt -and $type -in @('ControlType.DataItem', 'ControlType.Custom', 'ControlType.ListItem'))) -and $name) {
                 $names += $name
             }
+            if ($type -in @('ControlType.Hyperlink', 'ControlType.Button') -and $name) { $controlNames += $name }
+            if ($type -eq 'ControlType.Hyperlink' -and $name) { $linkNames += $name }
             if ($type -eq 'ControlType.Document' -and $name -and $name -notmatch '^Chrome(?:\s|$)') {
                 $documents += $name
             }
@@ -176,40 +192,63 @@ function Read-PageSnapshot {
                 $editId = [string]$element.Current.AutomationId
                 if ($editName -notmatch '^(Address and search bar|地址栏|地址和搜索栏|網址列|網址和搜尋列)$' -and $editId -ne 'view_1022') {
                     $nonAddressEdits++
+                    if (Test-NativeOtpInputLabel $editName $editId) { $otpInputPresent = $true }
+                    elseif (Test-NativeScopedOtpInput $element) { $otpInputPresent = $true; $scopedOtpInputPresent = $true }
+                    if ($element.Current.IsPassword) { $passwordInputPresent = $true }
                 }
             }
         }
         catch { }
     }
     $bodyText = (@($names | Select-Object -Unique) -join ' ').Trim()
+    $browserFailureCode = Get-NativeBrowserFailure $bodyText
     $currentUri = Get-CurrentUri
     $leichiWaf = $bodyText -match '当前环境正在被调试|正在进行安全检测|安全检测能力由\s*雷池|如您是正常访问|客户端异常.*确认.*合法用户'
     $cloudflareWaf = $bodyText -match '请稍候[.…]*\s*[^ ]+\s*正在进行安全验证|本网站使用安全服务防护恶意自动程序|Just a moment|Performing security verification|Verify you are human|Cloudflare.*performance and security'
     $waf = $leichiWaf -or $cloudflareWaf
     $success = $bodyText -match '签到成功|今日已签到|今天已签到|今天已经签到过|已经签到|已签到'
-    $securityVerification = $bodyText -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b'
+    $security = Get-NativeSecurityState $bodyText $currentUri $otpInputPresent $passwordInputPresent $nonAddressEdits $scopedOtpInputPresent
+    $securityVerification = $security.securityVerification
     $loginRoute = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)'
     # Some NexusPHP sites canonicalize between www and the bare host after the
     # WAF challenge. Treat only that narrow host alias as equivalent; scheme,
     # port, and the remaining hostname must still match.
     $sameOrigin = $null -ne $currentUri -and (Test-EquivalentWafOrigin $originUri $currentUri)
     $attendanceEndpoint = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:attendance|check[-_]?in|showup)(?:\.php)?(?:/|$)'
-    [pscustomobject]@{
+    $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeDailyControl $originValue $_ })
+    $unsignedControls = @($linkNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeUnsignedControl $originValue $_ })
+    $normalizedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() })
+    $authenticated = @($normalizedControls | Where-Object { $_ -match '^(?:退出|退出登录|登出|注销|登出账号|登出帳號|Logout|Log out)$' }).Count -gt 0 -and
+        @($normalizedControls | Where-Object { $_ -match '^(?:控制面板|用户中心|用戶中心|个人资料|個人資料|设置|設定|Control Panel|User CP)$' }).Count -gt 0
+    $snapshot = [pscustomobject]@{
         currentUrl = if ($currentUri) { $currentUri.AbsoluteUri } else { '' }
+        pageContentAvailable = [bool]$pageContentAvailable
+        browserFailureCode = $browserFailureCode
         bodyText = $bodyText.Substring(0, [Math]::Min(2000, $bodyText.Length))
         successText = Get-NativeSuccessText $bodyText
+        successControl = if ($signedControls.Count -eq 1) { $signedControls[0] } else { '' }
+        signedControlCount = $signedControls.Count
+        unsignedControl = if ($unsignedControls.Count -eq 1) { $unsignedControls[0] } else { '' }
+        unsignedControlCount = $unsignedControls.Count
+        authenticated = [bool]$authenticated
         document = (@($documents | Select-Object -Unique) -join ' ').Substring(0, [Math]::Min(500, (@($documents | Select-Object -Unique) -join ' ').Length))
         waf = [bool]$waf
         leichiWaf = [bool]$leichiWaf
         cloudflareWaf = [bool]$cloudflareWaf
         success = [bool]$success
         securityVerification = [bool]$securityVerification
+        nativeSecurityDiagnostic = $security.nativeSecurityDiagnostic
         loginRoute = [bool]$loginRoute
         sameOrigin = [bool]$sameOrigin
         attendanceEndpoint = [bool]$attendanceEndpoint
-        siteBodyLoaded = (-not $waf -and $sameOrigin -and $bodyText.Length -gt 80)
+        siteBodyLoaded = (-not $browserFailureCode -and -not $waf -and $sameOrigin -and $bodyText.Length -gt 80)
         nonAddressEdits = $nonAddressEdits
     }
+    $snapshot.nativeSecurityDiagnostic | Add-Member -NotePropertyName sameOrigin -NotePropertyValue ([bool]$sameOrigin)
+    $snapshot.nativeSecurityDiagnostic | Add-Member -NotePropertyName pageContentAvailable -NotePropertyValue ([bool]$pageContentAvailable)
+    $snapshot.nativeSecurityDiagnostic | Add-Member -NotePropertyName waf -NotePropertyValue ([bool]$waf)
+    $snapshot | Add-Member -NotePropertyName audiencesDailyHeaderVerified -NotePropertyValue (Test-NativeAudiencesDailyHeader $snapshot $originValue)
+    return $snapshot
 }
 
 function Close-ProfileChrome {
@@ -366,11 +405,19 @@ try {
     $last = $null
     do {
         $last = Read-PageSnapshot
+        if ($last.browserFailureCode) {
+            [pscustomobject]@{status='unconfirmed';failureCode=$last.browserFailureCode;
+                reason='浏览器未能连接到站点，尚未读取账号或签到页面';inspection=$last;
+                submissionAttempted=[bool]$script:nativeLocalSubmissionAttempted} |
+                Complete-NativePtResult | ConvertTo-Json -Depth 8
+            exit 2
+        }
         if ($last.securityVerification) {
             [pscustomobject]@{
                 status = 'needs_attention'
                 failureCode = 'two_factor_required'
                 attentionKind = 'trusted_device_initialization'
+                nativeSecurityDiagnostic = $last.nativeSecurityDiagnostic
                 retryableLoginRecovery = $false
                 reason = '站点要求完成异地登录 2FA 验证'
                 confirmationClickAttempted = $confirmationClickAttempted
@@ -383,7 +430,8 @@ try {
             } | Complete-NativePtResult | ConvertTo-Json -Depth 8
             exit 2
         }
-        $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked -FormalVisit:(-not $ReadOnly -and [bool]$PerformCheckin -and [bool]$last.attendanceEndpoint)
+        $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $checkinClicked -FormalVisit:(-not $ReadOnly -and
+            [bool]$last.attendanceEndpoint -and ([bool]$PerformCheckin -or [bool]$script:nativeLocalSubmissionAttempted))
         if (Test-NativePageCompletion $last $originValue $pageEvidence) {
             [pscustomobject]@{
                 status = 'signed'
@@ -398,6 +446,15 @@ try {
                 submissionAttempted = [bool]$script:nativeLocalSubmissionAttempted
             } | Complete-NativePtResult | ConvertTo-Json -Depth 8
             exit 0
+        }
+        if ($ReadOnly) {
+            $unsignedEvidence = Get-ConfirmedNativeUnsignedEvidence $last $Url
+            if ($null -ne $unsignedEvidence) {
+                [pscustomobject]@{status='not_signed';reason='执行 Profile 已登录首页确认今日尚未签到';
+                    submissionAttempted=$false;clicked=$false;inspection=$last;evidence=$unsignedEvidence} |
+                    Complete-NativePtResult | ConvertTo-Json -Depth 8
+                exit 0
+            }
         }
         if (-not $PerformCheckin -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and -not $last.loginRoute) {
             [pscustomobject]@{

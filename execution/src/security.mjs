@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const SENSITIVE_QUERY_KEY = /(token|key|secret|auth|session|cookie|password|passwd|code)/i;
 
@@ -43,9 +44,26 @@ export async function ensurePrivateDirectory(directory) {
   if (process.platform !== "win32") await fs.chmod(directory, 0o700);
 }
 
-export async function atomicWriteJson(filePath, value) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const temporary = `${filePath}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  await fs.rename(temporary, filePath);
+export async function atomicWriteJson(filePath, value, {
+  io = fs, platform = process.platform,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
+} = {}) {
+  await io.mkdir(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await io.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    const delays = [50, 100, 200, 400, 800];
+    for (let attempt = 0; ; attempt++) {
+      try { await io.rename(temporary, filePath); return; }
+      catch (error) {
+        if (platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error.code) || attempt >= delays.length) throw error;
+        // Retry only the replacement of these already-written bytes. A state
+        // write failure must never replay the check-in that produced them.
+        await wait(delays[attempt]);
+      }
+    }
+  } catch (error) {
+    await io.unlink(temporary).catch(() => {});
+    throw error;
+  }
 }

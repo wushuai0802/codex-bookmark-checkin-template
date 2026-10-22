@@ -34,6 +34,15 @@ test('uncertain submissions and completed work cannot authorize a retry or login
   const snapshot=fixture();snapshot.tasks=[{origin:'https://api.example',accountRef:'acct_'+('a'.repeat(16)),accountKey:'named',observedStatus:'needs_attention',failureCode:'submission_outcome_unknown'}];
   assert.equal(operationTargets(snapshot)[0].actions.resume,false);
 });
+
+test('a PT address change disables stale login and retry actions while retaining read-only verification',()=>{
+  for(const failureCode of ['site_migration','bookmark_origin_changed']){
+    const snapshot=fixture();snapshot.tasks=[{origin,observedStatus:'login_required'}];
+    snapshot.ptStatus.sites[0].effective={status:'needs_attention',fresh:true,failureCode};
+    const actions=operationTargets(snapshot)[0].actions;
+    assert.deepEqual(actions,{verify:true,retry:false,login:false,resume:false});
+  }
+});
 test('expired requests and changed account plans never reach execution',t=>{
   const root=workspace(t),snapshot=fixture();enqueueOperation(root,{origin,action:'retry'},snapshot,now);
   assert.equal(claimOperation(root,new Date('2026-09-30T09:00:00Z')),null);
@@ -99,4 +108,33 @@ test('login and continuation retain the named account and refuse a changed unkno
   assert.equal(opened,1);assert.equal(runs,1);
   target.failureCode='submission_outcome_unknown';target.observedStatus='needs_attention';target.submissionAttempted=true;fs.writeFileSync(file,JSON.stringify(snapshot));
   await assert.rejects(()=>executeDashboardOperation(root,{...request,action:'resume'},{runEngine:async()=>{throw Error('must not run');}}),/not authorized/);
+});
+
+test('a fresh passive completion or logged-in state avoids a redundant PT login window without signing',async t=>{
+  const root=workspace(t),current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current),legacy=path.join(root,'legacy');
+  for(const dir of ['config','outputs','legacy/config','legacy/data'])fs.mkdirSync(path.join(root,dir),{recursive:true});
+  fs.writeFileSync(root+'/config/runtime.local.json',JSON.stringify({executionEngine:'v1',legacyRoot:legacy}));
+  fs.writeFileSync(legacy+'/config/config.json','{}');
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
+  fs.writeFileSync(legacy+'/data/v2-integration.json',JSON.stringify({harvestPtGate:{catalogFile}}));
+  const snapshot=fixture();snapshot.businessDate=day;snapshot.generatedAt=current.toISOString();snapshot.ptStatus.sites[0].effective.status='login_required';
+  fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot));
+  const request={id:'op_'+('d'.repeat(32)),origin,action:'login',businessDate:day,planHash:snapshot.planHash,expiresAt:new Date(current.getTime()+600000).toISOString()};
+  for(const status of ['already_signed','not_signed']){
+    let opened=0;
+    const result=await executeDashboardOperation(root,request,{openLogin:async()=>{opened++;},runSite:async options=>{
+      assert.equal(options.readOnly,true);
+      return {origin,status,accountKey:'site-default',profileBinding:'a'.repeat(64),businessDate:day,observedAt:current.toISOString(),
+        operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+        evidence:{source:'pt_page',authoritative:true,businessDate:day,confirmedAt:current.toISOString(),evidenceScope:'site_account_day',summary:'已读取当日状态'}};
+    },runEngine:async()=>{throw Error('login precheck cannot sign');}});
+    assert.equal(opened,0);assert.equal(result.status,'completed');assert.equal(result.resultStatus,status);
+  }
+  let opened=0;
+  const fallback=await executeDashboardOperation(root,request,{openLogin:async()=>{opened++;},runSite:async()=>{throw Error('network unavailable');}});
+  assert.equal(opened,1);assert.equal(fallback.status,'waiting_login');
+  const moved=await executeDashboardOperation(root,request,{openLogin:async()=>{throw Error('migration must not open login');},runSite:async()=>({
+    origin,status:'needs_attention',failureCode:'site_migration',accountKey:'site-default',profileBinding:'a'.repeat(64),businessDate:day,observedAt:current.toISOString(),
+    operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,evidence:{source:'none',authoritative:false,summary:'站点已迁移'}})});
+  assert.equal(moved.status,'blocked');assert.match(moved.message,/书签/);
 });

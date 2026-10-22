@@ -309,7 +309,7 @@ try {
       await page.locator('.nav-item[data-view="pt-status"]').click();
       assert.match(await page.locator('#pt-kpis').textContent(), /权威完成\s*1/);
       assert.match(await page.locator('#pt-kpis').textContent(), /执行成功待补证\s*1/);
-      assert.match(await page.locator('#pt-kpis').textContent(), /状态未知\s*1/);
+      assert.match(await page.locator('#pt-kpis').textContent(), /等待外部条件\s*1/);
       await page.locator('#pt-kpis .kpi').filter({hasText:'执行成功待补证'}).click();
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
       assert.match(await page.locator('#pt-status-body').textContent(),/reported\.example/);
@@ -317,11 +317,11 @@ try {
       await page.reload();
       await page.waitForFunction(() => document.querySelector('#pt-status-body').textContent.includes('reported.example'));
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
-      await page.locator('#pt-kpis .kpi').filter({hasText:'状态未知'}).click();
+      await page.locator('#pt-kpis .kpi').filter({hasText:'等待外部条件'}).click();
       assert.equal(await page.locator('#pt-status-body tr').count(),1);
       assert.ok((await page.locator('#pt-status-body').textContent()).includes(uncertainTask.origin));
-      assert.equal(await page.locator('#pt-status-body .status-chip.deferred').textContent(),'站点维护');
-      assert.match(await page.locator('#pt-status-body').textContent(),/等待站点恢复/);
+      assert.equal(await page.locator('#pt-status-body .status-chip.deferred').textContent(),'等待外部条件');
+      assert.match(await page.locator('#pt-status-body').textContent(),/等待外部条件恢复/);
       assert.equal(await page.locator('#pt-status-body .pt-recovery-note').getAttribute('open'),null);
       await page.locator('#pt-status-body .pt-recovery-note summary').click();
       assert.equal(await page.locator('#pt-status-body .pt-recovery-note p').isVisible(),true);

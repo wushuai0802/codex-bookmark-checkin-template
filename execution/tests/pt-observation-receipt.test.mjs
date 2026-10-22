@@ -88,7 +88,8 @@ test('bound passive PT receipt closes the executor quarantine without a browser 
   const unlabelled=verifiedPtObservation(root,{origin:target.origin},config,now);
   assert.equal(unlabelled.accountKey,undefined);
   assert.equal(resultIdentity({...unlabelled,origin:target.origin}),target.origin);
-  const state=updateSiteState({sites:{[target.origin]:{pendingOpenCdAt:'2026-09-30T01:00:00Z'}}},[{...target,...result}],now,config);
+  const state=updateSiteState({sites:{[target.origin]:{pendingOpenCdAt:'2026-09-30T01:00:00Z',
+    pendingOpenCdProfileBinding:binding.profileBinding,pendingOpenCdAccountKey:'site-default'}}},[{...target,...result}],now,config);
   assert.equal(state.sites[target.origin].pendingOpenCdAt,null);
   for(const invalid of [{...receipt,profileBinding:'b'.repeat(64)},{...receipt,accountKey:'secondary'},
     {...receipt,submissionAttempted:true},{...receipt,businessDate:'2026-09-29'},

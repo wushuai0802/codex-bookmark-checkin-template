@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {projectPtSiteResult} from './pt-site-execution.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
+import {appendPassivePtReconciliations} from './pt-reconciliation.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 
 export function currentPassivePtResult(value,now=new Date()){
@@ -29,7 +30,8 @@ export function currentPassivePtResult(value,now=new Date()){
   return result;
 }
 
-export function recordPtVerification(root,value,{now=new Date(),lockHeld=false}={}){
+export function recordPtVerification(root,value,{now=new Date(),lockHeld=false,attemptState=null}={}){
+  if(attemptState&&!lockHeld)throw Error('owned PT attempt state requires its fallback lock');
   const result=currentPassivePtResult(value,now),businessDate=dayAt(now);
   const lease=lockHeld?null:acquireExecutionLock(root,{name:'harvest-fallback.lock'});
   try{
@@ -48,6 +50,14 @@ export function recordPtVerification(root,value,{now=new Date(),lockHeld=false}=
     const temporary=file+'.'+process.pid+'.tmp';
     try{fs.writeFileSync(temporary,JSON.stringify(report,null,2),{mode:0o600});fs.renameSync(temporary,file);}
     finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
-    return {recorded:true,result};
+    const attemptFile=path.join(directory,`harvest-fallback-attempts-${businessDate}.json`);
+    const state=attemptState??(fs.existsSync(attemptFile)?JSON.parse(fs.readFileSync(attemptFile,'utf8')):null);
+    const reconciled=appendPassivePtReconciliations(state,result,now);
+    if(reconciled.length){
+      const attemptTemporary=attemptFile+'.'+process.pid+'.tmp';
+      try{fs.writeFileSync(attemptTemporary,JSON.stringify(state,null,2),{mode:0o600});fs.renameSync(attemptTemporary,attemptFile);}
+      finally{if(fs.existsSync(attemptTemporary))fs.unlinkSync(attemptTemporary);}
+    }
+    return {recorded:true,result,reconciledAttemptCount:reconciled.length};
   }finally{if(lease)releaseExecutionLock(lease);}
 }

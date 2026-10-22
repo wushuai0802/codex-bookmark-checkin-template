@@ -52,6 +52,7 @@
     "timeoutMs": 5000
   },
   "disabledCheckinOrigins": [],
+  "disabledAccountKeys": [],
   "loginAsCheckinOrigins": [],
   "newApiCaptchaRules": {},
   "newApiSignInRules": {},

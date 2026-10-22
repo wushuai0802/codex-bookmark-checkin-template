@@ -50,13 +50,18 @@ export function projectPtSiteResult(value,origin){
     ...(value.submissionAttempted===false?{submissionAttempted:false}:{})};
 }
 
-export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,spawnChild=spawn,timeoutMs=600_000}){
+export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,fallbackAttemptId,spawnChild=spawn,timeoutMs=600_000}){
   const script=path.join(legacyRoot,'scripts/Run-PtSupplement.mjs');
   if(!fs.existsSync(script))throw Error('PT site execution helper is missing');
   const command=[script,origin,catalogFile,catalogHash,...(readOnly?['--read-only']:verifyBeforeSubmit?['--verify-before-submit']:[])];
+  if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId))throw Error('invalid PT fallback attempt');
+  const childEnv={...process.env,CHECKIN_V2_ENGINE_ROOT:root,CHECKIN_V2_ENGINE_LEASE:lease.owner.nonce,
+    ...(verifyBeforeSubmit?{CHECKIN_PT_FALLBACK_RECHECK:'1'}:{})};
+  delete childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
+  if(!readOnly&&fallbackAttemptId!==undefined)childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID=fallbackAttemptId;
   const output=await new Promise((resolve,reject)=>{
     const child=spawnChild(process.execPath,command,{cwd:legacyRoot,windowsHide:true,shell:false,
-      stdio:['ignore','pipe','pipe'],env:{...process.env,CHECKIN_V2_ENGINE_ROOT:root,CHECKIN_V2_ENGINE_LEASE:lease.owner.nonce}});
+      stdio:['ignore','pipe','pipe'],env:childEnv});
     let stdout='',stderr='';
     const timer=setTimeout(()=>{child.kill();reject(Error('PT site execution timed out'));},timeoutMs);
     const append=(current,chunk)=>{
@@ -66,14 +71,25 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
     child.stdout.on('data',chunk=>{stdout=append(stdout,chunk.toString('utf8'));});
     child.stderr.on('data',chunk=>{stderr=append(stderr,chunk.toString('utf8'));});
     child.once('error',error=>{clearTimeout(timer);reject(error);});
-    child.once('exit',(code,signal)=>{clearTimeout(timer);if(code===3){reject(Error('V2 runner is already active'));return;}if(code===4){const e=Error('PT preflight prevented browser submission');e.code='PT_PREFLIGHT';reject(e);return;}if(signal||code!==0){reject(Error('PT site execution failed'));return;}resolve(stdout);});
+    child.once('exit',(code,signal)=>{clearTimeout(timer);if(code===3){reject(Error('V2 runner is already active'));return;}if(code===4){
+      const e=Error('PT preflight prevented browser submission');e.code='PT_PREFLIGHT';
+      try{const diagnostic=JSON.parse(stderr.trim().split(/\r?\n/).at(-1));
+        if(diagnostic.error==='PT_PREFLIGHT'&&['catalog_stale','catalog_hash_changed','registration_invalid','execution_plan_missing',
+          'execution_plan_changed','bookmark_source_changed','site_scope_changed','scope_unavailable'].includes(diagnostic.reason))
+          e.preflightReason=diagnostic.reason;
+      }catch{/* Never propagate a child's raw stderr or private page text. */}
+      reject(e);return;
+    }if(signal||code!==0){reject(Error('PT site execution failed'));return;}resolve(stdout);});
   });
   const line=output.trim().split(/\r?\n/).at(-1);
   return projectPtSiteResult(JSON.parse(line),origin);
 }
 
 export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catalogHash,
-  readOnly=false,verifyBeforeSubmit=false,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  readOnly=false,verifyBeforeSubmit=false,fallbackAttemptId,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId)){
+    const error=Error('PT fallback attempt is invalid');error.code='PT_PREFLIGHT';throw error;
+  }
   const absoluteCatalog=path.resolve(root,catalogFile??'');
   const actualHash=fs.existsSync(absoluteCatalog)?crypto.createHash('sha256').update(fs.readFileSync(absoluteCatalog)).digest('hex'):null;
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??'')||actualHash!==catalogHash.toLowerCase()){
@@ -86,7 +102,8 @@ export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catal
   if(integration.executionEngine!=='v1'||path.resolve(integration.v2ProjectRoot).toLowerCase()!==path.resolve(root).toLowerCase())throw Error('PT site gateway binding mismatch');
   const lease=acquire(root);
   try {
-    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit});
+    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit,
+      ...(fallbackAttemptId!==undefined?{fallbackAttemptId}:{})});
     return projectPtSiteResult(value,origin);
   } finally {release(lease);}
 }

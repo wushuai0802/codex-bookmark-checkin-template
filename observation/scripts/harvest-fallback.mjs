@@ -48,12 +48,17 @@ try{
   }
   const inputs=loadHarvestFallbackInputs({root,reportFile,catalogFile});
   const runtime=loadRuntimeConfig(root),fallbackOnlyEnabled=runtime.ptFallbackOnlyEnabled;
+  const onlyOrigin=value('--only-origin');
+  if(onlyOrigin){const selected=new URL(onlyOrigin);
+    if(selected.protocol!=='https:'||selected.origin!==onlyOrigin||selected.username||selected.password)
+      throw Error('fallback selection requires one exact HTTPS origin');}
   const {ptReadPolicy}=await import(pathToFileURL(path.join(runtime.legacyRoot,'src/pt-read-policy.mjs')));
   const readOnlyOrigins=inputs.catalog.sites.filter(site=>{
     try{return ptReadPolicy(site.origin,inputs.config).dailyHeader===true;}catch{return false;}
   }).map(site=>site.origin);
   const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount,readOnlyOrigins,
-    refreshHarvest:liveHarvestProbe(value('--harvest-ssh-target'),value('--harvest-db-path'))}):planHarvestFallback({...inputs,fallbackOnlyEnabled});
+    ...(onlyOrigin?{onlyOrigins:[onlyOrigin]}:{}),
+    refreshHarvest:liveHarvestProbe(value('--harvest-ssh-target'),value('--harvest-db-path'))}):planHarvestFallback({...inputs,fallbackOnlyEnabled,readOnlyOrigins});
   const newAttempts=execute?null:pendingHarvestFallbackAttempts(root,result,{readOnlyOrigins}).length;
   const assessmentStates=Object.fromEntries([...new Set(result.assessments.map(item=>item.state))].sort().map(state=>[state,result.assessments.filter(item=>item.state===state).length]));
   const blockedReasons=Object.fromEntries([...new Set(result.blocked.map(item=>item.reason))].sort().map(reason=>[reason,result.blocked.filter(item=>item.reason===reason).length]));

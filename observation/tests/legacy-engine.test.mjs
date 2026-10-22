@@ -32,14 +32,14 @@ test('engine child requires matching root nonce and live owner',t=>{
  assert.throws(()=>validateEngineLease({...f,legacyRoot:path.join(f.root,'other'),env}),/binding mismatch/);
  releaseExecutionLock(lease);
 });
-test('dry run holds V2 lock until V1 child exits and releases on spawn failure',async t=>{
+test('fallback recheck propagates a bounded V1 marker without changing normal engine args',async t=>{
  const f=fixture(t);let captured;
- const r=await runLegacyEngine({...f,mode:'dry-run',spawnChild:(shell,args,options)=>{
+ const r=await runLegacyEngine({...f,mode:'dry-run',fallbackRecheck:true,spawnChild:(shell,args,options)=>{
    captured=options;assert.ok(args.includes('-DryRun'));assert.equal(options.shell,false);assert.equal(options.windowsHide,true);
    assert.throws(()=>acquireExecutionLock(f.root),/already active/);validateEngineLease({...f,env:options.env});
    const child=new EventEmitter();queueMicrotask(()=>child.emit('exit',0));return child;
  }});
- assert.equal(r.exitCode,0);assert.equal(fs.existsSync(path.join(f.root,'data/v2-run.lock')),false);assert.ok(captured.env.CHECKIN_V2_ENGINE_LEASE);
+ assert.equal(r.exitCode,0);assert.equal(fs.existsSync(path.join(f.root,'data/v2-run.lock')),false);assert.ok(captured.env.CHECKIN_V2_ENGINE_LEASE);assert.equal(captured.env.CHECKIN_PT_FALLBACK_RECHECK,'1');
  await assert.rejects(()=>runLegacyEngine({...f,spawnChild:()=>{throw Error('spawn failed');}}),/spawn failed/);
  assert.equal(fs.existsSync(path.join(f.root,'data/v2-run.lock')),false);
 });

@@ -1,5 +1,5 @@
 import { overviewMetrics, overviewStatusCounts, projectOverviewSnapshot, dailySummaryTitle, statusGradient, statusColors } from './overview-model.mjs';
-import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, matchesLedger, ledgerPendingCount, ledgerCancelledCount, visibleLedgerChange, TASK_FILTERS, taskStatusLabel, taskStatusSummary, taskStatusCondition, externalTask } from './dashboard-model.mjs';
+import { identityTitle, identityCaption, siteTitle, matchesTask, matchesPt, ptStatusCategory, ptStatusCondition, ptEvidenceState, PT_EVIDENCE_LABELS, matchesLedger, ledgerPendingCount, ledgerCancelledCount, visibleLedgerChange, TASK_FILTERS, taskStatusLabel, taskStatusSummary, taskStatusCondition, externalTask } from './dashboard-model.mjs';
 import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion, MOTION } from './motion.mjs';
@@ -548,7 +548,9 @@ function renderPtStatus(data) {
     ['PT 站点', counts.sites ?? 0, `${counts.inLegacyPlan ?? 0} 日常 · ${counts.fallbackOnly ?? 0} 仅补签`, ''],
     ['权威完成', countCategory('confirmed'), '当日页面、接口或日志确认', 'confirmed'],
     ['执行成功待补证', countCategory('reported'), '已报成功，不等于漏签', 'reported'],
-    ['状态未知', reviewCount, '缺少可确认的今日结论', 'review']
+    ['待执行层核验', reviewCount, '只读优先，结果不明不重放', 'review'],
+    ['观测未确认', ptSites.filter(site=>ptEvidenceState(site)==='monitor_only_unconfirmed').length, '仅观测，无成功回执不判失败', 'monitor_unconfirmed'],
+    ['等待外部条件', ptSites.filter(site=>ptEvidenceState(site)==='external_blocked').length, '站点故障与本地问题分开', 'external']
   ];
   const kpis = $('#pt-kpis'); kpis.replaceChildren();
   for (const [label, value, foot, scope] of cards) {
@@ -564,7 +566,8 @@ function renderPtStatus(data) {
     const siteCell = el('td'); append(siteCell, el('span', 'origin', site.displayName || site.origin), el('span', 'subtext', site.origin));
     const effective = site.effective ?? {};
     const category = ptStatusCategory(site);
-    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? category === 'confirmed' ? '今日已确认，无需补签' : 'Harvest 未完成后复核' : '不在补签范围'));
+    const evidenceState=ptEvidenceState(site);
+    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? category === 'confirmed' ? '今日已确认，无需补签' : '已授权补签，先核验今日状态' : '不在补签范围'));
     const ptCondition=ptStatusCondition(site);
     const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown',{observedStatus:effective.status??'unknown',condition:ptCondition});
     const likelySigned = effective.status === 'unknown' && effective.fresh && !effective.authoritative &&
@@ -572,17 +575,19 @@ function renderPtStatus(data) {
     if (likelySigned) chip.textContent = '疑似已签到';
     else if(category==='reported')chip.textContent='执行成功';
     if (!effective.fresh) { chip.className = 'status-chip unknown stale'; chip.textContent = effective.observedAt ? `历史：${STATUS_LABELS[effective.status] ?? '未知'}` : '暂无今日记录'; }
+    if(category==='unknown'&&['monitor_only_unconfirmed','verification_pending','guarded_read_needed','external_blocked'].includes(evidenceState))chip.textContent=PT_EVIDENCE_LABELS[evidenceState];
     append(statusCell, chip, site.discrepancy ? el('span', 'subtext discrepancy-text', '来源状态不一致') : null);
-    const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', category==='reported' ? '执行回执待补证' : effective.authoritative ? '权威证据' : '状态待核验'));
+    const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', site.reconciledFromUnknown ? '当日只读证据已闭环，原记录保留' : category==='reported' ? '执行回执待补证' : effective.authoritative ? '权威证据' : evidenceState==='monitor_only_unconfirmed' ? '没有回执不代表签到失败' : '状态待核验'));
     const observedCell = el('td'); append(observedCell, el('span', null, formatTime(effective.observedAt)), el('span', 'subtext', effective.fresh ? '当日回执' : effective.observedAt ? '历史记录 · 非今日确认' : '暂无今日记录'));
     const actionCell = el('td');
-    if (!site.inLegacyPlan&&!site.fallbackEnabled) append(actionCell,el('span',null,'仅观测'),el('span','subtext','不在当前书签补签范围'));
-    else if (category==='confirmed') append(actionCell,
+    if (category==='confirmed') append(actionCell,
       el('span',null,effective.source==='harvest'?'Harvest 今日成功':effective.source==='execution-supplement'?'补签已确认':'执行账号今日完成'),
       effective.source==='harvest'?el('span','subtext','执行账号以自身回执为准'):null);
+    else if(evidenceState==='monitor_only_unconfirmed')append(actionCell,el('span',null,'保持观测'),el('span','subtext','未授权执行；未知不计为失败'));
     else if (category==='unavailable') append(actionCell,el('span',null,'功能未开放'));
     else if(category==='reported')append(actionCell,el('span',null,'补录当日证据'),el('span','subtext','不重复提交签到'));
-    else if(ptCondition==='site_maintenance')append(actionCell,el('span',null,'等待站点恢复'),el('span','subtext',effective.evidence?.summary));
+    else if(evidenceState==='verification_pending')append(actionCell,el('span',null,'只读复核提交结果'),el('span','subtext','保留原提交记录，不自动重放'));
+    else if(evidenceState==='external_blocked'||ptCondition==='site_maintenance')append(actionCell,el('span',null,'等待外部条件恢复'),el('span','subtext',effective.evidence?.summary));
     else append(actionCell,statusChip('needs_attention'),el('span','subtext',effective.evidence?.summary || site.recovery?.summary || '待执行层核验'));
     if(site.recovery?.summary){
       const note=el('details','subtext pt-recovery-note');

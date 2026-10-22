@@ -253,13 +253,18 @@ test('native status and post-submit captcha evidence require current-day signals
 
 test("跳转登录页时执行上下文销毁会恢复为登录失效", async () => {
   let snapshots = 0;
+  let structureReads = 0;
   const page = {
-    evaluate: async () => {
+    evaluate: async (_function, argument) => {
+      if(typeof argument!=='string'){
+        structureReads++;
+        return {hasOtpInput:false,hasOtpForm:false,hasRequiredOtpInput:false};
+      }
       snapshots += 1;
       if (snapshots === 1) throw new Error("Execution context was destroyed, most likely because of a navigation");
       return {
         bodyText: "登录 使用 LinuxDO 继续",
-        hasPassword: false,
+        passwordInputs: false,
         challengeSelectors: false,
       };
     },
@@ -271,6 +276,7 @@ test("跳转登录页时执行上下文销毁会恢复为登录失效", async ()
   assert.equal(result.status, "login_required");
   assert.equal(result.url, "https://example.test/login?expired=%5BVALUE%5D");
   assert.equal(snapshots, 2);
+  assert.equal(structureReads,1);
 });
 
 test("候选历史会脱敏网址和错误原因", () => {

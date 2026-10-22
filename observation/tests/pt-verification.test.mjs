@@ -7,12 +7,76 @@ import {currentPassivePtResult,recordPtVerification} from '../src/pt-verificatio
 import {loadPtRecoveryDiagnostics} from '../src/pt-reconciliation.mjs';
 import {buildPtStatus} from '../src/pt-status.mjs';
 import {publicPtStatus} from '../src/dashboard-server.mjs';
+import {acquireExecutionLock,releaseExecutionLock} from '../src/execution-lock.mjs';
 const now=new Date('2026-09-30T05:00:00Z'),origin='https://pt.example';
 const receipt=(status='not_signed')=>({origin,status,observedAt:now.toISOString(),businessDate:'2026-09-30',
   profileBinding:'a'.repeat(64),accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
   evidence:{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),businessDate:'2026-09-30',evidenceScope:'site_account_day',
     pagePath:'/index.php',statusSignal:'nexus_daily_header_unsigned',summary:'今日尚未签到'}});
 function workspace(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-verify-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(path.join(root,'outputs'));return root;}
+
+function pendingAttempt(changes={}){
+  return {attemptId:'current-attempt',origin,businessDate:'2026-09-30',accountKey:'site-default',
+    startedAt:'2026-09-30T01:00:00Z',state:'completed',v1Status:'needs_attention',
+    outcome:{origin,accountKey:'site-default',profileBinding:'a'.repeat(64),status:'needs_attention',failureCode:'two_factor_required'},...changes};
+}
+
+test('a current passive completion automatically closes matching old uncertainty without changing the original attempt',t=>{
+  const root=workspace(t),file=path.join(root,'outputs/harvest-fallback-attempts-2026-09-30.json');
+  const attempt=pendingAttempt();fs.writeFileSync(file,JSON.stringify({businessDate:'2026-09-30',attempts:[attempt]}));
+  assert.equal(loadPtRecoveryDiagnostics(root,'2026-09-30').sites[0].code,'unverified_prior_attempt');
+  const first=recordPtVerification(root,receipt('already_signed'),{now});
+  assert.equal(first.reconciledAttemptCount,1);
+  const saved=JSON.parse(fs.readFileSync(file));assert.deepEqual(saved.attempts,[attempt]);
+  assert.equal(saved.reconciliations[0].kind,'confirmed_external');
+  assert.equal(saved.reconciliations[0].profileBinding,'a'.repeat(64));
+  assert.equal(recordPtVerification(root,receipt('already_signed'),{now}).reconciledAttemptCount,0);
+  assert.equal(JSON.parse(fs.readFileSync(file)).reconciliations.length,1);
+  const recovery=loadPtRecoveryDiagnostics(root,'2026-09-30');assert.deepEqual(recovery.sites,[]);
+  const status=buildPtStatus({businessDate:'2026-09-30',generatedAt:now.toISOString(),monitorCatalog:{sites:[{origin}]},
+    planTargets:[{origin}],recoveryReport:recovery,fallbackReport:{source:'execution-supplement',businessDate:'2026-09-30',sites:[receipt('already_signed')]}});
+  assert.equal(status.sites[0].evidenceState,'confirmed');
+});
+
+test('passive closure updates the owned fallback state so its following save cannot overwrite reconciliation',t=>{
+  const root=workspace(t),file=path.join(root,'outputs/harvest-fallback-attempts-2026-09-30.json');
+  const state={businessDate:'2026-09-30',attempts:[pendingAttempt()],verifications:[]};
+  fs.writeFileSync(file,JSON.stringify(state));
+  assert.throws(()=>recordPtVerification(root,receipt('already_signed'),{now,attemptState:state}),/requires its fallback lock/);
+  const lock=acquireExecutionLock(root,{name:'harvest-fallback.lock'});
+  try{
+    assert.equal(recordPtVerification(root,receipt('already_signed'),{now,lockHeld:true,attemptState:state}).reconciledAttemptCount,1);
+    state.verifications.push({state:'completed'});fs.writeFileSync(file,JSON.stringify(state));
+    assert.equal(JSON.parse(fs.readFileSync(file)).reconciliations.length,1);
+  }finally{releaseExecutionLock(lock);}
+  assert.deepEqual(loadPtRecoveryDiagnostics(root,'2026-09-30').sites,[]);
+});
+
+test('completion cannot close another profile, account, day, origin, missing binding or an attempt after its receipt',t=>{
+  for(const changed of [
+    {outcome:{profileBinding:'b'.repeat(64)}},{outcome:{}},{accountKey:'other-account'},
+    {businessDate:'2026-09-29'},{origin:'https://other.example'},
+    {startedAt:'2026-09-30T05:00:01Z'},
+  ]){
+    const root=workspace(t),file=path.join(root,'outputs/harvest-fallback-attempts-2026-09-30.json');
+    const attempt=pendingAttempt(changed);fs.writeFileSync(file,JSON.stringify({businessDate:'2026-09-30',attempts:[attempt]}));
+    assert.equal(recordPtVerification(root,receipt('already_signed'),{now}).reconciledAttemptCount,0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file)).attempts,[attempt]);
+    assert.equal(JSON.parse(fs.readFileSync(file)).reconciliations,undefined);
+  }
+});
+
+test('negative observations and previous-day history remain unclosed by current-day positive receipts',t=>{
+  const root=workspace(t),file=path.join(root,'outputs/harvest-fallback-attempts-2026-09-30.json');
+  const older=path.join(root,'outputs/harvest-fallback-attempts-2026-09-29.json');
+  fs.writeFileSync(file,JSON.stringify({businessDate:'2026-09-30',attempts:[pendingAttempt()]}));
+  fs.writeFileSync(older,JSON.stringify({businessDate:'2026-09-29',attempts:[pendingAttempt({businessDate:'2026-09-29',startedAt:'2026-09-29T01:00:00Z'})]}));
+  const before=fs.readFileSync(older,'utf8');
+  assert.equal(recordPtVerification(root,receipt(),{now}).reconciledAttemptCount,0);
+  assert.equal(JSON.parse(fs.readFileSync(file)).reconciliations,undefined);
+  assert.equal(recordPtVerification(root,receipt('already_signed'),{now}).reconciledAttemptCount,1);
+  assert.equal(fs.readFileSync(older,'utf8'),before);
+});
 
 test('passive verification requires current account-day evidence and keeps completion when a later read fails',t=>{
   const root=workspace(t);

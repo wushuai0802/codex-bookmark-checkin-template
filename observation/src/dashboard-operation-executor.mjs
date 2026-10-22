@@ -10,6 +10,7 @@ import {recordPtVerification} from './pt-verification.mjs';
 import {runHarvestFallback} from './harvest-fallback.mjs';
 import {runLegacyEngine} from './legacy-engine.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
+import {ptReadPolicies} from './checkin-contract.generated.mjs';
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const dayAt=now=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
 
@@ -58,6 +59,37 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
     return {status:'blocked',message:'本次未满足补签条件；保留记录，先查看核验结果',resultStatus:outcome?.v1Status??'unknown'};
   }
   if(request.action==='login'){
+    // An explicit login request may have waited in the queue while the site
+    // finished signing. Reuse the existing bound passive gateway before
+    // opening another manual window; this step never performs a supplement.
+    if(target.pt&&accountKey==='site-default'&&ptReadPolicies[target.origin]){
+      let gate;try{gate=read(path.join(legacy,'data/v2-integration.json')).harvestPtGate;}catch{}
+      if(gate?.catalogFile&&fs.existsSync(gate.catalogFile)){
+        const bytes=fs.readFileSync(gate.catalogFile),catalogHash=crypto.createHash('sha256').update(bytes).digest('hex');
+        const temporary=path.join(root,'tmp','login-read-'+crypto.randomUUID()+'.json');
+        fs.mkdirSync(path.dirname(temporary),{recursive:true});fs.writeFileSync(temporary,bytes,{mode:0o600,flag:'wx'});
+        let result;
+        try{result=await runSite({root,origin:target.origin,catalogFile:temporary,catalogHash,readOnly:true});}
+        catch(error){
+          if(['PT_PREFLIGHT','PT_ACCOUNT_MISMATCH','PT_PROFILE_MISMATCH'].includes(error.code))throw error;
+          // A network/read-capability failure does not cancel the user's
+          // already-authorized manual login request. Its normal locks remain.
+        }
+        finally{try{fs.unlinkSync(temporary);}catch{/* Cleanup cannot replace the bound read result. */}}
+        if(result){
+          if(result.accountKey!==accountKey)throw Error('passive login check account changed');
+          recordPtVerification(root,result);
+          if([result.failureCode,result.underlyingFailureCode].some(code=>['site_migration','bookmark_origin_changed'].includes(code)))
+            return {status:'blocked',message:'站点地址已变更，请先核对书签后再继续登录',resultStatus:result.status};
+          if(['signed','already_signed'].includes(result.status)&&result.evidence?.authoritative===true)
+            return {status:'completed',message:'只读核验已确认今日签到完成，无需打开登录窗口',resultStatus:result.status};
+          if(result.status==='not_signed'&&result.evidence?.authoritative===true)
+            return {status:'completed',message:'账号已登录，今日尚未签到，可继续原有签到任务',resultStatus:'not_signed'};
+          if(result.siteCondition==='site_maintenance')
+            return {status:'blocked',message:'站点正在维护，恢复后只读核验',resultStatus:result.status};
+        }
+      }
+    }
     if(openLogin)await openLogin({root,legacy,target,config});
     else{
       const {ptExecutionBinding}=await import(pathToFileURL(path.join(legacy,'src/pt-read-policy.mjs')));

@@ -52,6 +52,8 @@ else {
     @(& $node (Join-Path $root 'src\attention-urls.mjs') | ConvertFrom-Json)
 }
 $origins = @($items | ForEach-Object { ([uri][string]$_.url).GetLeftPart([System.UriPartial]::Authority) } | Select-Object -Unique)
+. (Join-Path $PSScriptRoot 'Native-PtChromeProxy.ps1')
+$nativePtProxyServer = Resolve-NativePtChromeProxyForOrigins $config $origins
 $proxyOrigins = @($origins | Where-Object {
     $null -ne $config.nativeLoginProxyByOrigin -and
     $null -ne $config.nativeLoginProxyByOrigin.PSObject.Properties[$_]
@@ -75,6 +77,9 @@ if ($proxyOrigins.Count -gt 0) {
         $loginProxy.AbsolutePath -ne '/' -or $loginProxy.Query -or $loginProxy.Fragment) {
         throw '专用登录代理必须是无凭据的本机 SOCKS4 端口。'
     }
+}
+if ($nativePtProxyServer -and $loginProxy) {
+    throw '同一专用窗口不能同时配置 PT 路由与账号登录代理。'
 }
 $windowPosition = if ($Offscreen) { '-32000,-32000' } elseif ($Minimized) { '0,0' } else { '60,60' }
 $arguments = @(
@@ -105,10 +110,30 @@ $directHosts = @(
         Select-Object -Unique
 )
 if ($directHosts.Count -gt 0) {
+    if ($nativePtProxyServer) {
+        $routedHost = ([uri][string]$origins[0]).DnsSafeHost -replace '^www\.', ''
+        $directHosts = @($directHosts | Where-Object { $routedHost -notlike $_ -and ('www.' + $routedHost) -notlike $_ })
+    }
+}
+if ($directHosts.Count -gt 0) {
     $arguments += "--proxy-bypass-list=$($directHosts -join ';')"
 }
-if ($loginProxy) {
+if ($nativePtProxyServer) {
+    $arguments += "--proxy-server=$nativePtProxyServer"
+}
+elseif ($loginProxy) {
     $arguments += "--proxy-server=$($loginProxy.GetLeftPart([System.UriPartial]::Authority))"
+}
+elseif ($origins.Count -eq 1 -and $config.ptReadOnlyPolicies) {
+    $policy = $config.ptReadOnlyPolicies.PSObject.Properties[[string]$origins[0]].Value
+    if ($policy.nativeIsolatedChrome -eq $true -and $policy.nativeApiHeaderFallback -eq $true -and $policy.proxyServer) {
+        $ptProxy = [uri][string]$policy.proxyServer
+        if ($ptProxy.Scheme -ne 'http' -or $ptProxy.DnsSafeHost -notin @('127.0.0.1','localhost','::1') -or
+            -not $ptProxy.Port -or $ptProxy.UserInfo -or $ptProxy.AbsolutePath -ne '/' -or $ptProxy.Query -or $ptProxy.Fragment) {
+            throw '站点浏览器代理必须是无凭据的本机 HTTP 端口。'
+        }
+        $arguments += "--proxy-server=$($ptProxy.GetLeftPart([System.UriPartial]::Authority))"
+    }
 }
 if ($Minimized) {
     $arguments += '--start-minimized'

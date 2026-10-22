@@ -38,7 +38,9 @@ export const conditionLabels = Object.freeze({
   "rate_limit": "等待限频恢复",
   "harvest_waiting": "等待 Harvest",
   "submission_outcome_unknown": "结果待核验",
-  "entitlement_expired": "权益已失效"
+  "entitlement_expired": "权益已失效",
+  "site_migration": "站点已迁移",
+  "bookmark_origin_changed": "书签地址需核对"
 });
 export const taskStatuses = Object.freeze([
   "signed",
@@ -99,6 +101,9 @@ export const ptFailureMessages = Object.freeze({
   "harvest_waiting": "Harvest 当日任务尚未完成，暂缓补签",
   "network_error": "页面访问失败，尚未取得签到状态",
   "authoritative_status_unavailable": "页面尚无可确认的今日签到证据",
+  "checkin_control_unavailable": "签到控件尚未稳定可点击，未提交签到",
+  "site_migration": "站点明确提示已迁移，请核对并更新书签地址",
+  "bookmark_origin_changed": "页面已离开书签授权来源，请核对并更新书签地址",
   "accessibility_unavailable": "浏览器未提供可读网页正文，等待任务窗口重新核验",
   "site_server_error": "站点服务端返回故障，等待恢复后核验",
   "tls_certificate_invalid": "站点 TLS 证书无效，等待站点续证",
@@ -111,6 +116,27 @@ export const ptRetryCauses = Object.freeze([
   "harvest_waiting"
 ]);
 export const ptReadPolicies = Object.freeze({
+  "https://audiences.me": {
+    "selector": "#info_block",
+    "unsignedTexts": [
+      "签到",
+      "每日签到"
+    ]
+  },
+  "https://piggo.me": {
+    "selector": "#info_block",
+    "unsignedTexts": [
+      "签到",
+      "签到得魔力"
+    ]
+  },
+  "https://www.hdkyl.in": {
+    "selector": "#info_block",
+    "unsignedTexts": [
+      "签到",
+      "签到得魔力"
+    ]
+  },
   "https://p.t-baozi.cc": {
     "selector": "#info_block",
     "actionPath": "/attendance.php",
@@ -126,6 +152,15 @@ export const ptReadPolicies = Object.freeze({
     "selector": "#info_block",
     "actionPath": "/attendance.php",
     "unsignedText": "签到",
+    "unsignedTexts": [
+      "签到",
+      "待签到",
+      "点击签到"
+    ],
+    "unsignedContains": [
+      "点击签到",
+      "待签到"
+    ],
     "dailyHeader": true,
     "signedTexts": [
       "今日已完成已签到"
@@ -134,7 +169,11 @@ export const ptReadPolicies = Object.freeze({
   },
   "https://ourbits.club": {
     "selector": "#info_block",
-    "selfProfileHeader": true
+    "selfProfileHeader": true,
+    "unsignedTexts": [
+      "签到",
+      "签到得魔力"
+    ]
   },
   "https://cspt.top": {
     "selector": ".menu-base-info",

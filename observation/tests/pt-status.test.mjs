@@ -216,3 +216,119 @@ test('yesterday completion stays in source history but cannot count as today com
   assert.equal(after.counts.status.signed,1);
   assert.equal(after.sites[0].effective.source,'harvest');
 });
+
+test('Harvest unknown separates registered reads, monitor observations, pending submissions and external faults',()=>{
+  const businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
+  const origin='https://registered.example',pending='https://pending.example',monitor='https://monitor.example',maintenance='https://maintenance.example';
+  const result=buildPtStatus({businessDate,generatedAt,monitorCatalog:{sites:[origin,pending,monitor,maintenance].map(origin=>({origin}))},
+    planTargets:[origin,pending,maintenance].map(origin=>({origin,folderNames:['PT白名单']})),
+    tasks:[{taskId:'registered',origin,accountRef,observedStatus:'deferred'},
+      {taskId:'pending',origin:pending,accountRef,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}],
+    receipts:[{taskId:'pending',observedAt:'2026-10-09T01:00:00Z',evidence:{source:'none',authoritative:false}}],
+    externalReport:{source:'harvest',businessDate,taskCompletion:null,sites:[origin,pending,monitor].map(origin=>({origin,status:'unknown',observedAt:'2026-10-09T03:00:00Z'}))},
+    fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin:maintenance,status:'unknown',observedAt:'2026-10-09T03:00:00Z',siteCondition:'site_maintenance',evidence:{source:'pt_page',authoritative:false}}]}});
+  assert.equal(result.sites.find(site=>site.origin===origin).evidenceState,'guarded_read_needed');
+  assert.equal(result.sites.find(site=>site.origin===monitor).evidenceState,'monitor_only_unconfirmed');
+  assert.equal(result.sites.find(site=>site.origin===pending).evidenceState,'verification_pending');
+  assert.equal(result.sites.find(site=>site.origin===maintenance).evidenceState,'external_blocked');
+  assert.equal(result.counts.guardedReadNeeded,1);assert.equal(result.counts.monitorOnlyUnconfirmed,1);
+  assert.equal(result.counts.verificationPending,1);assert.equal(result.counts.externalBlocked,1);
+  assert.equal(result.sites.find(site=>site.origin===pending).observations.find(item=>item.source==='legacy-checkin').submissionAttempted,true);
+});
+
+test('authorized exact-catalog fallback-only sites retain guarded-read capability without a daily task',()=>{
+  const args={businessDate:'2026-10-09',generatedAt:'2026-10-09T04:00:00Z',monitorCatalog:{sites:[{origin:'https://monitor.example',entryUrl:'https://monitor.example/index.php'}]}};
+  assert.equal(buildPtStatus(args).sites[0].evidenceState,'monitor_only_unconfirmed');
+  const enabled=buildPtStatus({...args,fallbackOnlyEnabled:true});
+  assert.equal(enabled.sites[0].evidenceState,'guarded_read_needed');assert.equal(enabled.sites[0].fallbackEnabled,true);
+  assert.equal(enabled.counts.inLegacyPlan,0);assert.equal(enabled.counts.fallbackOnly,1);
+});
+
+test('same-kind authorities use execution priority while signed/unsigned conflicts remain visible and cannot supplement',()=>{
+  const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
+  const args={businessDate,generatedAt,monitorCatalog:{sites:[{origin}]},planTargets:[{origin,folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef,observedStatus:'signed'}],receipts:[{taskId,observedAt:'2026-10-09T02:00:00Z',evidence:{source:'page_text',authoritative:true}}],
+    externalReport:{source:'harvest',businessDate,sites:[{origin,status:'signed',observedAt:'2026-10-09T03:00:00Z',evidence:{source:'harvest',authoritative:true}}]}};
+  assert.equal(buildPtStatus(args).sites[0].effective.source,'legacy-checkin');
+  const stronger=buildPtStatus({...args,fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,status:'already_signed',observedAt:'2026-10-09T01:00:00Z',evidence:{source:'pt_page',authoritative:true}}]}}).sites[0];
+  assert.equal(stronger.effective.source,'execution-supplement');assert.equal(stronger.discrepancy,false);
+  args.externalReport.sites[0].status='not_signed';
+  const conflict=buildPtStatus(args).sites[0];assert.equal(conflict.effective.status,'not_signed');
+  assert.equal(conflict.discrepancy,true);assert.equal(conflict.supplementCandidate,false);assert.notEqual(conflict.evidenceState,'confirmed');
+});
+
+test('only a current same-account profile-bound passive completion marks an unknown submission reconciled',()=>{
+  const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z',profileBinding='a'.repeat(64);
+  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}],
+    receipts:[{taskId,observedAt:'2026-10-09T01:00:00Z',evidence:{source:'none',authoritative:false,profileBinding}}],
+    fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,accountRef,status:'already_signed',observedAt:'2026-10-09T03:00:00Z',submissionAttempted:false,readSafety:'reviewed_passive',
+      evidence:{source:'pt_page',authoritative:true,profileBinding,businessDate,evidenceScope:'site_account_day',confirmedAt:'2026-10-09T03:00:00Z'}}]}};
+  const confirmed=buildPtStatus(args).sites[0];assert.equal(confirmed.evidenceState,'confirmed');assert.equal(confirmed.reconciledFromUnknown,true);
+  assert.equal(confirmed.observations.find(item=>item.source==='legacy-checkin').failureCode,'submission_outcome_unknown');
+  for(const change of [{readSafety:'unknown'},{submissionAttempted:true},{evidence:{...args.fallbackReport.sites[0].evidence,profileBinding:'b'.repeat(64)}},
+    {evidence:{...args.fallbackReport.sites[0].evidence,evidenceScope:undefined}}]){
+    const site=buildPtStatus({...args,fallbackReport:{...args.fallbackReport,sites:[{...args.fallbackReport.sites[0],...change}]}}).sites[0];
+    assert.equal(site.reconciledFromUnknown,undefined);
+  }
+  const otherAccount=buildPtStatus({...args,fallbackReport:{...args.fallbackReport,sites:[{...args.fallbackReport.sites[0],accountRef:'acct_aaaaaaaaaaaaaaaa'}]}});
+  assert.equal(otherAccount.sites.some(site=>site.reconciledFromUnknown),false);
+  const nextDay=buildPtStatus({...args,businessDate:'2026-10-10',generatedAt:'2026-10-10T04:00:00Z',fallbackReport:null});
+  assert.equal(nextDay.sites[0].reconciledFromUnknown,undefined);assert.equal(nextDay.sites[0].evidenceState,'guarded_read_needed');
+});
+
+test('external classification requires a specific site condition rather than generic local network errors',()=>{
+  const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
+  for(const [failureCode,expected] of [['network_error','guarded_read_needed'],['tls_certificate_invalid','external_blocked'],['site_server_error','external_blocked']]){
+    const site=buildPtStatus({businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],tasks:[{taskId,origin,observedStatus:'deferred',failureCode,retryCause:'upstream_unavailable'}]}).sites[0];
+    assert.equal(site.evidenceState,expected);
+  }
+});
+
+test('explicit wrong-day evidence never becomes authoritative even with a today observation timestamp',()=>{
+  const report=buildPtStatus({businessDate:'2026-10-09',generatedAt:'2026-10-09T04:00:00Z',monitorCatalog:{sites:[{origin:'https://pt.example'}]},
+    externalReport:{source:'harvest',sites:[{origin:'https://pt.example',status:'signed',observedAt:'2026-10-09T03:00:00Z',evidence:{source:'harvest',authoritative:true,businessDate:'2026-10-08'}}]}});
+  assert.equal(report.sites[0].effective.authoritative,false);assert.notEqual(report.sites[0].evidenceState,'confirmed');
+  const oldReport=buildPtStatus({businessDate:'2026-10-09',generatedAt:'2026-10-09T04:00:00Z',monitorCatalog:{sites:[{origin:'https://pt.example'}]},
+    externalReport:{source:'harvest',businessDate:'2026-10-08',sites:[{origin:'https://pt.example',status:'signed',observedAt:'2026-10-09T03:00:00Z',evidence:{source:'harvest',authoritative:true}}]}});
+  assert.equal(oldReport.sites[0].effective.authoritative,false);assert.notEqual(oldReport.sites[0].evidenceState,'confirmed');
+});
+
+test('confirmed unsigned, unavailable and configuration-disabled evidence stay distinct from monitor-only uncertainty',()=>{
+  const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
+  for(const [status,verification,expected] of [['not_signed',undefined,'not_signed_confirmed'],['not_available',undefined,'unavailable'],['not_available','task_disabled','disabled']]){
+    const result=buildPtStatus({businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],tasks:[{taskId,origin,observedStatus:status}],
+      receipts:[{taskId,observedAt:'2026-10-09T03:00:00Z',evidence:{source:'pt_page',authoritative:true,businessDate,verification}}]});
+    assert.equal(result.sites[0].evidenceState,expected);
+    if(status==='not_signed')assert.equal(result.counts.notSignedConfirmed,1);
+  }
+});
+
+test('successful formal submissions are confirmed rather than mistaken for unknown submissions',()=>{
+  const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z',profileBinding='a'.repeat(64);
+  const evidence={source:'pt_page',authoritative:true,businessDate,confirmedAt:'2026-10-09T03:00:00Z',profileBinding};
+  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef,profileBinding,observedStatus:'signed',submissionAttempted:true}],
+    receipts:[{taskId,observedAt:'2026-10-09T03:00:00Z',evidence}]};
+  const formal=buildPtStatus(args).sites[0];assert.equal(formal.evidenceState,'confirmed');assert.equal(formal.reconciledFromUnknown,undefined);
+  const supplement=buildPtStatus({...args,tasks:[],receipts:[],fallbackReport:{source:'execution-supplement',businessDate,
+    sites:[{origin,accountRef,status:'signed',submissionAttempted:true,observedAt:'2026-10-09T03:00:00Z',evidence}]}}).sites.find(site=>site.accountRef===accountRef);
+  assert.equal(supplement.evidenceState,'confirmed');assert.equal(supplement.reconciledFromUnknown,undefined);
+});
+
+test('a precise same-profile formal outcome confirms completion without relabeling historical unknown audit as a passive reconciliation',()=>{
+  const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z',profileBinding='a'.repeat(64);
+  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],
+    tasks:[{taskId,origin,accountRef,profileBinding,observedStatus:'needs_attention',submissionAttempted:true,failureCode:'submission_outcome_unknown'}],
+    receipts:[{taskId,observedAt:'2026-10-09T01:00:00Z',evidence:{source:'none',authoritative:false}}],
+    fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,accountRef,status:'signed',submissionAttempted:true,observedAt:'2026-10-09T03:00:00Z',
+      evidence:{source:'pt_page',authoritative:true,businessDate,confirmedAt:'2026-10-09T03:00:00Z',profileBinding,evidenceScope:'site_account_day'}}]}};
+  const site=buildPtStatus(args).sites[0];assert.equal(site.evidenceState,'confirmed');assert.equal(site.reconciledFromUnknown,undefined);
+  assert.equal(site.observations.find(item=>item.source==='legacy-checkin').failureCode,'submission_outcome_unknown');
+  const mismatched=buildPtStatus({...args,fallbackReport:{...args.fallbackReport,sites:[{...args.fallbackReport.sites[0],evidence:{...args.fallbackReport.sites[0].evidence,profileBinding:'b'.repeat(64)}}]}}).sites[0];
+  assert.equal(mismatched.evidenceState,'verification_pending');assert.equal(mismatched.reconciledFromUnknown,undefined);
+  const noCurrentBinding=buildPtStatus({...args,tasks:args.tasks.map(task=>({...task,profileBinding:undefined})),
+    receipts:[{taskId,observedAt:'2026-10-09T01:00:00Z',evidence:{source:'none',authoritative:false,profileBinding}}],
+    fallbackReport:{...args.fallbackReport,sites:[{...args.fallbackReport.sites[0],evidence:{...args.fallbackReport.sites[0].evidence,profileBinding:'b'.repeat(64)}}]}}).sites[0];
+  assert.equal(noCurrentBinding.evidenceState,'verification_pending');
+});

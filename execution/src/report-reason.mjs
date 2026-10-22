@@ -13,7 +13,16 @@ export function normalizeResultReason(result) {
   if (result.status === "already_signed") {
     return { ...result, reason: "主 Chrome 页面明确确认今日已签到" };
   }
-  return { ...result, reason: "主 Chrome 回退返回了不可读结果，已保留状态并安排复核" };
+  if (result.nativeGate === true && result.failureCode === "submission_outcome_unknown") {
+    return { ...result, reason: "原生签到可能已提交，先只读核验，禁止自动重放" };
+  }
+  if (result.nativeReadback?.code === "invalid_json") {
+    return { ...result, reason: "主 Chrome 只读回读返回无效 JSON，已保留诊断并安排复核" };
+  }
+  if (result.failureCode === "submission_outcome_unknown" || result.submissionAttempted === true) {
+    return { ...result, reason: "主 Chrome 签到可能已提交，但尚无权威结果；先只读核验，禁止重放" };
+  }
+  return { ...result, reason: "主 Chrome 回退未取得权威终态，已保留诊断并安排只读复核" };
 }
 
 export function normalizeResultReasons(results) {

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readBookmarkPlanWithBackup } from "./bookmarks.mjs";
 import { launchAutomationContext } from "./browser.mjs";
 import { isTerminalResult } from "./result-contract.mjs";
+import {bookmarkReviewRequired} from './site-migration.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -16,12 +17,9 @@ const signalPath = path.join(rootDirectory, "tmp", "close-manual-session.signal"
 const statePath = path.join(rootDirectory, "tmp", "manual-session.json");
 
 await fs.rm(signalPath, { force: true });
-const visibleConfig = { ...config, headless: false, backgroundWindowMode: "visible" };
-const context = await launchAutomationContext(visibleConfig);
-
 const attentionOrigins = [...new Set(
   latest.results
-    .filter((result) => !isTerminalResult(result))
+    .filter((result) => !isTerminalResult(result)&&!bookmarkReviewRequired(result))
     .map((result) => result.origin)
 )];
 const preferredFirst = config.attentionPreferredOrigins ?? [];
@@ -30,6 +28,9 @@ const orderedOrigins = [
   ...attentionOrigins.filter((origin) => !preferredFirst.includes(origin)),
 ];
 const targets = orderedOrigins.map((origin) => plan.targets.find((target) => target.origin === origin)).filter(Boolean);
+if(!targets.length){console.log(JSON.stringify({status:'no_login_targets'}));process.exit(0);}
+const visibleConfig = { ...config, headless: false, backgroundWindowMode: "visible" };
+const context = await launchAutomationContext(visibleConfig);
 
 const pages = context.pages();
 for (let index = 0; index < targets.length; index += 1) {

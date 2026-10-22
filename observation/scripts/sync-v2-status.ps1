@@ -1,5 +1,5 @@
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$SshTarget='',[string]$NasDataDir='/volume3/docker/checkin-fabric-v2/nas-data')
+param([string]$SshTarget='',[string]$NasDataDir='/volume3/docker/checkin-fabric-v2/nas-data',[string]$NodePath='')
 $ErrorActionPreference='Stop';$root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Sync-Transport.ps1')
 
@@ -31,8 +31,10 @@ if(-not $SshTarget){
 if($SshTarget -notmatch '^[A-Za-z0-9_.-]+$'){throw 'SshTarget is invalid'}
 if($NasDataDir -notmatch '^/volume3/docker/[A-Za-z0-9_.-]+/nas-data$'){throw 'NasDataDir is invalid'}
 if(-not $PSCmdlet.ShouldProcess($NasDataDir,'Sync redacted V2 canary status')){Write-Output 'WhatIf: no status files changed.';return}
+$nodeCommand=if($NodePath){$NodePath}else{(Get-Command node.exe,node -ErrorAction SilentlyContinue|Select-Object -First 1).Source}
+if(-not $nodeCommand -or -not (Test-Path -LiteralPath $nodeCommand -PathType Leaf)){throw 'Node.js executable was not found'}
 $ssh=(Get-Command ssh.exe,ssh -ErrorAction SilentlyContinue|Select-Object -First 1).Source;if(-not $ssh){throw 'ssh is required'}
-& node (Join-Path $PSScriptRoot 'export-dashboard-status.mjs')
+& $nodeCommand (Join-Path $PSScriptRoot 'export-dashboard-status.mjs')
 if($LASTEXITCODE -ne 0){throw 'Dashboard status export failed'}
 $files=@(Get-Item -LiteralPath (Join-Path $root 'outputs\dashboard-runtime.json'))
 $nasProject=$NasDataDir.Substring(0,$NasDataDir.Length-'/nas-data'.Length)

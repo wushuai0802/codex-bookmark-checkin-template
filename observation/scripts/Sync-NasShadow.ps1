@@ -98,12 +98,12 @@ function Release-ShadowPublicationLease([object]$Lease) {
     catch { }
 }
 
-function Invoke-BoundedDashboardStatusSync([string]$StatusScript, [string]$SshTarget, [string]$NasDataDir, [string]$LogRoot) {
+function Invoke-BoundedDashboardStatusSync([string]$StatusScript, [string]$SshTarget, [string]$NasDataDir, [string]$LogRoot, [string]$NodePath) {
     $shell = Get-Command pwsh.exe,powershell.exe,pwsh,powershell -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $shell) { throw 'PowerShell executable for dashboard status sync was not found' }
     $arguments = @(
         '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$StatusScript,
-        '-SshTarget',$SshTarget,'-NasDataDir',$NasDataDir
+        '-SshTarget',$SshTarget,'-NasDataDir',$NasDataDir,'-NodePath',$NodePath
     )
     $result = Invoke-BoundedSyncProcess $shell.Source $arguments 'dashboard_status_sync' '' 90
     if ($result.exitCode -ne 0) { throw $result.failure }
@@ -291,7 +291,7 @@ try {
 
     if (-not $NoUpload) {
         Write-Log 'Starting dashboard status sync.'
-        Invoke-BoundedDashboardStatusSync (Join-Path $resolvedProjectRoot 'scripts\sync-v2-status.ps1') $SshTarget $NasDataDir $syncRoot
+        Invoke-BoundedDashboardStatusSync (Join-Path $resolvedProjectRoot 'scripts\sync-v2-status.ps1') $SshTarget $NasDataDir $syncRoot $NodePath
         Write-Log 'V2 dashboard receipts and ownership synchronized.'
         Write-Log 'Uploading redacted snapshot and ledger to NAS staging.'
         $archivePath = Join-Path $syncRoot 'nas-upload.tar.gz'
