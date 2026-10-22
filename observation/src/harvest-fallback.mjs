@@ -188,6 +188,14 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     if(prior?.status==='not_available'){
       block(origin,'v1_feature_or_task_unavailable');continue;
     }
+    const supplement=fallbackReport?.sites?.find(item=>originOf(item.origin)===origin&&
+      (item.accountKey??'site-default')===accountKey&&Number.isFinite(Date.parse(item.observedAt))&&
+      dayAt(new Date(item.observedAt))===businessDate&&Date.parse(item.observedAt)<=now.getTime()+60_000);
+    if([prior,supplement].some(item=>[item?.failureCode,item?.underlyingFailureCode]
+      .some(code=>['site_migration','bookmark_origin_changed'].includes(code)))){
+      blocked.push({origin,reason:'external_condition',external:true});
+      assessments.push({origin,state:'external_condition',reason:'external_condition'});continue;
+    }
     if(target&&prior?.failureCode==='submission_outcome_unknown'&&prior.submissionAttempted===true){
       // A registered PT whose write result is unknown must not be submitted
       // again by Harvest fallback. Queue a bounded passive review instead;

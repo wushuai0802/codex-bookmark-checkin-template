@@ -34,6 +34,15 @@ test('uncertain submissions and completed work cannot authorize a retry or login
   const snapshot=fixture();snapshot.tasks=[{origin:'https://api.example',accountRef:'acct_'+('a'.repeat(16)),accountKey:'named',observedStatus:'needs_attention',failureCode:'submission_outcome_unknown'}];
   assert.equal(operationTargets(snapshot)[0].actions.resume,false);
 });
+
+test('a PT address change disables stale login and retry actions while retaining read-only verification',()=>{
+  for(const failureCode of ['site_migration','bookmark_origin_changed']){
+    const snapshot=fixture();snapshot.tasks=[{origin,observedStatus:'login_required'}];
+    snapshot.ptStatus.sites[0].effective={status:'needs_attention',fresh:true,failureCode};
+    const actions=operationTargets(snapshot)[0].actions;
+    assert.deepEqual(actions,{verify:true,retry:false,login:false,resume:false});
+  }
+});
 test('expired requests and changed account plans never reach execution',t=>{
   const root=workspace(t),snapshot=fixture();enqueueOperation(root,{origin,action:'retry'},snapshot,now);
   assert.equal(claimOperation(root,new Date('2026-09-30T09:00:00Z')),null);
@@ -124,4 +133,8 @@ test('a fresh passive completion or logged-in state avoids a redundant PT login 
   let opened=0;
   const fallback=await executeDashboardOperation(root,request,{openLogin:async()=>{opened++;},runSite:async()=>{throw Error('network unavailable');}});
   assert.equal(opened,1);assert.equal(fallback.status,'waiting_login');
+  const moved=await executeDashboardOperation(root,request,{openLogin:async()=>{throw Error('migration must not open login');},runSite:async()=>({
+    origin,status:'needs_attention',failureCode:'site_migration',accountKey:'site-default',profileBinding:'a'.repeat(64),businessDate:day,observedAt:current.toISOString(),
+    operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,evidence:{source:'none',authoritative:false,summary:'站点已迁移'}})});
+  assert.equal(moved.status,'blocked');assert.match(moved.message,/书签/);
 });

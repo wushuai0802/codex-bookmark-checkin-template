@@ -79,6 +79,8 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
         if(result){
           if(result.accountKey!==accountKey)throw Error('passive login check account changed');
           recordPtVerification(root,result);
+          if([result.failureCode,result.underlyingFailureCode].some(code=>['site_migration','bookmark_origin_changed'].includes(code)))
+            return {status:'blocked',message:'站点地址已变更，请先核对书签后再继续登录',resultStatus:result.status};
           if(['signed','already_signed'].includes(result.status)&&result.evidence?.authoritative===true)
             return {status:'completed',message:'只读核验已确认今日签到完成，无需打开登录窗口',resultStatus:result.status};
           if(result.status==='not_signed'&&result.evidence?.authoritative===true)

@@ -122,7 +122,7 @@ export function ptEvidenceState(site) {
   if(states.includes(site?.evidenceState))return site.evidenceState;
   const e=site?.effective??{};
   if(e.fresh!==false&&['signed','already_signed'].includes(e.status)&&e.authoritative===true)return 'confirmed';
-  if(e.fresh!==false&&e.siteCondition==='site_maintenance')return 'external_blocked';
+  if(e.fresh!==false&&['site_maintenance','site_migration','bookmark_origin_changed'].includes(ptStatusCondition(site)))return 'external_blocked';
   if(e.failureCode==='submission_outcome_unknown'||['submission_outcome_unknown','unverified_prior_attempt'].includes(site?.recovery?.code))return 'verification_pending';
   if(!site?.inLegacyPlan&&!site?.fallbackEnabled)return 'monitor_only_unconfirmed';
   if(e.fresh!==false&&e.status==='not_available'&&e.authoritative===true)return 'unavailable';
@@ -139,6 +139,12 @@ export const PT_EVIDENCE_LABELS = Object.freeze({
 export function ptStatusCondition(site) {
   const effective=site?.effective??{};
   if(effective.fresh!==false&&effective.siteCondition==='site_maintenance')return 'site_maintenance';
+  if(effective.fresh!==false&&!['signed','already_signed','not_available'].includes(effective.status)){
+    const moved=[effective,...(site?.observations??[]).filter(item=>item.fresh===true)]
+      .flatMap(item=>[item.failureCode,item.underlyingFailureCode])
+      .find(code=>['site_migration','bookmark_origin_changed'].includes(code));
+    if(moved)return moved;
+  }
   if(effective.failureCode==='submission_outcome_unknown'||
     ['submission_outcome_unknown','unverified_prior_attempt'].includes(site?.recovery?.code))return 'submission_outcome_unknown';
   return effective.retryCause;

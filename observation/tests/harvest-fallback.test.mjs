@@ -16,6 +16,20 @@ const fixture=()=>({
   plan:{targets:[{origin:'https://ourbits.club',folderNames:['PT白名单']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
 });
 
+test('a current execution or supplement migration stops fallback without clearing its unknown submit',()=>{
+  const origin='https://ourbits.club';
+  for(const code of ['site_migration','bookmark_origin_changed'])for(const source of ['execution','supplement']){
+    const f=fixture(),diagnostic={origin,accountKey:'site-default',status:'needs_attention',failureCode:'submission_outcome_unknown',
+      underlyingFailureCode:code,submissionAttempted:true,observedAt:now.toISOString(),evidence:{authoritative:false}};
+    if(source==='execution')f.latest.results=[diagnostic];
+    else f.fallbackReport={source:'execution-supplement',businessDate:'2026-09-20',sites:[diagnostic]};
+    const result=planHarvestFallback(f);
+    assert.equal(result.eligible.some(item=>item.origin===origin),false);
+    assert.equal(result.blocked.find(item=>item.origin===origin).external,true);
+    assert.equal(diagnostic.failureCode,'submission_outcome_unknown');assert.equal(diagnostic.submissionAttempted,true);
+  }
+});
+
 test('registered PT sites are eligible while Harvest is pending; managed fallback-only sites remain gated',()=>{
   const f=fixture();f.harvest.checkinInventoryComplete=true;f.harvest.taskCompletion=null;
   f.harvest.sites=f.harvest.sites.filter(site=>site.origin!=='https://external.example')

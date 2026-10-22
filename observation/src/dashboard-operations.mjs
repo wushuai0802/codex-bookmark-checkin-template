@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {ptReadPolicies} from './checkin-contract.generated.mjs';
+import {ptStatusCondition} from '../public/dashboard-model.mjs';
 const dayAt=now=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
 const active=new Set(['queued','running']);
 const states=new Set(['queued','running','completed','waiting_login','blocked','expired','interrupted']);
@@ -21,9 +22,11 @@ export function operationTargets(snapshot){
   return result.map(target=>{
     const uncertain=target.failureCode==='submission_outcome_unknown'||target.evidence?.verification==='submission_outcome_unknown'||target.pt?.recovery?.code==='submission_outcome_unknown';
     const terminal=['signed','already_signed','not_available'].includes(target.status);
-    const login=!terminal&&!uncertain&&(target.status==='login_required'||['login_required','upstream_login_required','two_factor_required','managed_challenge'].includes(target.failureCode));
+    const bookmarkReview=[target.failureCode,target.underlyingFailureCode,ptStatusCondition(target.pt)]
+      .some(code=>['site_migration','bookmark_origin_changed'].includes(code));
+    const login=!terminal&&!uncertain&&!bookmarkReview&&(target.status==='login_required'||['login_required','upstream_login_required','two_factor_required','managed_challenge'].includes(target.failureCode));
     const policy=ptReadPolicies[target.origin];
-    const actions={verify:Boolean(target.pt&&policy),retry:Boolean(target.kind==='pt'&&policy?.dailyHeader&&target.pt?.fallbackEnabled&&
+    const actions={verify:Boolean(target.pt&&policy),retry:Boolean(!bookmarkReview&&target.kind==='pt'&&policy?.dailyHeader&&target.pt?.fallbackEnabled&&
       target.pt.effective?.status==='not_signed'&&target.pt.effective?.authoritative&&target.pt.effective?.fresh),
       login,resume:login&&target.kind==='regular'};
     return {...target,actions};

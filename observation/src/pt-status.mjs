@@ -215,7 +215,9 @@ export function classifyPtEvidenceState(site) {
       (!submitted||currentBoundCompletion(site,effective.evidence?.businessDate))) return 'confirmed';
   if(effective.fresh===true&&status==='not_available'&&effective.authoritative===true)
     return effective.evidence?.verification==='task_disabled'?'disabled':'unavailable';
+  const moved=item=>[item?.failureCode,item?.underlyingFailureCode].some(code=>['site_migration','bookmark_origin_changed'].includes(code));
   if (effective.fresh===true&&(effective.siteCondition === 'site_maintenance' || effective.retryCause==='rate_limit' ||
+      moved(effective)||site.observations?.some(item=>item.fresh&&moved(item))||
       ['tls_certificate_invalid', 'tls_handshake_failed', 'site_server_error'].includes(effective.failureCode))) {
     return 'external_blocked';
   }

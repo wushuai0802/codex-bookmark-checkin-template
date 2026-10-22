@@ -2,8 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildPtStatus} from '../src/pt-status.mjs';
 import {publicPtStatus} from '../src/dashboard-server.mjs';
+import {ptStatusCondition,matchesPt} from '../public/dashboard-model.mjs';
 
 const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
+
+test('PT address review remains external through public projection without erasing an uncertain submit',()=>{
+  const now=new Date(),businessDate=day(now),origin='https://pt.example',taskId='task';
+  for(const code of ['site_migration','bookmark_origin_changed']){
+    const report=buildPtStatus({businessDate,generatedAt:now.toISOString(),planTargets:[{origin,folderNames:['PT白名单']}],
+      tasks:[{taskId,origin,observedStatus:'needs_attention',submissionAttempted:true,failureCode:'submission_outcome_unknown',underlyingFailureCode:code}],
+      receipts:[{taskId,observedAt:now.toISOString(),evidence:{source:'none',authoritative:false}}]});
+    const site=publicPtStatus(report).sites[0];
+    assert.equal(site.evidenceState,'external_blocked');assert.equal(ptStatusCondition(site),code);
+    assert.equal(matchesPt(site,'external'),true);assert.equal(matchesPt(site,'review'),false);
+    assert.equal(site.observations[0].failureCode,'submission_outcome_unknown');
+    assert.equal(site.observations[0].submissionAttempted,true);assert.equal(site.effective.authoritative,false);
+  }
+});
 
 test('public PT projection preserves classification, pending diagnostics and null-time inventory audits',()=>{
   const now=new Date(),businessDate=day(now),generatedAt=now.toISOString(),origin='https://pt.example';
