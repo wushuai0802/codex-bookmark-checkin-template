@@ -7,9 +7,28 @@
 .daily-summary .eyebrow { color:#58759b; margin-bottom:9px; }
 .daily-summary h2 { margin:0; font-size:25px; line-height:1.4; font-weight:720; letter-spacing:-.025em; }
 .daily-note { margin:10px 0 0; color:#60718a; font-size:12px; line-height:1.75; }
-.daily-progress { flex:0 0 160px; text-align:right; }
-.daily-progress strong { display:block; font-size:39px; letter-spacing:-.06em; font-variant-numeric:tabular-nums; color:#234e75; }
-.daily-progress span { font-size:11px; color:#6b7e96; }
+.daily-progress { flex:0 0 104px; display:grid; justify-items:center; gap:6px; padding:0; border:0; background:transparent; color:var(--text); cursor:pointer; }
+.progress-ring { display:grid; place-items:center; position:relative; width:96px; height:96px; border-radius:50%; background:conic-gradient(var(--green,#168975) var(--verified-progress,0%),var(--track,#dce7f2) 0); }
+.progress-ring::before { content:''; position:absolute; inset:6px; border-radius:50%; background:var(--surface,#fff); }
+.progress-value { position:relative; display:flex; flex-wrap:wrap; align-items:baseline; justify-content:center; font-variant-numeric:tabular-nums; }
+.daily-progress strong { font-size:27px; line-height:1.2; letter-spacing:-.04em; color:var(--text); }
+.daily-progress .progress-denominator { font-size:14px; color:var(--muted); }
+.daily-progress small { flex-basis:100%; font-size:10px; line-height:1.5; color:var(--muted); }
+.daily-progress .progress-caption { font-size:11px; color:var(--accent-text,var(--blue)); }
+.daily-progress:hover .progress-caption { text-decoration:underline; }
+.formula-result { font-size:30px; font-variant-numeric:tabular-nums; font-weight:700; margin:24px 0 12px; }
+.formula-description { font-size:13px; line-height:1.8; color:var(--muted); }
+.formula-equation { padding:16px; border-radius:8px; background:var(--surface-2); font-variant-numeric:tabular-nums; line-height:1.8; overflow-wrap:anywhere; }
+.attention-tabs { display:flex; flex-wrap:wrap; gap:0 12px; border-bottom:1px solid var(--line); align-items:center; margin-bottom:4px; }
+.attention-tabs>button:not(.mark-all-read-btn) { min-height:42px; padding:7px 0; background:transparent; border:0; border-bottom:2px solid transparent; color:var(--muted); font-size:12px; cursor:pointer; }
+.attention-tabs>button.active { border-bottom-color:var(--blue); color:var(--accent-text,var(--blue)); font-weight:650; }
+.attention-tabs .mark-all-read-btn { margin:0 0 0 auto; min-height:40px; padding:6px 2px; border:0; background:transparent; color:var(--muted); font-size:11px; }
+.attention-identity { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 8px; min-width:0; }
+.attention-account { font-size:11px; color:var(--muted); }
+.attention-category { flex:0 0 auto; padding:3px 7px; border-radius:5px; font-size:11px; line-height:1.5; background:var(--neutral-bg); color:var(--muted); }
+.attention-category.urgent { color:var(--red); background:var(--bad-bg); }
+.attention-category.review { color:var(--amber); background:var(--warn-bg); }
+.ui-select-group { padding:10px 12px 5px; font-size:11px; font-weight:650; color:var(--muted); }
 .completion-track { height:5px; background:#dce7f2; border-radius:4px; margin-top:12px; overflow:hidden; }
 .completion-track i { display:block; height:100%; background:#168975; border-radius:4px; }
 .sync-strip { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 2px 22px; color:var(--muted); font-size:11px; line-height:1.5; }
@@ -51,8 +70,8 @@ button:focus-visible,input:focus-visible,select:focus-visible { outline:2px soli
   .daily-summary { padding:18px; gap:17px; align-items:flex-start; }
   .daily-summary h2 { font-size:20px; }
   .daily-progress { flex:0 0 78px; }
-  .daily-progress strong { font-size:30px; }
-  .daily-progress span { font-size:9px; }
+  .daily-progress strong { font-size:23px; }
+  .progress-ring { width:76px; height:76px; }
   .daily-note { font-size:11px; }
   .sync-strip { flex-wrap:wrap; margin-bottom:17px; }
   .sync-strip label { margin-left:auto; }
@@ -64,4 +83,4 @@ button:focus-visible,input:focus-visible,select:focus-visible { outline:2px soli
   .status-chart { gap:16px; }
   .health-content { grid-template-columns:1fr 1fr; }
 }
-@media(max-width:390px) { .daily-summary{display:block;} .daily-progress{display:none;} .attention-top{align-items:flex-start;} }
+@media(max-width:390px) { .attention-top{align-items:flex-start;} }

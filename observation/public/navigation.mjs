@@ -10,7 +10,7 @@ export function normalizeRoute(value = {}) {
     account: typeof value.account === 'string' ? value.account.slice(0, 300) : '',
     ptScope: ['monitor','plan','fresh','review','confirmed','reported','monitor_unconfirmed','verification','external'].includes(value.ptScope) ? value.ptScope : '',
     scrollY: Math.max(0, Number(value.scrollY) || 0),
-    overlay: value.overlay && ['menu','task','ledger','account'].includes(value.overlay.type)
+    overlay: value.overlay && ['menu','task','ledger','account','formula'].includes(value.overlay.type)
       ? { type: value.overlay.type, id: String(value.overlay.id ?? '').slice(0, 120) } : null };
 }
 
