@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { buildSnapshot } from '../src/bridge.mjs';
 import {createLedgerRecord} from '../src/shadow-ledger.mjs';
 import { createDashboardServer } from '../src/dashboard-server.mjs';
-import {overviewMetrics,projectOverviewSnapshot} from '../public/overview-model.mjs';
+import {overviewMetrics,overviewResultCounts,projectOverviewSnapshot} from '../public/overview-model.mjs';
 
 const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-ui-navigation-'));
 const dataDir = path.join(artifacts, 'synthetic-data');
@@ -63,7 +63,10 @@ const historical=Array.from({length:36},(_,index)=>{
 });
 fs.writeFileSync(path.join(dataDir,'shadow-ledger.jsonl'),
   [...historical,baseRecord].map(record=>JSON.stringify(record)).join('\n')+'\n');
-const { server } = createDashboardServer({ dataDir, adminToken: '', bind: '127.0.0.1', port: 0 });
+// This script deliberately reloads the overview many times across five
+// viewports; keep the production rate limit intact and lift it only here.
+const { server } = createDashboardServer({ dataDir, adminToken: '', bind: '127.0.0.1', port: 0,
+  rateLimitPerMinute: 10000 });
 let browser;
 try {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -146,10 +149,31 @@ try {
       await page.keyboard.press('Escape');
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
-      await page.locator('#kpi-grid .kpi').nth(1).click();
-      await page.waitForFunction(() => document.querySelector('.attention-tabs button.active')?.dataset.queue==='proof');
-      assert.equal(await page.locator('#attention-count').textContent(),'1 待补证');
-      assert.match(await page.locator('#attention-list').textContent(),/回执待补证/);
+      // Every overview number must navigate to the matching task list; only the
+      // in-page queue tabs switch the panel below the summary.
+      for (const [index,bucket] of [[0,'verified'],[1,'proof'],[2,'actionable'],[3,'excluded']]) {
+        await page.goto(base);
+        await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+        await page.locator('#kpi-grid .kpi').nth(index).click();
+        await page.waitForFunction(value => document.querySelector('#task-status').value===value
+          && document.querySelector('#view-tasks').classList.contains('active-view'), bucket);
+      }
+      const resultCounts=overviewResultCounts(overviewView);
+      await page.goto(base);
+      await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+      await page.locator('#daily-summary .summary-action').click();
+      const heroBucket=resultCounts.actionable?'actionable':resultCounts.proof?'proof':'';
+      await page.waitForFunction(value => document.querySelector('#task-status').value===value
+        && document.querySelector('#view-tasks').classList.contains('active-view'), heroBucket);
+      if(resultCounts.proof){
+        await page.goto(base);
+        await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+        await page.locator('#daily-summary .summary-proof').click();
+        await page.waitForFunction(() => document.querySelector('#task-status').value==='proof'
+          && document.querySelector('#view-tasks').classList.contains('active-view'));
+      }
+      await page.goto(base);
+      await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       await page.locator('#daily-summary .daily-progress').click();
       await page.locator('dialog.formula-drawer[open]').waitFor();
       assert.match(await page.locator('dialog.formula-drawer').textContent(),/核验率口径/);
@@ -157,6 +181,22 @@ try {
       await page.keyboard.press('Escape');
       await page.locator('dialog.formula-drawer[open]').waitFor({state:'hidden'});
       assert.equal(await page.locator('#daily-summary .daily-progress').evaluate(node=>node===document.activeElement),true);
+      // The queue row, status legend and plan link must keep drilling into tasks.
+      await page.goto(base);
+      await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+      await page.locator('#attention-list .attention-foot .link-button').first().click();
+      await page.waitForFunction(() => document.querySelector('#view-tasks').classList.contains('active-view'));
+      assert.ok((await page.locator('#task-status').inputValue()).length > 0);
+      await page.goto(base);
+      await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+      await page.locator('.overview-details').evaluate(node => { node.open = true; });
+      await page.locator('#status-chart .legend-row').first().click();
+      await page.waitForFunction(() => document.querySelector('#view-tasks').classList.contains('active-view'));
+      await page.goto(base);
+      await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
+      await page.locator('.overview-details').evaluate(node => { node.open = true; });
+      await page.locator('.plan-panel [data-view-link="tasks"]').click();
+      await page.waitForFunction(() => document.querySelector('#view-tasks').classList.contains('active-view'));
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       const openCalendar = async () => {
@@ -283,6 +323,11 @@ try {
       await page.waitForFunction(() => document.querySelector('.calendar-day')
         && document.querySelector('#view-calendar').classList.contains('active-view'));
       assert.equal(new URL(page.url()).hash, '#calendar');
+      // Reset local acknowledgement so this section can observe unread state.
+      await page.evaluate(() => { try { localStorage.removeItem('fabricReadNotices.v1'); } catch {} });
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector('.calendar-day')
+        && document.querySelector('#view-calendar').classList.contains('active-view'));
       // Repeated attention clicks must not hide every view or restart scrolling.
       await page.locator('#attention-jump').click();
       await page.waitForFunction(() => location.hash === '#overview');
@@ -333,6 +378,17 @@ try {
         await page.locator(`.nav-item[data-view="${view}"]`).click();
         await page.waitForFunction(view => document.querySelector(`#view-${view}`).classList.contains('active-view') && !document.querySelector('.main-content').inert, view);
       }
+      // Account cards expose a read-only overview drawer and a task drill-down.
+      if (mobile) await page.locator('#menu-toggle').click();
+      await page.locator('.nav-item[data-view="accounts"]').click();
+      await page.waitForFunction(() => document.querySelector('#view-accounts').classList.contains('active-view')
+        && !document.querySelector('.main-content').inert);
+      await page.locator('#accounts-grid .account-card .link-button').first().click();
+      await page.locator('dialog.account-drawer[open]').waitFor();
+      await page.keyboard.press('Escape');
+      await page.locator('dialog.account-drawer[open]').waitFor({state:'hidden'});
+      await page.locator('#accounts-grid .account-card .link-button').nth(1).click();
+      await page.waitForFunction(() => document.querySelector('#view-tasks').classList.contains('active-view'));
       if (mobile) await page.locator('#menu-toggle').click();
       await page.locator('.nav-item[data-view="pt-status"]').click();
       assert.match(await page.locator('#pt-kpis').textContent(), /权威完成\s*1/);

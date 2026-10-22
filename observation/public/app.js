@@ -271,17 +271,10 @@ function renderKpis(data) {
     card.dataset.kind=filter;
     card.classList.toggle('has-issues',['proof','actionable'].includes(filter)&&value>0);
     card.setAttribute('aria-label', `${label} ${value} 项，查看${filter==='proof'?'待补证回执':'任务'}`);
-    card.addEventListener('click', () => ['proof','actionable'].includes(filter)?showOverviewQueue(filter):openTasks({ status: filter }));
+    card.addEventListener('click', () => openTasks({ status: filter }));
     append(card, el('div', 'kpi-label', label), el('div', 'kpi-value', value), el('div', 'kpi-foot', foot));
     grid.append(card);
   }
-}
-
-function showOverviewQueue(filter){
-  state.attentionFilter=filter;
-  if(state.view!=='overview')navigation.navigate({view:'overview'});
-  if(state.data)renderAttention(state.data.tasks??[]);
-  requestAnimationFrame(()=>$('.attention-panel').scrollIntoView({block:'start',behavior:reducedMotion()?'instant':'smooth'}));
 }
 
 function openTasks({ status = '', query = '', account = '' } = {}) {
@@ -427,9 +420,9 @@ function renderDailySummary(data) {
   progress.addEventListener('click',()=>navigation.openOverlay('formula','overview'));
   const tasksButton = el('button', 'button primary summary-action', counts.actionable ? '查看待处理' : counts.proof?'查看待补证':'查看全部任务');
   tasksButton.type = 'button';
-  tasksButton.addEventListener('click', () => counts.actionable?showOverviewQueue('actionable'):counts.proof?showOverviewQueue('proof'):openTasks());
+  tasksButton.addEventListener('click', () => openTasks({status:counts.actionable?'actionable':counts.proof?'proof':''}));
   const footer=el('div','summary-footer');footer.append(tasksButton);
-  if(counts.proof&&counts.actionable){const proof=el('button','link-button summary-proof',`查看 ${counts.proof} 条待补证`);proof.type='button';proof.addEventListener('click',()=>showOverviewQueue('proof'));footer.append(proof);}
+  if(counts.proof){const proof=el('button','link-button summary-proof',`查看 ${counts.proof} 条待补证`);proof.type='button';proof.addEventListener('click',()=>openTasks({status:'proof'}));footer.append(proof);}
   copy.append(footer);
   append(node, copy, progress);
   $('#sync-age').textContent = `快照 ${formatTime(data?.generatedAt)} · ${freshness.snapshotLabel}`;
