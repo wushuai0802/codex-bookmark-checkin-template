@@ -95,6 +95,13 @@ body{margin:0;background:#eff5fd!important;font-family:system-ui;color:#19314b}.
     await page.locator('#daily-summary .button.primary').evaluate(node=>{node.textContent='测试操作';});
     await page.waitForFunction(()=>document.querySelector('#daily-summary .button.primary > .liquid-sheen'));
     await page.locator('#mobile-dock [data-view="tasks"]').click();
+    await page.waitForFunction(()=>!document.querySelector('#view-tasks .table-panel').classList.contains('liquid-surface'));
+    assert.equal(await page.locator('#view-tasks .table-panel > .liquid-sheen').count(),0,'transparent phone list wrappers must not draw a square glass frame');
+    await page.setViewportSize({width:1440,height:900});
+    await page.waitForFunction(()=>document.querySelector('#view-tasks .table-panel').classList.contains('liquid-surface'));
+    await page.setViewportSize({width:390,height:900});
+    await page.waitForFunction(()=>!document.querySelector('#view-tasks .table-panel').classList.contains('liquid-surface'));
+    assert.equal(await page.locator('#task-mobile-list .mobile-task-card').first().evaluate(node=>node.classList.contains('liquid-surface')),true);
     const filterBaseline=await page.locator('.liquid-definitions filter').count();
     for(let i=0;i<5;i++){
       await page.locator('.ui-select[data-for="task-status"] .ui-select-trigger').click();

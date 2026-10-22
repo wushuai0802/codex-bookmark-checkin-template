@@ -52,6 +52,8 @@ output to the inner border curve rather than relying only on backdrop-filter
 clipping. Engine-generated DOM changes do not trigger a fresh document scan,
 and unchanged filter attributes are not rewritten. View changes animate the
 title while glass backgrounds remain stable.
+Transparent phone list wrappers and nested layout-only panels do not receive
+their own glass surface; this avoids a square frame behind rounded cards.
 
 The overview heading always provides Mark all read across actionable,
 proof-pending and external-condition groups, including when the selected group

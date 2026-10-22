@@ -6,9 +6,11 @@ const NS='http://www.w3.org/2000/svg';
 const controls='.topbar,.sidebar .nav,.mobile-dock,.nav-indicator,.ui-select-menu,.button.primary,.icon-button';
 const cards='.daily-summary,.kpi,.panel,.site-card,.account-card,.mobile-task-card';
 const entries=new Map(),textures=new Map();
-let preferences=readAppearance(),serial=0,frame=0,defs,intersection,resize;
+let preferences=readAppearance(),serial=0,frame=0,defs,intersection,resize,mobileQuery;
 const svg=(tag,attributes={})=>{const node=document.createElementNS(NS,tag);for(const [key,value] of Object.entries(attributes))node.setAttribute(key,String(value));return node;};
 const isCard=node=>node.matches(cards)&&!node.matches(controls);
+const eligible=node=>!node.matches('.overview-detail-grid > .panel')
+  &&!(mobileQuery?.matches&&node.matches('#view-tasks .table-panel,#view-pt-status .table-panel'));
 const svgBackdrop=()=>CSS.supports('backdrop-filter','url("#fabric-liquid-probe")')&&/(?:Chrome|Chromium|Edg)\//.test(navigator.userAgent);
 
 function texture(width,height,radius,bevel){
@@ -57,7 +59,7 @@ function opticalFilter(width,height,image,rgb,haze,saturation){
 
 function update(entry){
   const {node}=entry;
-  if(!entry.visible||!node.isConnected||preferences.mode==='none'||(isCard(node)&&!preferences.cards)){
+  if(!entry.visible||!node.isConnected||!eligible(node)||preferences.mode==='none'||(isCard(node)&&!preferences.cards)){
     dropFilter(entry);return;
   }
   const width=Math.round(node.clientWidth),height=Math.round(node.clientHeight);
@@ -94,7 +96,7 @@ function scan(){
   frame=requestAnimationFrame(()=>{
     const enabled=preferences.mode!=='none'&&document.documentElement.dataset.workspace==='cpam';
     for(const [node,entry] of entries){
-      if(!node.isConnected||!enabled||(isCard(node)&&!preferences.cards)){
+      if(!node.isConnected||!eligible(node)||!enabled||(isCard(node)&&!preferences.cards)){
         intersection.unobserve(node);resize.unobserve(node);dropFilter(entry);entry.sheen.remove();
         node.style.removeProperty('--liquid-mask');node.style.removeProperty('--liquid-radius');
         node.classList.remove('liquid-surface');entries.delete(node);
@@ -105,7 +107,7 @@ function scan(){
     }
     if(!enabled)return;
     for(const node of document.querySelectorAll(preferences.cards?controls+','+cards:controls)){
-      if(entries.has(node))continue;
+      if(entries.has(node)||!eligible(node))continue;
       const sheen=document.createElement('span');sheen.className='liquid-sheen';sheen.setAttribute('aria-hidden','true');
       node.classList.add('liquid-surface');node.prepend(sheen);
       const entry={node,sheen,visible:false,filter:null,geometry:''};entries.set(node,entry);
@@ -118,6 +120,7 @@ function scan(){
 export function installLiquidGlass(){
   const root=svg('svg',{'aria-hidden':'true',focusable:'false',class:'liquid-definitions'});
   defs=svg('defs');root.append(defs);document.body.append(root);
+  mobileQuery=matchMedia('(max-width:700px)');mobileQuery.addEventListener('change',scan);
   intersection=new IntersectionObserver(records=>{for(const record of records){const entry=entries.get(record.target);if(entry){entry.visible=record.isIntersecting;update(entry);}}},{rootMargin:'80px'});
   resize=new ResizeObserver(records=>{for(const record of records){const entry=entries.get(record.target);if(entry)update(entry);}});
   const observer=new MutationObserver(records=>{
