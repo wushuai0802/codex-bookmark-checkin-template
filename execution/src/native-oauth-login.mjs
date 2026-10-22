@@ -16,6 +16,8 @@ import { safeErrorMessage, safeLogUrl } from "./security.mjs";
 import { isLoginOrSignInRoute } from "./url-routes.mjs";
 import { resumeSingleGoogleAccount } from "./google-session-choice.mjs";
 import { checkNewApiAccount, oauthAccountCheckinMode } from "./new-api-account-checkin.mjs";
+import { awaitOffscreenWindow, installOffscreenWindows } from "./offscreen-windows.mjs";
+import {createOAuthTrace} from './oauth-flow-diagnostics.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -56,6 +58,8 @@ const rule = checkinMode === "new_api"
 if (!rule?.nativeBrowser) throw new Error("目标站点没有启用原生浏览器 OAuth 恢复");
 const configuredExpectedAccountId = expectedAccountId || rule.expectedAccountId;
 if (!configuredExpectedAccountId) throw new Error("原生 OAuth 恢复必须配置预期账号 ID");
+const flowTrace=createOAuthTrace({root:rootDirectory,origin,provider,flow:'native'});
+flowTrace.emit('browser_start');
 
 const CONNECT_LINUX_DO_ORIGIN = "https://connect.linux.do";
 const CONNECT_AUTHORIZATION_LABELS = Object.freeze([
@@ -284,6 +288,7 @@ async function startLinuxDoUpstreamLogin(page, loginProvider) {
     page.waitForTimeout(7000).then(() => null),
   ]);
   if (!activePage) return null;
+  await awaitOffscreenWindow(activePage);
   await activePage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
   await activePage.waitForTimeout(1000);
   return activePage;
@@ -365,6 +370,8 @@ try {
   browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
   const context = browser.contexts()[0];
   if (!context) throw new Error("原生 Chrome 没有可用浏览器上下文");
+  await installOffscreenWindows(context, { headless: false, backgroundWindowMode: "offscreen" });
+  flowTrace.emit('browser_ready');
   // A session cookie can complete the callback server-side. Callback evidence
   // is optional, so this helper never reads or prints the callback body.
 
@@ -387,7 +394,9 @@ try {
     timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
   });
   await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+  flowTrace.emit('identity_verify');
   const existingAccountId = (await readOAuthAccountIdentity(page, origin))?.accountId ?? null;
+  flowTrace.emit('result_verify');
   const existingIdentityMatches = existingAccountId === configuredExpectedAccountId;
   const existingDailyCheckin = checkinMode === "new_api"
     ? await checkNewApiAccount(page, origin, configuredExpectedAccountId)
@@ -420,6 +429,7 @@ try {
   }
 
   if (reuseExistingDailyEvidence || (checkinMode === "new_api" && existingDailyCheckin?.status !== "login_required")) {
+    flowTrace.finish(reuseExistingDailyEvidence);
     console.log(JSON.stringify({
       origin,
       provider,
@@ -435,10 +445,12 @@ try {
     if (!reuseExistingDailyEvidence) process.exitCode = 2;
   } else {
     if (rule.forceLogout || guardedOAuthRelogin) {
+      flowTrace.emit('logout');
       await forceConfiguredOAuthLogout(page, rule, runtimeConfig);
     }
 
     const beginTargetProviderLogin = async (activePage) => {
+    flowTrace.emit('target_login');
     await activePage.goto(loginUrl.href, {
       waitUntil: "domcontentloaded",
       timeout: Number(runtimeConfig.navigationTimeoutMs) || 20000,
@@ -449,6 +461,7 @@ try {
       await agreementCheckbox.check({ timeout: 5000 });
     }
     const labels = providerLabels(provider);
+    flowTrace.emit('provider_login');
     let providerButton = await findProviderButton(activePage, labels);
     if (!providerButton && await revealAlternateLoginOptions(activePage)) {
       providerButton = await findProviderButton(activePage, labels);
@@ -458,6 +471,7 @@ try {
     await providerButton.click({ timeout: 10000 });
     const popup = await popupPromise;
     const nextPage = popup ?? activePage;
+    await awaitOffscreenWindow(nextPage);
     await nextPage.waitForTimeout(1500);
     await nextPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
     return nextPage;
@@ -497,7 +511,9 @@ try {
       break;
     }
     if (location.origin === CONNECT_LINUX_DO_ORIGIN) {
+      flowTrace.emit('authorization');
       if (await clickConnectLinuxDoAuthorization(page, connectAuthorizationState)) {
+        flowTrace.emit('callback_wait');
         await page.waitForTimeout(1000);
         continue;
       }
@@ -507,6 +523,7 @@ try {
       }
     }
     if (location.hostname === "linux.do" && /^\/login(?:[/?#]|$)/i.test(location.pathname)) {
+      flowTrace.emit('provider_login');
       if (!upstreamLoginAttempted) {
         upstreamLoginAttempted = true;
         resumeTargetAfterUpstream = true;
@@ -560,6 +577,7 @@ try {
     if (!callbackReached) {
       throw new Error(`${provider} OAuth 未在限定时间内回到目标站点（授权点击=${connectAuthorizationState.clicks}，验证交互=${connectTurnstileState.interactionAttempted ? 1 : 0}，上游恢复=${upstreamLoginAttempted ? 1 : 0}，等待重建=${resumeTargetAfterUpstream ? 1 : 0}）`);
     }
+    flowTrace.emit('callback_wait',{callbackObserved:true});
 
   // The callback page finishes the server-side OAuth exchange with JavaScript.
   // Let that request settle before navigating to the authoritative log page.
@@ -571,6 +589,7 @@ try {
   });
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
 
+    flowTrace.emit('identity_verify');
     const observedAccountId = (await readOAuthAccountIdentity(page, origin))?.accountId ?? null;
     if (checkinMode !== "new_api") {
       if (observedAccountId !== configuredExpectedAccountId) {
@@ -579,6 +598,7 @@ try {
     }
 
     const verificationDeadline = Date.now() + rule.verificationWaitMs;
+    flowTrace.emit('result_verify');
     let dailyCheckin = null;
     do {
       dailyCheckin = checkinMode === "new_api"
@@ -590,6 +610,7 @@ try {
     } while (Date.now() < verificationDeadline);
 
     const completed = ["signed", "already_signed"].includes(dailyCheckin?.status);
+    flowTrace.finish(completed);
     const dailyFailureCode = dailyCheckin?.status === "deferred"
       ? (dailyCheckin.retryCause === "rate_limit" ? "oauth_rate_limited" : "oauth_upstream_unavailable")
       : null;
@@ -609,6 +630,7 @@ try {
     if (!completed) process.exitCode = 2;
   }
 } catch (error) {
+  flowTrace.finish(false);
   console.log(JSON.stringify({
     origin,
     provider,

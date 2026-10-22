@@ -7,12 +7,12 @@ export function cancelledTask(task){return task?.observedStatus==='not_available
 export function taskStatusLabel(task){return cancelledTask(task)?conditionLabels.task_disabled:
   (!['signed','already_signed','not_available'].includes(task?.observedStatus)?conditionLabels[taskStatusCondition(task)]:null)??statusLabels[task?.observedStatus]??task?.observedStatus;}
 export function externalTask(task){return !['signed','already_signed','not_available'].includes(task?.observedStatus)&&
-  [...externalRetryCauses,'site_maintenance','entitlement_expired'].includes(taskStatusCondition(task));}
+  [...externalRetryCauses,'site_maintenance','entitlement_expired','site_migration','bookmark_origin_changed'].includes(taskStatusCondition(task));}
 
 export function siteSideTask(task){
   if(['signed','already_signed','not_available'].includes(task?.observedStatus))return false;
   const condition=taskStatusCondition(task);
-  if(['site_maintenance','rate_limit'].includes(condition))return true;
+  if(['site_maintenance','rate_limit','site_migration','bookmark_origin_changed'].includes(condition))return true;
   return condition==='upstream_unavailable'&&['tls_certificate_invalid','tls_handshake_failed','site_server_error',
     'oauth_upstream_unavailable','oauth_upstream_circuit_open'].includes(task.failureCode);
 }
@@ -102,12 +102,39 @@ export function visibleLedgerChange(change={}) {
 
 export function matchesPt(site, scope = '') {
   const category = ptStatusCategory(site);
+  const evidenceState = ptEvidenceState(site);
   return !scope || (scope === 'monitor' && !site.inLegacyPlan) || (scope === 'plan' && site.inLegacyPlan)
     || (scope === 'fresh' && site.effective?.fresh)
     || (scope === 'confirmed' && category === 'confirmed')
     || (scope === 'reported' && category === 'reported')
-    || (scope === 'review' && (site.inLegacyPlan===true||site.fallbackEnabled===true) && category === 'unknown');
+    || (scope === 'review' && (site.inLegacyPlan===true||site.fallbackEnabled===true) &&
+      !['monitor_only_unconfirmed','external_blocked'].includes(evidenceState) && category === 'unknown')
+    || (scope === 'monitor_unconfirmed' && evidenceState === 'monitor_only_unconfirmed')
+    || (scope === 'verification' && evidenceState === 'verification_pending')
+    || (scope === 'external' && evidenceState === 'external_blocked');
 }
+
+// New snapshots carry this classification explicitly. Old snapshots retain
+// a safe compatible view; bookmark inventory must never imply execution.
+export function ptEvidenceState(site) {
+  const states=['confirmed','guarded_read_needed','not_signed_confirmed','verification_pending',
+    'monitor_only_unconfirmed','external_blocked','unavailable','disabled','unconfirmed'];
+  if(states.includes(site?.evidenceState))return site.evidenceState;
+  const e=site?.effective??{};
+  if(e.fresh!==false&&['signed','already_signed'].includes(e.status)&&e.authoritative===true)return 'confirmed';
+  if(e.fresh!==false&&e.siteCondition==='site_maintenance')return 'external_blocked';
+  if(e.failureCode==='submission_outcome_unknown'||['submission_outcome_unknown','unverified_prior_attempt'].includes(site?.recovery?.code))return 'verification_pending';
+  if(!site?.inLegacyPlan&&!site?.fallbackEnabled)return 'monitor_only_unconfirmed';
+  if(e.fresh!==false&&e.status==='not_available'&&e.authoritative===true)return 'unavailable';
+  if(e.fresh!==false&&e.status==='not_signed'&&e.authoritative===true)return 'not_signed_confirmed';
+  return 'guarded_read_needed';
+}
+
+export const PT_EVIDENCE_LABELS = Object.freeze({
+  confirmed:'已签到',guarded_read_needed:'待只读复核',not_signed_confirmed:'今日未签到',
+  verification_pending:'提交待核验',monitor_only_unconfirmed:'观测未确认',
+  external_blocked:'等待外部条件',unavailable:'未开放',disabled:'已取消',unconfirmed:'状态未确认'
+});
 
 export function ptStatusCondition(site) {
   const effective=site?.effective??{};

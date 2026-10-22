@@ -13,6 +13,30 @@ export function resultIdentity(value) {
   return accountKey ? `${origin}#account=${encodeURIComponent(accountKey)}` : origin;
 }
 
+// Native/passive helpers name the unlabelled single account site-default.
+// Keep the daily plan's historical identity when importing that receipt, so
+// a fresh completion replaces the prior failure in progress/final merges.
+export function resultForPlanTarget(target, result) {
+  if (!String(target?.accountKey ?? '').trim() && result?.accountKey === 'site-default') {
+    const { accountKey, ...rest } = result;
+    return rest;
+  }
+  return result;
+}
+
+// A resumed report may contain an untouched unknown submission. Keep its
+// original observation time so publishing another site's result cannot make
+// that old submission appear newer than an already-confirmed passive receipt.
+export function preserveResultObservationTimes(results, fallbackAt) {
+  return results.map(result => {
+    if (result.observedAt != null) return result;
+    const at = [result.evidence?.createdAt, result.evidence?.confirmedAt,
+      result.confirmedAt, result.lastConfirmedAt, fallbackAt]
+      .find(value => typeof value === 'string' && Number.isFinite(Date.parse(value)));
+    return at ? {...result, observedAt:new Date(at).toISOString()} : result;
+  });
+}
+
 function executionBinding(value = {}) {
   const existing = String(value?.executionBinding ?? "").trim();
   if (existing) {

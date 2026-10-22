@@ -17,5 +17,10 @@ if (Test-Path -LiteralPath $statePath) {
     Remove-Item -LiteralPath $statePath -Force
 }
 
+$attention = @((& $node (Join-Path $root 'src\attention-urls.mjs') | ConvertFrom-Json))
+if ($attention.Count -eq 0) {
+    Write-Output '当前没有需要登录的站点；地址变更项请先核对书签。'
+    exit 0
+}
 Start-Process -FilePath $node -ArgumentList @((Join-Path $root 'src\manual-session.mjs')) -WorkingDirectory $root -WindowStyle Hidden
 Write-Output '正在打开机器人专用 Chrome 登录窗口。'

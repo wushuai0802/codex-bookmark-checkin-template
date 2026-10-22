@@ -26,18 +26,19 @@ async function runFixture(shell, command) {
   }
 }
 
-test("native unsigned evidence requires the authenticated exact SaoBao daily control without conflicts", async () => {
+test("native unsigned evidence requires an authenticated exact reviewed daily control without conflicts", async () => {
   const base = {
     currentUrl: "https://ptsbao.club/index.php", sameOrigin: true, authenticated: true,
-    siteBodyLoaded: true, waf: false, securityVerification: false, loginRoute: false,
+    siteBodyLoaded: true, pageContentAvailable: true, waf: false, securityVerification: false, loginRoute: false,
     success: false, successText: "", successControl: "", signedControlCount: 0,
     unsignedControl: "签到", unsignedControlCount: 1,
   };
   const cases = [
     { snapshot: base, expected: true },
     { snapshot: { ...base, unsignedControl: '签到得魔力' }, expected: true },
+    { snapshot: { ...base, currentUrl: 'https://www.ptsbao.club/index.php' }, expected: true },
     ...[
-      { authenticated: false }, { sameOrigin: false }, { siteBodyLoaded: false },
+      { authenticated: false }, { sameOrigin: false }, { siteBodyLoaded: false }, { pageContentAvailable: false },
       { waf: true }, { securityVerification: true }, { loginRoute: true },
       { success: true }, { success: undefined }, { successText: "今日已签到" },
       { successControl: "签到已得10, 补签卡: 0" }, { signedControlCount: 1 },
@@ -48,11 +49,12 @@ test("native unsigned evidence requires the authenticated exact SaoBao daily con
       { currentUrl: "https://ptsbao.club/index.php?day=2026-10-02" },
       { currentUrl: "https://ptsbao.club/index.php#history" },
       { currentUrl: "http://ptsbao.club/index.php" },
-      { currentUrl: "https://www.ptsbao.club/index.php" },
+      { currentUrl: "https://ptsbao.club:8443/index.php" },
+      { currentUrl: "https://user" + "@" + "ptsbao.club/index.php" },
       { currentUrl: "https://other.example/index.php" },
     ].map((overrides) => ({ snapshot: { ...base, ...overrides }, expected: false })),
     { snapshot: base, target: "https://ptsbao.club/attendance.php", expected: false },
-    { snapshot: { ...base, currentUrl: "https://piggo.me/index.php" }, target: "https://piggo.me/index.php", expected: false },
+    { snapshot: { ...base, currentUrl: "https://unreviewed.example/index.php" }, target: "https://unreviewed.example/index.php", expected: false },
   ];
   const command = preamble + `
 $cases='${quote(JSON.stringify(cases))}' | ConvertFrom-Json
@@ -74,6 +76,29 @@ ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
       assert.equal(Date.parse(evidence.confirmedAt), Date.parse("2026-10-02T16:00:01Z"));
       assert.equal("bodyText" in evidence, false);
     });
+  }
+});
+
+test('each reviewed native PT home accepts only its exact unsigned labels and rejects conflicting or unauthenticated controls',async()=>{
+  const command=preamble+`
+$rows=@(foreach($origin in @('https://audiences.me','https://ourbits.club','https://piggo.me','https://www.hdkyl.in')){
+  if(-not $CheckinNativePtUnsignedLabels.ContainsKey($origin)){throw 'Native unsigned label contract is missing'}
+  foreach($label in @($CheckinNativePtUnsignedLabels[$origin])){
+    foreach($scenario in @('exact','historical','anonymous','duplicate','signed_conflict')){
+      $snapshot=[pscustomobject]@{currentUrl=($origin+'/index.php');sameOrigin=$true;authenticated=($scenario -ne 'anonymous');
+        siteBodyLoaded=$true;pageContentAvailable=$true;waf=$false;securityVerification=$false;loginRoute=$false;
+        success=$false;successText='';successControl='';signedControlCount=if($scenario -eq 'signed_conflict'){1}else{0};
+        unsignedControlCount=if($scenario -eq 'duplicate'){2}else{1};unsignedControl=if($scenario -eq 'historical'){'历史'+$label}else{'['+$label+']'}}
+      $evidence=Get-ConfirmedNativeUnsignedEvidence $snapshot ($origin+'/index.php')
+      [pscustomobject]@{site=([uri]$origin).Host;scenario=$scenario;authoritative=($null -ne $evidence)}
+    }
+  }
+})
+ConvertTo-Json -InputObject $rows -Depth 5 -Compress`;
+  for(const shell of shells){
+    const rows=await runFixture(shell,command);
+    assert.ok(rows.length>=20);
+    for(const row of rows)assert.equal(row.authoritative,row.scenario==='exact',`${shell}/${row.site}/${row.scenario}`);
   }
 });
 

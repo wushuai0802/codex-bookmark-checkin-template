@@ -48,16 +48,58 @@ function vectorDistance(left, right) {
   return sum / left.length;
 }
 
-async function fetchOptionReferences(option, optionIndex) {
+function createReferenceReader(fetchImpl, requestTimeoutMs, timeoutMs) {
+  const positiveTimeout = (value, fallback) => Number.isFinite(value) && value > 0 ? Math.ceil(value) : fallback;
+  const requestTimeout = positiveTimeout(requestTimeoutMs, 8000);
+  const deadline = Date.now() + positiveTimeout(timeoutMs, 60000);
+  const diagnostics = { requests: 0, failedRequests: 0, timedOutRequests: 0 };
+  return {
+    diagnostics,
+    expired: () => Date.now() >= deadline,
+    async read(url, init, bodyType) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+      diagnostics.requests += 1;
+      const controller = new AbortController();
+      let timer;
+      const request = (async () => {
+        try {
+          const response = await fetchImpl(url, { ...init, credentials: "omit", signal: controller.signal });
+          if (!response?.ok) return null;
+          return await response[bodyType]();
+        } catch {
+          return null;
+        }
+      })();
+      try {
+        const result = await Promise.race([
+          request,
+          new Promise((resolve) => {
+            timer = setTimeout(() => {
+              diagnostics.timedOutRequests += 1;
+              controller.abort();
+              resolve(null);
+            }, Math.min(requestTimeout, remaining));
+          }),
+        ]);
+        if (result === null) diagnostics.failedRequests += 1;
+        return result;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
+async function fetchOptionReferences(option, optionIndex, reader) {
   const media = new Map();
   for (const alias of normalizedAliases(option.text).slice(0, 4)) {
-    const response = await fetch(ANILIST_ENDPOINT, {
+    if (reader.expired()) break;
+    const body = await reader.read(ANILIST_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json", "user-agent": REFERENCE_USER_AGENT },
       body: JSON.stringify({ query: ANILIST_QUERY, variables: { search: alias } }),
-    }).catch(() => null);
-    if (!response?.ok) continue;
-    const body = await response.json().catch(() => null);
+    }, "json");
     for (const item of body?.data?.Page?.media ?? []) media.set(item.id, item);
     if (media.size >= 2) break;
   }
@@ -65,10 +107,11 @@ async function fetchOptionReferences(option, optionIndex) {
   const references = [];
   for (const item of [...media.values()].slice(0, 5)) {
     for (const [kind, url] of [["cover", item.coverImage?.extraLarge || item.coverImage?.large], ["banner", item.bannerImage]]) {
-      if (!url) continue;
-      const response = await fetch(url).catch(() => null);
-      if (!response?.ok) continue;
-      const buffer = Buffer.from(await response.arrayBuffer());
+      if (!url || reader.expired()) continue;
+      const body = await reader.read(url, {}, "arrayBuffer");
+      if (!body) continue;
+      const vector = await imageVector(Buffer.from(body)).catch(() => null);
+      if (!vector) continue;
       references.push({
         optionIndex,
         optionName: option.name,
@@ -76,7 +119,7 @@ async function fetchOptionReferences(option, optionIndex) {
         mediaId: item.id,
         kind,
         url,
-        vector: await imageVector(buffer),
+        vector,
       });
     }
   }
@@ -109,27 +152,30 @@ export function parseMyAnimeListSearchImages(html, aliases) {
   return [...new Set(matches)].slice(0, 5);
 }
 
-async function fetchMyAnimeListReferences(option, optionIndex) {
+async function fetchMyAnimeListReferences(option, optionIndex, reader) {
   const aliases = normalizedAliases(option.text).slice(0, 4);
   const urls = new Set();
   for (const alias of aliases) {
+    if (reader.expired()) break;
     const search = new URL(MYANIMELIST_SEARCH);
     search.searchParams.set("q", alias);
     search.searchParams.set("cat", "anime");
-    const response = await fetch(search, {
+    const html = await reader.read(search, {
       headers: { "user-agent": REFERENCE_USER_AGENT, accept: "text/html" },
-    }).catch(() => null);
-    if (!response?.ok) continue;
-    for (const url of parseMyAnimeListSearchImages(await response.text(), aliases)) urls.add(url);
+    }, "text");
+    if (html === null) continue;
+    for (const url of parseMyAnimeListSearchImages(html, aliases)) urls.add(url);
     if (urls.size >= 3) break;
   }
 
   const references = [];
   for (const url of [...urls].slice(0, 5)) {
-    const response = await fetch(url, { headers: { "user-agent": REFERENCE_USER_AGENT } }).catch(() => null);
-    if (!response?.ok) continue;
-    const buffer = Buffer.from(await response.arrayBuffer());
-    references.push({ optionIndex, optionName: option.name, optionText: option.text, kind: "mal-cover", url, vector: await imageVector(buffer) });
+    if (reader.expired()) break;
+    const body = await reader.read(url, { headers: { "user-agent": REFERENCE_USER_AGENT } }, "arrayBuffer");
+    if (!body) continue;
+    const vector = await imageVector(Buffer.from(body)).catch(() => null);
+    if (!vector) continue;
+    references.push({ optionIndex, optionName: option.name, optionText: option.text, kind: "mal-cover", url, vector });
   }
   return references;
 }
@@ -167,7 +213,11 @@ async function circleEdgeScore(input) {
   return best;
 }
 
-export async function solveU2VisualChallenge(image, options) {
+export async function solveU2VisualChallenge(image, options, {
+  fetchImpl = fetch,
+  requestTimeoutMs = 8000,
+  timeoutMs = 60000,
+} = {}) {
   if (!Buffer.isBuffer(image) || !Array.isArray(options) || options.length < 2) {
     return { answer: null, reason: "U2 题目输入无效" };
   }
@@ -177,14 +227,19 @@ export async function solveU2VisualChallenge(image, options) {
   if (width < 300 || height < 200) return { answer: null, reason: "U2 验证图片尺寸异常" };
   const contentHeight = Math.max(1, height - 33);
 
-  let referenceGroups = await Promise.all(options.map(fetchOptionReferences));
+  const reader = createReferenceReader(fetchImpl, requestTimeoutMs, timeoutMs);
+  let referenceGroups = await Promise.all(options.map((option, index) => fetchOptionReferences(option, index, reader)));
   let references = referenceGroups.flat();
   if (new Set(references.map((item) => item.optionIndex)).size < 2) {
-    referenceGroups = await Promise.all(options.map(fetchMyAnimeListReferences));
-    references = referenceGroups.flat();
+    referenceGroups = await Promise.all(options.map((option, index) => fetchMyAnimeListReferences(option, index, reader)));
+    references.push(...referenceGroups.flat());
   }
   if (new Set(references.map((item) => item.optionIndex)).size < 2) {
-    return { answer: null, reason: "AniList 与 MyAnimeList 均未返回足够的候选作品封面" };
+    return {
+      answer: null,
+      reason: reader.expired() ? "候选作品封面读取超时，未继续识别" : "AniList 与 MyAnimeList 均未返回足够的候选作品封面",
+      diagnostics: { ...reader.diagnostics, referenceDeadlineReached: reader.expired() },
+    };
   }
 
   const rows = [];

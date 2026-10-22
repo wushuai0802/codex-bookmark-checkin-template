@@ -221,3 +221,30 @@ test("账号会话体检跨域跳转时按登录失效处理", async () => {
   });
   assert.equal(result.status, "login_required");
 });
+
+test('session probes retain authentication beside settings copy and refuse active OTP gates before account storage reads', async () => {
+  for (const kind of ['oauth_account', 'shared_oauth']) for (const gate of [false, true]) {
+    let storageReads = 0, closed = false;
+    const page = {
+      goto: async () => ({ status: () => 200, json: async () => ({ data: { id: '200' } }) }),
+      url: () => 'https://tracker.example/index.php', title: async () => 'Account',
+      evaluate: async callback => {
+        const source = String(callback);
+        if (source.includes('hasOtpInput')) return { hasOtpInput: gate, hasOtpForm: false, hasRequiredOtpInput: false };
+        if (source.includes('bodyText')) return { bodyText: '欢迎回来 今日已签到 2FA设置 忘记二级验证? 自助解绑', hasPassword: false };
+        storageReads++;
+        return '200';
+      },
+      close: async () => { closed = true; },
+    };
+    const result = await probeSessionPage({ newPage: async () => page }, {
+      kind, key: 'test-account', probeUrl: 'https://tracker.example/index.php',
+      expectedAccountId: '200', accountIdPaths: ['data.id'],
+    });
+    assert.equal(result.status, gate ? 'login_required' : 'authenticated', `${kind}/${gate}`);
+    assert.equal(result.failureCode, gate ? 'two_factor_required' : undefined);
+    assert.equal(closed, true);
+    if (gate) assert.equal(storageReads, 0);
+    assert.equal('bodyText' in result, false);
+  }
+});

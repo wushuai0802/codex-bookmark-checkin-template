@@ -1,10 +1,96 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
 import { atomicWriteJson } from "./security.mjs";
 import { isConfirmedNotAvailable } from "./result-contract.mjs";
-import { openCdSubmissionState, quotaClaimState } from "./quota-claim-guard.mjs";
+import { confirmedOpenCd, openCdSubmissionState, quotaClaimState } from "./quota-claim-guard.mjs";
 
 const SUCCESSFUL = new Set(["signed", "already_signed"]);
+const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
+
+function openCdAuditState(prior,result,finishedAt){
+  if(result.origin!=='https://open.cd'||String(result.accountKey??'site-default')!=='site-default')return {};
+  const binding=result.profileBinding,validBinding=/^[a-f0-9]{64}$/.test(binding??'');
+  const recovery=(prior.openCdRecoveryAttempts??[]).find(item=>item.claimId===result.ptRecovery?.claimId&&
+    item.accountKey==='site-default'&&item.profileBinding===binding&&item.businessDate===dayAt(finishedAt));
+  const confirmed=confirmedOpenCd(result,finishedAt)&&validBinding;
+  // A current success without the durable recovery claim is independent of an
+  // older unresolved write intent. Keep that intent blocked and auditable.
+  const pendingAtTime=Date.parse(prior.pendingOpenCdAt??'');
+  const sameDayPending=Number.isFinite(pendingAtTime)&&
+    dayAt(pendingAtTime)===result.evidence?.businessDate&&
+    prior.pendingOpenCdAccountKey==='site-default'&&
+    /^[a-f0-9]{64}$/.test(prior.pendingOpenCdProfileBinding??'')&&
+    prior.pendingOpenCdProfileBinding===binding;
+  const confirmedAt=Date.parse(result.evidence?.confirmedAt??'');
+  const recoveryTimes=recovery?[Date.parse(recovery.claimedAt??''),Date.parse(recovery.proofConfirmedAt??'')]:[];
+  const recoveryMalformed=Boolean(recovery)&&recoveryTimes.some(value=>!Number.isFinite(value));
+  const recoveryTime=recovery?Math.max(...recoveryTimes):-Infinity;
+  const recoveryProofIsNewer=!recovery||!recoveryMalformed&&Number.isFinite(confirmedAt)&&confirmedAt>=recoveryTime;
+  const pendingProofIsNewer=!sameDayPending||Number.isFinite(confirmedAt)&&confirmedAt>=pendingAtTime;
+  const resolvesCurrentRecovery=confirmed&&(
+    recoveryProofIsNewer&&Boolean(recovery)&&result.ptRecovery?.claimId===recovery.claimId&&recovery.businessDate===result.evidence.businessDate
+    || recoveryProofIsNewer&&pendingProofIsNewer&&sameDayPending);
+  const uncertain=result.failureCode==='submission_outcome_unknown'&&result.submissionAttempted===true;
+  const pendingAt=recovery&&uncertain?finishedAt.toISOString():openCdSubmissionState(prior.pendingOpenCdAt,result,finishedAt);
+  const next={pendingOpenCdAt:resolvesCurrentRecovery?null:
+    confirmed&&prior.pendingOpenCdAt?prior.pendingOpenCdAt:
+    confirmedOpenCd(result,finishedAt)&&prior.pendingOpenCdAt&&!validBinding?prior.pendingOpenCdAt:pendingAt};
+  const previousPendingAt=prior.pendingOpenCdAt;
+  if (previousPendingAt && next.pendingOpenCdAt !== previousPendingAt) {
+    const history=prior.openCdPendingHistory??[];
+    const entry={pendingAt:previousPendingAt,accountKey:'site-default',
+      profileBinding:prior.pendingOpenCdProfileBinding??null,originalOutcome:'unknown',
+      supersededAt:finishedAt.toISOString(),status:'superseded_by_new_attempt'};
+    next.openCdPendingHistory=history.some(item=>item.pendingAt===entry.pendingAt&&
+      item.profileBinding===entry.profileBinding)?history:[...history,entry];
+  }
+  if(uncertain&&validBinding&&(recovery||!Number.isFinite(Date.parse(prior.pendingOpenCdAt??'')))){
+    next.pendingOpenCdProfileBinding=binding;next.pendingOpenCdAccountKey='site-default';
+  }
+  if(resolvesCurrentRecovery){
+    next.pendingOpenCdProfileBinding=null;next.pendingOpenCdAccountKey=null;
+    if(Number.isFinite(Date.parse(prior.pendingOpenCdAt??''))){
+      const resolution={kind:'current_day_confirmed',origin:result.origin,accountKey:'site-default',profileBinding:binding,
+        pendingAt:prior.pendingOpenCdAt,originalOutcome:'unknown',
+        businessDate:result.evidence.businessDate,originalBusinessDate:dayAt(recovery?.originalPendingAt??prior.pendingOpenCdAt),
+        confirmedAt:result.evidence.confirmedAt,
+        resolvedAt:finishedAt.toISOString(),...(recovery?{recoveryClaimId:recovery.claimId}:{}),
+        evidence:{source:result.evidence.source,authoritative:true,businessDate:result.evidence.businessDate,
+          confirmedAt:result.evidence.confirmedAt,...(result.evidence.statusSignal?{statusSignal:result.evidence.statusSignal}:{})}};
+      resolution.resolutionId=crypto.createHash('sha256').update(JSON.stringify([result.origin,binding,resolution.pendingAt,
+        resolution.businessDate,resolution.kind])).digest('hex');
+      const audits=prior.openCdSubmissionResolutions??[];
+      next.openCdSubmissionResolutions=audits.some(item=>item.resolutionId===resolution.resolutionId)?audits:[...audits,resolution];
+      const linkedPendingAt=recovery?.originalPendingAt??previousPendingAt;
+      const resolvedPendingAts=new Set([linkedPendingAt,previousPendingAt].filter(Boolean));
+      if(linkedPendingAt)next.openCdPendingHistory=(next.openCdPendingHistory??[]).map(item=>
+        resolvedPendingAts.has(item.pendingAt)&&item.status!=='historical_confirmed'?
+          {...item,status:'resolved_current_day',resolutionId:resolution.resolutionId}:item);
+    }
+  }
+  if(confirmed&&previousPendingAt&&!prior.pendingOpenCdProfileBinding&&!resolvesCurrentRecovery){
+    const resolution={kind:'pending_manual_binding',origin:result.origin,accountKey:'site-default',
+      profileBinding:binding,pendingAt:previousPendingAt,originalBusinessDate:dayAt(previousPendingAt),
+      originalOutcome:'unknown',businessDate:result.evidence.businessDate,confirmedAt:result.evidence.confirmedAt,
+      resolvedAt:finishedAt.toISOString(),status:'unknown',
+      evidence:{source:result.evidence.source,authoritative:true,businessDate:result.evidence.businessDate,
+        confirmedAt:result.evidence.confirmedAt,statusSignal:result.evidence.statusSignal}};
+    resolution.resolutionId=crypto.createHash('sha256').update(JSON.stringify([result.origin,binding,previousPendingAt,
+      result.evidence.businessDate,resolution.kind])).digest('hex');
+    const audits=prior.openCdSubmissionResolutions??[];
+    next.openCdSubmissionResolutions=audits.some(item=>item.resolutionId===resolution.resolutionId)?audits:[...audits,resolution];
+  }
+  if(recovery||confirmed&&(prior.openCdRecoveryAttempts??[]).length)next.openCdRecoveryAttempts=prior.openCdRecoveryAttempts.map(item=>{
+    if(resolvesCurrentRecovery&&item.accountKey==='site-default'&&item.profileBinding===binding&&
+      Date.parse(item.claimedAt)<=Date.parse(result.evidence.confirmedAt)&&['claimed','outcome_unknown'].includes(item.state))
+      return {...item,state:item.businessDate===result.evidence.businessDate?'confirmed_current_day':'superseded_for_current_binding',
+        finishedAt:finishedAt.toISOString(),confirmedAt:result.evidence.confirmedAt,resolutionBusinessDate:result.evidence.businessDate};
+    return item.claimId===recovery?.claimId?{...item,state:uncertain?'outcome_unknown':result.submissionAttempted===false?'not_submitted':'claimed',
+      finishedAt:finishedAt.toISOString()}:item;
+  });
+  return next;
+}
 
 export async function loadSiteState(filePath) {
   try {
@@ -102,7 +188,7 @@ export function updateSiteState(previous, results, finishedAt = new Date(), conf
     const shouldRefreshConfirmation = confirmed && !cachedConfirmation;
     const preferredUrl = reusablePreferredUrl(result) ?? prior.preferredUrl ?? null;
     const pendingQuotaClaimAt = quotaClaimState(prior.pendingQuotaClaimAt, result, finishedAt, config);
-    const pendingOpenCdAt = openCdSubmissionState(prior.pendingOpenCdAt, result, finishedAt);
+    const openCdState = openCdAuditState(prior,result,finishedAt);
     sites[result.origin] = {
       ...prior,
       lastStatus: result.status,
@@ -132,7 +218,7 @@ export function updateSiteState(previous, results, finishedAt = new Date(), conf
       lastDurationMs: durationMs,
       preferredUrl,
       ...(pendingQuotaClaimAt === undefined ? {} : { pendingQuotaClaimAt }),
-      ...(pendingOpenCdAt === undefined ? {} : { pendingOpenCdAt }),
+      ...openCdState,
     };
   }
   return { version: 1, updatedAt: timestamp, sites };

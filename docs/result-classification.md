@@ -11,7 +11,7 @@ submission; unknown evidence does not qualify as disabled or successful.
 | Temporary upstream outage | Keep the existing bounded probes, shared-upstream circuit breaker and late recovery window. Show waiting for the site, not a local execution failure. |
 | Rate limit | Honor the cooldown and daily cap. |
 | Harvest still running | Wait for its result before considering a supplement. |
-| Prior submission outcome unknown | Keep the quarantine; only read back status. Maintenance or an expired entitlement does not clear this state. |
+| Prior submission outcome unknown | Read back using the actual execution Profile. A fresh authenticated, exact daily unsigned control can authorize one new guarded attempt; an inconclusive read cannot. Maintenance or an expired entitlement does not clear this state. |
 | Login, identity or local execution problem | Keep the specific attention/error result and the appropriate recovery path. |
 | Reported completion missing evidence | Perform a bounded passive recheck; do not submit again or invent a receipt. |
 
@@ -25,3 +25,29 @@ retains the matched signal before diagnostic text truncation. A reviewed,
 authenticated daily header may confirm the current day; arbitrary page text,
 cumulative counters, different origins, stale dates, and challenge/login pages do
 not. Passive reads that cross the business-day boundary are rejected.
+
+Native readbacks retain the actual account and Profile binding in a separate
+durable receipt. A current negative receipt does not rewrite an older day's
+unknown submission as failed or successful. The preflight registers the receipt
+and rechecks the gate before continuing; a completion counts only when the
+owned write intent is successfully confirmed in the journal.
+
+CAPTCHA handlers run after navigating to the question as well as on the initial
+page. Explicit refusal is checked before a page change can erase it; an unknown
+submitted result never reloads an attendance endpoint as a verification step.
+A passive final read keeps the full operation classified as an actual check-in
+when it followed a submission. Public reference images use a separate request
+context, the existing valid local proxy, and bounded request deadlines.
+
+Single-account passive receipts keep their configured Profile and reconciliation
+scope after the numeric site identity is removed from public reports. Importing
+that receipt preserves the daily plan identity, so a new completion replaces the
+old failure. Browser-generated connection or certificate error pages are not
+tracker content and cannot provide either signed or unsigned evidence.
+
+An explicitly reviewed native API fallback may reuse its existing isolated
+Profile and configured local proxy. Its index read uses strict TLS, a fresh
+server date and inert HTML parsing. A formal recovery still registers that
+account's unsigned receipt, rechecks the gate and persists an intent before
+one already-registered attendance GET. It performs no POST discovery, follows
+no redirects and stops when the response or durable confirmation is unclear.

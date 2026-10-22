@@ -50,6 +50,47 @@ export function loadPtRecoveryDiagnostics(root,businessDate){
   return {businessDate,sites:[...byOrigin.values()]};
 }
 
+function confirmedExternalResolution({attempt,attemptId,businessDate,receipt,now}){
+  const result=projectPtSiteResult(receipt,attempt.origin);
+  const binding=attempt.profileBinding??attempt.outcome?.profileBinding;
+  const confirmed=Date.parse(result.evidence?.confirmedAt),observed=Date.parse(result.observedAt);
+  if(receipt?.origin!==attempt.origin||!/^[a-f0-9]{64}$/.test(binding??'')||binding!==result.profileBinding||
+     result.accountKey!==(attempt.accountKey??'site-default')||result.submissionAttempted!==false||
+     !['safe_status_endpoint','safe_history_page'].includes(result.operationMode)||result.readSafety!=='reviewed_passive'||
+     !['signed','already_signed'].includes(result.status)||result.evidence.authoritative!==true||
+     !Number.isFinite(confirmed)||!Number.isFinite(Date.parse(attempt.startedAt))||confirmed<Date.parse(attempt.startedAt)-60_000||
+     observed>now.getTime()+60_000||dayAt(observed)!==businessDate||dayAt(confirmed)!==businessDate||
+     result.businessDate!==businessDate||result.evidence.businessDate!==businessDate)throw Error('receipt does not prove this account/profile/day');
+  return {schemaVersion:1,attemptId,kind:'confirmed_external',origin:attempt.origin,accountKey:result.accountKey,
+    businessDate,profileBinding:binding,confirmedAt:result.evidence.confirmedAt,observedAt:result.observedAt,
+    reconciledAt:now.toISOString(),operationMode:result.operationMode,status:result.status};
+}
+
+// The caller owns the existing fallback lock and may also own an in-memory
+// attempt state. Mutate that exact state so its later save retains closure.
+export function appendPassivePtReconciliations(state,receipt,now=new Date()){
+  if(!state||state.businessDate!==dayAt(now)||state.businessDate!==receipt?.businessDate)return [];
+  if(!Array.isArray(state.attempts)||state.reconciliations!==undefined&&!Array.isArray(state.reconciliations))
+    throw Error('invalid PT attempt journal');
+  const observed=Date.parse(receipt.observedAt),confirmed=Date.parse(receipt.evidence?.confirmedAt);
+  if(receipt.evidence?.evidenceScope!=='site_account_day'||!Number.isFinite(observed)||
+     observed>now.getTime()+60_000||now.getTime()-observed>5*60_000)return [];
+  const appended=[];
+  for(const [index,attempt] of state.attempts.entries()){
+    const pending=['in_progress','outcome_unknown','completed_cross_day'].includes(attempt.state)||
+      attempt.outcome?.submissionOutcomeUnknown===true||attempt.outcome?.failureCode==='submission_outcome_unknown'||
+      attempt.state==='completed'&&['needs_attention','unknown'].includes(attempt.v1Status)&&attempt.outcome?.submissionAttempted!==false;
+    if(!pending||ptAttemptReconciled(state,attempt,index)||confirmed<Date.parse(attempt.startedAt)||
+       attempt.businessDate&&attempt.businessDate!==state.businessDate)continue;
+    let resolution;
+    try{resolution=confirmedExternalResolution({attempt,attemptId:ptAttemptId(attempt,index),businessDate:state.businessDate,receipt,now});}
+    catch{continue;}
+    state.reconciliations??=[];
+    state.reconciliations.push(resolution);appended.push(resolution);
+  }
+  return appended;
+}
+
 // Reconciliation is append-only evidence, never deletion or reset of attempts.
 // Old attempts without an exact profile binding require manual investigation.
 export function reconcilePtAttempt({root,businessDate,attemptId,receipt,kind='confirmed_external',acknowledgement=null,note='',now=new Date()}={}){
@@ -64,19 +105,7 @@ export function reconcilePtAttempt({root,businessDate,attemptId,receipt,kind='co
     const attempt=matches[0];
     let resolution;
     if(kind==='confirmed_external'){
-    const result=projectPtSiteResult(receipt,attempt.origin);
-    const binding=attempt.profileBinding??attempt.outcome?.profileBinding;
-    const confirmed=Date.parse(result.evidence?.confirmedAt),observed=Date.parse(result.observedAt);
-    if(!/^[a-f0-9]{64}$/.test(binding??'')||binding!==result.profileBinding||
-       result.accountKey!==(attempt.accountKey??'site-default')||result.submissionAttempted!==false||
-       !['safe_status_endpoint','safe_history_page'].includes(result.operationMode)||result.readSafety!=='reviewed_passive'||
-       !['signed','already_signed'].includes(result.status)||result.evidence.authoritative!==true||
-       !Number.isFinite(confirmed)||!Number.isFinite(Date.parse(attempt.startedAt))||confirmed<Date.parse(attempt.startedAt)-60_000||
-       observed>now.getTime()+60_000||dayAt(observed)!==businessDate||dayAt(confirmed)!==businessDate||
-       result.businessDate!==businessDate||result.evidence.businessDate!==businessDate)throw Error('receipt does not prove this account/profile/day');
-    resolution={schemaVersion:1,attemptId,kind:'confirmed_external',origin:attempt.origin,accountKey:result.accountKey,
-      businessDate,profileBinding:binding,confirmedAt:result.evidence.confirmedAt,observedAt:result.observedAt,
-      reconciledAt:now.toISOString(),operationMode:result.operationMode,status:result.status};
+      resolution=confirmedExternalResolution({attempt,attemptId,businessDate,receipt,now});
     }else if(kind==='closed_manual'){
       if(acknowledgement!=='reviewed-this-attempt-no-same-day-replay'||typeof note!=='string'||note.trim().length<10||note.length>240)
         throw Error('explicit operator review is required');

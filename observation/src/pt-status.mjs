@@ -6,6 +6,8 @@ import {ptStatuses} from './checkin-contract.generated.mjs';
 import {siteDisplayName} from './display-identity.mjs';
 import {canonicalPtOrigin} from './pt-coordination.generated.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
+export const PT_EVIDENCE_STATES=Object.freeze(['confirmed','guarded_read_needed','not_signed_confirmed',
+  'verification_pending','monitor_only_unconfirmed','external_blocked','unavailable','disabled','unconfirmed']);
 
 const SOURCE_VALUES = new Set(['harvest', 'legacy-checkin', 'execution-supplement', 'manual', 'v2-observer', 'other']);
 const EVIDENCE_VALUES = new Set(['api', 'page_text', 'pt_page', 'usage_log', 'user_confirmation', 'manual', 'health_cache', 'harvest', 'none']);
@@ -20,7 +22,7 @@ const STATUS_ALIASES = new Map([
   ['pending', 'unknown'], ['timeout', 'unreachable']
 ]);
 const SOURCE_PRIORITY = new Map([
-  ['execution-supplement', 5], ['harvest', 4], ['v2-observer', 3], ['legacy-checkin', 2], ['manual', 1], ['other', 0]
+  ['execution-supplement', 5], ['legacy-checkin', 4], ['harvest', 3], ['v2-observer', 2], ['manual', 1], ['other', 0]
 ]);
 
 function sensitiveKey(key) {
@@ -95,6 +97,8 @@ function evidenceFor(input, status) {
     ...(Number.isFinite(Date.parse(evidence.confirmedAt))?{confirmedAt:new Date(evidence.confirmedAt).toISOString()}:{}),
     ...(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(evidence.businessDate??'')?{businessDate:evidence.businessDate}:{}),
     ...(evidence.evidenceScope==='site_account_day'?{evidenceScope:evidence.evidenceScope}:{}),
+    ...(evidence.verification==='task_disabled'?{verification:'task_disabled'}:{}),
+    ...((evidence.readSafety??input?.readSafety)==='reviewed_passive'?{readSafety:'reviewed_passive'}:{}),
     ...(/^[a-z0-9_]{1,80}$/.test(evidence.statusSignal??'')?{statusSignal:evidence.statusSignal}:{}),
     ...(/^[a-f0-9]{64}$/.test(evidence.profileBinding??input?.profileBinding??'')?{profileBinding:evidence.profileBinding??input.profileBinding}:{}),
     statusVerified: authoritative && ['signed', 'already_signed', 'not_signed'].includes(status)
@@ -132,6 +136,7 @@ function normalizeObservation(input, {
     source,
     origin,
     ...projectPtDiagnostic(input),
+    ...(typeof input.submissionAttempted==='boolean'?{submissionAttempted:input.submissionAttempted}:{}),
     displayName: displayName ?? displayNameFor(input, origin),
     accountRef,
     status,
@@ -155,7 +160,8 @@ export function normalizePtStatusReport(report, {
   const sites = Array.isArray(report.sites) ? report.sites : [];
   const unique = new Map();
   for (const item of sites) {
-    const observation = normalizeObservation(item, {
+    const observation = normalizeObservation({...item,evidence:{...item.evidence,
+      ...(/^\d{4}-\d{2}-\d{2}$/.test(report.businessDate??'')&&!item.evidence?.businessDate?{businessDate:report.businessDate}:{})}}, {
       defaultSource: source,
       generatedAt,
       maxAgeHours,
@@ -183,9 +189,64 @@ function betterObservation(a, b) {
   if (b.status === 'unknown' && !b.evidence.authoritative && confirmedCompletion(a)) return a;
   if (confirmedCompletion(a) && unconfirmedObservation(b)) return a;
   if (confirmedCompletion(b) && unconfirmedObservation(a)) return b;
+  // Rank equivalent authorities by source. Opposing signed/unsigned signals
+  // remain a discrepancy and keep the newer observation; neither authorizes
+  // a submission while the conflict is unresolved.
+  const statusKind=item=>['signed','already_signed'].includes(item.status)?'signed':item.status;
+  if (a.evidence.authoritative && b.evidence.authoritative &&
+      statusKind(a)===statusKind(b) &&
+      (SOURCE_PRIORITY.get(a.source) ?? 0) !== (SOURCE_PRIORITY.get(b.source) ?? 0)) {
+    return (SOURCE_PRIORITY.get(a.source) ?? 0) > (SOURCE_PRIORITY.get(b.source) ?? 0) ? a : b;
+  }
   const time = new Date(a.observedAt) - new Date(b.observedAt);
   if (time !== 0) return time > 0 ? a : b;
   return (SOURCE_PRIORITY.get(a.source) ?? 0) >= (SOURCE_PRIORITY.get(b.source) ?? 0) ? a : b;
+}
+
+export function classifyPtEvidenceState(site) {
+  const effective = site?.effective ?? {};
+  const status = effective.fresh===true?effective.status:'unknown';
+  const possiblyUnconfirmed=item=>item.failureCode==='submission_outcome_unknown'||
+    item.submissionAttempted===true&&(!['signed','already_signed'].includes(item.status)||item.authoritative!==true);
+  const submitted=effective.fresh===true&&possiblyUnconfirmed(effective)||
+    site.observations?.some(item=>item.fresh&&possiblyUnconfirmed(item))||
+    ['submission_outcome_unknown','unverified_prior_attempt'].includes(site?.recovery?.code);
+  if (effective.fresh===true && ['signed', 'already_signed'].includes(status) && effective.authoritative === true && !site.discrepancy &&
+      (!submitted||currentBoundCompletion(site,effective.evidence?.businessDate))) return 'confirmed';
+  if(effective.fresh===true&&status==='not_available'&&effective.authoritative===true)
+    return effective.evidence?.verification==='task_disabled'?'disabled':'unavailable';
+  if (effective.fresh===true&&(effective.siteCondition === 'site_maintenance' || effective.retryCause==='rate_limit' ||
+      ['tls_certificate_invalid', 'tls_handshake_failed', 'site_server_error'].includes(effective.failureCode))) {
+    return 'external_blocked';
+  }
+  if (submitted) {
+    return 'verification_pending';
+  }
+  if(effective.fresh===true&&status==='not_signed'&&effective.authoritative===true&&!site.discrepancy)return 'not_signed_confirmed';
+  if (!site?.inLegacyPlan && !site?.fallbackEnabled && !['signed','already_signed'].includes(status)) return 'monitor_only_unconfirmed';
+  if ((site?.inLegacyPlan||site?.fallbackEnabled) && !['signed','already_signed'].includes(status)) return 'guarded_read_needed';
+  return 'unconfirmed';
+}
+
+function currentBoundCompletion(site,businessDate,{passiveOnly=false}={}){
+  const positive=site?.effective,proof=positive?.evidence??{};
+  const passive=positive?.source==='execution-supplement'&&proof.readSafety==='reviewed_passive'&&positive?.submissionAttempted===false;
+  const formal=positive?.submissionAttempted===true&&positive?.failureCode!=='submission_outcome_unknown';
+  return positive?.fresh===true&&positive.authoritative===true&&['signed','already_signed'].includes(positive.status)&&!site.discrepancy&&
+    ['execution-supplement','legacy-checkin'].includes(positive.source)&&
+    proof.businessDate===businessDate&&proof.evidenceScope==='site_account_day'&&
+    (passiveOnly?passive:passive||formal)&&
+    /^[a-f0-9]{64}$/.test(proof.profileBinding??'')&&Number.isFinite(Date.parse(proof.confirmedAt))&&
+    Boolean(site.accountRef)&&
+    (site.observations??[]).some(item=>(item.failureCode==='submission_outcome_unknown'||
+      item.submissionAttempted===true&&(!['signed','already_signed'].includes(item.status)||item.authoritative!==true))&&
+      item.fresh&&item.evidence?.profileBinding===proof.profileBinding&&Date.parse(item.observedAt)<=Date.parse(proof.confirmedAt));
+}
+
+export function ptUnknownReconciled(site,businessDate){
+  return currentBoundCompletion(site,businessDate,{passiveOnly:true})&&
+    (site.observations??[]).some(item=>item.fresh&&(item.failureCode==='submission_outcome_unknown'||
+      item.submissionAttempted===true&&(!['signed','already_signed'].includes(item.status)||item.authoritative!==true)));
 }
 
 function mergeSiteObservations(observations, target) {
@@ -215,6 +276,7 @@ function mergeSiteObservations(observations, target) {
     effective: effective ? {
       source: effective.source, status: effective.status, observedAt: effective.observedAt,
       ...projectPtDiagnostic(effective),
+      ...(typeof effective.submissionAttempted==='boolean'?{submissionAttempted:effective.submissionAttempted}:{}),
       fresh: effective.freshness.fresh, authoritative: effective.evidence.authoritative,
       evidence: {...effective.evidence}
     } : {source:'v2-observer',status:'unknown',observedAt:null,fresh:false,authoritative:false,
@@ -226,6 +288,7 @@ function mergeSiteObservations(observations, target) {
     observations: ordered.map((item) => ({
       source: item.source, status: item.status, observedAt: item.observedAt,
       ...projectPtDiagnostic(item),
+      ...(typeof item.submissionAttempted==='boolean'?{submissionAttempted:item.submissionAttempted}:{}),
       fresh: item.freshness.fresh, authoritative: item.evidence.authoritative,
       evidence: item.evidence
     }))
@@ -277,6 +340,9 @@ export function buildPtStatus({
       source: 'legacy-checkin',
       managedBy: 'legacy-checkin',
       inLegacyPlan: true,
+      ...(/^[a-f0-9]{64}$/.test(task.profileBinding??'')?{profileBinding:task.profileBinding}:{}),
+      ...projectPtDiagnostic(task),
+      ...(typeof task.submissionAttempted==='boolean'?{submissionAttempted:task.submissionAttempted}:{}),
       evidence: receipt?.evidence ?? { source: 'none', authoritative: false, summary: '' }
     }, { generatedAt, maxAgeHours, inLegacyPlan: true, fallbackObservedAt: stableFallbackAt, displayName: displayNameFor(targets.get(taskOrigin), taskOrigin) }));
   }
@@ -320,9 +386,25 @@ export function buildPtStatus({
       item.freshness.fresh = false;
       item.supplementCandidate = false;
     }
+    const confirmed=Date.parse(item.evidence.confirmedAt??'');
+    const matching=tasks.filter(task=>{
+      try{return normalizeOriginForStatus(task.origin)===item.origin&&(task.accountRef??null)===(item.accountRef??null);}catch{return false;}
+    });
+    const expectedBinding=matching.length===1?matching[0].profileBinding:null;
+    if((item.evidence.businessDate&&item.evidence.businessDate!==businessDate)||
+       (expectedBinding&&item.evidence.profileBinding&&expectedBinding!==item.evidence.profileBinding)||
+       (Number.isFinite(confirmed)&&(confirmed>Date.parse(generatedAt)+60_000||
+         new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(confirmed))!==businessDate))){
+      item.evidence.authoritative=false;
+      item.evidence.statusVerified=false;
+      item.supplementCandidate=false;
+    }
   }
-  const sites = [...grouped.values()].map((items) => ({...mergeSiteObservations(items, targets.get(items[0].origin)??monitorSites.get(items[0].origin)),
-    fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)})).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
+  const sites = [...grouped.values()].map((items) => {
+    const site = {...mergeSiteObservations(items, targets.get(items[0].origin)??monitorSites.get(items[0].origin)),
+      fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)};
+    return site;
+  }).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
   if(recoveryReport?.businessDate===businessDate)for(const site of sites){
     const recovery=recoveryReport.sites?.find(item=>item.origin===site.origin);
     if(!recovery||!['prior_outcome_unknown','submission_outcome_unknown','unverified_prior_attempt'].includes(recovery.code))continue;
@@ -341,6 +423,12 @@ export function buildPtStatus({
     site.effective.siteCondition='site_maintenance';
     site.effective.evidence.summary=redactText(maintenance.evidence.summary||'只读检查确认站点维护，等待恢复后核验');
   }
+  for(const site of sites){
+    site.evidenceState=classifyPtEvidenceState(site);
+    // A display success is not automatically a submission reconciliation.
+    // Only an account/day/profile-bound passive receipt closes that audit.
+    if(ptUnknownReconciled(site,businessDate))site.reconciledFromUnknown=true;
+  }
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;
   return {
@@ -357,6 +445,11 @@ export function buildPtStatus({
       fresh: sites.filter((site) => site.effective?.fresh).length,
       discrepancies: sites.filter((site) => site.discrepancy).length,
       supplementCandidates: sites.filter((site) => site.supplementCandidate).length,
+      monitorOnlyUnconfirmed: sites.filter(site => site.evidenceState === 'monitor_only_unconfirmed').length,
+      guardedReadNeeded: sites.filter(site => site.evidenceState === 'guarded_read_needed').length,
+      verificationPending: sites.filter(site => site.evidenceState === 'verification_pending').length,
+      externalBlocked: sites.filter(site => site.evidenceState === 'external_blocked').length,
+      notSignedConfirmed: sites.filter(site => site.evidenceState === 'not_signed_confirmed').length,
       status
     },
     executionEnabled: false,

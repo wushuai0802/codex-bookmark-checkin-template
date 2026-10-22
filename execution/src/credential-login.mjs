@@ -11,7 +11,7 @@ import {
 } from "./credential-session-verification.mjs";
 import { assertBookmarkNavigation, safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
-import { classifyPageText } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -86,7 +86,8 @@ try {
   await acceptConfiguredLoginTerms(page, origin, config);
   const password = page.locator('input[type="password"]:visible');
   const initialText = String(await page.locator("body").innerText().catch(() => ""));
-  const initialState = classifyPageText({ url: page.url(), bodyText: initialText, hasPassword: await password.count() > 0 });
+  const initialState = classifyPageText({ url: page.url(), bodyText: initialText, hasPassword: await password.count() > 0,
+    ...await readPageTwoFactorStructure(page) });
   if (initialState.failureCode === "two_factor_required") {
     status = "needs_attention";
     failureCode = initialState.failureCode;
@@ -129,6 +130,7 @@ try {
             url: page.url(),
             bodyText: postSubmitText,
             hasPassword: await page.locator('input[type="password"]:visible').count() > 0,
+            ...await readPageTwoFactorStructure(page),
           });
           if (postSubmitState.failureCode === "two_factor_required") {
             status = "needs_attention";

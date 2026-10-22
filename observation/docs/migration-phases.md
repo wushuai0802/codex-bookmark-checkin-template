@@ -1,5 +1,22 @@
 # Production Boundary and Historical Work
 
+## Native secondary-verification recovery: 2026-10-13
+
+The established Windows native runner can now recover a reviewed PigGo
+secondary-code challenge through a private Bitwarden opt-in. It keeps the
+controller lease, wrapper mutex, run lock, account/Profile binding and native
+submission journal. The current user's DPAPI-protected independent CLI session
+is bound to the vault account and exact item UUID; ordinary completed runs do
+not load it. A normal authenticated recovery never itself confirms attendance.
+After account readback and a native read-only reopening, the existing guard must
+accept a fresh receipt before allowing one mature continuation. Unknown or
+rejected authentication is not replayed during the same business day.
+
+The former isolated test's two-hour limit is not the production credential
+policy. Lock, logout, account changes or revoked authorization stop recovery and
+request local reauthorization through the existing result/notice path. See
+[Bitwarden auxiliary verification](../../execution/docs/bitwarden-totp.md).
+
 The project has one production execution owner. The Windows execution package
 keeps the established browser profiles, site rules, retries and authoritative
 results. The observation package leases a run, imports redacted results,

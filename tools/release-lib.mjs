@@ -21,8 +21,9 @@ const operationsSources=new Map([
   ['operations/scripts/Sync-OperationsSupport.ps1','observation/scripts/Sync-OperationsSupport.ps1'],
   ['operations/scripts/Sync-Transport.ps1','observation/scripts/Sync-Transport.ps1']
 ]);
-const managed={test:file=>operationsSources.has(file)||publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
-const sourceFile=file=>operationsSources.get(file)??file;
+const operationsCodeFile=/^operations\/(?:src|public|schemas|scripts)\/[A-Za-z0-9_.\/-]+$|^operations\/(?:Dockerfile|compose\.(?:nas|worker)\.yaml|\.dockerignore|package(?:-lock)?\.json)$/;
+const managed={test:file=>operationsSources.has(file)||operationsCodeFile.test(file)||publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
+const sourceFile=file=>operationsSources.get(file)??(file.startsWith('operations/')?`observation/${file.slice('operations/'.length)}`:file);
 export const fileHash=file=>fs.existsSync(file)?crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'):null;
 function safeFile(root,relative){
   if(!/^[A-Za-z0-9_.\/-]+$/.test(relative)||relative.split('/').some(p=>p==='..'||p==='.'||!p))throw Error('unsafe release path');
@@ -42,6 +43,20 @@ const marker=root=>path.join(root,'release.json');
 function atomic(file,bytes){fs.mkdirSync(path.dirname(file),{recursive:true});const temp=file+'.'+crypto.randomUUID()+'.tmp';
   try{fs.writeFileSync(temp,bytes,{mode:0o600});fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}}
 
+export function assertNoManualHandoff(root){
+  const pending=new Set(['pending','pending_verification','waiting_for_user','awaiting_user','awaiting_manual_handoff','waiting_login','awaiting_login']);
+  for(const relative of ['tmp/manual-handoff.json','tmp/manual-verification.json','tmp/manual-session.json']){
+    const file=safeFile(root,relative);
+    if(!fs.existsSync(file))continue;
+    const state=JSON.parse(fs.readFileSync(file,'utf8'));
+    if(pending.has(state.state))throw Error('resolve pending manual handoff before changing code');
+    if(Number.isSafeInteger(state.pid)&&state.pid>0){
+      try{process.kill(state.pid,0);throw Object.assign(Error('manual window is active'),{code:'MANUAL_ACTIVE'});}
+      catch(error){if(error.code!=='ESRCH')throw Error('close the active manual session before changing code');}
+    }
+  }
+}
+
 export function planRelease({source,executionRoot,observationRoot,opsRoot,files,revision,version}={}){
   const roots={execution:path.resolve(executionRoot),observation:path.resolve(observationRoot),...(opsRoot?{operations:path.resolve(opsRoot)}:{})};
   for(const root of Object.values(roots))if(root===path.parse(root).root)throw Error('runtime root cannot be a drive root');
@@ -49,7 +64,12 @@ export function planRelease({source,executionRoot,observationRoot,opsRoot,files,
   if(new Set(Object.values(roots).map(canonical)).size!==Object.values(roots).length)throw Error('execution, observation and operations roots must be distinct');
   source=path.resolve(source);
   files??=execFileSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:source,encoding:'utf8'}).trim().split(/\r?\n/).filter(file=>managed.test(file));
-  if(roots.operations)files=[...files,...operationsSources.keys()];
+  if(roots.operations){
+    const operationCode=[...files].filter(file=>file.startsWith('observation/')&&
+      /^(?:observation\/(?:src|public|schemas|scripts)\/|observation\/(?:Dockerfile|compose\.(?:nas|worker)\.yaml|\.dockerignore|package(?:-lock)?\.json)$)/.test(file))
+      .map(file=>`operations/${file.slice('observation/'.length)}`);
+    files=[...files,...operationsSources.keys(),...operationCode];
+  }
   const entries=[...new Set(files)].sort().map(file=>{
     if(!managed.test(file))throw Error('file outside release scope');
     const from=safeFile(source,sourceFile(file)),to=destination(roots,file),afterHash=fileHash(from);
@@ -75,6 +95,7 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
   const backup=path.join(path.resolve(backupRoot),new Date().toISOString().replaceAll(':','-')+'-'+plan.revision.slice(0,12));
   if(fs.existsSync(backup))throw Error('release backup already exists');
   return lock(plan,async()=>{
+    assertNoManualHandoff(plan.roots.execution);
     const prepared=plan.files.map(entry=>{
       const from=safeFile(plan.source,sourceFile(entry.file)),to=destination(plan.roots,entry.file);
       if(fileHash(from)!==entry.afterHash||fileHash(to)!==entry.beforeHash)throw Error('release drift: '+entry.file);
@@ -114,6 +135,7 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
 export async function rollbackRelease(backup,{lock=withRuntimeLocks}={}){
   const plan=JSON.parse(fs.readFileSync(path.join(backup,'manifest.json'),'utf8'));
   return lock(plan,async()=>{
+    assertNoManualHandoff(plan.roots.execution);
     for(const entry of plan.files){
       if(fileHash(destination(plan.roots,entry.file))!==entry.afterHash)throw Error('runtime drift prevents rollback: '+entry.file);
       if(entry.beforeHash&&fileHash(safeFile(backup,entry.file))!==entry.beforeHash)throw Error('backup hash mismatch');

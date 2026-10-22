@@ -355,7 +355,19 @@ test("原生签到提交后未知状态是不可重试终态", async () => {
     assert.match(source, /submissionAttempted/);
     assert.match(source, /submission_outcome_unknown/);
   }
-  assert.match(runner, /preflight\?\.submissionAttempted === true/);
+  assert.match(runner, /nativeUnconfirmedSubmission\(preflight\)/);
+  const {nativeUnconfirmedSubmission}=await import('../src/native-preflight-result.mjs');
+  const {isRetryEligible}=await import('../src/retry-policy.mjs');
+  for(const preflightResult of [
+    {status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true},
+    {status:'needs_attention',failureCode:'two_factor_required',submissionAttempted:true},
+  ]){
+    const result=nativeUnconfirmedSubmission(preflightResult);
+    assert.equal(result.failureCode,'submission_outcome_unknown');
+    assert.equal(result.submissionAttempted,true);
+    assert.equal(result.retryable,false);
+    assert.equal(isRetryEligible(result),false);
+  }
   assert.match(runner, /retryable:\s*false/);
 });
 

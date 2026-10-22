@@ -14,9 +14,16 @@ export function configuredOAuthApiCheckinRule(requestedOrigin, config = {}) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`OAuth API 签到规则无效：${origin}`);
   }
+  if (raw.requireDailyRecord === true && !raw.identityPath) {
+    throw new Error("OAuth 当日记录验证需要同源身份接口");
+  }
   return {
     statusUrl: sameOriginEndpoint(origin, raw.statusPath, `OAuth API 签到状态地址 ${origin}`),
     actionUrl: sameOriginEndpoint(origin, raw.actionPath, `OAuth API 签到动作地址 ${origin}`),
+    ...(raw.requireDailyRecord === true ? {
+      requireDailyRecord: true,
+      identityUrl: sameOriginEndpoint(origin, raw.identityPath, "OAuth 身份接口"),
+    } : {}),
   };
 }
 
@@ -25,12 +32,14 @@ export function configuredOAuthApiCheckinRule(requestedOrigin, config = {}) {
  * returns terminal success only from the site's authenticated status/action
  * endpoints; page copy and click completion are intentionally ignored.
  */
-export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
+export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}, {readOnly = false} = {}) {
   const origin = new URL(requestedOrigin).origin;
   const rule = configuredOAuthApiCheckinRule(origin, config);
   if (!rule) return null;
+  if (readOnly && !rule.requireDailyRecord) throw new Error("只读核验需要启用当日记录验证");
+  const businessDate = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai'}).format(new Date());
 
-  const outcome = await page.evaluate(async ({ statusUrl, actionUrl }) => {
+  const outcome = await page.evaluate(async ({ statusUrl, actionUrl, identityUrl, requireDailyRecord, businessDate, readOnly }) => {
     const finiteNumber = (value) => {
       if (value == null || String(value).trim() === "") return null;
       const number = typeof value === "number" ? value : Number(String(value).replace(/,/g, ""));
@@ -39,7 +48,7 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
     const payloadOf = (body) => body?.data && typeof body.data === "object" ? body.data : body;
     const readBalance = (body) => {
       const payload = payloadOf(body);
-      return finiteNumber(payload?.new_balance ?? payload?.current_balance ?? payload?.balance ?? payload?.quota);
+      return finiteNumber(payload?.new_balance ?? payload?.current_balance ?? payload?.current_quota ?? payload?.balance ?? payload?.quota);
     };
     const readReward = (body) => {
       const payload = payloadOf(body);
@@ -55,6 +64,8 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
       const response = await fetch(url, {
         method,
         credentials: "include",
+        redirect: "error",
+        signal: AbortSignal.timeout(10000),
         headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
       }).catch(() => null);
       if (!response) return { code: "network_error" };
@@ -74,19 +85,39 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
         reward: readReward(body),
         message,
         loginMessage: /(?:未登录|请先登录|login required|unauthorized)/i.test(message),
+        ...(requireDailyRecord ? {
+          userId: payloadOf(body)?.linux_do_id,
+          record: payloadOf(body)?.today_record,
+        } : {}),
       };
     };
 
+    let identity;
+    if (requireDailyRecord) {
+      identity = await request(identityUrl, "GET");
+      if (identity.code === "login_required" || identity.loginMessage) return {code:"login_required"};
+      if (identity.code === "rate_limited") return {code:"rate_limited"};
+      if (identity.code === "network_error" || identity.status >= 500) return {code:"read_unavailable"};
+      if (!identity.ok || !identity.success || !/^[1-9]\d{0,19}$/.test(String(identity.userId ?? ""))) return {code:"unconfirmed"};
+    }
+    const dailyRecord = observed => !requireDailyRecord || observed.record?.spin_date === businessDate &&
+      String(observed.record?.linux_do_id) === String(identity.userId);
+    const proof = observed => requireDailyRecord ? {
+      accountId: String(identity.userId), recordDate: observed.record?.spin_date,
+    } : {};
     const before = await request(statusUrl, "GET");
     if (before.code === "login_required" || before.loginMessage) return { code: "login_required" };
     if (before.code === "rate_limited") return { code: "rate_limited" };
-    if (before.ok && before.success && before.canSpin === false) {
-      return { code: "already_signed", balance: before.balance };
+    if (before.ok && before.success && before.canSpin === false && dailyRecord(before)) {
+      return { code: "already_signed", balance: before.balance, ...proof(before) };
     }
+    if (requireDailyRecord && (before.code === "network_error" || before.status >= 500)) return {code:"read_unavailable"};
+    if (requireDailyRecord && (before.canSpin === false || before.record != null)) return {code:"unconfirmed"};
     if (!(before.ok && before.success && before.canSpin === true)) {
-      if (/已签到|已簽到|already/i.test(before.message)) return { code: "already_signed", balance: before.balance };
+      if (!requireDailyRecord && /已签到|已簽到|already/i.test(before.message)) return { code: "already_signed", balance: before.balance };
       return { code: "unconfirmed" };
     }
+    if (readOnly) return {code:"not_signed", ...proof(before)};
 
     const action = await request(actionUrl, "POST");
     if (action.code === "login_required" || action.loginMessage) return { code: "login_required" };
@@ -99,13 +130,14 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
         const after = await request(statusUrl, "GET");
         if (after.code === "login_required" || after.loginMessage) return { code: "login_required" };
         if (after.code === "rate_limited") return { code: "rate_limited" };
-        if (after.ok && after.success && after.canSpin === false) {
+        if (after.ok && after.success && after.canSpin === false && dailyRecord(after)) {
           return {
             code: "signed",
             beforeBalance: before.balance,
             actionBalance: action.balance,
             afterBalance: after.balance,
             reward: action.reward,
+            ...proof(after),
           };
         }
         if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500));
@@ -117,11 +149,31 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
     const after = await request(statusUrl, "GET");
     if (after.code === "login_required" || after.loginMessage) return { code: "login_required" };
     if (after.code === "rate_limited") return { code: "rate_limited" };
-    if (after.ok && after.success && after.canSpin === false) {
-      return { code: "already_signed", balance: after.balance };
+    if (after.ok && after.success && after.canSpin === false && dailyRecord(after)) {
+      return { code: "already_signed", balance: after.balance, actionSubmitted:true, ...proof(after) };
     }
     return { code: "submission_outcome_unknown", actionSubmitted: true };
-  }, rule);
+  }, rule.requireDailyRecord ? {...rule, businessDate, readOnly} : rule);
+
+  const confirmedAt = new Date();
+  const currentDay = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai'}).format(confirmedAt);
+  const boundEvidence = rule.requireDailyRecord && outcome?.accountId && currentDay === businessDate &&
+    (outcome.code === 'not_signed' || outcome.recordDate === businessDate) ? {
+      authoritative:true, accountId:outcome.accountId, businessDate,
+      confirmedAt:confirmedAt.toISOString(), evidenceScope:'site_account_day',
+      statusSignal:outcome.code === 'not_signed' ? 'oauth_daily_unsigned' : 'oauth_daily_record',
+      ...(outcome.recordDate ? {recordDate:outcome.recordDate} : {}),
+    } : null;
+  if (rule.requireDailyRecord && ['signed','already_signed','not_signed'].includes(outcome?.code) && !boundEvidence) {
+    const submitted = outcome.code === 'signed' || outcome.actionSubmitted === true;
+    return {status:'needs_attention', failureCode:submitted?'submission_outcome_unknown':'authoritative_status_unavailable',
+      submissionAttempted:submitted, retryable:false,
+      reason:'OAuth 当日记录与账号或业务日期不匹配，停止自动提交'};
+  }
+  if (outcome?.code === 'not_signed') {
+    return {status:'not_signed', submissionAttempted:false, reason:'身份和状态接口确认今日尚未签到',
+      evidence:{source:'oauth_api_status', ...boundEvidence}};
+  }
 
   if (outcome?.code === "signed") {
     const evidence = { source: "oauth_api_action" };
@@ -136,7 +188,8 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
     return {
       status: "signed",
       reason: "OAuth 站点签到接口确认今日签到成功",
-      evidence,
+      evidence:{...evidence, ...boundEvidence},
+      ...(rule.requireDailyRecord ? {submissionAttempted:true} : {}),
     };
   }
   if (outcome?.code === "already_signed") {
@@ -145,7 +198,8 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
     return {
       status: "already_signed",
       reason: "OAuth 站点状态接口确认今日已签到",
-      evidence,
+      evidence:{...evidence, ...boundEvidence},
+      ...(rule.requireDailyRecord ? {submissionAttempted:outcome.actionSubmitted === true} : {}),
     };
   }
   if (outcome?.code === "rate_limited") {
@@ -166,6 +220,13 @@ export async function tryOAuthApiCheckin(page, requestedOrigin, config = {}) {
       submissionAttempted: true,
       retryable: false,
     };
+  }
+  if (rule.requireDailyRecord) {
+    return outcome?.code === 'read_unavailable'
+      ? {status:'deferred', retryCause:'upstream_unavailable', submissionAttempted:false,
+        reason:'OAuth 签到状态接口暂未正常响应，未提交签到'}
+      : {status:'needs_attention', failureCode:'authoritative_status_unavailable', submissionAttempted:false,
+        reason:'OAuth 接口未确认当前账号的当日状态，停止通用页面点击'};
   }
   return null;
 }

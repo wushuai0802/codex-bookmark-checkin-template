@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,17 +16,66 @@ const fixture=()=>({
   plan:{targets:[{origin:'https://ourbits.club',folderNames:['PT白名单']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
 });
 
-test('independent PT sites are eligible while Harvest is pending; managed sites remain gated',()=>{
+test('registered PT sites are eligible while Harvest is pending; managed fallback-only sites remain gated',()=>{
   const f=fixture();f.harvest.checkinInventoryComplete=true;f.harvest.taskCompletion=null;
   f.harvest.sites=f.harvest.sites.filter(site=>site.origin!=='https://external.example')
     .map(site=>({...site,checkinEnabled:site.origin!=='https://ourbits.club'}));
   const result=planHarvestFallback(f);
   assert.deepEqual(result.eligible.map(site=>site.origin),['https://ourbits.club','https://external.example']);
-  assert.ok(result.eligible.every(site=>site.trigger==='execution_owned_pt_recheck'));
+  assert.deepEqual(result.eligible.map(site=>site.trigger),['harvest_status_unconfirmed','monitored_pt_status_unobserved']);
   f.harvest.sites[0].checkinEnabled=true;
   const managed=planHarvestFallback(f);
-  assert.deepEqual(managed.eligible.map(site=>site.origin),['https://external.example']);
-  assert.equal(managed.blocked.find(site=>site.origin==='https://ourbits.club').reason,'harvest_task_not_complete');
+  assert.deepEqual(managed.eligible.map(site=>site.origin),['https://ourbits.club','https://external.example']);
+  assert.equal(managed.eligible[0].trigger,'harvest_status_unconfirmed');
+});
+
+test('catalog-only observations never become a generic Harvest waiting task',()=>{
+  const f=fixture();
+  f.plan.targets=[];
+  f.catalog.sites=[{origin:'https://external.example',entryUrl:'https://external.example/attendance'}];
+  f.harvest.sites=[{origin:'https://external.example',checkinEnabled:true,status:'pending',observedAt:null,evidence:{authoritative:false}}];
+  f.harvest.taskCompletion=null;
+  const monitor=planHarvestFallback({...f,fallbackOnlyEnabled:false});
+  assert.equal(monitor.eligible.length,0);
+  assert.equal(monitor.blocked[0].reason,'monitor_only_unconfirmed');
+  const optedIn=planHarvestFallback({...f,fallbackOnlyEnabled:true});
+  assert.equal(optedIn.eligible.length,0);
+  assert.equal(optedIn.blocked[0].reason,'fallback_only_reader_unreviewed');
+});
+
+test('authorized fallback-only PT releases Harvest pending only for a fresh passive proof',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-fallback-guarded-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture(),origin='https://external.example';
+  f.harvest.sites=[{origin,status:'pending',checkinEnabled:true,observedAt:null,evidence:{authoritative:false}}];
+  f.harvest.taskCompletion=null;f.catalog.sites=[{origin,entryUrl:origin+'/attendance'}];f.plan.targets=[];f.latest.results=[];
+  const preview=planHarvestFallback({...f,readOnlyOrigins:[origin]});
+  assert.equal(preview.blocked.length,0);
+  assert.deepEqual(preview.eligible.map(item=>({origin:item.origin,kind:item.kind,guardedSubmit:item.guardedSubmit,readOnlyReview:item.readOnlyReview})),[
+    {origin,kind:'fallback_only',guardedSubmit:true,readOnlyReview:true},
+  ]);
+  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify(f.catalog));
+  const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(catalogFile)).digest('hex');
+  const calls=[];
+  const passive={origin,status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',profileBinding:'b'.repeat(64),
+    accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+    evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:now.toISOString(),evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}};
+  const result=await runHarvestFallback({...f,root,execute:true,catalogFile,catalogHash,readOnlyOrigins:[origin],
+    runSite:async options=>{calls.push(options.readOnly?'read':'guarded');return options.readOnly?passive:{origin,status:'signed',observedAt:now.toISOString(),businessDate:'2026-09-20',submissionAttempted:true,evidence:{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),businessDate:'2026-09-20'}};}});
+  assert.deepEqual(calls,['read','guarded']);
+  assert.equal(result.outcomes[0].state,'completed');
+  const repeated=await runHarvestFallback({...f,root,execute:true,catalogFile,catalogHash,readOnlyOrigins:[origin],runSite:async()=>{throw Error('same proof must not replay');}});
+  assert.equal(repeated.outcomes[0].state,'already_confirmed');
+});
+
+test('canonical aliases are accepted for reviewed fallback-only scope and single-origin selection',()=>{
+  const f=fixture();
+  f.harvest.taskCompletion=null;
+  f.harvest.sites=[{origin:'https://www.open.cd',status:'pending',checkinEnabled:true,observedAt:null,evidence:{authoritative:false}}];
+  f.catalog.sites=[{origin:'https://www.open.cd',entryUrl:'https://open.cd/attendance'}];f.plan.targets=[];f.latest.results=[];
+  const result=planHarvestFallback({...f,readOnlyOrigins:['https://open.cd']});
+  assert.equal(result.eligible[0].origin,'https://open.cd');
+  assert.equal(result.eligible[0].readOnlyReview,true);
 });
 
 test('independent PT recheck ignores unrelated Harvest completion changes but respects assignment changes',async t=>{
@@ -35,10 +85,15 @@ test('independent PT recheck ignores unrelated Harvest completion changes but re
     const f=fixture();f.harvest.checkinInventoryComplete=true;f.harvest.taskCompletion=null;
     f.harvest.sites=[{...failed('https://ourbits.club'),checkinEnabled:false}];f.catalog.sites=f.catalog.sites.slice(0,1);
     let calls=0;
-    const result=await runHarvestFallback({...f,root,execute:true,refreshHarvest:async()=>({...f.harvest,
+    const result=await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:['https://ourbits.club'],refreshHarvest:async()=>({...f.harvest,
       sites:[{...f.harvest.sites[0],checkinEnabled:switched}],taskCompletion:switched?null:fixture().harvest.taskCompletion}),
-      runEngine:async()=>{calls++;return {runId:'fixture',results:[{origin:'https://ourbits.club',status:'already_signed'}]};}});
-    assert.equal(calls,switched?0:1);
+      runSite:async input=>{
+        calls++;
+        if(input.readOnly)return {origin:'https://ourbits.club',accountKey:'site-default',status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',profileBinding:'b'.repeat(64),operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,evidence:{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),businessDate:'2026-09-20',evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}};
+        return {origin:'https://ourbits.club',status:'already_signed',observedAt:now.toISOString(),evidence:{source:'page_text',authoritative:true,confirmedAt:now.toISOString()}};
+      }
+    });
+    assert.equal(calls,switched?0:2);
     assert.equal(result.outcomes[0].state,switched?'harvest_assignment_changed':'completed');
   }
 });
@@ -71,7 +126,8 @@ test('a monitored PT target keeps its execution result even when its execution f
   f.catalog.sites=f.catalog.sites.filter(site=>site.origin==='https://external.example');
   const report=planHarvestFallback(f);
   assert.equal(report.registeredCount,1);
-  assert.equal(report.eligible[0].kind,'registered');
+  assert.equal(report.eligible[0].kind,'registered_review');
+  assert.equal(report.eligible[0].guardedSubmit,true);
   assert.equal(report.eligible[0].origin,'https://external.example');
 });
 
@@ -104,13 +160,35 @@ test('a bookmarked PT site absent from Harvest is reviewed after the daily task 
   f.fallbackOnlyEnabled=false;
   assert.equal(planHarvestFallback(f).blocked.some(item=>item.origin==='https://external.example'&&item.reason==='fallback_only_not_enabled'),true);
 });
-test('unknown Harvest status is reviewed only after its daily task completes',()=>{
+test('unknown Harvest status releases the registered PT without waiting for task completion',()=>{
   const f=fixture();f.catalog.sites=f.catalog.sites.slice(0,1);f.harvest.sites=[{origin:'https://ourbits.club',userId:'7',status:'unknown',observedAt:null,evidence:{authoritative:false}}];
   const reviewed=planHarvestFallback(f);
-  assert.equal(reviewed.eligible[0].trigger,'harvest_task_done_status_unknown');
+  assert.equal(reviewed.eligible[0].trigger,'harvest_status_unconfirmed');
   f.harvest.taskCompletion.status='failed';assert.equal(planHarvestFallback(f).eligible[0].trigger,'harvest_task_failed');
   f.harvest.taskCompletion.status='completed';f.latest.results[0].status='already_signed';assert.equal(planHarvestFallback(f).eligible.length,0);
   f.latest.results[0].status='needs_attention';assert.equal(planHarvestFallback(f).eligible[0].origin,'https://ourbits.club');
+});
+
+test('pending, failed, and missing Harvest states all release a precise registered PT target',()=>{
+  for(const status of ['pending','failed','unknown']){
+    const f=fixture();f.catalog.sites=f.catalog.sites.slice(0,1);f.harvest.taskCompletion=null;
+    f.harvest.sites=[{origin:'https://ourbits.club',status,observedAt:status==='failed'?'2026-09-20T09:55:00+08:00':null,evidence:{authoritative:false}}];
+    const result=planHarvestFallback(f);
+    assert.equal(result.eligible.length,1,status);
+    assert.equal(result.eligible[0].origin,'https://ourbits.club');
+    assert.equal(result.eligible[0].trigger,'harvest_status_unconfirmed');
+  }
+  const missing=fixture();missing.catalog.sites=missing.catalog.sites.slice(0,1);missing.harvest.sites=[];missing.harvest.taskCompletion=null;
+  assert.equal(planHarvestFallback(missing).eligible[0].trigger,'harvest_status_unconfirmed');
+});
+
+test('Harvest external conditions are blocked separately and do not become local failures',()=>{
+  const f=fixture();f.catalog.sites=f.catalog.sites.slice(0,1);f.harvest.taskCompletion=null;
+  f.harvest.sites=[{origin:'https://ourbits.club',status:'maintenance',siteCondition:'site_maintenance',observedAt:null,evidence:{authoritative:false}}];
+  const result=planHarvestFallback(f);
+  assert.equal(result.eligible.length,0);
+  assert.deepEqual(result.blocked[0],{origin:'https://ourbits.club',reason:'external_condition',external:true});
+  assert.deepEqual(result.assessments[0],{origin:'https://ourbits.club',state:'external_condition',reason:'external_condition'});
 });
 test('Harvest ID is not a PT account ID; stale, completed and ambiguous plans still block',()=>{
   const f=fixture();
@@ -149,7 +227,7 @@ test('Harvest completion audits every registered PT task, including one absent f
   const audit=planHarvestFallback(f);
   assert.equal(audit.registeredCount,2);
   assert.deepEqual(audit.eligible.map(item=>item.origin),['https://ourbits.club','https://unobserved.example']);
-  assert.equal(audit.eligible[1].trigger,'registered_pt_status_unobserved');
+  assert.equal(audit.eligible[1].trigger,'harvest_status_unconfirmed');
   assert.equal(audit.assessments.filter(item=>item.state==='executor_recheck_queued').length,2);
   f.latest.results.push({origin:'https://unobserved.example',accountKey:'site-default',status:'already_signed'});
   assert.equal(planHarvestFallback(f).eligible.length,1);
@@ -162,7 +240,7 @@ test('registered PT unknown submission enters a passive review queue after Harve
   assert.equal(preview.blocked.length,0);
   assert.deepEqual(preview.eligible[0],{
     origin:'https://ourbits.club',accountKey:'site-default',businessDate:'2026-09-20',
-    kind:'registered_review',readOnlyReview:true,observedAt:'2026-09-20T01:55:00.000Z',
+    kind:'registered_review',readOnlyReview:true,guardedSubmit:true,observedAt:'2026-09-20T01:55:00.000Z',
     trigger:'submission_unknown_readonly_review',
   });
   assert.deepEqual(preview.assessments.find(item=>item.origin==='https://ourbits.club'),{
@@ -207,6 +285,42 @@ test('Audiences unknown review records a passive diagnostic and never calls the 
   assert.equal(pendingHarvestFallbackAttempts(root,nextPreview,{now:f.now}).length,0);
   assert.equal(pendingHarvestFallbackAttempts(root,nextPreview,{now:new Date(f.now.getTime()+31*60_000)}).length,1);
 });
+
+test('registered OpenCD fresh unsigned proof resumes V1 once and remains quarantined after an ambiguous outcome',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-registered-open-recovery-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));configureUnifiedFixture(root);
+  const f=fixture(),origin='https://open.cd';
+  f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/index.php'}];
+  f.plan.targets=[{origin,folderNames:['公益站']}];
+  f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+  let engineCalls=0;
+  const proof={origin,status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',accountKey:'site-default',
+    profileBinding:'b'.repeat(64),operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+    evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:now.toISOString(),
+      evidenceScope:'site_account_day',pagePath:'/index.php',statusSignal:'open_cd_daily_unsigned'}};
+  const args={...f,root,execute:true,runSite:async input=>{if(input.readOnly){assert.equal(input.readOnly,true);return proof;}engineCalls++;return {origin,status:'already_signed',observedAt:now.toISOString(),evidence:{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),businessDate:'2026-09-20',statusSignal:'open_cd_daily_record_entry'}};}};
+  await runHarvestFallback(args);await runHarvestFallback(args);
+  assert.equal(engineCalls,1,'a guarded recovery cannot be retried from the same proof');
+  const state=JSON.parse(fs.readFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json'));
+  assert.equal(state.attempts.length,1);assert.equal(state.attempts[0].recoveryEvidence.evidence.statusSignal,'open_cd_daily_unsigned');
+});
+
+test('registered review cannot resume from unverified, stale, wrong-day or non-opted-in negative evidence',async t=>{
+  for(const variant of ['unverified','stale','wrong-day','opt-out','foreign-signal']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-registered-open-deny-'));
+    t.after(()=>fs.rmSync(root,{recursive:true,force:true}));configureUnifiedFixture(root);
+    const f=fixture(),origin='https://open.cd';f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/index.php'}];
+    f.plan.targets=[{origin,folderNames:['公益站']}];f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+    let engineCalls=0;const at=variant==='stale'?new Date(now.getTime()-6*60_000):now;
+    const proof={origin,status:'not_signed',observedAt:at.toISOString(),businessDate:variant==='wrong-day'?'2026-09-19':'2026-09-20',
+      accountKey:'site-default',profileBinding:'b'.repeat(64),operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+      evidence:{source:'pt_page',authoritative:variant!=='unverified',businessDate:'2026-09-20',confirmedAt:at.toISOString(),
+        evidenceScope:'site_account_day',pagePath:'/index.php',statusSignal:variant==='foreign-signal'?'generic_label':'open_cd_daily_unsigned'}};
+    await runHarvestFallback({...f,root,execute:true,fallbackOnlyEnabled:variant!=='opt-out',runSite:async()=>proof,
+      runEngine:async()=>{engineCalls++;return {results:[]};}});
+    assert.equal(engineCalls,0,variant+' must never authorize a supplement');
+  }
+});
 test('an explicit V1 site/account disable and disabled feature cannot enter fallback',()=>{
  const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);
  f.catalog.sites=f.catalog.sites.slice(0,1);
@@ -228,10 +342,10 @@ test('attempt is durable before execution, never blindly repeated and busy can r
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-fallback-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
   const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
-  let calls=0;const success=async options=>{calls++;assert.deepEqual(options.origins,['https://ourbits.club']);assert.deepEqual(options.accountKeys,['site-default']);return {runId:'today',results:[{origin:'https://ourbits.club',accountKey:'site-default',status:'signed'}]};};
-  assert.equal((await runHarvestFallback({...f,root,execute:true,runEngine:success})).outcomes[0].v1Status,'signed');
-  assert.equal((await runHarvestFallback({...f,root,execute:true,runEngine:success})).outcomes[0].state,'already_attempted');
-  assert.equal(calls,1);
+  let calls=0;const success=async options=>{calls++;if(options.readOnly)return {origin:'https://ourbits.club',accountKey:'site-default',status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',profileBinding:'b'.repeat(64),operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,evidence:{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),businessDate:'2026-09-20',evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}};return {origin:'https://ourbits.club',status:'signed',observedAt:now.toISOString(),evidence:{source:'page_text',authoritative:true,confirmedAt:now.toISOString()}};};
+  assert.equal((await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:['https://ourbits.club'],runSite:success})).outcomes[0].v1Status,'signed');
+  assert.equal((await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:['https://ourbits.club'],runSite:success})).outcomes[0].state,'passive_verification_cooldown');
+  assert.equal(calls,2);
   const stored=JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json'),'utf8'));
   assert.equal(stored.attempts[0].state,'completed');assert.equal(fs.existsSync(path.join(root,'data/harvest-fallback.lock')),false);
 });
@@ -245,7 +359,14 @@ test('fallback-only PT site uses the execution-layer site helper and a separate 
   let calls=0;
   const args={...f,root,execute:true,catalogFile,catalogHash,
     runEngine:async()=>{throw Error('daily plan must not run for an external PT site');},
-    runSite:async value=>{calls++;assert.equal(value.origin,'https://external.example');return {origin:value.origin,status:'already_signed',observedAt:f.now.toISOString(),evidence:{source:'page_text',authoritative:true,summary:'已签到'}};}};
+    runSite:async value=>{
+      calls++;assert.equal(value.origin,'https://external.example');
+      assert.match(value.fallbackAttemptId,/^[0-9a-f-]{36}$/);
+      const journal=JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json')));
+      const own=journal.attempts.find(item=>item.attemptId===value.fallbackAttemptId),worker=JSON.parse(fs.readFileSync(path.join(root,'data/harvest-fallback.lock')));
+      assert.equal(own.state,'in_progress');assert.equal(own.workerPid,worker.pid);assert.equal(own.workerNonce,worker.nonce);
+      return {origin:value.origin,status:'already_signed',observedAt:f.now.toISOString(),evidence:{source:'page_text',authoritative:true,summary:'已签到'}};
+    }};
   const result=await runHarvestFallback(args);
   assert.deepEqual(result.outcomes.map(item=>item.v1Status),['already_signed']);
   assert.equal((await runHarvestFallback(args)).outcomes[0].state,'already_attempted');assert.equal(calls,1);
@@ -416,9 +537,11 @@ test('a V2 lock collision is not counted as an actual attempt',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'harvest-busy-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);
   const f=fixture();f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
-  const busy=await runHarvestFallback({...f,root,execute:true,runEngine:async()=>{throw Error('V2 runner is already active');}});
+  let current=now;
+  const busy=await runHarvestFallback({...f,root,now:current,clock:()=>current,execute:true,readOnlyOrigins:['https://ourbits.club'],runSite:async()=>{throw Error('V2 runner is already active');}});
   assert.equal(busy.outcomes[0].state,'deferred_busy');
-  const second=await runHarvestFallback({...f,root,execute:true,runEngine:async()=>({runId:'later',results:[]})});
+  current=new Date(current.getTime()+16*60_000);
+  const second=await runHarvestFallback({...f,root,now:current,clock:()=>current,execute:true,readOnlyOrigins:['https://ourbits.club'],runSite:async input=>input.readOnly?{origin:'https://ourbits.club',accountKey:'site-default',status:'not_signed',observedAt:current.toISOString(),businessDate:'2026-09-20',profileBinding:'b'.repeat(64),operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,evidence:{source:'pt_page',authoritative:true,confirmedAt:current.toISOString(),businessDate:'2026-09-20',evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}}:{origin:'https://ourbits.club',status:'already_signed',observedAt:current.toISOString(),evidence:{source:'page_text',authoritative:true,confirmedAt:current.toISOString()}}});
   assert.equal(second.outcomes[0].state,'completed');
 });
 
@@ -431,7 +554,7 @@ test('preview counts only unattempted candidates and rejects a malformed daily a
   const audit=path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json');
   fs.writeFileSync(audit,JSON.stringify({businessDate:preview.businessDate,attempts:[{origin:'https://ourbits.club',state:'completed'}]}));
   assert.equal(pendingHarvestFallbackAttempts(root,preview).length,0);
-  fs.writeFileSync(audit,JSON.stringify({businessDate:preview.businessDate,attempts:[{origin:'https://ourbits.club',state:'deferred_preflight'}]}));
+  fs.writeFileSync(audit,JSON.stringify({businessDate:preview.businessDate,attempts:[{origin:'https://ourbits.club',state:'deferred_preflight',submissionState:'not_submitted',v1Status:'unknown',finishedAt:'2026-09-20T01:00:00Z',nextEligibleAt:'2026-09-20T01:30:00Z',outcome:{retryCause:'harvest_waiting',submissionAttempted:false}}]}));
   assert.equal(pendingHarvestFallbackAttempts(root,preview).length,1);
   fs.writeFileSync(audit,JSON.stringify({businessDate:'2026-09-19',attempts:[]}));
   assert.throws(()=>pendingHarvestFallbackAttempts(root,preview),/audit is invalid/);
@@ -485,6 +608,114 @@ test('uncertain passive result never permits a recovery submission',async t=>{
       readSafety:'reviewed_passive',submissionAttempted:false,evidence:{source:'none',authoritative:false}};}});
   assert.equal(calls,1);assert.equal(result.outcomes[0].state,'passive_result_unverified');
   assert.equal(JSON.parse(fs.readFileSync(path.join(root,'outputs/harvest-fallback-attempts-2026-09-20.json'))).attempts.length,0);
+  assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now,readOnlyOrigins:[origin]}).length,0);
+});
+
+function nativeProfileRecoveryFixture(root,{attemptChanges={},resultChanges={},priorChanges={}}={}){
+  const f=fixture(),origin='https://ourbits.club',businessDate='2026-09-20';
+  f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
+  f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+  f.config={ptReadOnlyPolicies:{[origin]:{reviewed:true,mode:'safe_history_page',url:origin+'/index.php',nativeMainChrome:true}}};
+  const proof=at=>({origin,accountKey:'site-default',profileBinding:'b'.repeat(64),businessDate,
+    status:'not_signed',observedAt:at,submissionAttempted:false,operationMode:'safe_history_page',readSafety:'reviewed_passive',
+    evidence:{source:'pt_page',authoritative:true,businessDate,confirmedAt:at,evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}});
+  const old=proof('2026-09-20T01:20:00.000Z'),attempt={attemptId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',origin,
+    accountKey:'site-default',businessDate,state:'completed',startedAt:'2026-09-20T01:20:01.000Z',finishedAt:'2026-09-20T01:20:03.000Z',
+    recoveryEvidence:{...old,...priorChanges},outcome:{...old,status:'needs_attention',failureCode:'authoritative_status_unavailable',
+      profileBinding:'c'.repeat(64),observedAt:'2026-09-20T01:20:03.000Z',...resultChanges},...attemptChanges};
+  fs.mkdirSync(path.join(root,'outputs'),{recursive:true});
+  const audit=path.join(root,'outputs','harvest-fallback-attempts-'+businessDate+'.json');
+  fs.writeFileSync(audit,JSON.stringify({businessDate,attempts:[attempt]}));
+  return {f,origin,businessDate,proof,audit,attempt};
+}
+
+test('an explicit unsubmitted generic-profile guard can recover once through the bound native engine',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-profile-recovery-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const {f,origin,businessDate,proof,audit}=nativeProfileRecoveryFixture(root);
+  const calls=[],current=proof(now.toISOString());
+  const args={...f,root,execute:true,readOnlyOrigins:[origin],runSite:async options=>{
+    calls.push('read');assert.equal(options.readOnly,true,'native submits must not use the generic supplement');return current;
+  },runEngine:async options=>{
+    calls.push('native');assert.equal(options.mode,'execute');assert.deepEqual(options.origins,[origin]);
+    assert.deepEqual(options.accountKeys,[],'legacy raw default keys may be absent; exact origin selection keeps preflight bounded');
+    assert.equal(options.notify,false);assert.equal(options.fallbackRecheck,true);
+    return {runId:'20260920-native-test',businessDate,observedAt:now.toISOString(),results:[{
+      ...current,status:'signed',submissionAttempted:true,operationMode:'legacy_checkin',readSafety:'attendance_page_risk'}]};
+  }};
+  const output=await runHarvestFallback(args);
+  assert.deepEqual(calls,['read','native']);assert.equal(output.outcomes[0].v1Status,'signed');
+  const state=JSON.parse(fs.readFileSync(audit));assert.equal(state.attempts.length,2);
+  assert.equal(state.attempts[0].outcome.submissionAttempted,false);assert.equal(state.attempts[1].nativeRegisteredEngine,true);
+  assert.equal(state.attempts[1].outcome.profileBinding,current.profileBinding);
+  assert.equal((await runHarvestFallback(args)).outcomes[0].state,'already_confirmed');assert.deepEqual(calls,['read','native']);
+});
+
+test('unknown writes, mismatched accounts, stale proof and unreviewed routing retain the daily submit limit',async t=>{
+  const variants=[
+    {resultChanges:{submissionAttempted:true}},
+    {resultChanges:{submissionAttempted:undefined}},
+    {resultChanges:{submissionOutcomeUnknown:true}},
+    {resultChanges:{failureCode:'submission_outcome_unknown'}},
+    {resultChanges:{accountKey:'other-account'}},
+    {attemptChanges:{businessDate:'2026-09-19'}},
+    {attemptChanges:{attemptId:undefined}},
+    {resultChanges:{observedAt:'2026-09-19T01:20:03.000Z'}},
+    {attemptChanges:{nativeRegisteredEngine:true}},
+    {priorChanges:{profileBinding:'d'.repeat(64)}},
+    {attemptChanges:{finishedAt:'2026-09-20T02:00:00.000Z'}},
+    {unreviewed:true}
+  ];
+  for(const variant of variants){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-recovery-refusal-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);const {f,origin,proof,audit}=nativeProfileRecoveryFixture(root,variant);
+    if(variant.unreviewed)f.config.ptReadOnlyPolicies[origin].reviewed=false;
+    let reads=0;
+    const output=await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:[origin],runSite:async options=>{
+      reads++;assert.equal(options.readOnly,true);return proof(now.toISOString());
+    },runEngine:async()=>{throw Error('a rejected recovery must not launch the native engine');}});
+    assert.equal(reads,1);assert.equal(output.outcomes[0].state,'daily_attempt_limit',JSON.stringify(variant));
+    assert.equal(JSON.parse(fs.readFileSync(audit)).attempts.length,1);
+  }
+});
+
+test('native-engine wrong-profile results stay quarantined instead of being published as completion',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-return-binding-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);const {f,origin,businessDate,proof,audit}=nativeProfileRecoveryFixture(root);
+  const current=proof(now.toISOString());
+  const output=await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:[origin],runSite:async options=>{
+    assert.equal(options.readOnly,true);return current;
+  },runEngine:async()=>({businessDate,observedAt:now.toISOString(),results:[{...current,status:'signed',submissionAttempted:true,profileBinding:'d'.repeat(64)}]})});
+  assert.equal(output.outcomes[0].state,'outcome_unknown');
+  const state=JSON.parse(fs.readFileSync(audit));assert.equal(state.attempts[1].outcome.profileBinding,'d'.repeat(64));
+  assert.equal(state.attempts[1].outcome.submissionAttempted,true);
+  const saved=JSON.parse(fs.readFileSync(path.join(root,'outputs','pt-fallback-results-'+businessDate+'.json')));
+  assert.equal(saved.sites[0].status,'not_signed','an incompatible engine success must never overwrite the passive account proof');
+});
+
+test('registered native recovery rejects missing or duplicate account results before publishing',async t=>{
+  for(const duplicate of [false,true]){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-return-account-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);const {f,origin,businessDate,proof,audit}=nativeProfileRecoveryFixture(root);
+    const current=proof(now.toISOString()),entry={...current,status:'signed',submissionAttempted:true};
+    const output=await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:[origin],runSite:async options=>{
+      assert.equal(options.readOnly,true);return current;
+    },runEngine:async()=>({businessDate,observedAt:now.toISOString(),results:duplicate?[entry,entry]:[{...entry,accountKey:'other-account'}]})});
+    assert.equal(output.outcomes[0].state,'outcome_unknown');
+    const state=JSON.parse(fs.readFileSync(audit));assert.equal(state.attempts[1].nativeRegisteredEngine,true);
+    const saved=JSON.parse(fs.readFileSync(path.join(root,'outputs','pt-fallback-results-'+businessDate+'.json')));
+    assert.equal(saved.sites[0].status,'not_signed');
+  }
+});
+
+test('explicit non-submission repairs keep both the total recovery and passive cooldown bounds',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-recovery-bounds-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);const {f,origin,proof,audit,attempt}=nativeProfileRecoveryFixture(root);
+  fs.writeFileSync(audit,JSON.stringify({businessDate:f.harvest.businessDate,attempts:[attempt,{...attempt},{...attempt}]}));
+  const output=await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:[origin],runSite:async options=>{
+    assert.equal(options.readOnly,true);return proof(now.toISOString());
+  },runEngine:async()=>{throw Error('bounded recovery must not execute');}});
+  assert.equal(output.outcomes[0].state,'daily_guard_recovery_limit');
   assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now,readOnlyOrigins:[origin]}).length,0);
 });
 

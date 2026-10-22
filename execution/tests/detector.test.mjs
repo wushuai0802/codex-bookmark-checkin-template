@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyPageText, formatDailyReason, isCheckinSingleChoiceChallenge, ptPageEvidence, scoreActionText, solveArithmeticQuestion } from "../src/detector.mjs";
+import vm from "node:vm";
+import { classifyPageText, readPageTwoFactorStructure, formatDailyReason, isCheckinSingleChoiceChallenge, ptPageEvidence, scoreActionText, solveArithmeticQuestion } from "../src/detector.mjs";
 
 test("识别已签到状态", () => {
   assert.equal(classifyPageText({ bodyText: "您今日已签到，请明天再来" }).status, "already_signed");
@@ -23,10 +24,14 @@ test("OpenCD authenticated daily header is same-day evidence; historical text an
   assert.equal(evidence.authoritative,true);
   assert.equal(evidence.businessDate,"2026-09-29");
   assert.equal(evidence.statusSignal,"open_cd_daily_record_entry");
+  const pending=ptPageEvidence({...args,bodyText:prefix+"[签到] [21点] [菠菜]\n[退出]",allowUndatedActionText:false});
+  assert.equal(pending.authoritative,true);
+  assert.equal(pending.status,'not_signed');
+  assert.equal(pending.statusSignal,'open_cd_daily_unsigned');
   const simplified=body.replace("當前時間","当前时间").replace("歡迎回來","欢迎回来").replace("[查看簽到記錄] [21點]","[已签到] [21点]");
   assert.equal(ptPageEvidence({...args,bodyText:simplified,allowUndatedActionText:false})?.authoritative,true);
   for(const changed of [
-    {bodyText:prefix+"[签到] [21點]\n[退出]\n2026.09.18 查看签到记录"},
+    {bodyText:prefix+"[签到记录] [21點]\n[退出]\n2026.09.18 查看签到记录"},
     {bodyText:body.replace("08:43","06:43")},
     {bodyText:body.replace("歡迎回來", "登入")},
     {url:"https://open.cd/forums.php"},
@@ -70,6 +75,103 @@ test("异地 2FA 是确定性可信设备关注状态而不是普通登录重试
 
 test("说明文字不被误判为当前人机挑战", () => {
   assert.equal(classifyPageText({ bodyText: "每日签到 完成人机验证即可领取奖励" }).status, "ready");
+});
+
+test('2FA help links, settings and announcements cannot replace a signed or login state', () => {
+  for (const text of ['忘记二级验证? 点击这里自助解绑', '忘記二級驗證? 自助解綁', '2FA设置 管理两步验证',
+    '公告 请启用 2FA 以保护账号', '二级验证代码帮助说明']) {
+    assert.equal(classifyPageText({ bodyText: `欢迎回来 今日已签到 ${text}` }).status, 'already_signed', text);
+    assert.equal(classifyPageText({ url: 'https://tracker.example/login.php', bodyText: text, hasPassword: true }).status,
+      'login_required', text);
+    assert.equal(classifyPageText({ url: 'https://tracker.example/index.php', bodyText: text }).status, 'ready', text);
+  }
+  const imageCaptcha = classifyPageText({ url: 'https://tracker.example/attendance.php', bodyText: '请输入验证码完成签到 2FA设置',
+    challengeSelectors: true });
+  assert.equal(imageCaptcha.status, 'interactive_challenge');
+  assert.notEqual(imageCaptcha.failureCode, 'two_factor_required');
+});
+
+test('real OTP gates remain ahead of stale success text while optional login OTP allows password recovery', () => {
+  const url = 'https://tracker.example/login.php';
+  assert.equal(classifyPageText({ url, hasPassword: true, hasOtpInput: true, bodyText: '二级验证 忘记二级验证?' }).status,
+    'login_required');
+  for (const sample of [
+    { url, hasPassword: true, hasOtpInput: true, hasRequiredOtpInput: true },
+    { url: 'https://tracker.example/index.php', hasOtpInput: true },
+    { url: 'https://tracker.example/index.php', hasOtpForm: true },
+    { url: 'https://tracker.example/take2fa.php', hasPassword: true },
+    { url: 'https://github.example/sessions/two-factor/app', hasOtpInput: true },
+    { url, hasPassword: true, bodyText: 'Please enter your authenticator code' },
+  ]) {
+    const result = classifyPageText({ bodyText: '今日已签到', ...sample });
+    assert.equal(result.failureCode, 'two_factor_required', JSON.stringify(sample));
+    assert.equal(result.retryableLoginRecovery, false);
+  }
+  for (const sample of [
+    { url: 'https://tracker.example/take2fa.php' },
+    { url: 'https://tracker.example/login.php?redirect=/take2fa.php', hasPassword: true },
+    { url: 'https://tracker.example/login.php#/sessions/two-factor/app', hasPassword: true },
+    { url, hasPassword: true, hasOtpInput: 'true' },
+  ]) assert.notEqual(classifyPageText(sample).failureCode, 'two_factor_required');
+});
+
+function otpStructureFixture(fields, url = 'https://tracker.example/index.php') {
+  const inputs = fields.map(field => {
+    const input = { type: field.type ?? 'text', disabled: field.disabled ?? false, readOnly: field.readOnly ?? false,
+      hidden: field.hidden ?? false, required: field.required ?? false, style: field.style ?? {},
+      getAttribute(name) {
+        if (name === 'value') throw Error('Input values must stay private');
+        return field[name] ?? null;
+      },
+      getBoundingClientRect: () => ({ width: field.width ?? 80, height: field.height ?? 20 }),
+      form: field.action === undefined ? null : { action: field.resolvedAction,
+        getAttribute: name => name === 'action' ? field.action : null },
+    };
+    Object.defineProperty(input, 'value', { get() { throw Error('Input values must stay private'); } });
+    return input;
+  });
+  return {
+    evaluate: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
+      URL, location: new URL(url),
+      document: { querySelectorAll: selector => { assert.equal(selector, 'input'); return inputs; } },
+      getComputedStyle: input => ({ display: 'block', visibility: 'visible', ...input.style }),
+    }),
+  };
+}
+
+test('visible OTP structure distinguishes optional password login from secondary verification without reading values', async () => {
+  const cases = [
+    { fields: [{ name: 'two_step_code' }], expected: [true, false, false] },
+    { fields: [{ name: '2fa', action: '/take2fa.php' }], expected: [true, true, false] },
+    { fields: [{ name: 'code', action: '/take2fa.php' }], expected: [false, true, false] },
+    { fields: [{ type: 'password', name: 'code', action: '/take2fa.php' }], expected: [false, true, false] },
+    { fields: [{ name: 'two_step_code', required: true }], expected: [true, false, true] },
+    { fields: [{ name: 'otp', 'aria-required': 'true' }], expected: [true, false, true] },
+    { fields: [{ name: 'verification_code', placeholder: '验证码' }], expected: [false, false, false] },
+    { fields: [{ name: 'imagestring', autocomplete: 'one-time-code', action: '/take2fa.php' }], expected: [false, false, false] },
+    { fields: [{ name: 'code', action: 'https://other.example/take2fa.php' }], expected: [false, false, false] },
+    { fields: [{ name: 'code', action: '/take2fa.php', resolvedAction: 'https://other.example/take2fa.php' }],
+      expected: [false, false, false] },
+    { fields: [{ name: 'otp', type: 'hidden' }, { name: 'totp', disabled: true }, { name: '2fa', readOnly: true },
+      { name: 'two_step_code', hidden: true }, { name: 'otp', style: { display: 'none' } },
+      { name: 'otp', style: { visibility: 'hidden' } }, { name: 'otp', width: 0 }], expected: [false, false, false] },
+  ];
+  for (const { fields, expected } of cases) {
+    const structure = await readPageTwoFactorStructure(otpStructureFixture(fields));
+    assert.deepEqual(Object.values(structure), expected, JSON.stringify(fields));
+    assert.doesNotMatch(JSON.stringify(structure), /two_step_code|value|bodyText/);
+  }
+  const optionalLogin = await readPageTwoFactorStructure(otpStructureFixture([
+    { type: 'password', name: 'password', action: '/takelogin.php' },
+    { name: 'two_step_code', action: '/takelogin.php' }, { name: 'imagestring', action: '/takelogin.php' },
+  ], 'https://tracker.example/login.php'));
+  assert.equal(classifyPageText({ url: 'https://tracker.example/login.php', hasPassword: true, ...optionalLogin }).status,
+    'login_required');
+  const unavailable = await readPageTwoFactorStructure({ evaluate: async () => { throw Error('Page unavailable'); } });
+  assert.deepEqual(unavailable, { hasOtpInput: false, hasOtpForm: false, hasRequiredOtpInput: false });
+  const malformed = await readPageTwoFactorStructure({ evaluate: async () => ({ hasOtpInput: 'true', hasOtpForm: 1,
+    hasRequiredOtpInput: true, bodyText: 'PRIVATE_BODY', code: 'PRIVATE_CODE' }) });
+  assert.deepEqual(malformed, { hasOtpInput: false, hasOtpForm: false, hasRequiredOtpInput: true });
 });
 
 test("签到功能说明和历史入口不被误判为已完成", () => {

@@ -184,9 +184,14 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     };
     if(typeof entry.submissionAttempted==='boolean')task.submissionAttempted=entry.submissionAttempted;
     if(/^[a-z_]{1,80}$/.test(entry.failureCode??''))task.failureCode=entry.failureCode;
+    // Non-secret binding metadata is needed to reconcile a passive receipt
+    // with its original execution. Never import a browser directory here.
+    if(/^[a-f0-9]{64}$/.test(entry.profileBinding??entry.evidence?.profileBinding??''))
+      task.profileBinding=entry.profileBinding??entry.evidence.profileBinding;
     if(!['signed','already_signed','not_available'].includes(status)){
       const condition=entry.failureCode==='submission_outcome_unknown'||entry.submissionAttempted===true?'submission_outcome_unknown':
         entry.siteCondition==='site_maintenance'||entry.failureCode==='site_maintenance'?'site_maintenance':
+        ['site_migration','bookmark_origin_changed'].includes(entry.failureCode)?entry.failureCode:
         externalRetryCauses.includes(entry.retryCause)?entry.retryCause:
         entry.evidence?.source==='vibe_entitlement_status'&&entry.evidence?.statusSignal==='expired_subscription'?'entitlement_expired':null;
       if(condition)task.condition=condition;

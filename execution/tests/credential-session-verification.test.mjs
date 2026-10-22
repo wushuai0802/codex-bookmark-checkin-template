@@ -37,3 +37,20 @@ test("只有权威页面的已登录证据才通过", () => {
     assert.equal(classifyCredentialVerification({ ...valid, ...sample }).authenticated, false, JSON.stringify(sample));
   }
 });
+
+test('verification retains daily completion beside 2FA settings but never authenticates a real OTP gate', () => {
+  const settings = classifyCredentialVerification({ ...valid, bodyText: `${valid.bodyText} 2FA设置 忘记二级验证? 点击这里自助解绑` });
+  assert.equal(settings.authenticated, true);
+  assert.equal(settings.dailyCheckin.status, 'already_signed');
+  for (const sample of [
+    { bodyText: '异地登录安全验证 请输入二级验证代码，完成后再访问签到页面' },
+    { hasOtpInput: true },
+    { finalUrl: 'https://tracker.example/take2fa.php', hasOtpForm: true },
+    { finalUrl: 'https://tracker.example/take2fa.php', passwordVisible: true },
+  ]) {
+    const result = classifyCredentialVerification({ ...valid, ...sample });
+    assert.equal(result.authenticated, false, JSON.stringify(sample));
+    assert.equal(result.failureCode, 'two_factor_required');
+    assert.equal(result.dailyCheckin, undefined);
+  }
+});

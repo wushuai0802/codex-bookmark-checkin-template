@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {planRelease,applyRelease,rollbackRelease,auditRelease} from '../../tools/release-lib.mjs';
+import {planRelease,applyRelease,rollbackRelease,auditRelease,assertNoManualHandoff} from '../../tools/release-lib.mjs';
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'release-drill-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const source=path.join(root,'source'),executionRoot=path.join(root,'execution'),observationRoot=path.join(root,'observation');
   for(const dir of [source+'/execution/src',source+'/observation/public',executionRoot+'/src',executionRoot+'/config',observationRoot+'/public'])fs.mkdirSync(dir,{recursive:true});
@@ -13,6 +13,18 @@ function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'release-dri
   fs.writeFileSync(executionRoot+'/src/runner.mjs','old runner');fs.writeFileSync(executionRoot+'/config/config.json','private config');
   return {root,source,executionRoot,observationRoot,files:['execution/src/runner.mjs','observation/public/app.js','observation/Dockerfile'],revision:'a'.repeat(40),version:'1.1.0'};}
 const lock=async(_plan,run)=>run();
+
+test('all actual pending handoff states and an active manual process prevent code replacement',async t=>{
+  const f=fixture(t);fs.mkdirSync(f.executionRoot+'/tmp');
+  const file=f.executionRoot+'/tmp/manual-handoff.json',plan=planRelease(f);
+  for(const state of ['awaiting_manual_handoff','pending_verification','waiting_for_user','awaiting_login']){
+    fs.writeFileSync(file,JSON.stringify({state}));
+    await assert.rejects(applyRelease(plan,{backupRoot:f.root+'/backups',lock}),/manual handoff/);
+    assert.equal(fs.readFileSync(f.executionRoot+'/src/runner.mjs','utf8'),'old runner');
+  }
+  fs.writeFileSync(file,JSON.stringify({state:'handoff_complete'}));assert.doesNotThrow(()=>assertNoManualHandoff(f.executionRoot));
+  fs.writeFileSync(file,JSON.stringify({pid:process.pid}));assert.throws(()=>assertNoManualHandoff(f.executionRoot),/active manual/);
+});
 test('release drill preserves private state and restores old code without destroying new files',async t=>{
   const f=fixture(t),plan=planRelease(f),out=await applyRelease(plan,{backupRoot:f.root+'/backups',lock});
   assert.equal(auditRelease(plan).drift.length,0);assert.equal(fs.readFileSync(f.executionRoot+'/config/config.json','utf8'),'private config');
@@ -114,4 +126,32 @@ test('operations runtime receives bounded shadow sync code without replacing its
   assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-OperationsSupport.ps1','utf8'),'old support');
   assert.equal(fs.readFileSync(opsRoot+'/scripts/Sync-Transport.ps1','utf8'),'old transport');
   assert.equal(fs.readFileSync(opsRoot+'/config/config.json','utf8'),'private ops config');
+});
+
+test('operations runtime code trees are mapped from the canonical observation layer',async t=>{
+  const f=fixture(t),opsRoot=f.root+'/operations';
+  fs.mkdirSync(opsRoot+'/src',{recursive:true});fs.mkdirSync(opsRoot+'/public',{recursive:true});
+  fs.mkdirSync(f.source+'/observation/src',{recursive:true});
+  fs.mkdirSync(f.source+'/observation/scripts',{recursive:true});fs.mkdirSync(f.source+'/execution/scripts',{recursive:true});
+  for(const [relative,content] of [['observation/scripts/Sync-NasShadow.ps1','sync'],['observation/scripts/Start-NasShadowScheduler.ps1','scheduler'],['observation/scripts/Sync-OperationsSupport.ps1','support'],['observation/scripts/Sync-Transport.ps1','transport'],['execution/scripts/Run-HiddenPowerShell.vbs','launcher']])fs.writeFileSync(f.source+'/'+relative,content);
+  fs.writeFileSync(f.source+'/observation/src/bridge.mjs','canonical bridge');
+  fs.writeFileSync(f.source+'/observation/scripts/Invoke-PtEvidenceRepair.ps1','canonical evidence launcher');
+  fs.writeFileSync(f.source+'/observation/scripts/reconcile-pt-evidence.mjs','canonical evidence worker');
+  fs.writeFileSync(opsRoot+'/src/bridge.mjs','stale bridge');
+  fs.writeFileSync(opsRoot+'/public/app.js','stale ui');
+  fs.mkdirSync(opsRoot+'/scripts',{recursive:true});
+  fs.writeFileSync(opsRoot+'/scripts/Invoke-PtEvidenceRepair.ps1','stale evidence launcher');
+  fs.writeFileSync(opsRoot+'/scripts/reconcile-pt-evidence.mjs','stale evidence worker');
+  const plan=planRelease({...f,opsRoot,files:[...f.files,'operations/src/bridge.mjs','operations/public/app.js','operations/scripts/Invoke-PtEvidenceRepair.ps1','operations/scripts/reconcile-pt-evidence.mjs']});
+  const out=await applyRelease(plan,{backupRoot:f.root+'/backups',lock});
+  assert.equal(fs.readFileSync(opsRoot+'/src/bridge.mjs','utf8'),'canonical bridge');
+  assert.equal(fs.readFileSync(opsRoot+'/public/app.js','utf8'),'new ui');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Invoke-PtEvidenceRepair.ps1','utf8'),'canonical evidence launcher');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/reconcile-pt-evidence.mjs','utf8'),'canonical evidence worker');
+  assert.equal(auditRelease(plan).drift.length,0);
+  await rollbackRelease(out.backup,{lock});
+  assert.equal(fs.readFileSync(opsRoot+'/src/bridge.mjs','utf8'),'stale bridge');
+  assert.equal(fs.readFileSync(opsRoot+'/public/app.js','utf8'),'stale ui');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/Invoke-PtEvidenceRepair.ps1','utf8'),'stale evidence launcher');
+  assert.equal(fs.readFileSync(opsRoot+'/scripts/reconcile-pt-evidence.mjs','utf8'),'stale evidence worker');
 });

@@ -20,7 +20,7 @@ test('evidence rebuild carries forward the previous health source when a fresh p
   assert.equal(health.failedChecks.length,2);assert.equal(health.reason,'ok');
 });
 
-test('refreshing a catalog keeps its exact folder while rebinding harmless bookmark changes',t=>{
+test('refreshing a catalog keeps its exact folder while rebinding harmless bookmark changes',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-evidence-catalog-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const legacy=root+'/legacy';fs.mkdirSync(legacy+'/config',{recursive:true});fs.mkdirSync(root+'/config');
@@ -35,7 +35,7 @@ test('refreshing a catalog keeps its exact folder while rebinding harmless bookm
   fs.writeFileSync(file,JSON.stringify(original));
   document.checksum='changed-by-browser';fs.writeFileSync(bookmarksPath,JSON.stringify(document));
   assert.throws(()=>validateCurrentPtCatalog(original,{bookmarksPath,now}));
-  const fresh=JSON.parse(fs.readFileSync(refreshEvidenceCatalog(root,file,now)));
+  const fresh=JSON.parse(fs.readFileSync(await refreshEvidenceCatalog(root,file,now)));
   assert.equal(validateCurrentPtCatalog(fresh,{bookmarksPath,now}),true);
   assert.deepEqual(fresh.scope,original.scope);assert.deepEqual(fresh.sites.map(s=>s.origin),[origin]);
 });
@@ -50,6 +50,54 @@ test('only same-day reported PT completions without evidence enter passive repai
   const verified=snapshot();verified.receipts[0].evidence.authoritative=true;
   assert.deepEqual(ptEvidenceCandidates(verified,catalog,{sites:{}},now),[]);
   assert.deepEqual(ptEvidenceCandidates(snapshot(),{sites:[]},{sites:{}},now),[]);
+});
+
+test('a current matched Harvest completion keeps a historical unknown task out of the passive budget',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-harvest-done-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');
+  const value=snapshot(),pending='https://pending.example';
+  value.tasks[0]={...value.tasks[0],accountRef:'acct_current',observedStatus:'needs_attention',
+    failureCode:'submission_outcome_unknown',submissionAttempted:true};
+  value.tasks.push({taskId:'pending',origin:pending,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true});
+  value.receipts.push({taskId:'pending',evidence:{authoritative:false}});
+  value.ptStatus={sites:[{origin,accountRef:'acct_current',effective:{source:'harvest',status:'signed',fresh:true,
+    authoritative:true,observedAt:now.toISOString(),evidence:{source:'harvest',authoritative:true,statusVerified:true,businessDate:'2026-09-30'}}}]};
+  assert.deepEqual(ptEvidenceCandidates(value,{sites:[{origin},{origin:pending}]},{sites:{}},now),[pending]);
+  fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(value));
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify({sites:[{origin},{origin:pending}]}));
+  const calls=[];
+  await repairPtEvidence({root,catalogFile,maxSites:1,refreshCatalog:()=>catalogFile,clock:()=>now,runSite:async input=>{
+    calls.push(input.origin);assert.equal(input.readOnly,true);return {origin:input.origin,status:'unknown',evidence:{authoritative:false}};
+  }});
+  assert.deepEqual(calls,[pending]);
+  assert.equal(JSON.parse(fs.readFileSync(root+'/outputs/shadow-beta-snapshot.json')).tasks[0].failureCode,'submission_outcome_unknown',
+    'budget suppression never rewrites historical submission evidence');
+});
+
+test('stale, foreign-account and non-authoritative Harvest observations cannot suppress passive repair',()=>{
+  for(const variant of [
+    {site:{accountRef:'acct_other'}},
+    {effective:{observedAt:'2026-09-29T12:00:00Z'}},
+    {effective:{observedAt:'2026-09-30T12:02:00Z'}},
+    {effective:{fresh:false}},
+    {effective:{authoritative:false}},
+    {effective:{status:'unknown'}},
+    {evidence:{authoritative:false}},
+    {evidence:{businessDate:'2026-09-29'}},
+    {evidence:{statusVerified:false}},
+    {missingAccount:true},
+    {missingAccount:true,multipleAccounts:true},
+    {duplicate:true}
+  ]){
+    const value=snapshot();value.tasks[0].accountRef='acct_current';
+    const site={origin,accountRef:'acct_current',...variant.site,effective:{source:'harvest',status:'signed',fresh:true,authoritative:true,
+      observedAt:now.toISOString(),...variant.effective,evidence:{source:'harvest',authoritative:true,statusVerified:true,
+        businessDate:'2026-09-30',...variant.evidence}}};
+    if(variant.missingAccount){delete value.tasks[0].accountRef;delete site.accountRef;}
+    if(variant.multipleAccounts)value.tasks.push({...value.tasks[0],taskId:'other-task',accountKey:'other-account'});
+    value.ptStatus={sites:variant.duplicate?[site,site]:[site]};
+    assert.deepEqual(ptEvidenceCandidates(value,catalog,{sites:{}},now),[origin],JSON.stringify(variant));
+  }
 });
 
 test('repair never submits or erases a reported completion; unresolved evidence is bounded',async t=>{
@@ -122,6 +170,22 @@ test('an empty evidence pass does not create a recurring publication marker',asy
   assert.equal(result.results.length,0);
   assert.equal(result.dirtyMarker,null);
   assert.equal(fs.existsSync(root+'/outputs/pt-evidence-repair-dirty-2026-09-30.json'),false);
+});
+
+test('evidence worker persists a bound unsigned proof for V1 without submitting or claiming success',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-proof-negative-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));fs.mkdirSync(root+'/outputs');
+  const value=snapshot();value.tasks[0].observedStatus='needs_attention';value.tasks[0].failureCode='submission_outcome_unknown';
+  fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(value));
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify(catalog));
+  let records=0;
+  const result=await repairPtEvidence({root,catalogFile,refreshCatalog:()=>catalogFile,clock:()=>now,
+    runSite:async input=>{assert.equal(input.readOnly,true);return {origin,status:'not_signed',submissionAttempted:false,evidence:{authoritative:true}};},
+    record:(_root,proof)=>{records++;assert.equal(proof.submissionAttempted,false);return {recorded:true};}});
+  assert.equal(records,1);assert.equal(result.results[0].outcome,'verified_not_signed');
+  const marker=JSON.parse(fs.readFileSync(root+'/outputs/'+result.dirtyMarker));
+  assert.equal(marker.verifiedCount,0,'negative evidence is not a success');
+  assert.equal(JSON.parse(fs.readFileSync(root+'/outputs/shadow-beta-snapshot.json')).tasks[0].observedStatus,'needs_attention');
 });
 
 test('busy passive reviews have a separate bounded wakeup budget',async t=>{

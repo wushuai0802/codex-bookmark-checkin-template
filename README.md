@@ -3,7 +3,9 @@
 One check-in project, organized by responsibility rather than version:
 
 Unified release series: **1.1**. Start with [中文快速开始](docs/quickstart.md)
-and [发布与恢复](docs/release-and-recovery.md).
+and [发布与恢复](docs/release-and-recovery.md). See
+[执行可靠性与人工接管](docs/reliability-hardening.md) for click, storage,
+OAuth diagnostics and site-address change handling.
 
 | Directory | Responsibility |
 | --- | --- |

@@ -5,10 +5,11 @@ import {readBookmarkPlanWithBackup} from './bookmarks.mjs';
 import {accountMetadataForOrigin,compatiblePriorResult} from './result-identity.mjs';
 import {configuredTargetSkip} from './browser.mjs';
 import {isPtExecutionTarget,checkHarvestPtBeforeWrite} from './harvest-pt-gate.mjs';
-import {ptExecutionBinding} from './pt-read-policy.mjs';
+import {ptExecutionBinding,ptReadPolicy} from './pt-read-policy.mjs';
 import {nativePtReadBinding} from './native-pt-read.mjs';
-import {verifiedPtObservation} from './pt-observation-receipt.mjs';
+import {verifiedPtObservation,boundPtObservation} from './pt-observation-receipt.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
+import {ptReadPolicies,nativePtHeaderOrigins} from './checkin-contract.generated.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const success=value=>['signed','already_signed'].includes(value?.status);
@@ -28,6 +29,66 @@ export function nativeCurrentSuccess(result,now=new Date()){
 }
 const safeEvidence=e=>({source:e.source,authoritative:true,confirmedAt:e.confirmedAt,businessDate:e.businessDate,
   ...(e.pagePath?{pagePath:e.pagePath}:{}),...(e.statusSignal?{statusSignal:e.statusSignal}:{})});
+const controlText=value=>String(value??'').replace(/^[\[【]|[\]】]$/g,'').trim();
+function reviewedNativeHome(actual,expected,{unsigned=false}={}){
+  try{
+    const a=new URL(actual),e=new URL(expected),bare=value=>value.replace(/^www\./,'');
+    const registered=nativePtHeaderOrigins.some(value=>bare(new URL(value).hostname)===bare(e.hostname));
+    return a.protocol==='https:'&&e.protocol==='https:'&&!a.username&&!a.password&&!a.search&&!a.hash&&
+      (a.pathname==='/index.php'||!unsigned&&a.pathname==='/')&&a.port===e.port&&
+      (a.origin===e.origin||registered&&bare(a.hostname)===bare(e.hostname))?a.pathname:null;
+  }catch{return null;}
+}
+function acceptedReadback(value,target,binding,policy,now){
+  const inspection=value?.inspection,evidence=value?.evidence,day=dayAt(now);
+  const at=Date.parse(evidence?.confirmedAt??''),observed=Date.parse(value?.observedAt??'');
+  const actualPath=reviewedNativeHome(inspection?.currentUrl,value?.url,{unsigned:value?.status==='not_signed'});
+  if(!policy||policy.reviewed!==true||policy.mode!=='safe_history_page'||
+    value?.origin!==target.origin||value.url!==target.origin+'/index.php'||
+    value.accountKey!==binding.accountKey||value.profileBinding!==binding.profileBinding||
+    !['signed','already_signed','not_signed'].includes(value.status)||value.submissionAttempted!==false||
+    ['clicked','checkinClicked','checkinClickAttempted'].some(key=>value[key]===true)||
+    value.operationMode!=='safe_history_page'||value.readSafety!=='reviewed_passive'||
+    value.businessDate!==day||evidence?.businessDate!==day||evidence?.authoritative!==true||
+    evidence.source!=='page_text'||!actualPath||evidence.pagePath!==actualPath||evidence.evidenceScope!=='site_account_day'||
+    !Number.isFinite(at)||!Number.isFinite(observed)||at>now.getTime()||observed>now.getTime()||
+    dayAt(at)!==day||dayAt(observed)!==day||Math.abs(observed-at)>60_000||now.getTime()-at>5*60_000||
+    inspection.sameOrigin!==true||inspection.pageContentAvailable!==true||
+    inspection.waf!==false||inspection.securityVerification!==false||inspection.loginRoute!==false)return null;
+  if(value.status==='not_signed'){
+    const reviewed=ptReadPolicies[target.origin]??policy;
+    const labels=[reviewed.unsignedText,...(reviewed.unsignedTexts??[])].filter(text=>typeof text==='string'&&text);
+    if(target.origin==='https://ourbits.club'&&inspection.ourbitsHeaderRewardCount!==undefined&&
+      inspection.ourbitsHeaderRewardCount!==0)return null;
+    if(evidence.statusSignal!=='nexus_daily_header_unsigned'||inspection.authenticated!==true||
+      inspection.siteBodyLoaded!==true||inspection.success!==false||inspection.successText||inspection.successControl||
+      inspection.signedControlCount!==0||inspection.unsignedControlCount!==1||
+      !labels.includes(controlText(inspection.unsignedControl)))return null;
+  }else{
+    const text=controlText(inspection.successControl),reviewed=ptReadPolicies[target.origin]??policy;
+    // Public labels remain fixed; an already validated private daily-header
+    // policy may also opt in to the same bounded numeric reward control.
+    const signedRewardControl=reviewed.signedRewardControl===true||
+      policy.dailyHeader===true&&policy.signedRewardControl===true;
+    const signed=/^(?:今日|今天)?(?:已签到|已簽到|已经签到|已經簽到)$/.test(text)||
+      signedRewardControl&&/^(?:签到已得|簽到已得)[0-9,.]+(?:,\s*补签卡:\s*\d+)?$/.test(text);
+    const audiences=target.origin==='https://audiences.me'&&inspection.audiencesDailyHeaderVerified===true&&
+      inspection.signedControlCount===0;
+    const ourbits=target.origin==='https://ourbits.club'&&inspection.ourbitsDailyHeaderVerified===true&&
+      inspection.authenticated===true&&inspection.siteBodyLoaded===true&&inspection.signedControlCount===0&&
+      !inspection.successControl&&!inspection.unsignedControl&&inspection.ourbitsHeaderContextClear===true&&
+      inspection.ourbitsHeaderLogoutCount===1&&inspection.ourbitsHeaderStatsCount===4&&
+      inspection.ourbitsHeaderRewardCount===1&&inspection.ourbitsHeaderUnsignedControlCount===0&&
+      inspection.currentUrl==='https://ourbits.club/index.php';
+    if(evidence.statusSignal!=='nexus_daily_header_signed'||inspection.unsignedControlCount!==0||
+      !(inspection.authenticated===true&&inspection.signedControlCount===1&&signed||audiences||ourbits))return null;
+  }
+  // Persist the bound proof only. Page/control text is deliberately discarded.
+  return {origin:target.origin,accountKey:binding.accountKey,profileBinding:binding.profileBinding,
+    status:value.status,businessDate:day,observedAt:value.observedAt,receivedAt:now.toISOString(),
+    submissionAttempted:false,operationMode:'safe_history_page',readSafety:'reviewed_passive',
+    evidence:{...safeEvidence(evidence),evidenceScope:'site_account_day'}};
+}
 export function nativePtDecision({prior,pending,receipt,unsigned=false,reportedToday=false,now=new Date()}={}){
   const unsignedAt=Date.parse(unsigned?.confirmedAt??'');
   const recover=unsigned?.authoritative===true&&unsigned.businessDate===dayAt(now)&&
@@ -40,7 +101,8 @@ export function nativePtDecision({prior,pending,receipt,unsigned=false,reportedT
     return {...completion,nativeGate:true,submissionAttempted:false};
   if(recover){
     const until=Date.parse(prior?.nextEligibleAt??'');
-    if(Number.isFinite(until)&&until>now.getTime())return {...prior,nativeGate:true,submissionAttempted:false};
+    if(Number.isFinite(until)&&until>now.getTime()&&prior?.retryCause!=='native_readback_unavailable')
+      return {...prior,nativeGate:true,submissionAttempted:false};
     return null;
   }
   if(pending||prior?.submissionAttempted===true&&!success(prior)||prior?.failureCode==='submission_outcome_unknown')return unknown();
@@ -78,10 +140,11 @@ function writeJournal(file,value){
 
 // The short gate lock serializes intent updates. Production writes additionally
 // require the controller's live lease, inherited by the native subprocess.
-export async function runNativePtGate({root,origin,url,profile,mainProfile=false,phase='inspect',attemptId,action,status,evidence,
-  now,clock=now?()=>new Date(now):()=>new Date(),readPlan=readBookmarkPlanWithBackup,harvest=checkHarvestPtBeforeWrite,verify=verifiedPtObservation}={}){
+export async function runNativePtGate({root,origin,url,profile,mainProfile=false,phase='inspect',attemptId,action,status,evidence,receipt:readback,
+  now,clock=now?()=>new Date(now):()=>new Date(),readPlan=readBookmarkPlanWithBackup,harvest=checkHarvestPtBeforeWrite,
+  verify=verifiedPtObservation,verifyHistorical=boundPtObservation}={}){
   now=clock();
-  if(!['inspect','begin','finish'].includes(phase))throw Error('invalid native PT phase');
+  if(!['bind','readback','inspect','begin','finish'].includes(phase))throw Error('invalid native PT phase');
   const requested=new URL(origin),destination=new URL(url);
   if(requested.protocol!=='https:'||requested.origin!==origin||requested.username||requested.password||destination.protocol!=='https:'||destination.username||destination.password||destination.hash)throw Error('unsafe native PT target');
   const config=read(path.join(root,'config/config.json'),null);
@@ -95,72 +158,154 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
     .map(e=>typeof e==='string'?{url:e}:e).filter(e=>{try{return new URL(e.url).origin===origin||e.sourceOrigin===origin;}catch{return false;}});
   if(![origin,...(target.allowedOrigins??[])].includes(destination.origin)||!entries.some(e=>e.url===url)&&!['/','/index.php','/login.php'].includes(destination.pathname))throw Error('unregistered native PT URL');
   const binding=bindingFor(root,config,target,profile,mainProfile,entries);
+  const identity={accountKey:binding.accountKey,profileBinding:binding.profileBinding};
+  let readPolicy;try{readPolicy=ptReadPolicy(target.origin,config);}catch{}
+  const mainWriteRegistered=(config.mainChromeFallbackUrls??[]).some(value=>{
+    const entry=typeof value==='string'?{url:value}:value;
+    try{return entry.autoCheckin!==false&&(new URL(entry.url).origin===origin||entry.sourceOrigin===origin);}catch{return false;}
+  });
+  const currentBindingOnly=mainProfile&&readPolicy?.nativeMainChrome===true&&mainWriteRegistered;
   const skip=configuredTargetSkip(target,config);
-  if(skip)return {managed:true,allow:false,decision:{...skip,nativeGate:true,submissionAttempted:false}};
+  if(skip)return {managed:true,allow:false,...identity,decision:{...skip,nativeGate:true,submissionAttempted:false,...identity}};
+  if(phase==='bind')return {managed:true,allow:true,...identity};
   const integration=read(path.join(root,'data/v2-integration.json'),null);
   if(phase!=='inspect')checkLease(root,integration);
   const lock=await acquireRunLock(path.join(root,'tmp/native-pt-gate.lock'));
   try{
     const file=path.join(root,'data/native-pt-attempts.json'),journal=read(file,{schemaVersion:1,attempts:[]});
-    if(journal.schemaVersion!==1||!Array.isArray(journal.attempts))throw Error('invalid native PT journal');
+    if(journal.schemaVersion!==1||!Array.isArray(journal.attempts)||
+      journal.readbacks!==undefined&&!Array.isArray(journal.readbacks))throw Error('invalid native PT journal');
     const accountKey=target.accountKey??'site-default',sameAccount=a=>a.origin===target.origin&&a.accountKey===accountKey;
+    if(phase==='readback'){
+      const saved=acceptedReadback(readback,target,binding,readPolicy,now);
+      if(!saved)return {managed:true,allow:false,receiptAccepted:false,...identity,
+        decision:readback?.submissionAttempted===true?unknown():{status:'unconfirmed',failureCode:'native_readback_unavailable',
+          nativeGate:true,submissionAttempted:false,reason:'只读回执未满足当前账号、Profile 和当日证据绑定'}};
+      if(dayAt(clock())!==dayAt(now))return {managed:true,allow:false,receiptAccepted:false,...identity,
+        decision:deferred(clock(),'业务日期已切换，先刷新当日原生核验')};
+      const receipts=journal.readbacks??(journal.readbacks=[]);
+      if(!receipts.some(value=>sameAccount(value)&&value.profileBinding===saved.profileBinding&&
+        value.status===saved.status&&value.evidence?.confirmedAt===saved.evidence.confirmedAt)){
+        receipts.push(saved);writeJournal(file,journal);
+      }
+      return {managed:true,allow:true,receiptAccepted:true,submissionAttempted:false,...identity};
+    }
     const owned=journal.attempts.find(a=>a.attemptId===attemptId);
     if(owned&&(!sameAccount(owned)||owned.profileBinding!==binding.profileBinding))throw Error('native attempt binding mismatch');
     if(phase==='finish'){
-      if(!owned)return {managed:true,allow:false,decision:unknown()};
-      if(nativeCurrentSuccess({status,evidence},now)&&dayAt(owned.startedAt)===dayAt(now)&&Date.parse(evidence.confirmedAt)>=Date.parse(owned.startedAt)){
+      if(!owned)return {managed:true,allow:false,confirmed:false,confirmationState:'rejected',...identity,decision:unknown()};
+      const suppliedBinding=evidence?.profileBinding;
+      const suppliedScope=evidence?.evidenceScope;
+      const suppliedSignal=String(evidence?.statusSignal??'');
+      // The passive reader may only use index.php, but a formal write has
+      // already passed the exact registered destination gate. Its mature
+      // attendance-page completion must close that owned intent as well.
+      const registeredDestination=entries.some(entry=>{
+        try{return new URL(entry.url).href===destination.href;}catch{return false;}
+      });
+      const finishPath=evidence?.pagePath;
+      const finishEvidenceBound=(!suppliedBinding||suppliedBinding===binding.profileBinding)&&
+        (!suppliedScope||suppliedScope==='site_account_day')&&
+        (finishPath==='/index.php'||registeredDestination&&finishPath===destination.pathname)&&
+        (!suppliedSignal||['nexus_daily_header_signed','open_cd_daily_record_entry','submitted_success_response','same_day_page_text'].includes(suppliedSignal));
+      const confirmed=finishEvidenceBound&&['submitted','confirmed'].includes(owned.state)&&
+        nativeCurrentSuccess({status,evidence},now)&&owned.businessDate===dayAt(owned.startedAt)&&
+        dayAt(owned.startedAt)===dayAt(now)&&Date.parse(evidence.confirmedAt)>=Date.parse(owned.startedAt);
+      if(confirmed){
         owned.state='confirmed';owned.finishedAt=now.toISOString();owned.status=status;
         owned.confirmedAt=evidence.confirmedAt;owned.evidence=safeEvidence(evidence);writeJournal(file,journal);
       }
-      return {managed:true,allow:true,submissionAttempted:true,profileBinding:binding.profileBinding};
+      return {managed:true,allow:confirmed,confirmed,confirmationState:confirmed?'confirmed':'rejected',
+        submissionAttempted:true,...identity,...(!confirmed?{decision:unknown()}: {})};
     }
-    const latest=read(path.join(root,'logs/latest.json'),null),prior=compatiblePriorResult(target,latest?.results??[]);
+    const latest=read(path.join(root,'logs/latest.json'),null),reportedPrior=compatiblePriorResult(target,latest?.results??[]);
+    let prior=currentBindingOnly&&reportedPrior?.profileBinding&&reportedPrior.profileBinding!==binding.profileBinding?null:reportedPrior;
+    const unboundCurrentSuccess=nativeCurrentSuccess(prior,now)&&prior.profileBinding!==binding.profileBinding;
+    if(unboundCurrentSuccess)
+      prior={status:'needs_attention',failureCode:'authoritative_status_unavailable',submissionAttempted:false,
+        reason:'成功报告未绑定当前执行 Profile，先只读核验'};
+    let historicalChanged=false;
+    for(const previous of journal.attempts.filter(a=>sameAccount(a)&&a.profileBinding===binding.profileBinding&&a.state==='submitted')){
+      const started=Date.parse(previous.startedAt);
+      if(!Number.isFinite(started)||started>=now.getTime()||previous.businessDate!==dayAt(started)||
+        !/^[a-f0-9]{64}$/.test(previous.profileBinding??''))continue;
+      const saved=verifyHistorical(root,target,config,{now,businessDate:dayAt(started),after:started,
+        profileBinding:previous.profileBinding});
+      if(!saved)continue;
+      previous.state='confirmed';previous.finishedAt=now.toISOString();previous.confirmedAt=saved.evidence.confirmedAt;
+      previous.resolution='historical_passive_readback';previous.status=saved.status;previous.evidence=safeEvidence(saved.evidence);
+      historicalChanged=true;
+    }
+    if(historicalChanged)writeJournal(file,journal);
     const verified=verify(root,target,config,now);
     const savedCompletion=journal.attempts.filter(a=>sameAccount(a)&&a.profileBinding===binding.profileBinding&&a.state==='confirmed'&&nativeCurrentSuccess(a,now))
       .sort((a,b)=>Date.parse(b.confirmedAt)-Date.parse(a.confirmedAt))[0];
     const persisted=savedCompletion?{
       status:'already_signed',profileBinding:binding.profileBinding,evidence:savedCompletion.evidence,
       reason:'原生执行的当日持久化回执已确认完成，无需重复提交'}:null;
-    const receipt=[verified,persisted].filter(value=>value?.profileBinding===binding.profileBinding&&nativeCurrentSuccess(value,now))
+    const storedReadbacks=(journal.readbacks??[]).filter(value=>sameAccount(value)&&
+      value.profileBinding===binding.profileBinding&&value.businessDate===dayAt(now)&&value.submissionAttempted===false&&
+      value.operationMode==='safe_history_page'&&value.readSafety==='reviewed_passive'&&
+      value.evidence?.authoritative===true&&value.evidence.source==='page_text'&&
+      value.evidence.businessDate===dayAt(now)&&
+      (value.status==='not_signed'?value.evidence.pagePath==='/index.php':success(value)&&['/','/index.php'].includes(value.evidence.pagePath))&&
+      value.evidence.evidenceScope==='site_account_day'&&
+      value.evidence.statusSignal===(value.status==='not_signed'?'nexus_daily_header_unsigned':'nexus_daily_header_signed')&&
+      Number.isFinite(Date.parse(value.observedAt))&&Number.isFinite(Date.parse(value.evidence.confirmedAt))&&
+      Date.parse(value.observedAt)<=now.getTime()&&Date.parse(value.evidence.confirmedAt)<=now.getTime()&&
+      dayAt(value.observedAt)===dayAt(now)&&dayAt(value.evidence.confirmedAt)===dayAt(now)&&
+      Math.abs(Date.parse(value.observedAt)-Date.parse(value.evidence.confirmedAt))<=60_000);
+    const receipt=[verified,persisted,...storedReadbacks].filter(value=>value?.profileBinding===binding.profileBinding&&nativeCurrentSuccess(value,now))
       .sort((a,b)=>Date.parse(b.evidence.confirmedAt??b.evidence.createdAt)-Date.parse(a.evidence.confirmedAt??a.evidence.createdAt))[0]??null;
     if(nativeCurrentSuccess(receipt,now)){
       let changed=false;const confirmed=Date.parse(receipt.evidence.confirmedAt);
       for(const previous of journal.attempts){
         if(sameAccount(previous)&&previous.profileBinding===binding.profileBinding&&previous.state==='submitted'&&
-          dayAt(previous.startedAt)===dayAt(confirmed)&&confirmed>=Date.parse(previous.startedAt)){
+          previous.businessDate===dayAt(previous.startedAt)&&dayAt(previous.startedAt)===dayAt(confirmed)&&confirmed>=Date.parse(previous.startedAt)){
           previous.state='confirmed';previous.finishedAt=now.toISOString();previous.confirmedAt=receipt.evidence.confirmedAt;
           previous.resolution='passive_readback';previous.status=receipt.status;previous.evidence=safeEvidence(receipt.evidence);changed=true;
         }
       }
       if(changed)writeJournal(file,journal);
     }
-    const pendingEntries=journal.attempts.filter(a=>sameAccount(a)&&a.state==='submitted'&&a.attemptId!==attemptId);
+    const inactiveHistoricalIntentCount=currentBindingOnly?journal.attempts.filter(a=>sameAccount(a)&&
+      a.profileBinding!==binding.profileBinding&&a.state==='submitted').length:0;
+    const pendingEntries=journal.attempts.filter(a=>sameAccount(a)&&a.state==='submitted'&&a.attemptId!==attemptId&&
+      (!currentBindingOnly||a.profileBinding===binding.profileBinding));
+    const malformedPending=pendingEntries.some(a=>{
+      const started=Date.parse(a.startedAt);
+      return !Number.isFinite(started)||a.businessDate!==dayAt(started);
+    });
     const reportAt=Date.parse(latest?.finishedAt??latest?.generatedAt??'');
     const reportedToday=Number.isFinite(reportAt)&&dayAt(reportAt)===dayAt(now);
     let unsigned=false;
-    if(integration?.v2ProjectRoot){
-      const report=read(path.join(integration.v2ProjectRoot,'outputs',`pt-fallback-results-${dayAt(now)}.json`),null);
-      const proof=report?.sites?.find(r=>r.origin===target.origin&&r.accountKey===accountKey),at=Date.parse(proof?.evidence?.confirmedAt??'');
+    const unsignedCandidates=[...storedReadbacks.filter(value=>value.status==='not_signed'),
+      ...(integration?.v2ProjectRoot?[boundPtObservation(root,target,config,{now,statuses:['not_signed'],profileBinding:binding.profileBinding})]:[])];
+    for(const proof of unsignedCandidates){
+      const at=Date.parse(proof?.evidence?.confirmedAt??'');
       const after=Math.max(0,...pendingEntries.map(a=>Date.parse(a.startedAt)),
         prior?.failureCode==='submission_outcome_unknown'?reportAt||0:0,
         ...[prior,receipt].filter(value=>nativeCurrentSuccess(value,now)).map(value=>Date.parse(value.evidence.confirmedAt??value.evidence.createdAt)),
         reportedToday&&success(prior)?reportAt:0);
-      const valid=report?.source==='execution-supplement'&&report.businessDate===dayAt(now)&&proof?.status==='not_signed'&&proof.profileBinding===binding.profileBinding&&
+      const valid=proof?.status==='not_signed'&&proof.profileBinding===binding.profileBinding&&
         pendingEntries.every(a=>a.profileBinding===binding.profileBinding)&&
         proof.submissionAttempted===false&&proof.readSafety==='reviewed_passive'&&proof.operationMode==='safe_history_page'&&
         proof.evidence?.authoritative===true&&proof.evidence.evidenceScope==='site_account_day'&&
-        ['page_text','pt_page'].includes(proof.evidence.source)&&proof.evidence.statusSignal==='nexus_daily_header_unsigned'&&proof.evidence.pagePath==='/index.php'&&
+        ['page_text','pt_page'].includes(proof.evidence.source)&&['nexus_daily_header_unsigned','open_cd_daily_unsigned'].includes(proof.evidence.statusSignal)&&proof.evidence.pagePath==='/index.php'&&
         proof.businessDate===dayAt(now)&&proof.evidence.businessDate===dayAt(now)&&Number.isFinite(at)&&
         Math.abs(Date.parse(proof.observedAt)-at)<=60_000&&at>after&&at<=now.getTime()&&now.getTime()-at<=5*60_000;
-      if(valid)unsigned=proof.evidence;
+      if(valid&&(!unsigned||at>Date.parse(unsigned.confirmedAt)))unsigned=proof.evidence;
     }
-    let decision=nativePtDecision({prior,pending:pendingEntries.length>0,receipt,unsigned,
+    let decision=malformedPending?unknown():nativePtDecision({prior,pending:pendingEntries.length>0,receipt,unsigned,
       reportedToday,now});
+    if(!decision&&unboundCurrentSuccess&&!unsigned)decision={status:'needs_attention',failureCode:'authoritative_status_unavailable',
+      submissionAttempted:false,nativeGate:true,retryable:false,reason:'成功报告未绑定当前执行 Profile，先只读核验'};
     if(owned&&owned.state==='confirmed')decision=unknown();
     if(owned&&(dayAt(owned.startedAt)!==dayAt(now)||now.getTime()-Date.parse(owned.startedAt)>10*60_000))decision=unknown();
     if(!decision)decision=harvest(target,{root,now});
     if(dayAt(clock())!==dayAt(now))decision=owned?unknown():deferred(clock(),'业务日期已切换，先刷新当日原生核验');
-    if(decision)return {managed:true,allow:false,decision:{...decision,nativeGate:true}};
+    if(decision)return {managed:true,allow:false,...identity,decision:{...decision,nativeGate:true,...identity},
+      ...(inactiveHistoricalIntentCount?{inactiveHistoricalIntentCount}: {})};
     if(phase==='inspect'){
       const sameDayPending=unsigned?pendingEntries.filter(a=>dayAt(a.startedAt)===dayAt(unsigned.confirmedAt)):[];
       if(sameDayPending.length){
@@ -168,10 +313,14 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
           previous.resolution='passive_readback_not_signed';previous.readbackEvidence=safeEvidence(unsigned);}
         writeJournal(file,journal);
       }
-      return {managed:true,allow:true,navigationRisk:nativePtNavigationRisk(url)};
+      return {managed:true,allow:true,...identity,navigationRisk:nativePtNavigationRisk(url),
+        ...(inactiveHistoricalIntentCount?{inactiveHistoricalIntentCount}: {})};
     }
     if(!/^[a-f0-9-]{36}$/.test(attemptId??'')||!['navigation','click'].includes(action))throw Error('invalid native attempt action');
-    if(owned?.actions.includes(action))return {managed:true,allow:false,decision:unknown()};
+    const allowedContinuation=owned?.actions.length===1&&owned.actions[0]==='navigation'&&action==='click';
+    if(owned && (owned.state!=='submitted'||owned.actions.includes(action)||
+      owned.actions.length>0&&!allowedContinuation))
+      return {managed:true,allow:false,...identity,decision:unknown()};
     if(unsigned)for(const previous of pendingEntries.filter(a=>dayAt(a.startedAt)===dayAt(unsigned.confirmedAt))){
       previous.state='resolved_not_signed';previous.resolvedAt=now.toISOString();
       previous.resolution='passive_readback_not_signed';previous.readbackEvidence=safeEvidence(unsigned);
@@ -180,6 +329,7 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
       startedAt:now.toISOString(),state:'submitted',actions:[]};
     entry.actions.push(action);if(!owned)journal.attempts.push(entry);
     writeJournal(file,journal);
-    return {managed:true,allow:true,submissionAttempted:true,profileBinding:binding.profileBinding};
+    return {managed:true,allow:true,submissionAttempted:true,...identity,
+      ...(inactiveHistoricalIntentCount?{inactiveHistoricalIntentCount}: {})};
   }finally{await releaseRunLock(lock);}
 }

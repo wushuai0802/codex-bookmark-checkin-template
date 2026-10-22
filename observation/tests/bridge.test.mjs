@@ -67,6 +67,19 @@ test('bridge imports 3 execution units and redacts sensitive evidence', () => {
   assert.equal(snapshot.health.freshness.fresh, true);
 });
 
+test('a later targeted report cannot refresh the observed time of an untouched unknown submission',()=>{
+  const root=fixtureRoot(),file=path.join(root,'logs','run-1','result.json');
+  const report=JSON.parse(fs.readFileSync(file,'utf8'));
+  report.finishedAt='2026-09-02T11:00:00.000Z';
+  report.results[0]={...report.results[0],status:'needs_attention',failureCode:'submission_outcome_unknown',
+    submissionAttempted:true,observedAt:'2026-09-02T01:02:00.000Z',evidence:{}};
+  fs.writeFileSync(file,JSON.stringify(report));
+  const snapshot=buildSnapshot({legacyRoot:root,generatedAt:'2026-09-02T11:01:00.000Z'});
+  const task=snapshot.tasks.find(t=>t.accountKey==='agentrouter-700001');
+  assert.equal(snapshot.receipts.find(r=>r.taskId===task.taskId).observedAt,'2026-09-02T01:02:00.000Z');
+  assert.equal(task.observedStatus,'needs_attention');
+});
+
 test('bridge carries redacted PT observations without changing the execution plan', () => {
   const root = fixtureRoot();
   const baseline = buildSnapshot({ legacyRoot: root, generatedAt: '2026-09-02T02:00:00.000Z' });

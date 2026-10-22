@@ -100,3 +100,28 @@ test('login and continuation retain the named account and refuse a changed unkno
   target.failureCode='submission_outcome_unknown';target.observedStatus='needs_attention';target.submissionAttempted=true;fs.writeFileSync(file,JSON.stringify(snapshot));
   await assert.rejects(()=>executeDashboardOperation(root,{...request,action:'resume'},{runEngine:async()=>{throw Error('must not run');}}),/not authorized/);
 });
+
+test('a fresh passive completion or logged-in state avoids a redundant PT login window without signing',async t=>{
+  const root=workspace(t),current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current),legacy=path.join(root,'legacy');
+  for(const dir of ['config','outputs','legacy/config','legacy/data'])fs.mkdirSync(path.join(root,dir),{recursive:true});
+  fs.writeFileSync(root+'/config/runtime.local.json',JSON.stringify({executionEngine:'v1',legacyRoot:legacy}));
+  fs.writeFileSync(legacy+'/config/config.json','{}');
+  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
+  fs.writeFileSync(legacy+'/data/v2-integration.json',JSON.stringify({harvestPtGate:{catalogFile}}));
+  const snapshot=fixture();snapshot.businessDate=day;snapshot.generatedAt=current.toISOString();snapshot.ptStatus.sites[0].effective.status='login_required';
+  fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot));
+  const request={id:'op_'+('d'.repeat(32)),origin,action:'login',businessDate:day,planHash:snapshot.planHash,expiresAt:new Date(current.getTime()+600000).toISOString()};
+  for(const status of ['already_signed','not_signed']){
+    let opened=0;
+    const result=await executeDashboardOperation(root,request,{openLogin:async()=>{opened++;},runSite:async options=>{
+      assert.equal(options.readOnly,true);
+      return {origin,status,accountKey:'site-default',profileBinding:'a'.repeat(64),businessDate:day,observedAt:current.toISOString(),
+        operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+        evidence:{source:'pt_page',authoritative:true,businessDate:day,confirmedAt:current.toISOString(),evidenceScope:'site_account_day',summary:'已读取当日状态'}};
+    },runEngine:async()=>{throw Error('login precheck cannot sign');}});
+    assert.equal(opened,0);assert.equal(result.status,'completed');assert.equal(result.resultStatus,status);
+  }
+  let opened=0;
+  const fallback=await executeDashboardOperation(root,request,{openLogin:async()=>{opened++;},runSite:async()=>{throw Error('network unavailable');}});
+  assert.equal(opened,1);assert.equal(fallback.status,'waiting_login');
+});

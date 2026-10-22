@@ -4,13 +4,22 @@ param(
     [Parameter(Mandatory = $true)][string]$Url,
     [ValidateRange(10, 180)][int]$TimeoutSeconds = 90,
     [switch]$ReadOnly,
-    [string]$RuntimeRoot
+    [string]$RuntimeRoot,
+    [string]$LifecyclePath,
+    [string]$LifecycleToken
 )
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = if ($RuntimeRoot) { [IO.Path]::GetFullPath($RuntimeRoot) } else { Split-Path -Parent $PSScriptRoot }
+if ($LifecyclePath) {
+    $lifecyclePrefix=[IO.Path]::GetFullPath((Join-Path $root 'tmp')).TrimEnd([IO.Path]::DirectorySeparatorChar)+[IO.Path]::DirectorySeparatorChar
+    if (-not $ReadOnly -or $LifecycleToken -notmatch '^[a-f0-9-]{36}$' -or
+        -not [IO.Path]::GetFullPath($LifecyclePath).StartsWith($lifecyclePrefix,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Read lifecycle descriptor is outside its task scope'
+    }
+}
 . (Join-Path $PSScriptRoot 'ResultContract.ps1')
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 $originUri = [uri]$Origin
@@ -87,12 +96,16 @@ if (-not $profilePath.StartsWith($sourcePrefix, [System.StringComparison]::Ordin
 if (-not (Test-Path -LiteralPath ([string]$config.chromeExecutable))) { throw '未找到已配置的 Chrome。' }
 
 . (Join-Path $PSScriptRoot 'Native-PtGuard.ps1')
+. (Join-Path $PSScriptRoot 'Native-PtChromeProxy.ps1')
 $script:nativeLocalSubmissionAttempted = $false
 $script:checkinClickAttempted = $false
 try {
+    $nativePtProxyServer = Resolve-NativePtChromeProxy $config $originValue
+    Assert-NativePtMainChromeProxy -Config $config -ProfileRoot $sourceRoot -Origin $originValue -ProxyServer $nativePtProxyServer
     $nativeDecision = Initialize-NativePtGuard -Root $root -Origin $originValue -Url $Url -ProfilePath $profilePath -MainProfile -ReadOnly:$ReadOnly
 } catch {
-    $nativeDecision = Get-NativePtFailure -ErrorRecord $_
+    $nativeDecision = Get-NativePtChromeProxyFailure $_
+    if ($null -eq $nativeDecision) { $nativeDecision = Get-NativePtFailure -ErrorRecord $_ }
 }
 if ($null -ne $nativeDecision) {
     $nativeDecision | Complete-NativePtResult | ConvertTo-Json -Depth 8
@@ -104,8 +117,28 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type @'
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 public static class CheckinWindowNative {
+    private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr window, StringBuilder name, int count);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Placement {
+        public int Length, Flags, ShowCommand;
+        public Point MinPosition, MaxPosition;
+        public Rect NormalPosition;
+    }
     [DllImport("user32.dll", SetLastError=true)]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint flags);
     [DllImport("user32.dll", SetLastError=true)]
@@ -114,8 +147,107 @@ public static class CheckinWindowNative {
     public static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool GetWindowRect(IntPtr hWnd, out Rect rect);
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool GetWindowPlacement(IntPtr hWnd, ref Placement placement);
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool SetWindowPlacement(IntPtr hWnd, ref Placement placement);
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern bool SetProp(IntPtr hWnd, string name, IntPtr value);
+
+    public static int OffscreenX { get { return Math.Min(-32000, GetSystemMetrics(76) - 1500); } }
+    public static int OffscreenY { get { return Math.Min(-32000, GetSystemMetrics(77) - 1000); } }
+
+    public static IntPtr[] FindWindows(int[] processIds) {
+        var ids = new HashSet<int>(processIds);
+        var windows = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+            uint id; GetWindowThreadProcessId(window, out id);
+            if (!ids.Contains((int)id)) return true;
+            var name = new StringBuilder(100);
+            GetClassName(window, name, name.Capacity);
+            if (name.ToString() == "Chrome_WidgetWin_1") windows.Add(window);
+            return true;
+        }, IntPtr.Zero);
+        return windows.ToArray();
+    }
+
+    public static bool IsStartupOffscreenWindow(IntPtr window, int[] processIds) {
+        uint id; GetWindowThreadProcessId(window, out id);
+        if (Array.IndexOf(processIds, (int)id) < 0 || IsIconic(window)) return false;
+        Rect rect;
+        if (!GetWindowRect(window, out rect)) return false;
+        // Chrome applies the launch position in device-independent pixels.
+        // Permit display scaling while requiring the task-only far-off-screen
+        // placement, before rendering any window whose URL is still unreadable.
+        return rect.Right > rect.Left && rect.Bottom > rect.Top &&
+            rect.Right < GetSystemMetrics(76) && rect.Bottom < GetSystemMetrics(77) &&
+            rect.Left <= Math.Min(-30000, OffscreenX + 1000) &&
+            rect.Top <= Math.Min(-30000, OffscreenY + 1000);
+    }
+
+    public static void RestoreForegroundIfTask(IntPtr window, IntPtr previousForeground) {
+        // Chrome may activate its new window before the helper identifies it.
+        // Restore the prior foreground only while our owned task is foreground;
+        // a user's intervening choice of another window always wins.
+        if (previousForeground != IntPtr.Zero && previousForeground != window &&
+            IsWindow(previousForeground) && IsWindowVisible(previousForeground) &&
+            !IsIconic(previousForeground) && GetForegroundWindow() == window)
+            SetForegroundWindow(previousForeground);
+    }
+
+    public static void RenderOffscreen(IntPtr window, IntPtr previousForeground) {
+        if (!IsWindow(window)) throw new InvalidOperationException("Task window is unavailable");
+        // Moving an iconic window does not move its restore bounds. Restoring
+        // it would show an on-screen frame, so fail closed for that state.
+        if (IsIconic(window)) throw new InvalidOperationException("Task window unexpectedly minimized");
+        // SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOZORDER moves and shows a
+        // normal window in one operation. It keeps Chromium rendering and its
+        // accessibility tree available without a visible restore or focus.
+        if (!SetWindowPos(window, IntPtr.Zero, OffscreenX, OffscreenY, 1400, 900, 0x0054))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        RestoreForegroundIfTask(window, previousForeground);
+        Rect rect;
+        if (!GetWindowRect(window, out rect)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        int left = GetSystemMetrics(76), top = GetSystemMetrics(77);
+        int right = left + GetSystemMetrics(78), bottom = top + GetSystemMetrics(79);
+        if (!IsWindowVisible(window) || IsIconic(window) ||
+            (rect.Left < right && rect.Right > left && rect.Top < bottom && rect.Bottom > top))
+            throw new InvalidOperationException("Task window is not rendering outside the desktop");
+    }
+
+    public static void PrepareToClose(IntPtr window) {
+        ShowWindow(window, 0); // Hide before changing Chrome's persisted restore bounds.
+        var placement = new Placement();
+        placement.Length = Marshal.SizeOf(typeof(Placement));
+        if (!GetWindowPlacement(window, ref placement)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        placement.Flags = 0;
+        placement.ShowCommand = 0; // SW_HIDE: setting safe restore bounds must not show the window.
+        placement.NormalPosition = new Rect { Left = 80, Top = 80, Right = 1480, Bottom = 980 };
+        if (!SetWindowPlacement(window, ref placement)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if (IsWindowVisible(window)) throw new InvalidOperationException("Task window became visible during cleanup");
+    }
 }
 '@
+
+function Save-NativeReadLifecycle([IntPtr]$Handle, [bool]$Closed = $false) {
+    if (-not $ReadOnly -or -not $LifecyclePath) { return }
+    $record=[pscustomobject]@{schemaVersion=1;readOnly=$true;helperPid=$PID;
+        helperStartedAt=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o');
+        handle=$Handle.ToInt64();token=$LifecycleToken;closed=$Closed}
+    [IO.File]::WriteAllText($LifecyclePath,($record | ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+}
 
 function Get-ChromeProcessIds {
     @(
@@ -132,20 +264,42 @@ function Get-ChromeProcessIds {
 function Get-ChromeWindows {
     $ids = @(Get-ChromeProcessIds)
     if ($ids.Count -eq 0) { return @() }
-    $desktop = [System.Windows.Automation.AutomationElement]::RootElement
     @(
-        $desktop.FindAll(
-            [System.Windows.Automation.TreeScope]::Children,
-            [System.Windows.Automation.Condition]::TrueCondition
-        ) | Where-Object {
+        foreach ($handle in @([CheckinWindowNative]::FindWindows([int[]]$ids))) {
             try {
-                $_.Current.ProcessId -in $ids -and
-                    $_.Current.ClassName -eq 'Chrome_WidgetWin_1' -and
-                    $_.Current.NativeWindowHandle -ne 0
+                [System.Windows.Automation.AutomationElement]::FromHandle($handle)
             }
-            catch { $false }
+            catch { }
         }
     )
+}
+
+function Get-MainProfileChromeProcessIds {
+    @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
+        try {
+            if (-not $_.ExecutablePath -or
+                [IO.Path]::GetFullPath([string]$_.ExecutablePath) -ne [IO.Path]::GetFullPath([string]$config.chromeExecutable)) { return $false }
+            $commandLine = [string]$_.CommandLine
+            if (-not $commandLine -or $commandLine -match '(?:^|\s)--type=') { return $false }
+            $rootMatch = [regex]::Match($commandLine, '(?i)(?:"--user-data-dir=([^"]+)"|--user-data-dir="([^"]+)"|--user-data-dir=([^\s"]+))')
+            $processRoot = if ($rootMatch.Success) {
+                @($rootMatch.Groups | Select-Object -Skip 1 | Where-Object Success | Select-Object -First 1)[0].Value
+            } else {
+                Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Google\Chrome\User Data'
+            }
+            [IO.Path]::GetFullPath($processRoot).TrimEnd('\') -eq $sourceRoot.TrimEnd('\')
+        } catch { $false }
+    } | Select-Object -ExpandProperty ProcessId)
+}
+
+function Register-NativeTaskWindow([System.Windows.Automation.AutomationElement]$Window) {
+    $handle = [IntPtr]$Window.Current.NativeWindowHandle
+    if ($ReadOnly -and $LifecyclePath) {
+        if (-not [CheckinWindowNative]::SetProp($handle,('CheckinNativeReadOwner_'+$LifecycleToken),[IntPtr]1)) {
+            throw '无法标记主 Chrome 任务窗口所有权'
+        }
+        Save-NativeReadLifecycle $handle
+    }
 }
 
 function Get-WindowElements([System.Windows.Automation.AutomationElement]$Window) {
@@ -200,6 +354,49 @@ function Get-WindowPageElements([System.Windows.Automation.AutomationElement]$Wi
     return $elements
 }
 
+function Get-NativeOurbitsAccountHeader([System.Windows.Automation.AutomationElement]$Window, [object[]]$PageElements, [uri]$CurrentUri) {
+    $empty = Measure-NativeOurbitsAccountHeader '' 0 @()
+    if ($originValue -cne 'https://ourbits.club' -or $null -eq $CurrentUri -or
+        $targetUri.GetLeftPart([System.UriPartial]::Authority) -cne $originValue -or
+        $targetUri.UserInfo -or $targetUri.Query -or $targetUri.Fragment -or $targetUri.AbsolutePath -cnotin @('/index.php', '/attendance.php') -or
+        $CurrentUri.GetLeftPart([System.UriPartial]::Authority) -cne $originValue -or $CurrentUri.UserInfo -or
+        $CurrentUri.Query -or $CurrentUri.Fragment -or $CurrentUri.AbsolutePath -cnotin @('/index.php', '/attendance.php') -or
+        $null -eq $Window -or $taskHandle -eq [IntPtr]::Zero -or $Window.Current.NativeWindowHandle -ne $taskHandle) { return $empty }
+    # The task-owned HWND/document is the boundary. A reward elsewhere on the
+    # page must not establish this account's current daily state.
+    $logouts = @($PageElements | Where-Object {
+        try { $_.Current.ControlType.ProgrammaticName -ceq 'ControlType.Hyperlink' -and ([string]$_.Current.Name).Trim() -ceq '退出' } catch { $false }
+    })
+    if ($logouts.Count -ne 1) { return $empty }
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $ancestor = $logouts[0]
+    for ($depth = 0; $depth -lt 12; $depth++) {
+        try {
+            $ancestor = $walker.GetParent($ancestor)
+            if ($null -eq $ancestor -or $ancestor.Current.ControlType.ProgrammaticName -cin @('ControlType.Document', 'ControlType.Window')) { break }
+            if ($ancestor.Current.ControlType.ProgrammaticName -cne 'ControlType.Group') { continue }
+            if (@($PageElements | Where-Object { $_.Equals($ancestor) }).Count -ne 1) { return $empty }
+            $controls = @()
+            $groupLogouts = 0
+            $passwordFieldPresent = $false
+            foreach ($element in @($ancestor.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))) {
+                $type = [string]$element.Current.ControlType.ProgrammaticName
+                if ($element.Current.IsPassword) { $passwordFieldPresent = $true }
+                if ($type -in @('ControlType.Hyperlink', 'ControlType.Button')) {
+                    $name = ([string]$element.Current.Name).Trim()
+                    $controls += $name
+                    if ($type -ceq 'ControlType.Hyperlink' -and $name -ceq '退出') { $groupLogouts++ }
+                }
+            }
+            $facts = Measure-NativeOurbitsAccountHeader ([string]$ancestor.Current.Name) $groupLogouts $controls $passwordFieldPresent
+            # Never climb past the first full account group to borrow reward
+            # text or unsigned actions from a larger page container.
+            if ($facts.ourbitsHeaderStatsCount -eq 4) { return $facts }
+        } catch { return $empty }
+    }
+    return $empty
+}
+
 function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window) {
     $elements = @(Get-WindowPageElements $Window)
     $pageContentAvailable = $elements.Count -gt 1
@@ -211,12 +408,13 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $controlNames = @()
     $linkNames = @()
     $nonAddressEdits = 0
+    $otpInputPresent = $false; $passwordInputPresent = $false; $scopedOtpInputPresent = $false
     foreach ($element in $elements) {
         try {
             $name = ([string]$element.Current.Name).Trim()
             $type = [string]$element.Current.ControlType.ProgrammaticName
             $pageTextType = $type -in @('ControlType.Text', 'ControlType.Hyperlink', 'ControlType.Button', 'ControlType.Document') -or
-                ($originValue -eq 'https://ptsbao.club' -and $type -in @('ControlType.DataItem', 'ControlType.Custom', 'ControlType.ListItem'))
+                ($originValue -in $CheckinNativePtHeaderOrigins -and $type -in @('ControlType.DataItem', 'ControlType.Custom', 'ControlType.ListItem'))
             if ($pageTextType -and $name) {
                 $names += $name
             }
@@ -227,17 +425,22 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
                 $editId = [string]$element.Current.AutomationId
                 if ($editName -notmatch '^(Address and search bar|地址栏|地址和搜索栏|網址列|網址和搜尋列)$' -and $editId -ne 'view_1022') {
                     $nonAddressEdits++
+                    if (Test-NativeOtpInputLabel $editName $editId) { $otpInputPresent = $true }
+                    elseif (Test-NativeScopedOtpInput $element) { $otpInputPresent = $true; $scopedOtpInputPresent = $true }
+                    if ($element.Current.IsPassword) { $passwordInputPresent = $true }
                 }
             }
         }
         catch { }
     }
     $bodyText = (@($names | Select-Object -Unique) -join ' ').Trim()
+    $browserFailureCode = Get-NativeBrowserFailure $bodyText
     $currentUri = Get-CurrentUri $Window
     $sameOrigin = $null -ne $currentUri -and (Test-EquivalentOrigin $targetUri $currentUri)
     $leichiWaf = $bodyText -match '当前环境正在被调试|正在进行安全检测|安全检测能力由\s*雷池|如您是正常访问|客户端异常.*确认.*合法用户'
     $cloudflareWaf = $bodyText -match '请稍候[.…]*\s*[^ ]+\s*正在进行安全验证|本网站使用安全服务防护恶意自动程序|Just a moment|Performing security verification|Verify you are human|Cloudflare.*performance and security'
-    $securityVerification = $bodyText -match '异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2FA\b'
+    $security = Get-NativeSecurityState $bodyText $currentUri $otpInputPresent $passwordInputPresent $nonAddressEdits $scopedOtpInputPresent
+    $securityVerification = $security.securityVerification
     $success = $bodyText -match '签到成功|今日已签到|今天已签到|今天已经签到过|已经签到|已完成今日签到|(?:^|\s)已签到(?:\s|$)|Already checked in|Checked in today'
     $signedControls = @($controlNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeDailyControl $originValue $_ })
     $unsignedControls = @($linkNames | ForEach-Object { ($_ -replace '^[\[【]|[\]】]$', '').Trim() } | Where-Object { Test-NativeUnsignedControl $originValue $_ })
@@ -245,9 +448,10 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
     $authenticated = @($normalizedControls | Where-Object { $_ -match '^(?:退出|退出登录|登出|注销|登出账号|登出帳號|Logout|Log out)$' }).Count -gt 0 -and
         @($normalizedControls | Where-Object { $_ -match '^(?:控制面板|用户中心|用戶中心|个人资料|個人資料|设置|設定|Control Panel|User CP)$' }).Count -gt 0
     $loginRoute = $null -ne $currentUri -and $currentUri.AbsolutePath -match '/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:/|$)'
-    [pscustomobject]@{
+    $snapshot = [pscustomobject]@{
         currentUrl = if ($currentUri) { $currentUri.AbsoluteUri } else { '' }
         pageContentAvailable = [bool]$pageContentAvailable
+        browserFailureCode = $browserFailureCode
         bodyText = $bodyText.Substring(0, [Math]::Min(2000, $bodyText.Length))
         checkinContext = @([regex]::Matches($bodyText, '.{0,20}(?:签到|簽到|心情|验证码).{0,100}') | Select-Object -First 8 | ForEach-Object { $_.Value })
         successText = Get-NativeSuccessText $bodyText
@@ -261,11 +465,28 @@ function Read-PageSnapshot([System.Windows.Automation.AutomationElement]$Window)
         leichiWaf = [bool]$leichiWaf
         cloudflareWaf = [bool]$cloudflareWaf
         securityVerification = [bool]$securityVerification
+        nativeSecurityDiagnostic = $security.nativeSecurityDiagnostic
         success = [bool]($success -or $signedControls.Count -eq 1)
         loginRoute = [bool]$loginRoute
         nonAddressEdits = $nonAddressEdits
-        siteBodyLoaded = [bool]($sameOrigin -and -not ($leichiWaf -or $cloudflareWaf) -and $bodyText.Length -gt 80)
+        siteBodyLoaded = [bool](-not $browserFailureCode -and $sameOrigin -and -not ($leichiWaf -or $cloudflareWaf) -and $bodyText.Length -gt 80)
     }
+    $snapshot.nativeSecurityDiagnostic | Add-Member -NotePropertyName sameOrigin -NotePropertyValue ([bool]$sameOrigin)
+    $snapshot.nativeSecurityDiagnostic | Add-Member -NotePropertyName pageContentAvailable -NotePropertyValue ([bool]$pageContentAvailable)
+    $snapshot.nativeSecurityDiagnostic | Add-Member -NotePropertyName waf -NotePropertyValue ([bool]($leichiWaf -or $cloudflareWaf))
+    $snapshot | Add-Member -NotePropertyName audiencesDailyHeaderVerified -NotePropertyValue (Test-NativeAudiencesDailyHeader $snapshot $originValue)
+    if ($originValue -ceq 'https://ourbits.club') {
+        $header = if ($snapshot.sameOrigin -and $snapshot.pageContentAvailable -and $snapshot.siteBodyLoaded -and
+            -not $snapshot.waf -and -not $snapshot.securityVerification -and -not $snapshot.loginRoute -and -not $browserFailureCode) {
+            Get-NativeOurbitsAccountHeader $Window $elements $currentUri
+        } else { Measure-NativeOurbitsAccountHeader '' 0 @() }
+        if ($header.accountHeaderVerified -eq $true) { $snapshot.authenticated = $true }
+        foreach ($name in @('ourbitsDailyHeaderVerified', 'ourbitsHeaderLogoutCount', 'ourbitsHeaderStatsCount',
+                'ourbitsHeaderRewardCount', 'ourbitsHeaderUnsignedControlCount', 'ourbitsHeaderContextClear')) {
+            $snapshot | Add-Member -NotePropertyName $name -NotePropertyValue $header.$name
+        }
+    }
+    return $snapshot
 }
 
 function Invoke-UniqueCheckinButton([System.Windows.Automation.AutomationElement]$Window) {
@@ -343,13 +564,15 @@ function Invoke-Control([System.Windows.Automation.AutomationElement]$Element) {
     catch { return $false }
 }
 
-function Close-TaskWindow([System.Windows.Automation.AutomationElement]$Window) {
+function Close-TaskWindow([System.Windows.Automation.AutomationElement]$Window, [IntPtr]$PreviousForeground = [IntPtr]::Zero) {
     $handle = [IntPtr]$Window.Current.NativeWindowHandle
-    [void][CheckinWindowNative]::ShowWindow($handle, 7)
+    if (-not [CheckinWindowNative]::IsWindow($handle)) { return }
+    [CheckinWindowNative]::RestoreForegroundIfTask($handle, $PreviousForeground)
     # Chrome persists the last normal window placement.  Always leave the
-    # temporary window with safe on-screen restore bounds before closing it so
-    # a later user-created Chrome window can never inherit task-only placement.
-    [void][CheckinWindowNative]::SetWindowPos($handle, [IntPtr]::Zero, 80, 80, 1400, 900, 0x0014)
+    # temporary window hidden with safe restore bounds before closing it so a
+    # later user-created Chrome window cannot inherit task-only placement.
+    $placementError = $null
+    try { [CheckinWindowNative]::PrepareToClose($handle) } catch { $placementError = $_ }
     try {
         $windowPattern = $Window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
         $windowPattern.Close()
@@ -360,10 +583,14 @@ function Close-TaskWindow([System.Windows.Automation.AutomationElement]$Window) 
     $deadline = (Get-Date).AddSeconds(15)
     while ([CheckinWindowNative]::IsWindow($handle) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
     if ([CheckinWindowNative]::IsWindow($handle)) { throw '主 Chrome 任务窗口未能正常关闭；未触碰其他窗口。' }
+    if ($placementError) { throw $placementError }
 }
 
 $beforeHandles = @{}
 $beforeWindowUrls = @{}
+foreach ($handle in @([CheckinWindowNative]::FindWindows([int[]]@(Get-ChromeProcessIds)))) {
+    $beforeHandles[$handle.ToInt32()] = $true
+}
 foreach ($window in @(Get-ChromeWindows)) {
     $handle = [int]$window.Current.NativeWindowHandle
     $beforeHandles[$handle] = $true
@@ -371,6 +598,9 @@ foreach ($window in @(Get-ChromeWindows)) {
     $beforeWindowUrls[$handle] = if ($beforeUri) { $beforeUri.AbsoluteUri } else { '' }
 }
 $taskWindow = $null
+$ownedStartupWindow = $null
+$taskHandle = [IntPtr]::Zero
+$previousForegroundWindow = [IntPtr]::Zero
 $result = $null
 $clicked = $false
 try {
@@ -378,33 +608,60 @@ try {
         "`"--user-data-dir=$sourceRoot`"",
         "--profile-directory=$profileDirectory",
         '--new-window',
-        '--start-minimized',
+        "--window-position=$([CheckinWindowNative]::OffscreenX),$([CheckinWindowNative]::OffscreenY)",
+        '--window-size=1400,900',
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-features=OptimizationGuideOnDeviceModel',
         '--force-renderer-accessibility',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        $targetUri.AbsoluteUri
+        '--disable-renderer-backgrounding'
     )
-    # Request background startup before URL discovery, which can time out.
-    # Never use task-only negative restore bounds on the user's profile.
+    if ($nativePtProxyServer) { $arguments += "--proxy-server=$nativePtProxyServer" }
+    $arguments += $targetUri.AbsoluteUri
+    # Chrome's existing root process owns proxy flags. A new-window launch
+    # cannot change them, even when it selects another profile directory.
+    Assert-NativePtMainChromeProxy -Config $config -ProfileRoot $sourceRoot -Origin $originValue -ProxyServer $nativePtProxyServer
+    # Start a normal off-screen window before URI discovery. Restoring a
+    # minimized HWND would reveal its on-screen restore bounds.
+    # Cleanup hides it while restoring safe bounds for the user's profile.
     if (Test-NativePtNavigationRisk) {
         Start-NativePtWrite -Action navigation
         $script:nativeLocalSubmissionAttempted = $true
     }
+    $previousForegroundWindow = [CheckinWindowNative]::GetForegroundWindow()
     Start-Process -FilePath ([string]$config.chromeExecutable) -ArgumentList $arguments -WindowStyle Hidden | Out-Null
     $windowDeadline = (Get-Date).AddSeconds(25)
     do {
         Start-Sleep -Milliseconds 500
         $newWindows = @(Get-ChromeWindows | Where-Object { -not $beforeHandles.ContainsKey([int]$_.Current.NativeWindowHandle) })
+        $mainIds = [int[]]@(Get-MainProfileChromeProcessIds)
+        if ($null -eq $ownedStartupWindow) {
+            $startupCandidates = @($newWindows | Where-Object {
+                [CheckinWindowNative]::IsStartupOffscreenWindow([IntPtr]$_.Current.NativeWindowHandle, $mainIds)
+            })
+            if ($startupCandidates.Count -eq 1) {
+                # A hidden Chromium window may withhold its URI and document
+                # tree until shown. Claim only one new main-profile HWND with
+                # the task-only launch placement, then show it atomically off
+                # screen. Persist ownership before waiting for page readback.
+                $ownedStartupWindow = $startupCandidates[0]
+                $taskHandle = [IntPtr]$ownedStartupWindow.Current.NativeWindowHandle
+                Register-NativeTaskWindow $ownedStartupWindow
+                [CheckinWindowNative]::RenderOffscreen($taskHandle, $previousForegroundWindow)
+            }
+        }
         $targetWindows = @($newWindows | Where-Object {
+            if ($_.Current.ProcessId -notin $mainIds) { return $false }
+            if ($null -ne $ownedStartupWindow -and
+                $_.Current.NativeWindowHandle -ne $ownedStartupWindow.Current.NativeWindowHandle) { return $false }
             $currentUri = Get-CurrentUri $_
             $null -ne $currentUri -and (Test-EquivalentOrigin $targetUri $currentUri)
         })
         if ($targetWindows.Count -eq 1) {
             $taskWindow = $targetWindows[0]
+            if ($null -eq $ownedStartupWindow) { Register-NativeTaskWindow $taskWindow }
         }
     } while ($null -eq $taskWindow -and (Get-Date) -lt $windowDeadline)
     if ($null -eq $taskWindow) {
@@ -426,24 +683,19 @@ try {
         }
     } else {
         $taskHandle = [IntPtr]$taskWindow.Current.NativeWindowHandle
-        [void][CheckinWindowNative]::ShowWindow($taskHandle, 7)
+        [CheckinWindowNative]::RenderOffscreen($taskHandle, $previousForegroundWindow)
 
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         $oauthLoginClicked = $false
         $oauthAuthorizeClicked = $false
-        $readWindowRestored = $false
         $last = $null
         do {
+            [CheckinWindowNative]::RenderOffscreen($taskHandle, $previousForegroundWindow)
             $last = Read-PageSnapshot $taskWindow
-            if (-not $last.pageContentAvailable -and -not $readWindowRestored) {
-                # Minimized Chrome may withhold its document tree. Restore only
-                # this task-created window without activating it, then sample
-                # once more. Only this task window is restored; submission
-                # remains protected by the current-day native write gate.
-                [void][CheckinWindowNative]::ShowWindow($taskHandle, 4)
-                $readWindowRestored = $true
-                Start-Sleep -Milliseconds 750
-                continue
+            if ($last.browserFailureCode) {
+                $result = [pscustomobject]@{status='unconfirmed';failureCode=$last.browserFailureCode;
+                    reason='浏览器未能连接到站点，尚未读取账号或签到页面';inspection=$last;clicked=$clicked}
+                break
             }
             $pageEvidence = Get-ConfirmedNativePageEvidence $last $Url $clicked -FormalVisit:(-not $ReadOnly -and $targetUri.AbsolutePath -match '^/(?:attendance|check[-_]?in|showup)(?:\.php)?/?$')
             if (Test-NativePageCompletion $last $originValue $pageEvidence) {
@@ -490,6 +742,7 @@ try {
                 if (-not $oauthAuthorizeClicked) {
                     $authorize = Get-UniqueNamedControl $taskWindow @('授权', '允許', '允许', 'Authorize', 'Allow')
                     if ($authorize -and (Invoke-Control $authorize)) {
+                        [CheckinWindowNative]::RestoreForegroundIfTask($taskHandle, $previousForegroundWindow)
                         $oauthAuthorizeClicked = $true
                         Start-Sleep -Seconds 2
                         continue
@@ -501,6 +754,7 @@ try {
             if (-not $ReadOnly -and $oauthProvider -eq 'LinuxDO' -and $last.siteBodyLoaded -and -not $oauthLoginClicked) {
                 $oauthLogin = Get-UniqueNamedControl $taskWindow @('登录', '登入', '使用 LinuxDO 登录', '使用 Linux DO 登录')
                 if ($oauthLogin -and (Invoke-Control $oauthLogin)) {
+                    [CheckinWindowNative]::RestoreForegroundIfTask($taskHandle, $previousForegroundWindow)
                     $oauthLoginClicked = $true
                     Start-Sleep -Seconds 2
                     continue
@@ -528,16 +782,8 @@ try {
                 break
             }
             if (-not $ReadOnly -and -not $last.success -and -not $script:checkinClickAttempted -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
-                if ($originValue -eq 'https://ptsbao.club' -and -not $readWindowRestored) {
-                    # Chrome may expose a cached document for a minimized
-                    # window while its page action remains suspended. Restore
-                    # only our task window without activation before dispatch.
-                    [void][CheckinWindowNative]::ShowWindow($taskHandle, 4)
-                    $readWindowRestored = $true
-                    Start-Sleep -Milliseconds 750
-                    continue
-                }
                 $clicked = Invoke-UniqueCheckinButton $taskWindow
+                [CheckinWindowNative]::RestoreForegroundIfTask($taskHandle, $previousForegroundWindow)
                 if ($clicked) { Start-Sleep -Seconds 2; continue }
             }
             Start-Sleep -Milliseconds 750
@@ -577,12 +823,17 @@ try {
 }
 catch {
     if ($null -eq $result) {
-        $result = Get-NativePtFailure -ErrorRecord $_
+        $result = Get-NativePtChromeProxyFailure $_
+        if ($null -eq $result) { $result = Get-NativePtFailure -ErrorRecord $_ }
     }
 }
 finally {
-    if ($null -ne $taskWindow) {
-        try { Close-TaskWindow $taskWindow }
+    $cleanupWindow = if ($null -ne $ownedStartupWindow) { $ownedStartupWindow } else { $taskWindow }
+    if ($null -ne $cleanupWindow) {
+        try {
+            Close-TaskWindow $cleanupWindow $previousForegroundWindow
+            if ($ReadOnly -and $LifecyclePath) { Save-NativeReadLifecycle $taskHandle $true }
+        }
         catch {
             # Cleanup is operational state, not evidence that a confirmed
             # remote check-in failed. Preserve the business result and evidence.

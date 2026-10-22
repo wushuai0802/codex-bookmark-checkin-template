@@ -46,12 +46,25 @@ written after every worker completion. The scheduler or NAS sync layer should us
 that marker to schedule its normal status sync; the worker never uploads, sends a
 notification, or submits a check-in.
 
-The worker holds execution locks, never calls a submission path, publishes only
-authoritative positive readbacks, and leaves original completion reports intact
+The worker holds execution locks, never calls a submission path, publishes
+authoritative account/day readbacks, and leaves original completion reports intact
 when a read fails. Each attempt also writes a redacted, structured audit line with
 `status`, `errorStage`, `errorCode`, and `submissionAttempted:false`. Native browser
 fallback is limited to configured single-account profiles and the reviewed index
 pages in the shared contract. No new scheduled task is needed.
+
+The catalog includes reviewed PT sites in the exact current execution plan even
+when their bookmark folder has a service label. It is bound to both the bookmark
+hash and the registered-plan digest; moving or removing an entry cannot retain an
+old authorization. Successful readbacks resolve current business state while
+historical executor attempts remain audit records. A current `not_signed` readback
+is persisted without claiming success. With the existing private fallback opt-in,
+the normal dispatcher may hand a reviewed registered target back to V1 once. V1
+must claim the fresh proof and recheck account/day/Profile under its execution
+lease; a repeated or inconclusive proof never replays an unknown submission.
+
+For scoped acceptance, `harvest-fallback.mjs --only-origin <exact-HTTPS-origin>`
+uses the same dispatcher and live Harvest check, not a separate repair executor.
 
 `Invoke-SyncRemoteCommand` captures SSH stderr and returns an exit code plus a
 safe failure category. Pass `-o ConnectTimeout=15 -o ServerAliveInterval=15

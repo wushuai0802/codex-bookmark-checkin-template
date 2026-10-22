@@ -56,7 +56,7 @@ test("部分进度即使全部已签到也不会报告成功", async () => {
   assert.equal(report.status, "unconfirmed");
   assert.equal(report.isComplete, false);
   assert.match(report.summary, /任务未完成：已处理 2\/5 项/);
-  assert.match(report.summary, /已签到 2\/5/);
+  assert.match(report.summary, /今日完成 2 项/);
 });
 
 test("部分进度在运行器超时时保持超时状态", async () => {
@@ -88,7 +88,7 @@ test("只有完整的 final 报告可以映射为今日已完成", async () => {
 
   assert.equal(report.status, "already_done");
   assert.equal(report.isComplete, true);
-  assert.equal(report.summary, '已签到 2/2');
+  assert.equal(report.summary, '今日完成 2 项');
 });
 
 test("同一逻辑站点的两个取消任务只统计一次", async () => {
@@ -120,7 +120,7 @@ test("同一逻辑站点的两个取消任务只统计一次", async () => {
 
   assert.equal(report.status, "skipped");
   assert.equal(report.siteCount, 1);
-  assert.equal(report.summary, '已签到 0/1 · 已取消 1');
+  assert.equal(report.summary, '今日完成 0 项 · 已暂停 1');
   assert.doesNotMatch(report.summary, /未开放/);
 });
 
@@ -150,7 +150,7 @@ test("同一站点的三个成功账号分别统计，通知不重复列出明�
 
   assert.equal(report.status, "success");
   assert.equal(report.siteCount, 3);
-  assert.equal(report.summary, '已签到 3/3');
+  assert.equal(report.summary, '今日完成 3 项');
   for (const accountId of accountIds) assert.doesNotMatch(report.summary, new RegExp(accountId));
 });
 
@@ -228,7 +228,7 @@ test("cleanup warning preserves confirmed checkin but remains visible", async ()
   const warning = await previewReport({ ...base, results: [{ ...result, cleanupFailureCode: "window_cleanup_failed" }] });
   assert.equal(warning.status, clean.status);
   assert.match(warning.summary, /窗口清理异常/);
-  assert.match(warning.summary, /已签到 1\/1/);
+  assert.match(warning.summary, /今日完成 1 项/);
   assert.notEqual(warning.eventKey, clean.eventKey);
 });
 
@@ -271,7 +271,30 @@ test("完整签到只剩站点外部故障时仍报告已完成，并保留等�
   assert.equal(report.status, "success");
   assert.doesNotMatch(report.summary, /待确认/);
   assert.match(report.summary, /等待外部 1/);
-  assert.match(report.summary, /已签到 2\/3/);
+  assert.match(report.summary, /今日完成 2 项/);
+});
+
+test('上游等待与自动登录恢复同时存在时报告重试中，真实待核验或人工处理仍优先', async () => {
+  const results = [
+    {origin:'https://done.example.test',status:'signed'},
+    {origin:'https://offline.example.test',status:'deferred',retryCause:'upstream_unavailable'},
+    {origin:'https://login.example.test',status:'deferred',retryCause:'login_required',submissionAttempted:false},
+  ];
+  const make = items => previewReport({runId:'20261012-mixed-retry',runState:'final',
+    plannedTotal:items.length,processedTotal:items.length,isComplete:true,results:items});
+  const retrying = await make(results);
+  assert.equal(retrying.status,'retrying');
+  assert.equal(retrying.businessComplete,false);
+  assert.equal(retrying.verificationPendingCount,0);
+  assert.equal(retrying.externalPendingCount,1);
+  assert.match(retrying.summary,/登录恢复 1/);
+  assert.match(retrying.summary,/等待外部 1/);
+  const unknown = await make([...results,{origin:'https://unknown.example.test',status:'needs_attention',
+    failureCode:'submission_outcome_unknown',submissionAttempted:true}]);
+  assert.equal(unknown.status,'unconfirmed');
+  assert.equal(unknown.verificationPendingCount,1);
+  const manual = await make([...results,{origin:'https://manual.example.test',status:'login_required',retryableLoginRecovery:false}]);
+  assert.equal(manual.status,'needs_attention');
 });
 
 test('unknown submissions stay in verification even if the site is under maintenance',async()=>{
@@ -281,6 +304,85 @@ test('unknown submissions stay in verification even if the site is under mainten
   assert.equal(report.externalPendingCount,0);assert.equal(report.verificationPendingCount,1);
   assert.match(report.summary,/待核验 1（不重复提交）/);
   assert.doesNotMatch(report.summary,/待重试|❌/);
+});
+
+test('unknown submissions with observed OTP fields explain required secondary verification without claiming success', async () => {
+  for (const observedField of ['otpInputPresent', 'scopedOtpInputPresent']) {
+    const report = await previewReport({
+      runId: `20261012-secondary-${observedField}`, runState: 'final', plannedTotal: 1, processedTotal: 1, isComplete: true,
+      results: [{
+        origin: 'https://secondary.example.test', status: 'needs_attention', failureCode: 'submission_outcome_unknown',
+        submissionAttempted: true, retryable: false, underlyingFailureCode: 'two_factor_required',
+        nativeSecurityDiagnostic: {
+          verificationRoute: false, otpInputPresent: false, scopedOtpInputPresent: false, passwordInputPresent: false,
+          sameOrigin: true, pageContentAvailable: true, waf: false, [observedField]: true,
+        },
+      }],
+    });
+    assert.equal(report.verificationPendingCount, 1);
+    assert.equal(report.businessComplete, false);
+    assert.equal(report.problemCount, 1);
+    assert.equal(report.status, 'unconfirmed');
+    assert.match(report.summary, /待核验 1（不重复提交）/);
+    assert.match(report.summary, /提交结果未确认，需完成二次验证，完成后自动复核/);
+    assert.doesNotMatch(report.summary, /待重试|今日完成 1 项/);
+  }
+});
+
+test('legacy attention labels, help and malformed OTP diagnostics cannot imply secondary verification', async () => {
+  const diagnostic = {
+    verificationRoute: false, otpInputPresent: false, scopedOtpInputPresent: false, passwordInputPresent: false,
+    sameOrigin: true, pageContentAvailable: true, waf: false,
+  };
+  const variants = [
+    { attentionKind: 'trusted_device_initialization' },
+    { attentionKind: 'trusted_device_initialization', nativeSecurityDiagnostic: { ...diagnostic, otpInputPresent: true } },
+    { underlyingFailureCode: 'two_factor_required' },
+    { underlyingFailureCode: 'two_factor_required', nativeSecurityDiagnostic: diagnostic, reason: '2FA help or ordinary captcha' },
+    { underlyingFailureCode: 'two_factor_required', nativeSecurityDiagnostic: { ...diagnostic, otpInputPresent: 'true' } },
+    { underlyingFailureCode: 'two_factor_required', nativeSecurityDiagnostic: { otpInputPresent: true } },
+  ];
+  const report = await previewReport({
+    runId: '20261012-secondary-negative', runState: 'final', plannedTotal: variants.length, processedTotal: variants.length, isComplete: true,
+    results: variants.map((variant, index) => ({
+      origin: `https://secondary-${index}.example.test`, status: 'needs_attention', failureCode: 'submission_outcome_unknown',
+      submissionAttempted: true, retryable: false, ...variant,
+    })),
+  });
+  assert.equal(report.verificationPendingCount, variants.length);
+  assert.equal(report.businessComplete, false);
+  assert.equal(report.status, 'unconfirmed');
+  assert.equal((report.summary.match(/提交结果未确认，等待只读复核/g) ?? []).length, variants.length);
+  assert.doesNotMatch(report.summary, /需完成二次验证|建立可信设备会话|待重试/);
+});
+
+test('only observed secondary verification changes the unknown-submission event key and ordinary refreshes stay deduplicated', async () => {
+  const base = { runId: '20261012-secondary-event', runState: 'final', plannedTotal: 1, processedTotal: 1, isComplete: true };
+  const unknown = {
+    origin: 'https://secondary-event.example.test', status: 'needs_attention', failureCode: 'submission_outcome_unknown',
+    submissionAttempted: true, retryable: false,
+  };
+  const observed = {
+    ...unknown, underlyingFailureCode: 'two_factor_required',
+    nativeSecurityDiagnostic: {
+      verificationRoute: false, otpInputPresent: true, scopedOtpInputPresent: false, passwordInputPresent: false,
+      sameOrigin: true, pageContentAvailable: true, waf: false,
+    },
+  };
+  const generic = await previewReport({ ...base, results: [unknown] });
+  const legacy = await previewReport({ ...base, results: [{ ...unknown, attentionKind: 'trusted_device_initialization' }] });
+  const codeOnly = await previewReport({ ...base, results: [{ ...unknown, underlyingFailureCode: 'two_factor_required' }] });
+  const realOtp = await previewReport({ ...base, results: [observed] });
+  const refreshed = await previewReport({
+    ...base, results: [{ ...observed, reason: 'new reader explanation', confirmedAt: '2026-10-12T10:00:00Z',
+      nativeSecurityDiagnostic: { ...observed.nativeSecurityDiagnostic, matchedRules: ['secondary_code_text'] } }],
+  });
+  assert.equal(generic.eventKey, legacy.eventKey);
+  assert.equal(generic.eventKey, codeOnly.eventKey);
+  assert.notEqual(generic.eventKey, realOtp.eventKey);
+  assert.equal(realOtp.eventKey, refreshed.eventKey);
+  assert.equal(realOtp.businessComplete, false);
+  assert.equal(realOtp.verificationPendingCount, 1);
 });
 
 test("动作结果未知转为关注，只有可恢复异常进入自动重试", async () => {
@@ -420,7 +522,7 @@ test('摘要只列异常账号一次，成功账号不会挤掉待处理结果',
     ]});
   assert.equal(report.siteCount, 26);
   assert.equal(report.problemCount, 2);
-  assert.match(report.summary, /^已签到 24\/26 · 待处理 2/);
+  assert.match(report.summary, /^今日完成 24 项 · 待复核 1 · 待处理 1/);
   assert.equal((report.summary.match(/Primary/g) ?? []).length, 1);
   assert.equal((report.summary.match(/Secondary/g) ?? []).length, 1);
   assert.doesNotMatch(report.summary, /账号结果|ok-\d|更多明细/);
@@ -470,6 +572,7 @@ test('同原因同时间的重试只显示一次安排，人工处理排在长�
   assert.ok(report.summary.indexOf('manual.example') < report.summary.indexOf('retry-0.example'));
   assert.ok(report.summary.indexOf('unknown.example') < report.summary.indexOf('retry-0.example'));
   assert.ok(report.summary.length <= 950);
-  assert.match(report.summary, /待处理 32/);
+  assert.match(report.summary, /登录恢复 30/);
+  assert.match(report.summary, /待复核 1/);
   assert.doesNotMatch(report.summary, /账号结果/);
 });

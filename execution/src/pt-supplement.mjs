@@ -8,6 +8,9 @@ import {ptDiagnostic} from './pt-diagnostics.mjs';
 import {nativePtReadBinding,inspectNativePtHeader} from './native-pt-read.mjs';
 import {readOurbitsProfile} from './pt-profile-read.mjs';
 import {readHddolbyHeader} from './hddolby-readonly.mjs';
+import {recoverPtLogin} from './pt-login-recovery.mjs';
+import {readHhclubProfileState} from './hhclub-two-factor-login.mjs';
+import {validatePtLoginResume} from './pt-login-resume-guard.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
@@ -94,7 +97,9 @@ export async function readPtRewardCounter(context,origin,config){
 export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,clock=()=>now?new Date(now):new Date(),
   readOnly=false,verifyBeforeSubmit=false,validateScope=()=>{},
   launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
-  acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader,readAvailability=readPtPublicAvailability}={}){
+  acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader,readAvailability=readPtPublicAvailability,
+  readHddolby=readHddolbyHeader,recoverLogin=recoverPtLogin,readPassive=readPtPassivePage,
+  fallbackAttemptId,validateLoginResume=validatePtLoginResume,readLoginProfile=readHhclubProfileState}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
   const bytes=fs.readFileSync(catalogFile);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase())throw Error('PT catalog changed');
@@ -102,12 +107,14 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   const startedAt=clock();
   const legacyRoot=path.resolve(root);
   const config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config/config.json'),'utf8'));
+  const configHash=crypto.createHash('sha256').update(fs.readFileSync(path.join(legacyRoot,'config/config.json'))).digest('hex');
+  const unchangedConfig=()=>crypto.createHash('sha256').update(fs.readFileSync(path.join(legacyRoot,'config/config.json'))).digest('hex')===configHash;
   await validateScope();
   const plan=JSON.parse(fs.readFileSync(path.join(legacyRoot,'data/last-valid-bookmark-plan.json'),'utf8'));
   // A bookmark entry is not automatically a safe read-only URL. Some PT
   // sites perform attendance on page load, so their mature flow is a formal
   // mutation even when no button is clicked.
-  if(!Array.isArray(plan.targets)||(!readOnly&&plan.targets.some(item=>item.origin===target.origin)))throw Error('PT origin belongs to the daily plan');
+  if(!Array.isArray(plan.targets)||(!readOnly&&!verifyBeforeSubmit&&plan.targets.some(item=>item.origin===target.origin)))throw Error('PT origin belongs to the daily plan');
   if((config.excludedOrigins??[]).includes(target.origin)||(config.disabledCheckinOrigins??[]).includes(target.origin)||
     (config.disabledAccountKeys??[]).includes('site-default'))throw Error('PT origin disabled by execution configuration');
   const owners=plan.targets.filter(item=>item.origin===target.origin);
@@ -115,39 +122,123 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   target.accountKey=owners[0]?.accountKey??'site-default';
   if((config.disabledAccountKeys??[]).includes(target.accountKey))throw Error('PT account disabled by execution configuration');
   const policy=readOnly||verifyBeforeSubmit?ptReadPolicy(target.origin,config):null;
-  const nativeRead=readOnly&&policy?.nativeMainChrome===true;
-  const binding=nativeRead?nativePtReadBinding(config,target):ptExecutionBinding(config,legacyRoot,target);
+  const nativeRead=readOnly&&(policy?.nativeMainChrome===true||policy?.nativeIsolatedChrome===true);
+  const binding=nativeRead?nativePtReadBinding(config,target,{root:legacyRoot,isolated:policy.nativeIsolatedChrome===true}):ptExecutionBinding(config,legacyRoot,target);
   const profile=binding.profile;
   if(!nativeRead&&!fs.existsSync(path.join(profile,'Local State')))throw Error('execution browser profile is unavailable');
   const readRules=file=>{try{return JSON.parse(fs.readFileSync(path.join(legacyRoot,file),'utf8')).rules??[];}catch(error){if(error.code==='ENOENT')return [];throw error;}};
   const rules=[...readRules('config/qa-rules.json'),...readRules('config/qa-rules.local.json')];
   const safeConfig={...binding.config,retryCount:0,failureScreenshots:false,capturePtEvidence:true,ptPassiveReadOnly:readOnly,
+    ptFallbackRecheck:verifyBeforeSubmit===true||config.ptFallbackRecheck===true,
     ...(policy?.proxyServer?{ptReadProxyServer:policy.proxyServer}:{})};
   const metadata={accountKey:binding.accountKey,profileBinding:binding.profileBinding,startedAt:startedAt.toISOString(),
     operationMode:policy?.mode??'legacy_checkin',readSafety:policy?'reviewed_passive':'attendance_page_risk'};
   const lock=await acquire(path.join(legacyRoot,'tmp/run.lock'));
   let context;
+  const loginOpt=config.siteTwoFactorRecovery?.[target.origin];
+  const canRecoverLogin=!readOnly&&target.origin==='https://hhanclub.net'&&loginOpt?.enabled===true&&
+    loginOpt.reviewed===true&&loginOpt.provider==='bitwarden'&&loginOpt.adapterId==='hhclub-nexus-login-v1';
+  let loginRecoveryUsed=false;
+  const recoverLoginOnce=async()=>{
+    if(loginRecoveryUsed)return {handled:true,status:'needs_attention',failureCode:'two_factor_required'};
+    loginRecoveryUsed=true;
+    return recoverLogin({root:legacyRoot,origin:target.origin,config,profile});
+  };
+  const recoverAndRead=async original=>{
+    if(!canRecoverLogin||original?.status!=='login_required')return original;
+    await context.close();context=null;
+    await validateScope();
+    if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
+    const login=await recoverLoginOnce();
+    if(login?.handled!==true||login.status!=='logged_in')return {status:'needs_attention',submissionAttempted:false,
+      failureCode:login?.failureCode==='two_factor_required'?'two_factor_required':'native_readback_unavailable',
+      ...(login?.siteTwoFactorRecovery?{siteTwoFactorRecovery:login.siteTwoFactorRecovery}:{})};
+    await validateScope();
+    if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
+    const readPolicy=ptReadPolicy(target.origin,config);
+    context=await launch({...safeConfig,ptPassiveReadOnly:true,
+      ...(readPolicy.proxyServer?{ptReadProxyServer:readPolicy.proxyServer}:{})});
+    await installPtReadFirewall(context,readPolicy);
+    const page=await context.newPage();
+    try{
+      const response=await page.goto(readPolicy.url,{waitUntil:'domcontentloaded',timeout:15000});
+      const observed=await readPassive(page,readPolicy,{origin:target.origin,now:clock(),httpStatus:response?.status?.()??0});
+      if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
+      if(['not_signed','already_signed','signed'].includes(observed.status)&&observed.evidence?.authoritative===true&&
+        observed.evidence.accountId!==String(loginOpt.expectedAccountId))
+        return {status:'unknown',failureCode:'account_mismatch',submissionAttempted:false};
+      return {...observed,submissionAttempted:false,
+        operationMode:'safe_history_page',readSafety:'reviewed_passive',
+        ...(login.siteTwoFactorRecovery?{siteTwoFactorRecovery:login.siteTwoFactorRecovery}:{})};
+    }finally{await page.close().catch(()=>{});}
+  };
   try {
     await validateScope();
     if(nativeRead){
-      const result=await inspectNative({root:legacyRoot,origin:target.origin,url:policy.url});
+      const result=await inspectNative({root:legacyRoot,origin:target.origin,url:policy.url,
+        ...(policy.nativeIsolatedChrome===true?{isolated:true}:{})});
       if(result.submissionAttempted!==false)throw Error('Native PT read did not prove submission was disabled');
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
       return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},clock());
     }
+    if(canRecoverLogin&&!verifyBeforeSubmit&&fallbackAttemptId!==undefined){
+      const firstDispatch=()=>validateLoginResume({root:legacyRoot,origin:target.origin,accountKey:binding.accountKey,
+        profileBinding:binding.profileBinding,attemptId:fallbackAttemptId,now:clock()});
+      const allowed=await firstDispatch();
+      if(allowed?.allowed!==true)return publicSupplementResult(target.origin,{...metadata,status:'unknown',
+        failureCode:'authoritative_status_unavailable',submissionAttempted:false},clock());
+      const identityPolicy=ptReadPolicy(target.origin,config);
+      context=await launch({...safeConfig,ptPassiveReadOnly:true,
+        ...(identityPolicy.proxyServer?{ptReadProxyServer:identityPolicy.proxyServer}:{})});
+      const identityArgs={expectedAccountId:String(loginOpt.expectedAccountId),now:clock()};
+      let identity=await readLoginProfile(context,identityArgs);
+      if(identity?.authenticated===true&&identity.accountMatched!==true)
+        return publicSupplementResult(target.origin,{...metadata,status:'unknown',failureCode:'account_mismatch',submissionAttempted:false},clock());
+      if(identity?.status==='login_required'&&identity.submissionAttempted===false){
+        await context.close();context=null;
+        await validateScope();
+        if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig()||(await firstDispatch())?.allowed!==true)
+          return publicSupplementResult(target.origin,{...metadata,status:'unknown',failureCode:'authoritative_status_unavailable',submissionAttempted:false},clock());
+        const login=await recoverLoginOnce();
+        if(login?.handled!==true||login.status!=='logged_in')
+          return publicSupplementResult(target.origin,{...metadata,status:'needs_attention',failureCode:
+            login?.failureCode==='two_factor_required'?'two_factor_required':'native_readback_unavailable',submissionAttempted:false},clock());
+        context=await launch({...safeConfig,ptPassiveReadOnly:true,
+          ...(identityPolicy.proxyServer?{ptReadProxyServer:identityPolicy.proxyServer}:{})});
+        identity=await readLoginProfile(context,{...identityArgs,now:clock()});
+        if(identity?.authenticated!==true||identity.accountMatched!==true)
+          return publicSupplementResult(target.origin,{...metadata,status:'unknown',failureCode:
+            identity?.authenticated===true?'account_mismatch':'native_readback_unavailable',submissionAttempted:false},clock());
+      }
+      await context.close();context=null;
+      await validateScope();
+      if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig()||(await firstDispatch())?.allowed!==true)
+        return publicSupplementResult(target.origin,{...metadata,status:'unknown',failureCode:'authoritative_status_unavailable',submissionAttempted:false},clock());
+      // The parent's existing audit proves this is the first dispatch, not a
+      // replay. HHCLUB's identity panel supplies no daily negative evidence.
+      // Continue its original flow and keep the real formal receipt.
+    }
     context=await launch({...safeConfig,ptPassiveReadOnly:readOnly||verifyBeforeSubmit});
     await validateScope();
-    if(readOnly&&policy.hddolbyHeader===true){
-      const result=await readHddolbyHeader(context,{origin:target.origin,now:clock()});
+    let hddolbyVerified=false;
+    if((readOnly||verifyBeforeSubmit)&&policy.hddolbyHeader===true){
+      const result=await readHddolby(context,{origin:target.origin,now:clock(),
+        expectedAccountId:config.siteTwoFactorRecovery?.[target.origin]?.expectedAccountId});
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during account header readback');
-      return publicSupplementResult(target.origin,{...metadata,...result},clock());
+      if(readOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)
+        return publicSupplementResult(target.origin,{...metadata,...result},clock());
+      await context.close();context=null;
+      await validateScope();
+      context=await launch({...safeConfig,ptPassiveReadOnly:false});
+      metadata.operationMode='legacy_checkin';metadata.readSafety='attendance_page_risk';
+      hddolbyVerified=true;
     }
     if(readOnly&&policy.selfProfileHeader===true){
       const result=await readOurbitsProfile(context,{origin:target.origin,now:clock()});
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during profile readback');
       return publicSupplementResult(target.origin,{...metadata,...result},clock());
     }
-    if(readOnly||verifyBeforeSubmit){
+    if(readOnly||verifyBeforeSubmit&&!hddolbyVerified){
       await installPtReadFirewall(context,policy);
       const readOnlyUrl=policy.url;
       const page=await context.newPage();
@@ -156,14 +247,18 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
           if(!readOnly||!policy.publicAvailabilityUrl)throw error;return null;
         });
         const observedAt=clock();
-        let result=await readPtPassivePage(page,policy,{origin:target.origin,now:observedAt,httpStatus:response?.status?.()??0});
+        let result=await readPassive(page,policy,{origin:target.origin,now:observedAt,httpStatus:response?.status?.()??0});
         // An authenticated daily control is newer account evidence than a
         // public maintenance landing page. Login also needs its own recovery.
         if(readOnly&&policy.publicAvailabilityUrl&&!['signed','already_signed','not_signed','login_required'].includes(result.status))
           result=await readAvailability(target.origin,policy)??result;
         if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
+        if(canRecoverLogin&&result.status==='login_required'){
+          await page.close().catch(()=>{});
+          result=await recoverAndRead(result);
+        }
         if(readOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)
-          return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},observedAt);
+          return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},clock());
       }finally{await page.close().catch(()=>{});}
       await context.close();context=null;
       await validateScope();
@@ -173,6 +268,16 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     }
     const before=await readReward(context,target.origin,safeConfig);
     let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+    if(canRecoverLogin&&result?.status==='login_required'){
+      result=await recoverAndRead(result);
+      if(result.status==='not_signed'&&result.evidence?.authoritative===true){
+        await context.close();context=null;
+        await validateScope();
+        if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
+        context=await launch({...safeConfig,ptPassiveReadOnly:false});
+        result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+      }
+    }
     if(terminal.has(result?.status)&&result?.evidence?.authoritative!==true&&
        (before!==null||rewardHintOrigins.has(target.origin))){
       const after=await readReward(context,target.origin,safeConfig);

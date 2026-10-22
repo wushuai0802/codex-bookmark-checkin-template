@@ -533,17 +533,6 @@ try {
                 . $runtimeResolverScript
             }
             $node = Resolve-CheckinNode $config
-            try {
-                Write-SchedulerHeartbeat 'flushing_notifications'
-                $outboxResult = (& $outboxScript | Select-Object -Last 1) | ConvertFrom-Json
-                if ([int]$outboxResult.processed -gt 0 -or [int]$outboxResult.invalid -gt 0) {
-                    Write-SchedulerLog "通知 outbox：处理=$($outboxResult.processed)，送达=$($outboxResult.delivered)，延后=$($outboxResult.deferred)，无效=$($outboxResult.invalid)，隔离=$($outboxResult.quarantined)。"
-                }
-            }
-            catch {
-                $outboxMessage = ([string]$_.Exception.Message) -replace '[\r\n\t]+', ' '
-                Write-SchedulerLog "通知 outbox 可恢复异常：$outboxMessage"
-            }
             Write-SchedulerHeartbeat 'idle'
             $schedule = [string]$config.schedule
             if ($schedule -notmatch '^([01]\d|2[0-3]):[0-5]\d$') { throw "无效签到时间：$schedule" }
@@ -559,6 +548,21 @@ try {
                 throw '当前书签计划检查结果不完整。'
             }
             $latestReportState = Get-LatestReportState $now $config $currentPlan
+            # Reconcile before delivery even when no browser run is due. A
+            # later Harvest/passive receipt can change today's report while
+            # the engine runId stays unchanged; the existing outbox dedupes it.
+            if ($latestReportState.Valid) {
+                try { & $reporterScript -RunnerStatus completed -ReportPath $latestReportPath | Out-Null }
+                catch { Write-SchedulerLog "当日权威汇总刷新暂不可用：$(Compress-SchedulerError $_.Exception.Message)" }
+            }
+            try {
+                Write-SchedulerHeartbeat 'flushing_notifications'
+                $outboxResult = (& $outboxScript | Select-Object -Last 1) | ConvertFrom-Json
+                if ([int]$outboxResult.processed -gt 0 -or [int]$outboxResult.invalid -gt 0) {
+                    Write-SchedulerLog "通知 outbox：处理=$($outboxResult.processed)，送达=$($outboxResult.delivered)，延后=$($outboxResult.deferred)，无效=$($outboxResult.invalid)，隔离=$($outboxResult.quarantined)。"
+                }
+            } catch { Write-SchedulerLog "通知 outbox 可恢复异常：$(Compress-SchedulerError $_.Exception.Message)" }
+            Write-SchedulerHeartbeat 'idle'
             $currentPlanFingerprint = [string]$currentPlan.planFingerprint
             $statePlanFingerprint = [string]$state.planFingerprint
             $statePlanChanged = $statePlanFingerprint -and $statePlanFingerprint -ne $currentPlanFingerprint

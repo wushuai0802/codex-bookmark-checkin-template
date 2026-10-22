@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright-core';
-import {hddolbyHeaderSigned,readHddolbyHeader,hddolbyDailyProof} from '../src/hddolby-readonly.mjs';
+import {hddolbyHeaderSigned,hddolbyHeaderUnsigned,readHddolbyHeader,hddolbyDailyProof,hddolbyDailyStatusProof} from '../src/hddolby-readonly.mjs';
 import {tryHddolbyPostRedirectVerification} from '../src/browser.mjs';
 import {ptReadPolicy} from '../src/pt-read-policy.mjs';
 import {publicSupplementResult} from '../src/pt-supplement.mjs';
@@ -36,6 +36,20 @@ test('HDDolby reads only linked passive pages and retains exact account/day evid
   const projected=publicSupplementResult(origin,{...result,operationMode:'safe_history_page',readSafety:'reviewed_passive'},now);
   assert.equal(projected.evidence.pagePath,'/log.php');assert.equal(projected.evidence.authoritative,true);
 });
+test('the unique current account must show the unsigned whale-coin control on both passive pages',async()=>{
+  const f=fixture(),unsigned={...header,text:'本站当前账户栏 签到得鲸币',unsigned:true};
+  const result=await readHddolbyHeader(f.context,{origin,now,extractHeader:async()=>unsigned});
+  assert.equal(result.status,'not_signed');assert.equal(result.submissionAttempted,false);
+  assert.equal(result.evidence.statusSignal,'hddolby_account_header_unsigned');
+  assert.equal(hddolbyDailyStatusProof(result,now),true);
+  assert.equal(hddolbyDailyStatusProof(result,new Date(now.getTime()+30_001)),false);
+  assert.equal(hddolbyDailyProof(result,now),false);
+  for(const change of [{text:'签到得鲸币 签到已得10'},{authenticated:false},{userIds:['7','8']},{unsigned:false}])
+    assert.equal(hddolbyHeaderUnsigned({...unsigned,...change}),false);
+  const mixed=fixture();
+  assert.equal((await readHddolbyHeader(mixed.context,{origin,now,
+    extractHeader:async html=>html==='index'?unsigned:{...header,userIds:['8']}})).status,'unknown');
+});
 test('different accounts, stale server clocks, unreadable pages and unlinked logs cannot certify completion',async()=>{
   for(const options of [{change:{userIds:['8']}},{change:{authenticated:false}},{status:302},
     {date:'invalid'},{date:'Fri, 02 Oct 2026 04:00:00 GMT'},{date:'Sat, 03 Oct 2026 04:10:00 GMT'}]){
@@ -45,6 +59,9 @@ test('different accounts, stale server clocks, unreadable pages and unlinked log
   const f=fixture();
   assert.equal((await readHddolbyHeader(f.context,{origin,now,extractHeader:async()=>({...header,logLinked:false})})).status,'unknown');
   assert.equal(f.calls.length,1);
+  const wrongPin=fixture();
+  assert.equal((await readHddolbyHeader(wrongPin.context,{origin,now,extractHeader:wrongPin.extractHeader,
+    expectedAccountId:'8'})).failureCode,'account_mismatch');
   await assert.rejects(()=>readHddolbyHeader(f.context,{origin:'https://foreign.example'}),/not reviewed/);
 });
 test('a take2fa redirect needs real readback and never accepts generic homepage text or re-navigates attendance',async()=>{
@@ -69,6 +86,14 @@ test('HDDolby capability cannot be transplanted to another site or an action pag
   for(const rule of [{...base,url:origin+'/attendance.php'},{...base,nativeMainChrome:true},{...base,selector:'body'}])
     assert.throws(()=>ptReadPolicy(origin,{ptReadOnlyPolicies:{[origin]:rule}}));
   assert.throws(()=>ptReadPolicy('https://other.example',{ptReadOnlyPolicies:{'https://other.example':{...base,url:'https://other.example/log.php'}}}));
+});
+
+test('the early take2fa success path checks the configured account pin before skipping recovery',async()=>{
+  const page={url:()=>origin+'/take2fa.php',context:()=>({})};
+  const result=await tryHddolbyPostRedirectVerification(page,origin,{siteTwoFactorRecovery:{[origin]:{expectedAccountId:'7'}}},
+    async(_context,options)=>{assert.equal(options.expectedAccountId,'7');return {status:'unknown',failureCode:'account_mismatch'};},
+    async()=>({twoFactorRecovery:{attempted:false,accepted:false,reason:'disabled'}}));
+  assert.equal(result.status,'needs_attention');
 });
 test('inert parsing blocks inline scripts and requests even in an execution context with JavaScript enabled',async()=>{
   const browser=await chromium.launch({headless:true,channel:'chrome'});

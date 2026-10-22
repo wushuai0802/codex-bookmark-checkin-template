@@ -6,7 +6,8 @@ import { acceptConfiguredLoginTerms, waitForLoginSubmitEnabled } from "./protect
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
-import { classifyPageText } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
+import { recoverHhclubTwoFactorLogin, verifyHhclubNativeProfile } from "./hhclub-two-factor-login.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -14,12 +15,15 @@ const rootDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const config = JSON.parse(await fs.readFile(path.join(rootDirectory, "config", "config.json"), "utf8"));
 const port = Number.parseInt(process.argv[2], 10);
 const expectedOrigin = new URL(process.argv[3]).origin;
+const actualProfile = path.resolve(rootDirectory, process.argv[4] || config.automationUserDataDir || "");
+const hhclub = expectedOrigin === "https://hhanclub.net";
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-login.mjs <port> <origin>");
 
 const browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
 let status = "needs_attention";
 let failureCode = null;
 let page = null;
+let twoFactorRecovery = null;
 try {
   page = browser.contexts().flatMap((context) => context.pages()).find((candidate) => {
     try { return new URL(candidate.url()).origin === expectedOrigin; } catch { return false; }
@@ -29,7 +33,8 @@ try {
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   await acceptConfiguredLoginTerms(page, expectedOrigin, config);
   const password = page.locator('input[type="password"]:visible');
-  const username = page.locator('input[type="email"]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="email" i]:visible, input[type="text"]:visible');
+  const namedUsername=page.locator('input[name="username"]:visible');
+  const username = hhclub || await namedUsername.count()===1 ? namedUsername : page.locator('input[type="email"]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="email" i]:visible, input[type="text"]:visible');
   if (await password.count() !== 1 || await username.count() !== 1) {
     status = "unsupported";
   } else {
@@ -98,6 +103,13 @@ try {
         ? await waitForLoginSubmitEnabled(page, submit, expectedOrigin, config)
         : false;
       if (submit && challengeReady && submitReady) {
+        const assisted = await recoverHhclubTwoFactorLogin({root:rootDirectory,origin:expectedOrigin,config,page,
+          profile:actualProfile,submit:()=>submit.click(),profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
+        if (assisted.handled) {
+          twoFactorRecovery = assisted;
+          status = assisted.status;
+          failureCode = assisted.failureCode ?? null;
+        } else {
         await submit.click();
         await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => {});
         await page.waitForFunction(() => {
@@ -148,19 +160,30 @@ try {
           }
         }
         status = stillHasPassword ? "needs_attention" : "logged_in";
+        }
       } else if (submit && !submitReady) status = "needs_attention";
     }
   }
 
   const finalLocation = new URL(page.url());
   const visiblePassword = await page.locator('input[type="password"]:visible').count() > 0;
+  if (hhclub && !twoFactorRecovery?.handled && !visiblePassword) {
+    const assisted = await recoverHhclubTwoFactorLogin({root:rootDirectory,origin:expectedOrigin,config,page,
+      profile:actualProfile,submit:async()=>{throw new Error("Login form unavailable");},
+      profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
+    if (assisted.handled) twoFactorRecovery = assisted;
+  }
   const finalState = classifyPageText({
     url: page.url(),
     title: await page.title(),
     bodyText: await page.locator("body").innerText().catch(() => ""),
     hasPassword: visiblePassword,
+    ...await readPageTwoFactorStructure(page),
   });
-  if (finalState.failureCode === "two_factor_required") {
+  if (twoFactorRecovery?.handled) {
+    status = twoFactorRecovery.status;
+    failureCode = twoFactorRecovery.failureCode ?? null;
+  } else if (finalState.failureCode === "two_factor_required") {
     status = "needs_attention";
     failureCode = finalState.failureCode;
   } else if (finalLocation.origin === expectedOrigin
@@ -172,6 +195,7 @@ try {
   console.log(JSON.stringify({
     origin: expectedOrigin,
     status,
+    ...(twoFactorRecovery?.siteTwoFactorRecovery ? { siteTwoFactorRecovery: twoFactorRecovery.siteTwoFactorRecovery } : {}),
     ...(failureCode ? { failureCode, attentionKind: "trusted_device_initialization" } : {}),
     finalUrl: safeLogUrl(page.url()),
     title: await page.title(),

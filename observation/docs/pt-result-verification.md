@@ -4,7 +4,9 @@ The unified executor keeps a submitted action distinct from a confirmed daily re
 
 ## BurnBao
 
-Use the registered site's HTTPS `/index.php` in its configured existing execution profile. The standard runner retains the mature NexusPHP CAPTCHA and OCR flow. A reviewed native main-Chrome fallback reads only the web document, not the browser toolbar. If a minimized task window withholds its document, restore that task-created window without activating or modifying the user's other windows.
+Use the registered site's HTTPS `/index.php` in its configured existing execution profile. The standard runner retains the mature NexusPHP CAPTCHA and OCR flow. A reviewed native main-Chrome fallback reads only the web document, not the browser toolbar. Its task-created window renders outside the virtual desktop without activation so the document remains accessible. Before closing, hide that window and restore safe normal bounds for later user-created Chrome windows. Only the task's own window may be moved or closed. The daily background preference also applies to native WAF and challenge preflight, including older per-site window-mode settings; supervised manual login keeps its visible launcher.
+
+Automated Chromium contexts also move each new page's window off screen, including OAuth popups. Callback listeners are attached before waiting for window placement; opener messages, navigation and self-closing callbacks retain their existing behavior. Placement has a bounded deadline. Chromium can map a new popup before emitting its page event, so a brief creation flash or focus transition can still precede containment. Window-management failure cannot certify a successful check-in or authorize replaying an uncertain submission.
 
 Completion requires a logged-in account header with one daily control showing `已签到` or `签到已得<amount>` (with the optional supplementary-card count). Do not accept a public forum message, a historical total, a login page, a challenge page, another origin, or simultaneous signed/unsigned controls.
 
@@ -15,6 +17,14 @@ Mutation remains behind the live Harvest gate, controller lease and execution lo
 A fresh bound passive non-completion may close an older native intent from the same business day as `resolved_not_signed`, with its original actions and the readback proof retained. Today's proof does not rewrite a historical unknown outcome. This audit update dispatches no new action and does not claim that no request was sent. A later recovery still passes the live submission gates.
 
 Native document text includes the site's table and custom text cells. An authenticated attendance `Error` page stops another entry click and preserves uncertainty. `图片代码无效` is a CAPTCHA rejection, not a diagnosed site outage or success. Reuse the existing NexusPHP CAPTCHA flow rather than repeatedly invoking a header link with no answer. Private routing can return to an already authenticated execution profile after the current account's non-completion is verified; never copy browser sessions or replace account bindings to do so.
+
+## AGSV
+
+The reviewed passive page is the authenticated `/index.php` and its unique `#info_block` account header. This site's live attendance control changes from `[签到得冰晶]` to `[签到已得<amount> 补签卡: <count>]` after the mature check-in succeeds. A comma before the card count is optional. Require the same-origin attendance control, the authenticated account and a current business-day read; forum text and historical totals do not qualify.
+
+Keep this reviewed policy in private runtime configuration. A guarded supplement propagates the recheck flag into the mature browser runner, so its second passive header read continues past an authoritative not-signed result instead of returning that result without signing. The resulting real completion receipt is retained by the existing parent attempt.
+
+A successful login response alone does not establish a session. When host-only and dotted-domain authentication cookies conflict, compare only the same site's candidate groups through passive account reads. Remove a group only after it is proven invalid and the other group is authenticated; preserve an OS-protected backup. Do not clear unrelated site cookies or change the site's second-factor setting.
 
 ## HDDolby
 

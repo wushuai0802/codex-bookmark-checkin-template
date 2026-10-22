@@ -10,6 +10,11 @@ export function hddolbyHeaderSigned(header){
     !/(?:历史|歷史|累计|累計|昨日|昨天|本月|总计|總計).{0,20}(?:签到已得|簽到已得)/.test(text);
 }
 
+export function hddolbyHeaderUnsigned(header){
+  return header?.authenticated===true&&Array.isArray(header.userIds)&&header.userIds.length===1&&
+    header.unsigned===true&&!/(?:签到已得|簽到已得)/.test(String(header.text??''));
+}
+
 export function hddolbyDailyProof(result,now=new Date()){
   const evidence=result?.evidence,at=Date.parse(evidence?.confirmedAt??'');
   return result?.status==='already_signed'&&result.submissionAttempted===false&&evidence?.source==='pt_page'&&
@@ -18,9 +23,17 @@ export function hddolbyDailyProof(result,now=new Date()){
     day(at)===day(now)&&evidence.businessDate===day(now);
 }
 
+export function hddolbyDailyStatusProof(result,now=new Date()){
+  if(result?.status==='already_signed')return hddolbyDailyProof(result,now);
+  const evidence=result?.evidence,at=Date.parse(evidence?.confirmedAt??'');
+  return result?.status==='not_signed'&&result.submissionAttempted===false&&evidence?.source==='pt_page'&&
+    evidence.authoritative===true&&evidence.statusSignal==='hddolby_account_header_unsigned'&&evidence.pagePath==='/log.php'&&
+    Number.isFinite(at)&&at<=now.getTime()&&now.getTime()-at<=30_000&&day(at)===day(now)&&evidence.businessDate===day(now);
+}
+
 // The current user's header on this ordinary page supplies the daily reward.
 // The page itself may deny access to site logs; no public log row is trusted.
-export async function readHddolbyHeader(context,{origin=originAllowed,now=new Date(),extractHeader}={}){
+export async function readHddolbyHeader(context,{origin=originAllowed,now=new Date(),extractHeader,expectedAccountId}={}){
   if(origin!==originAllowed)throw Error('HDDolby read origin is not reviewed');
   let parser;
   const extract=extractHeader??(async(html,url)=>{
@@ -42,7 +55,8 @@ export async function readHddolbyHeader(context,{origin=originAllowed,now=new Da
       });
       return {text:header.textContent.trim(),authenticated:links.some(link=>link.url.pathname==='/logout.php')&&
         controlPanel,userIds,
-        unsigned:links.some(link=>link.url.pathname==='/attendance.php'&&['签到','签到得魔力','立即签到'].includes(link.text)),
+        unsigned:links.some(link=>link.url.pathname==='/attendance.php'&&!link.url.search&&!link.url.hash&&
+          ['签到','签到得魔力','签到得鲸币','立即签到'].includes(link.text)),
         logLinked:[...document.querySelectorAll('a')].some(link=>{
           try{const u=new URL(link.getAttribute('href')??'',base);return u.origin===new URL(base).origin&&u.pathname==='/log.php'&&!u.search&&!u.hash;}catch{return false;}
         })};
@@ -61,9 +75,13 @@ export async function readHddolbyHeader(context,{origin=originAllowed,now=new Da
     const header=await read('/log.php');
     if(!header?.authenticated||header.userIds?.length!==1)return unknown();
     if(header.userIds[0]!==index.userIds[0])return unknown('account_mismatch');
-    if(!hddolbyHeaderSigned(header))return unknown();
-    return {status:'already_signed',submissionAttempted:false,evidence:{source:'pt_page',authoritative:true,
-      confirmedAt:now.toISOString(),businessDate:day(now),pagePath:'/log.php',statusSignal:'hddolby_account_header_signed'}};
+    if(expectedAccountId!==undefined&&(!/^\d{1,20}$/.test(String(expectedAccountId))||
+      header.userIds[0]!==String(expectedAccountId)))return unknown('account_mismatch');
+    const signed=hddolbyHeaderSigned(header),unsigned=hddolbyHeaderUnsigned(index)&&hddolbyHeaderUnsigned(header);
+    if(!signed&&!unsigned)return unknown();
+    return {status:unsigned?'not_signed':'already_signed',submissionAttempted:false,evidence:{source:'pt_page',authoritative:true,
+      confirmedAt:now.toISOString(),businessDate:day(now),pagePath:'/log.php',
+      statusSignal:unsigned?'hddolby_account_header_unsigned':'hddolby_account_header_signed'}};
   }catch{return unknown('network_error');}
   finally{await parser?.close().catch(()=>{});}
 }

@@ -1,5 +1,6 @@
 import { safeErrorMessage } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
+import {readOAuthProgress,oauthStageLabels} from './oauth-flow-diagnostics.mjs';
 
 const LOGIN_HELPER_STATUSES = new Set([
   "logged_in",
@@ -83,7 +84,10 @@ function safeTerminalDailyCheckin(value) {
 }
 
 export function parseLoginHelperResult(text) {
-  const lines = String(text ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = String(text ?? "").split(/\r?\n/).map((line) => line.trim()).filter(line=>{
+    if(!line)return false;
+    try{return JSON.parse(line)?.type!=='checkin_oauth_progress';}catch{return true;}
+  });
   for (let index = 0; index < lines.length; index += 1) {
     try {
       const value = JSON.parse(lines.slice(index).join("\n"));
@@ -99,7 +103,7 @@ export function parseLoginHelperResult(text) {
   return null;
 }
 
-export function loginHelperOutcome(text, fallback = "failed") {
+export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   const value = parseLoginHelperResult(text);
   const status = LOGIN_HELPER_STATUSES.has(String(value?.status)) ? String(value.status) : fallback;
   const failureCode = LOGIN_FAILURE_CODES.has(String(value?.failureCode))
@@ -139,10 +143,13 @@ export function loginHelperOutcome(text, fallback = "failed") {
     RETRYABLE_LOGIN_FAILURE_CODES.has(failureCode)
     || (!failureCode && ["timeout", "failed"].includes(status))
   );
+  const diagnostic=readOAuthProgress(progress);
   return {
     succeeded: status === "logged_in",
     status,
-    diagnostic: failureMessages[failureCode] ?? messages[status] ?? messages.failed,
+    diagnostic: (failureMessages[failureCode] ?? messages[status] ?? messages.failed)+
+      (diagnostic&&status!=='logged_in'?`（阶段：${oauthStageLabels[diagnostic.oauthStage]}）`:''),
+    ...(diagnostic??{}),
     ...(diagnosticCode ? { diagnosticCode } : {}),
     ...(failureCode ? { failureCode } : {}),
     ...(status !== "logged_in" ? { retryable } : {}),

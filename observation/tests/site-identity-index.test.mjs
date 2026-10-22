@@ -12,3 +12,11 @@ test('one PT classification preserves compatibility sources and never adopts Har
   assert.equal(index.get('https://service.example').kind,'service');
   assert.equal(index.get('https://service.example').ambiguous,true);
 });
+
+test('reviewed PT classification survives a service bookmark label without changing account identity',()=>{
+  const index=siteIdentityIndex({planTargets:[{origin:'https://open.cd',folderNames:['公益站']},
+    {origin:'https://service.example',folderNames:['公益站']}]});
+  assert.equal(index.get('https://open.cd').kind,'pt');
+  assert.deepEqual(index.get('https://open.cd').accountKeys,['site-default']);
+  assert.equal(index.get('https://service.example').kind,'service');
+});

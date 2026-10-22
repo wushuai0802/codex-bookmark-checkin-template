@@ -11,12 +11,36 @@ const report=()=>({schemaVersion:1,source:'harvest',businessDate:'2026-09-29',ge
   taskCompletion:{resultId:42,status:'completed',startedAt:'2026-09-29T01:30:00Z',completedAt:'2026-09-29T01:50:00Z'},
   sites:[{origin:target.origin,status:'unknown',observedAt:null}]});
 
-test('PT gate waits for an exact fresh same-day Harvest completion',()=>{
+test('PT gate releases a registered PT when Harvest is pending or unconfirmed',()=>{
   assert.equal(harvestPtDecision({report:report(),target,now}),null);
-  assert.equal(harvestPtDecision({report:{...report(),taskCompletion:null},target,now}).status,'deferred');
+  assert.equal(harvestPtDecision({report:{...report(),taskCompletion:null},target,now}).retryCause,'harvest_waiting');
+  assert.equal(harvestPtDecision({report:{...report(),taskCompletion:{...report().taskCompletion,status:'failed'}},target,now}),null);
+  assert.equal(harvestPtDecision({report:{...report(),sites:[{...report().sites[0],status:'pending'}]},target,now}),null);
+  assert.equal(harvestPtDecision({report:{...report(),sites:[]},target,now}),null);
   assert.equal(harvestPtDecision({report:{...report(),businessDate:'2026-09-28'},target,now}).status,'deferred');
   assert.equal(harvestPtDecision({report:{...report(),generatedAt:'2026-09-29T01:55:00Z'},target,now}).status,'deferred');
-  assert.equal(harvestPtDecision({report:{...report(),taskCompletion:{...report().taskCompletion,resultId:null}},target,now}).status,'deferred');
+});
+
+test('fallback marker releases the mature V1 reader while the main schedule keeps its Harvest gate',t=>{
+  const previous=process.env.CHECKIN_PT_FALLBACK_RECHECK;
+  t.after(()=>{if(previous===undefined)delete process.env.CHECKIN_PT_FALLBACK_RECHECK;else process.env.CHECKIN_PT_FALLBACK_RECHECK=previous;});
+  process.env.CHECKIN_PT_FALLBACK_RECHECK='1';
+  assert.equal(harvestPtDecision({report:{...report(),taskCompletion:null},target,now}),null);
+  assert.equal(harvestPtDecision({report:{...report(),generatedAt:'2026-09-29T01:55:00Z'},target,now}),null);
+});
+
+test('fallback marker does not trust an unverified Harvest success and releases V1 for its own read',t=>{
+  const previous=process.env.CHECKIN_PT_FALLBACK_RECHECK;
+  t.after(()=>{if(previous===undefined)delete process.env.CHECKIN_PT_FALLBACK_RECHECK;else process.env.CHECKIN_PT_FALLBACK_RECHECK=previous;});
+  const unverified={...report(),taskCompletion:null,sites:[{...report().sites[0],status:'signed',observedAt:now.toISOString(),evidence:{authoritative:false}}]};
+  assert.equal(harvestPtDecision({report:unverified,target,now}).retryCause,'harvest_waiting');
+  process.env.CHECKIN_PT_FALLBACK_RECHECK='1';
+  assert.equal(harvestPtDecision({report:unverified,target,now}),null);
+});
+
+test('Harvest external site conditions remain deferred and never authorize a PT write',()=>{
+  const result=harvestPtDecision({report:{...report(),taskCompletion:null,sites:[{...report().sites[0],status:'maintenance',siteCondition:'site_maintenance'}]},target,now});
+  assert.equal(result.status,'deferred');assert.equal(result.retryCause,'upstream_unavailable');assert.equal(result.submissionAttempted,false);
 });
 
 test('a same-day failed Harvest task releases Harvest-owned PT sites to the execution layer',()=>{

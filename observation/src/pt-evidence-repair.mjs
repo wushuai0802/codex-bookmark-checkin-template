@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {runPtSite} from './pt-site-execution.mjs';
 import {recordPtVerification} from './pt-verification.mjs';
-import {boundMonitorCatalog} from './monitor-catalog.mjs';
+import {boundMonitorCatalog,currentBoundMonitorCatalog} from './monitor-catalog.mjs';
 import {loadEffectiveConfig} from './effective-config.mjs';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {readLegacyHealth} from './legacy-engine.mjs';
@@ -145,6 +145,21 @@ export function rebuildDashboardAfterEvidence({root,catalogFile,now=new Date()}=
   }
 }
 
+function confirmedHarvestCompletion(snapshot,task,now){
+  if(typeof task.accountRef!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(task.accountRef))return false;
+  const matching=(snapshot.ptStatus?.sites??[]).filter(site=>site.origin===task.origin&&
+    (site.accountRef??null)===(task.accountRef??null));
+  if(matching.length!==1)return false;
+  // This only suppresses redundant passive work. The original unknown submit
+  // remains in its audit; a Harvest receipt never rewrites its native intent.
+  const current=matching[0].effective,at=Date.parse(current?.observedAt??'');
+  return current?.source==='harvest'&&['signed','already_signed'].includes(current.status)&&
+    current.fresh===true&&current.authoritative===true&&current.evidence?.source==='harvest'&&
+    current.evidence.authoritative===true&&current.evidence.statusVerified===true&&
+    current.evidence.businessDate===snapshot.businessDate&&Number.isFinite(at)&&
+    at<=now.getTime()+60_000&&dayAt(new Date(at))===snapshot.businessDate;
+}
+
 function candidateRecords(snapshot,catalog,state,now=new Date()){
   const today=dayAt(now);
   if(snapshot?.businessDate!==today)return [];
@@ -155,7 +170,8 @@ function candidateRecords(snapshot,catalog,state,now=new Date()){
     const origin=task.origin,accountKey=task.accountKey??'site-default';
     const readbackReview=task.observedStatus==='needs_attention'&&task.failureCode==='submission_outcome_unknown'&&task.submissionAttempted===true;
     const positiveWithoutEvidence=['signed','already_signed'].includes(task.observedStatus);
-    if(!origins.has(origin)||(!positiveWithoutEvidence&&!readbackReview)||receipts.get(task.taskId)?.evidence?.authoritative===true)continue;
+    if(!origins.has(origin)||(!positiveWithoutEvidence&&!readbackReview)||receipts.get(task.taskId)?.evidence?.authoritative===true||
+       confirmedHarvestCompletion(snapshot,task,now))continue;
     const key=identityKey(origin,accountKey);
     if(!unique.has(key))unique.set(key,{origin,accountKey,taskId:task.taskId});
   }
@@ -187,10 +203,12 @@ export function ptEvidenceCandidates(snapshot,catalog,state,now=new Date()){
     .filter((origin,index,all)=>all.indexOf(origin)===index);
 }
 
-export function refreshEvidenceCatalog(root,catalogFile,now=new Date()){
+export async function refreshEvidenceCatalog(root,catalogFile,now=new Date()){
   const runtime=read(path.join(root,'config/runtime.local.json')),config=loadEffectiveConfig(runtime.legacyRoot);
   const previous=read(catalogFile);
-  const catalog=boundMonitorCatalog(config.bookmarksPath,previous.scope,now);
+  const catalog=previous.registration==='current-execution-plan'||config.targetFolderNames?.length
+    ?await currentBoundMonitorCatalog(runtime.legacyRoot,previous.scope,now)
+    :boundMonitorCatalog(config.bookmarksPath,previous.scope,now);
   const file=path.join(root,'data/pt-evidence-catalog.json');
   fs.mkdirSync(path.dirname(file),{recursive:true});
   const temporary=file+'.'+process.pid+'.tmp';
@@ -205,7 +223,7 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
   try {
     const snapshot=read(path.join(root,'outputs/shadow-beta-snapshot.json'));
     if(snapshot.businessDate!==dayAt(clock()))return {businessDate:snapshot.businessDate,results:[]};
-    let currentCatalog=refreshCatalog(root,catalogFile,clock()),catalog=read(currentCatalog);
+    let currentCatalog=await refreshCatalog(root,catalogFile,clock()),catalog=read(currentCatalog);
     const stateFile=path.join(root,'data/pt-evidence-repair.json');
     const loadedState=fs.existsSync(stateFile)?read(stateFile):null;
     const state=loadedState&&typeof loadedState==='object'&&!Array.isArray(loadedState)
@@ -215,7 +233,7 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
     for(const candidate of candidates){
       const origin=candidate.origin,accountKey=candidate.accountKey;
       if(dayAt(clock())!==snapshot.businessDate)break;
-      currentCatalog=refreshCatalog(root,catalogFile,clock());
+      currentCatalog=await refreshCatalog(root,catalogFile,clock());
       const hash=crypto.createHash('sha256').update(fs.readFileSync(currentCatalog)).digest('hex');
       const old=previousFor(state,origin,accountKey);
       const previousAttempts=old?.businessDate===snapshot.businessDate
@@ -237,8 +255,16 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
         // current positive readback is published; other results stay in this audit.
         if(['signed','already_signed'].includes(result.status)&&result.evidence?.authoritative===true){
           const saved=record(root,result,{now:clock()});outcome=saved.recorded?'verified':'existing_receipt';auditStatus='verified';errorInfo={errorStage:null,errorCode:null};
+        }else if(result.status==='not_signed'&&result.evidence?.authoritative===true){
+          // Preserve a fresh account/day negative observation for the normal
+          // execution dispatcher. This worker remains read-only; only the
+          // execution layer may claim and recheck it before a single submit.
+          record(root,result,{now:clock()});outcome='verified_not_signed';auditStatus='verified';
+          errorInfo={errorStage:null,errorCode:null};
         }else{
-          errorInfo={errorStage:'readback',errorCode:'authoritative_readback_missing'};
+          errorInfo=result.status==='login_required'
+            ?{errorStage:'authentication',errorCode:'login_required'}
+            :{errorStage:'readback',errorCode:'authoritative_readback_missing'};
         }
       }catch(error){
         errorInfo=safeErrorCode(error);

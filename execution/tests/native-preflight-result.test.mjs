@@ -33,11 +33,15 @@ test("native readers recognize short NexusPHP completion messages", async () => 
   }
 });
 
-test("main-profile background startup precedes URI discovery and cleanup keeps evidence", async () => {
+test("main-profile startup renders off screen before URI discovery and cleanup keeps evidence", async () => {
   const source = await fs.readFile(new URL("../scripts/Invoke-MainChromeCheckinAccessibility.ps1", import.meta.url), "utf8");
-  assert.match(source, /'--start-minimized'/);
+  const executable = source.split(/\r?\n/).filter((line) => !line.trimStart().startsWith("#")).join("\n");
+  assert.doesNotMatch(executable, /--start-minimized/);
   assert.match(source, /Start-Process[^\r\n]+-WindowStyle Hidden/);
-  assert.doesNotMatch(source, /--window-position=-/);
+  assert.match(source, /--window-position=\$\(\[CheckinWindowNative\]::OffscreenX\)/);
+  assert.match(source, /RenderOffscreen\(\$taskHandle, \$previousForegroundWindow\)/);
+  assert.match(source, /ShowCommand = 0/);
+  assert.match(source, /NormalPosition = new Rect \{ Left = 80, Top = 80/);
   const cleanup = source.slice(source.lastIndexOf("finally {"));
   assert.match(cleanup, /cleanupFailureCode/);
   assert.doesNotMatch(cleanup, /\$result = \[pscustomobject\]/);

@@ -38,9 +38,10 @@ test('site execution requires one unified lease and keeps the result redacted',a
   fs.writeFileSync(path.join(root,'config/runtime.local.json'),JSON.stringify({executionEngine:'v1',legacyRoot,ptFallbackOnlyEnabled:true}));
   fs.writeFileSync(path.join(legacyRoot,'data/v2-integration.json'),JSON.stringify({executionEngine:'v1',v2ProjectRoot:root}));
   let acquired=0,released=0;
-  const result=await runPtSite({root,origin:'https://pt.example',catalogFile:'catalog.json',catalogHash,
+  const fallbackAttemptId=crypto.randomUUID();
+  const result=await runPtSite({root,origin:'https://pt.example',catalogFile:'catalog.json',catalogHash,fallbackAttemptId,
     acquire:()=>{acquired++;return {owner:{nonce:'synthetic'}};},release:()=>{released++;},
-    execute:async options=>{assert.equal(options.origin,'https://pt.example');assert.equal(options.catalogFile,catalogFile);assert.equal(options.lease.owner.nonce,'synthetic');return {origin:options.origin,status:'signed',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'page_text',authoritative:true,summary:'confirmed'},password:'TEST'};}});
+    execute:async options=>{assert.equal(options.origin,'https://pt.example');assert.equal(options.catalogFile,catalogFile);assert.equal(options.lease.owner.nonce,'synthetic');assert.equal(options.fallbackAttemptId,fallbackAttemptId);return {origin:options.origin,status:'signed',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'page_text',authoritative:true,summary:'confirmed'},password:'TEST'};}});
   assert.equal(result.status,'signed');assert.equal(acquired,1);assert.equal(released,1);
   fs.writeFileSync(path.join(root,'config/runtime.local.json'),JSON.stringify({executionEngine:'v1',legacyRoot}));
   await assert.rejects(()=>runPtSite({root,origin:'https://pt.example',catalogFile:'catalog.json',catalogHash,
@@ -49,6 +50,8 @@ test('site execution requires one unified lease and keeps the result redacted',a
   assert.throws(()=>projectPtSiteResult({origin:'https://wrong.example',status:'signed',observedAt:new Date().toISOString()},'https://pt.example'),/invalid/);
   await assert.rejects(()=>runPtSite({root,origin:'https://pt.example',catalogFile:'missing.json',catalogHash,
     acquire:()=>{throw Error('no lock may be acquired');}}),error=>error.code==='PT_PREFLIGHT');
+  await assert.rejects(()=>runPtSite({root,origin:'https://pt.example',catalogFile:'catalog.json',catalogHash,fallbackAttemptId:'wrong',
+    acquire:()=>{throw Error('no lock may be acquired');}}),error=>error.code==='PT_PREFLIGHT');
 });
 
 test('child receives the exact origin and lease; busy lock is retryable without a receipt',async t=>{
@@ -56,22 +59,57 @@ test('child receives the exact origin and lease; busy lock is retryable without 
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   fs.mkdirSync(path.join(root,'scripts'));fs.writeFileSync(path.join(root,'scripts/Run-PtSupplement.mjs'),'fixture');
   const args={legacyRoot:root,root,origin:'https://pt.example',catalogFile:path.join(root,'catalog.json'),catalogHash:'a'.repeat(64),lease:{owner:{nonce:'lease-fixture'}}};
+  const inheritedId=process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
+  process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID=crypto.randomUUID();
+  t.after(()=>{if(inheritedId===undefined)delete process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID;else process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID=inheritedId;});
   const spawnChild=(_node,argv,options)=>{
     assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash]);
     assert.equal(options.env.CHECKIN_V2_ENGINE_LEASE,'lease-fixture');
+    assert.equal(options.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID,undefined);
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
     setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'login_required',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);});
     return child;
   };
   assert.equal((await spawnPtSiteChild({...args,spawnChild})).status,'login_required');
-  const readOnlyChild=(_node,argv,options)=>{
-    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash,'--read-only']);
-    assert.equal(options.env.CHECKIN_V2_ENGINE_LEASE,'lease-fixture');
+  const fallbackAttemptId=crypto.randomUUID();
+  const ownAttemptChild=(_node,argv,options)=>{
+    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash]);
+    assert.equal(options.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID,fallbackAttemptId);
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
     setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'unknown',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);});
     return child;
   };
-  assert.equal((await spawnPtSiteChild({...args,readOnly:true,spawnChild:readOnlyChild})).status,'unknown');
+  assert.equal((await spawnPtSiteChild({...args,fallbackAttemptId,spawnChild:ownAttemptChild})).status,'unknown');
+  const readOnlyChild=(_node,argv,options)=>{
+    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash,'--read-only']);
+    assert.equal(options.env.CHECKIN_V2_ENGINE_LEASE,'lease-fixture');
+    assert.equal(options.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID,undefined);
+    const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
+    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'unknown',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);});
+    return child;
+  };
+  assert.equal((await spawnPtSiteChild({...args,readOnly:true,fallbackAttemptId,spawnChild:readOnlyChild})).status,'unknown');
+  const guardedChild=(_node,argv,options)=>{
+    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash,'--verify-before-submit']);
+    assert.equal(options.env.CHECKIN_PT_FALLBACK_RECHECK,'1');
+    const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
+    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'already_signed',observedAt:'2026-09-20T01:00:00Z',submissionAttempted:true,evidence:{source:'page_text',authoritative:true}}));child.emit('exit',0,null);});
+    return child;
+  };
+  assert.equal((await spawnPtSiteChild({...args,verifyBeforeSubmit:true,spawnChild:guardedChild})).status,'already_signed');
   const busy=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};setImmediate(()=>child.emit('exit',3,null));return child;};
   await assert.rejects(()=>spawnPtSiteChild({...args,spawnChild:busy}),/already active/);
+  for(const diagnostic of [{error:'PT_PREFLIGHT',reason:'catalog_hash_changed'},
+    {error:'PT_PREFLIGHT',reason:'arbitrary-private-output'},null]){
+    const preflight=()=>{
+      const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
+      setImmediate(()=>{child.stderr.write(diagnostic?JSON.stringify(diagnostic):'unstructured private output');child.emit('exit',4,null);});
+      return child;
+    };
+    await assert.rejects(()=>spawnPtSiteChild({...args,spawnChild:preflight}),error=>{
+      assert.equal(error.code,'PT_PREFLIGHT');
+      assert.equal(error.preflightReason,diagnostic?.reason==='catalog_hash_changed'?'catalog_hash_changed':undefined);
+      assert.doesNotMatch(error.message,/private|arbitrary/);return true;
+    });
+  }
 });

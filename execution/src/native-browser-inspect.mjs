@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { classifyPageText, scoreActionText, ptPageEvidence } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure, scoreActionText, ptPageEvidence } from "./detector.mjs";
 import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 
@@ -199,12 +199,14 @@ try {
         .some((element) => String(element.value || "").length > 20),
       }));
       const title = await page.title();
+      const twoFactorStructure = await readPageTwoFactorStructure(page);
       const explicitState = classifyPageText({
         url: page.url(),
         title,
         bodyText: snapshot.bodyText,
         hasPassword: snapshot.hasPassword,
         challengeSelectors: false,
+        ...twoFactorStructure,
       });
       let state = ["signed", "already_signed"].includes(explicitState.status) ? explicitState : classifyPageText({
         url: page.url(),
@@ -212,6 +214,7 @@ try {
         bodyText: snapshot.bodyText,
         hasPassword: snapshot.hasPassword,
         challengeSelectors: snapshot.challengeSelectors,
+        ...twoFactorStructure,
       });
       if (!challengeReloaded
         && reloadOnChallengeAfterSeconds > 0

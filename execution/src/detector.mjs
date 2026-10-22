@@ -39,14 +39,61 @@ export function isCheckinSingleChoiceChallenge({ contextText = "", submitTexts =
     || submits.some((text) => /^(提交|确认|確認|确定|確定|签到|簽到|check[ -]?in)$/i.test(text));
 }
 
-export function classifyPageText({ url = "", title = "", bodyText = "", hasPassword = false, challengeSelectors = false }) {
+function isTwoFactorRoute(value) {
+  try {
+    const path = new URL(String(value)).pathname;
+    return /^\/(?:take2fa|verify2fa|2fa|otp|totp|two[-_]?factor|two[-_]?step)(?:\.php)?\/?$/i.test(path)
+      || /^\/(?:sessions|auth)\/two[-_]?factor(?:\/|$)/i.test(path);
+  } catch { return false; }
+}
+
+export async function readPageTwoFactorStructure(page) {
+  // Inspect labels and form structure only. Optional login OTP fields must not
+  // prevent saved-password recovery, and no input value leaves the page.
+  const structure = await page.evaluate(() => {
+    const verificationPath = path => /^\/(?:take2fa|verify2fa|2fa|otp|totp|two[-_]?factor|two[-_]?step)(?:\.php)?\/?$/i.test(path)
+      || /^\/(?:sessions|auth)\/two[-_]?factor(?:\/|$)/i.test(path);
+    const available = input => {
+      if (input.disabled || input.readOnly || input.hidden || String(input.type).toLowerCase() === 'hidden') return false;
+      const style = getComputedStyle(input), rect = input.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const inputs = [...document.querySelectorAll('input')].filter(available);
+    let hasOtpInput = false, hasOtpForm = false, hasRequiredOtpInput = false;
+    for (const input of inputs) {
+      const labels = ['name', 'id', 'autocomplete', 'aria-label', 'placeholder', 'title']
+        .map(attribute => input.getAttribute(attribute) ?? '').join(' ');
+      const ordinaryCaptcha = /captcha|imagestring|(?:图片|圖片).{0,8}(?:验证码|驗證碼|代码|代碼)/i.test(labels);
+      const otp = !ordinaryCaptcha && /(?:^|[^a-z0-9])(?:otp|totp|2fa|two[-_]?factor(?:[-_]code)?|two[-_]?step(?:[-_]code)?|authenticator[-_]code|one-time-code)(?:$|[^a-z0-9])|(?:二级|二級|两步|兩步|二步|动态|動態|一次性).{0,10}(?:验证码|驗證碼|代码|代碼)/i.test(labels);
+      hasOtpInput ||= otp;
+      hasRequiredOtpInput ||= otp && (input.required === true || input.getAttribute('aria-required') === 'true');
+      if (!input.form || ordinaryCaptcha) continue;
+      try {
+        const action = new URL(input.form.action || input.form.getAttribute('action') || location.href, location.href);
+        const fieldType = String(input.type || 'text').toLowerCase();
+        if (action.origin === location.origin && !action.username && !action.password && verificationPath(action.pathname)
+          && ['text', 'tel', 'number', 'password'].includes(fieldType)) hasOtpForm = true;
+      } catch { /* A malformed or foreign form cannot establish a local gate. */ }
+    }
+    return { hasOtpInput, hasOtpForm, hasRequiredOtpInput };
+  }).catch(() => null);
+  return { hasOtpInput: structure?.hasOtpInput === true, hasOtpForm: structure?.hasOtpForm === true,
+    hasRequiredOtpInput: structure?.hasRequiredOtpInput === true };
+}
+
+export function classifyPageText({ url = "", title = "", bodyText = "", hasPassword = false, challengeSelectors = false,
+  hasOtpInput = false, hasOtpForm = false, hasRequiredOtpInput = false }) {
   const text = normalizeText(`${title}\n${bodyText}`).slice(0, 30000);
   const lowerUrl = String(url).toLowerCase();
 
   // A second-factor gate is deterministic operator attention, not a stale
   // password session. Classify it before the generic login-route check so the
   // scheduler does not repeatedly reopen the same trusted-device challenge.
-  if (/(?:异地登录安全验证|異地登錄安全驗證|忘记二级验证|忘記二級驗證|二级验证代码|二級驗證碼|\b2fa\b)/i.test(text)) {
+  const explicitTwoFactorPrompt = /(?:请输入|請輸入|请填写|請填寫|需要输入|需要輸入|要求输入|要求輸入).{0,24}(?:二级验证代码|二級驗證碼|(?:两步|兩步|二步|2FA|TOTP|OTP|动态|動態|一次性).{0,16}(?:验证码|驗證碼|代码|代碼|code))|(?:异地登录安全验证|異地登錄安全驗證).{0,30}(?:二级验证代码|二級驗證碼)|(?:enter|provide|type).{0,24}(?:authenticator|TOTP|OTP|two[- ]factor|2FA).{0,16}(?:code|token)/i.test(text);
+  const activeTwoFactorStructure = hasRequiredOtpInput === true || hasOtpForm === true
+    || hasOtpInput === true && (!hasPassword || isTwoFactorRoute(url))
+    || isTwoFactorRoute(url) && hasPassword;
+  if (explicitTwoFactorPrompt || activeTwoFactorStructure) {
     return {
       status: "needs_attention",
       reason: "站点要求完成异地登录 2FA 验证",
@@ -116,13 +163,16 @@ export function ptPageEvidence({origin,url,bodyText,status,now=new Date(),allowU
     const shanghai=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);
     const [hour,minute]=shanghai.split(':').map(Number);
     const siteMinutes=clock?Number(clock[1])*60+Number(clock[2]):NaN;
-    const signedControl=clock&&/^\s*\[(?:已签到|已簽到|查看签到记录|查看簽到記錄)\]\s*\[\d{1,2}(?:点|點)\]/.test(header.slice(clock.index+clock[0].length));
+    const dailyControl=clock&&header.slice(clock.index+clock[0].length);
+    const signedControl=dailyControl&&/^\s*\[(?:已签到|已簽到|查看签到记录|查看簽到記錄)\]\s*\[\d{1,2}(?:点|點)\]/.test(dailyControl);
+    const unsignedControl=dailyControl&&/^\s*\[(?:签到|簽到)\]\s*\[\d{1,2}(?:点|點)\]/.test(dailyControl);
     if(Number.isFinite(siteMinutes)&&siteMinutes>=0&&siteMinutes<1440&&hour!==0&&
-       Math.abs(siteMinutes-hour*60-minute)<=10&&signedControl&&
+       Math.abs(siteMinutes-hour*60-minute)<=10&&(signedControl||unsignedControl)&&
        /(?:欢迎回来|歡迎回來)/.test(header)&&/\[(?:退出|登出)\]/.test(header)){
       return {source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),
         businessDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),
-        pagePath:'/index.php',statusSignal:'open_cd_daily_record_entry'};
+        pagePath:'/index.php',status:unsignedControl?'not_signed':undefined,
+        statusSignal:unsignedControl?'open_cd_daily_unsigned':'open_cd_daily_record_entry'};
     }
   }
   const positive=/(?:今日|今天|当日).{0,18}(?:已签到|已簽到|已经签到|已經簽到|签到成功|簽到成功)|(?:已签到|已簽到|已经签到|已經簽到|签到成功|簽到成功).{0,18}(?:今日|今天|当日)|本次(?:签到|簽到).{0,18}(?:获得|獲得)|already checked[ -]?in today|checked in today/gi;

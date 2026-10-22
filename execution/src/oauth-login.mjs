@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findBookmarkTarget } from "./bookmarks.mjs";
 import { launchAutomationContext, tryNewApiCheckin } from "./browser.mjs";
+import { awaitOffscreenWindow } from "./offscreen-windows.mjs";
 import { safeLogUrl } from "./security.mjs";
 import { isLoginOrSignInRoute } from "./url-routes.mjs";
 import { configuredNewApiSignInRule, tryNewApiSignIn } from "./new-api-signin.mjs";
@@ -29,6 +30,7 @@ import {
   tryOAuthReloginCheckinStatus,
 } from "./oauth-relogin-checkin.mjs";
 import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
+import {createOAuthTrace} from './oauth-flow-diagnostics.mjs';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rootDirectory = path.dirname(sourceDirectory);
@@ -44,6 +46,8 @@ const oauthSessionProfiles = configuredOAuthSessionProfiles(config, rootDirector
 const isolatedConfig = configForIsolatedOAuthSite(config, isolatedOAuthSiteProfiles, bookmarkOrigin);
 const sessionConfig = configForOAuthSession(isolatedConfig, oauthSessionProfiles, bookmarkOrigin);
 const runtimeConfig = configForOAuthRecoveryAccount(sessionConfig, rootDirectory, bookmarkOrigin, provider);
+const flowTrace=createOAuthTrace({root:rootDirectory,origin:bookmarkOrigin,provider});
+flowTrace.emit('browser_start');
 
 function classifyOAuthRecoveryFailure(error) {
   const explicitCode = String(error?.failureCode ?? "");
@@ -211,6 +215,7 @@ async function startDirectLinuxDoOAuth(page, redirectOverride = "") {
 }
 
 async function runOAuthFlow(context) {
+  flowTrace.emit('browser_ready');
   let page = await context.newPage();
   let oauthCallbackEvidence = null;
   let oauthRateLimited = false;
@@ -277,6 +282,7 @@ async function runOAuthFlow(context) {
     ? await tryAnyRouterApiCheckin(page, runtimeConfig, origin)
     : null;
   if (["signed", "already_signed"].includes(existingAnyRouterCheckin?.status)) {
+    flowTrace.finish(true);
     console.log(JSON.stringify({
       origin,
       provider,
@@ -298,6 +304,7 @@ async function runOAuthFlow(context) {
     }
   }
   if (["signed", "already_signed"].includes(preflightReloginStatus?.status)) {
+    flowTrace.finish(true);
     console.log(JSON.stringify({
       origin,
       provider,
@@ -327,9 +334,11 @@ async function runOAuthFlow(context) {
     identityMatches: preflightReloginStatus?.identityMatched === true,
   });
   if (reloginRule?.forceLogout || guardedOAuthRelogin) {
+    flowTrace.emit('logout');
     await forceConfiguredOAuthLogout(page, reloginRule, config);
   }
   const configuredLoginUrl = config.oauthLoginUrls?.[origin] ?? `${origin}/login`;
+  flowTrace.emit('target_login');
   const loginUrl = new URL(configuredLoginUrl);
   if (loginUrl.origin !== origin || loginUrl.protocol !== "https:") throw new Error("OAuth 登录入口不属于目标站点");
   await page.goto(loginUrl.href, { waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
@@ -353,6 +362,7 @@ async function runOAuthFlow(context) {
   if (reloginRule && new URL(page.url()).origin === origin) {
     const postNavigationStatus = await tryOAuthReloginCheckinStatus(page, origin, config, "already_signed");
     if (["signed", "already_signed"].includes(postNavigationStatus?.status)) {
+      flowTrace.finish(true);
       console.log(JSON.stringify({origin,provider,status:"logged_in",finalUrl:safeLogUrl(page.url()),title:await page.title(),dailyCheckin:postNavigationStatus,reusedExistingDailyEvidence:true}, null, 2));
       return;
     }
@@ -382,6 +392,7 @@ async function runOAuthFlow(context) {
     existingDailyCheckin = await tryNewApiCheckin(page);
   }
   if (["signed", "already_signed"].includes(existingDailyCheckin?.status)) {
+    flowTrace.finish(true);
     console.log(JSON.stringify({
       origin,
       provider,
@@ -424,6 +435,7 @@ async function runOAuthFlow(context) {
     startedDirectOAuth = Boolean(directOAuthState);
   }
   let popup = null;
+  flowTrace.emit('provider_login');
   if (!startedDirectOAuth) {
     const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
     await providerButton.click({ timeout: 5000 }).catch(async () => {
@@ -441,6 +453,7 @@ async function runOAuthFlow(context) {
   if (popup) {
     page = popup;
     observeOAuthCallbacks(page);
+    await awaitOffscreenWindow(popup);
   } else if (!startedDirectOAuth && !oauthRateLimited && /linux\s*do/i.test(provider) && shouldStartOAuthFallback(page.url(), origin, oauthCallbackEvidence)) {
     await startDirectLinuxDoOAuth(page);
   }
@@ -462,6 +475,7 @@ async function runOAuthFlow(context) {
   }
 
   const authorizeCandidates = ["授权", "允许", "Authorize", "Allow"];
+  flowTrace.emit('authorization');
   const authorizationDeadline = Date.now() + 50000;
   let authorizationClicked = false;
   for (let authorizationPhase = 0; authorizationPhase < 3; authorizationPhase += 1) {
@@ -496,6 +510,7 @@ async function runOAuthFlow(context) {
     if (authorizeButton && !authorizationClicked) {
       authorizationClicked = true;
       await authorizeButton.click();
+      flowTrace.emit('callback_wait');
       await page.waitForURL((url) => url.hostname !== "connect.linux.do", { timeout: 50000 }).catch(() => {});
       await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
       continue;
@@ -530,6 +545,8 @@ async function runOAuthFlow(context) {
 
   await page.waitForTimeout(1500);
   await Promise.allSettled([...callbackTasks]);
+  flowTrace.emit('callback_wait',{callbackObserved:Boolean(oauthCallbackEvidence)});
+  flowTrace.emit('identity_verify');
   const finalUrl = page.url();
   const bodyText = String(await page.locator("body").innerText()).replace(/\s+/g, " ").trim();
   const finalLocation = new URL(finalUrl);
@@ -558,6 +575,7 @@ async function runOAuthFlow(context) {
     }
   }
   let dailyCheckin = null;
+  flowTrace.emit('result_verify');
   const signInRule = configuredNewApiSignInRule(origin, config);
   if (signInRule && oauthCallbackEvidence?.userId && finalLocation.origin === origin) {
     await page.evaluate(({ storageKey, userId }) => {
@@ -601,6 +619,7 @@ async function runOAuthFlow(context) {
   const dailyFailureCode = rejectedOAuthCallback(oauthCallbackEvidence) ? "oauth_callback_rejected" : dailyCheckin?.status === "deferred"
     ? (dailyCheckin.retryCause === "rate_limit" ? "oauth_rate_limited" : "oauth_upstream_unavailable")
     : null;
+  flowTrace.finish(loggedIn);
   console.log(JSON.stringify({
     origin,
     provider,
@@ -635,6 +654,7 @@ try {
   context = await launchAutomationContext(runtimeConfig);
   await runOAuthFlow(context);
 } catch (error) {
+  flowTrace.finish(false);
   console.log(JSON.stringify({
     origin,
     provider,
