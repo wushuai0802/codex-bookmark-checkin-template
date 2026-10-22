@@ -60,7 +60,11 @@ function openMenu(select, trigger) {
   trigger.setAttribute('aria-controls', menu.id);
   trigger.setAttribute('aria-expanded', 'true');
   const options = [...select.options];
+  let group=null;
   const rows = options.map((option, index) => {
+    const label=option.parentElement?.tagName==='OPTGROUP'?option.parentElement.label:null;
+    if(label&&label!==group){const heading=document.createElement('div');heading.className='ui-select-group';heading.textContent=label;heading.setAttribute('role','presentation');menu.append(heading);}
+    group=label;
     const row = document.createElement('div');
     row.className = 'ui-select-option';
     row.id = menu.id + '-option-' + index;

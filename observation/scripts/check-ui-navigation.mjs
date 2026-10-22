@@ -22,6 +22,11 @@ snapshot.tasks=snapshot.tasks.map(task=>({...task,businessDate:today,
   ...(task.observedStatus==='needs_attention'?{condition:'submission_outcome_unknown',failureCode:'submission_outcome_unknown',submissionAttempted:true}:{})}));
 const uncertainTask=snapshot.tasks.find(task=>task.observedStatus==='needs_attention');
 snapshot.receipts.find(receipt=>receipt.taskId===uncertainTask.taskId).evidence.summary='签到动作已发出但结果未确认';
+// One success carries authoritative evidence and one is only a receipt, so the
+// UI test covers both the verified and the proof-pending buckets.
+const verifiedTask=snapshot.tasks.find(task=>task.observedStatus==='signed');
+Object.assign(snapshot.receipts.find(receipt=>receipt.taskId===verifiedTask.taskId).evidence,
+  {authoritative:true,verification:'verified'});
 snapshot.ptStatus.businessDate=today;
 const ptSite = (host, status, authoritative) => ({
   origin: `https://${host}.example`, displayName: host, fallbackEnabled: true,
@@ -81,15 +86,22 @@ try {
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       const overviewData=await fetch(base+'/api/overview').then(response=>response.json());
-      const overviewRate=overviewMetrics(projectOverviewSnapshot(overviewData)).rate;
-      assert.equal(await page.locator('#daily-summary .daily-progress strong').textContent(),overviewRate===null?'—':`${overviewRate}%`);
-      assert.equal(await page.locator('#daily-summary .completion-track i').evaluate(node=>node.style.width),`${overviewRate??0}%`);
-      assert.match(await page.locator('#daily-summary .daily-progress').textContent(),/签到成功率/);
+      const overviewView=projectOverviewSnapshot(overviewData),overviewRate=overviewMetrics(overviewView).rate;
+      assert.equal(await page.locator('#daily-summary .daily-progress strong').textContent(),String(overviewMetrics(overviewView).verifiedSuccess));
+      assert.equal(await page.locator('#daily-summary .progress-denominator').textContent(),` / ${overviewMetrics(overviewView).eligible}`);
+      assert.match(await page.locator('#daily-summary .daily-progress').textContent(),/核验口径/);
+      assert.doesNotMatch(await page.locator('#daily-summary').textContent(),/签到成功率/);
+      assert.equal(await page.locator('#daily-summary .progress-ring')
+        .evaluate(node=>getComputedStyle(node).getPropertyValue('--verified-progress').trim()),`${overviewRate??0}%`);
+      assert.equal(await page.locator('#daily-summary .progress-ring').evaluate(node=>getComputedStyle(node).backgroundImage.includes('conic-gradient')),true);
       assert.equal(await page.locator('#status-chart .legend-label').filter({hasText:'已签到'}).count(),1);
       assert.doesNotMatch(await page.locator('#status-chart').textContent(),/今日已完成/);
       const mobile = viewport.width <= 700;
-      await page.locator('#kpi-grid .kpi').nth(2).click();
-      assert.equal(await page.locator('#task-status').inputValue(),'pending');
+      assert.equal(await page.locator('#kpi-grid .kpi').count(),4);
+      assert.deepEqual(await page.locator('#kpi-grid .kpi-label').allTextContents(),['已核验','待补证','待处理','已排除']);
+      assert.deepEqual(await page.locator('#kpi-grid .kpi-value').allTextContents(),['1','1','0','1']);
+      await page.locator('#kpi-grid .kpi').nth(3).click();
+      assert.equal(await page.locator('#task-status').inputValue(),'excluded');
       assert.equal(await page.locator('#tasks-body tr').count(),1);
       assert.equal(await page.locator('#tasks-body .status-chip').textContent(),'站点维护');
       assert.match(await page.locator('#tasks-body .evidence-summary').textContent(),/维护/);
@@ -102,7 +114,7 @@ try {
         assert.equal(await page.locator('#view-tasks .table-wrap').isVisible(),false);
       }
       await page.reload();
-      await page.waitForFunction(() => document.querySelector('#task-status').value==='pending'
+      await page.waitForFunction(() => document.querySelector('#task-status').value==='excluded'
         && document.querySelector('#task-result-count').textContent.includes('1 / 3'));
       assert.equal(await page.locator('#tasks-body tr').count(),1);
       const statusTrigger=page.locator('.ui-select[data-for="task-status"] .ui-select-trigger');
@@ -122,7 +134,7 @@ try {
       await page.keyboard.press('Escape');
       await page.locator('.ui-select-menu').waitFor({state:'hidden'});
       await statusTrigger.click();
-      await page.getByRole('listbox').getByRole('option',{name:'已签到'}).click();
+      await page.getByRole('listbox').getByRole('option',{name:'成功回执'}).click();
       assert.equal(await page.locator('#task-status').inputValue(),'completed');
       assert.equal(await page.locator('#tasks-body tr').count(),2);
       await statusTrigger.click();
@@ -135,8 +147,16 @@ try {
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       await page.locator('#kpi-grid .kpi').nth(1).click();
-      assert.equal(await page.locator('#task-status').inputValue(),'unavailable');
-      assert.match(await page.locator('#tasks-body').textContent(),/没有匹配的任务/);
+      await page.waitForFunction(() => document.querySelector('.attention-tabs button.active')?.dataset.queue==='proof');
+      assert.equal(await page.locator('#attention-count').textContent(),'1 待补证');
+      assert.match(await page.locator('#attention-list').textContent(),/回执待补证/);
+      await page.locator('#daily-summary .daily-progress').click();
+      await page.locator('dialog.formula-drawer[open]').waitFor();
+      assert.match(await page.locator('dialog.formula-drawer').textContent(),/核验率口径/);
+      assert.match(await page.locator('dialog.formula-drawer .formula-equation').textContent(),/÷ \(/);
+      await page.keyboard.press('Escape');
+      await page.locator('dialog.formula-drawer[open]').waitFor({state:'hidden'});
+      assert.equal(await page.locator('#daily-summary .daily-progress').evaluate(node=>node===document.activeElement),true);
       await page.goto(base);
       await page.waitForFunction(() => document.querySelector('#calendar-summary').textContent.length > 0);
       const openCalendar = async () => {
@@ -268,13 +288,21 @@ try {
       await page.waitForFunction(() => location.hash === '#overview');
       // Opening the queue preserves unread state; acknowledgement is explicit.
       assert.equal(await page.locator('#attention-badge').isVisible(), true);
-      assert.equal(await page.locator('#attention-list .status-chip').textContent(),'站点维护');
-      assert.equal(await page.locator('#attention-count').textContent(),'1 等待恢复');
+      assert.equal(await page.locator('#attention-count').textContent(),'1 待补证');
+      assert.equal(await page.locator('.attention-tabs button.active').getAttribute('data-queue'),'proof');
+      await page.locator('.attention-tabs button[data-queue="external"]').click();
+      assert.equal(await page.locator('#attention-count').textContent(),'1 站点待恢复');
+      assert.equal(await page.locator('#attention-list .attention-category').textContent(),'站点维护');
       assert.match(await page.locator('#attention-list .attention-reason').textContent(),/维护/);
       assert.doesNotMatch(await page.locator('#attention-list').textContent(),/需要复核身份|动作已发出/);
-      assert.match(await page.locator('#kpi-grid .kpi').nth(2).textContent(),/0 项需关注.*1 项等待外部条件/);
+      assert.match(await page.locator('#kpi-grid .kpi').nth(3).textContent(),/1 站点原因/);
       assert.match(await page.locator('#status-chart .legend').textContent(),/等待外部条件/);
-      await page.getByRole('button',{name:'全部标记为已读'}).click();
+      await page.getByRole('button',{name:'本组标为已读'}).click();
+      // Acknowledgement is per group; the proof queue stays unread until its
+      // own group is acknowledged.
+      assert.equal(await page.locator('#attention-badge').isVisible(),true);
+      await page.locator('.attention-tabs button[data-queue="proof"]').click();
+      await page.getByRole('button',{name:'本组标为已读'}).click();
       await page.waitForTimeout(1000);
       const scrollBefore = await page.evaluate(() => scrollY);
       for (let i = 0; i < 5; i++) {
@@ -379,7 +407,9 @@ try {
       assert.ok(Date.parse(original.attention.pausedUntil) > Date.now());
       if (mobile) await page.locator('#menu-toggle').click();
       await page.locator('.nav-item[data-view="overview"]').click();
-      await page.waitForFunction(() => document.querySelector('#attention-count').textContent.trim().startsWith('0 待关注'));
+      await page.locator('.attention-tabs button[data-queue="external"]').click();
+      await page.waitForFunction(() => document.querySelector('#attention-count').textContent.trim().startsWith('0 站点待恢复'));
+      assert.match(await page.locator('#attention-count').textContent(),/1 暂缓/);
       await page.waitForFunction(() => !document.body.classList.contains('sidebar-open')
         && !document.body.classList.contains('sidebar-exiting')
         && !document.querySelector('.main-content').inert);

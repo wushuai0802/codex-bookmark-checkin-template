@@ -69,6 +69,24 @@ export function overviewMetrics(data = {}, now = Date.now()) {
   };
 }
 
+export function overviewResultCounts(data={},now=Date.now()){
+  const m=overviewMetrics(data,now);
+  return {verified:m.verifiedSuccess,proof:m.unverifiedSuccess+m.unverifiedUnavailable,
+    actionable:Math.max(0,m.pending-m.excludedSiteIssues),
+    excluded:m.verifiedUnavailable+m.cancelled+m.excludedSiteIssues};
+}
+
+export function overviewFreshness(data={},now=Date.now()){
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(now));
+  const at=Date.parse(data.generatedAt??''),age=now-at;
+  const snapshotFresh=Number.isFinite(age)&&age>=-60_000&&age<=26*3_600_000&&
+    data.snapshotMeta?.generationStale!==true&&data.snapshotMeta?.fresh!==false;
+  return {businessCurrent:data.businessDate===today,snapshotFresh,
+    businessLabel:!data.businessDate?'尚无业务日期':data.businessDate===today?'今日业务':'非今日业务',
+    snapshotLabel:data.snapshotMeta?.generationStale===true?'同步未完成，保留上次完整快照':
+      !Number.isFinite(at)?'尚无快照':snapshotFresh?'快照新鲜':'快照已过期'};
+}
+
 export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0} = {}) {
   if (!metrics.total) return '等待今日签到数据';
   if (previousDay) return '等待今日签到结果';

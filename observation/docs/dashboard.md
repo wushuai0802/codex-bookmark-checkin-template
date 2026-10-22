@@ -22,10 +22,19 @@ gradients, `#F7F9FC` base, `#2868D8` action color, and graded surfaces:
 theme selection remains available; dark mode uses corresponding warmer/cooler
 surfaces. Account tasks and evidence are never changed by appearance parameters.
 
-The overview attention queue groups accounts only when business date, origin,
-status and evidence reason match. It previews four distinct causes, retains the
-task-level total and unread state, and routes "View all" to the pending task
-filter. This bounds overview height without hiding the remaining tasks.
+The overview reports four absolute buckets: verified success, receipts pending
+evidence, actionable work and excluded items (confirmed unavailable, configured
+cancellations and site-side conditions). Receipts without authoritative same-day
+evidence never count as verified. The 核验率 ring shows `verified / eligible` with
+the formula available in a read-only drawer; it excludes unavailable, cancelled
+and site-side tasks from the denominator and is not a "sign-in failure" rate.
+
+The attention queue has separate tabs for actionable work, pending evidence and
+site recovery. Accounts are grouped only when business date, origin, status and
+evidence reason match; each row also shows its reason (login, identity review,
+execution failure, deferred, submission review) and prioritises login and
+failures. Unread acknowledgement is per group and never changes task results.
+This bounds overview height without hiding the remaining tasks.
 
 The dashboard merges same-day execution-layer receipts with the current plan.
 Successful overlays require authoritative evidence; Harvest remains a separate
@@ -108,9 +117,10 @@ keeping browser control and check-in execution in the execution layer.
 
 ## Current features
 
-- **Outcome-first overview:** separates successful, unavailable and unresolved
-  check-ins. Completion rate excludes unavailable features; host health is not
-  displayed as business success. The ring chart is derived from actual counts.
+- **Outcome-first overview:** separates verified success, receipts pending
+  evidence, actionable work and excluded items. Completion rate excludes
+  unavailable features; host health is not displayed as business success. The
+  ring chart is derived from actual counts.
 - **Attention and reconciliation:** shows unresolved items with evidence
   summaries, Harvest/PT reconciliation and a filtered task shortcut.
 - **Fresh data:** snapshot and health ages are checked at request time. PT
@@ -119,8 +129,9 @@ keeping browser control and check-in execution in the execution layer.
   request. Visible pages refresh every minute, preserve filters, and defer
   refresh while editing. Auth and timeout failures remain explicit.
 - **Mobile and keyboard:** the navigation drawer manages focus and inert state;
-  overview cards fit phone widths without horizontal overflow. Existing secure
-  remembered sessions remain unchanged.
+  phone layouts keep the four-bucket strip and first actions above the fold, and
+  overview cards fit without horizontal overflow. Existing secure remembered
+  sessions remain unchanged.
 
 - **Overview:** logical-site count, execution-unit count, status mix, latest
   plan hash, execution/business completeness, and health freshness.

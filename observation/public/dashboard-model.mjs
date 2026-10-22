@@ -27,6 +27,14 @@ export function taskDisplayStatus(task){
   return task?.observedStatus??'unknown';
 }
 
+// Presentation only: retain the execution receipt and its original evidence.
+export function taskResultBucket(task){
+  if(cancelledTask(task)||siteSideTask(task))return 'excluded';
+  if(['signed','already_signed'].includes(task?.observedStatus))return task.evidence?.authoritative===true?'verified':'proof';
+  if(task?.observedStatus==='not_available')return task.evidence?.authoritative===true?'excluded':'proof';
+  return 'actionable';
+}
+
 export function identityTitle(item) {
   const identity = item.identity ?? {};
   return identity.username || identity.label || (identity.userId ? `ID ${identity.userId}` : '默认账号（身份待采集）');
@@ -47,7 +55,11 @@ export function siteTitle(item) {
 
 export const TASK_FILTERS = [
   ['', '全部任务'],
-  ['completed', '已签到'],
+  ['verified','已核验','核验结果'],
+  ['proof','待补证','核验结果'],
+  ['actionable','待处理','核验结果'],
+  ['excluded','已排除','核验结果'],
+  ['completed', '成功回执'],
   ['pending', '尚未完成'],
   ['external', '等待外部条件'],
   ['verification', '结果待核验'],
@@ -56,6 +68,8 @@ export const TASK_FILTERS = [
   ['attention', '需关注'],
   ['deferred', '已延迟'],
   ['login_required', '需登录'],
+  ['identity_review','身份复核'],
+  ['failed','执行异常'],
 ];
 
 export const normalizeTaskFilter = value => value === 'not_available' ? 'unavailable'
@@ -72,7 +86,10 @@ export function matchesTask(task, { status = '', query = '' } = {}) {
     unavailable: ['not_available'],
   };
   const statusGroup=Object.hasOwn(statusGroups,status)?statusGroups[status]:null;
-  const statusMatch = !status || (statusGroup ? statusGroup.includes(display) : display === status);
+  const statusMatch = !status || (['verified','proof','actionable','excluded'].includes(status)?taskResultBucket(task)===status:
+    status==='identity_review'?taskResultBucket(task)==='actionable'&&
+      ['identity_conflict','account_mismatch','identity_mismatch'].some(code=>[task.condition,task.failureCode,task.evidence?.verification].includes(code)):
+    statusGroup ? statusGroup.includes(display) : display === status);
   const haystack = [task.origin, siteTitle(task), task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
     task.identity?.username, task.identity?.userId, task.identity?.label].join(' ').toLowerCase();
   return statusMatch && haystack.includes(query.trim().toLowerCase());
