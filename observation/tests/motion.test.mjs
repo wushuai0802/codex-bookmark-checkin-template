@@ -25,3 +25,9 @@ test('reduced motion finishes without creating an animation',async()=>{
   try{const node=surface();assert.equal(await playMotion(node,[]),true);assert.equal(node.animations.length,0);}
   finally{if(original)globalThis.matchMedia=original;else delete globalThis.matchMedia;}
 });
+test('the saved elastic-motion preference also suppresses page animations',async()=>{
+  const original=globalThis.document;
+  globalThis.document={documentElement:{dataset:{liquidMotion:'false'}}};
+  try{const node=surface();assert.equal(await playMotion(node,[]),true);assert.equal(node.animations.length,0);}
+  finally{if(original)globalThis.document=original;else delete globalThis.document;}
+});

@@ -63,5 +63,7 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --prefix observation
-      - run: node scripts/check-ui-navigation.mjs
+      - run: |
+          node scripts/check-ui-navigation.mjs
+          node scripts/check-liquid-glass.mjs
         working-directory: observation

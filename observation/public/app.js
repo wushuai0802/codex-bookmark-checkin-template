@@ -7,6 +7,8 @@ import { createNoticeState, pausedNotices, attentionReason, overviewQueuePreview
 import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
 import { enhanceSelect, closeSelectMenu } from './select-menu.mjs';
 import {statusLabels as STATUS_LABELS} from './checkin-contract.generated.mjs';
+import {installAppearanceControls} from './appearance.mjs';
+import {installLiquidGlass} from './liquid-glass.mjs';
 
 const notices = createNoticeState();
 let attentionScrollUntil = 0;
@@ -84,7 +86,7 @@ function installNavigationSurfaces() {
     dock.append(button);
   }
   const syncInput = () => document.body.classList.toggle('dock-input-active',
-    Boolean(document.activeElement?.matches('input:not([type="checkbox"]):not([type="radio"]),textarea,[contenteditable="true"]')
+    Boolean(document.activeElement?.matches('input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),textarea,[contenteditable="true"]')
       && document.activeElement.getClientRects().length));
   document.addEventListener('focusin', syncInput);
   document.addEventListener('focusout', () => queueMicrotask(syncInput));
@@ -468,7 +470,8 @@ function renderDailySummary(data) {
   const previousDay = data?.businessDate && data.businessDate !== today;
   const node = $('#daily-summary'); node.replaceChildren();
   const tone = !m.total ? 'empty' : !m.fresh ? 'stale' : m.allResolved ? 'complete' : 'attention';
-  node.className = `daily-summary ${tone}`;
+  node.classList.remove('attention','complete','stale','empty');
+  node.classList.add('daily-summary',tone);
   const copy = el('div', 'daily-copy');
   const title = dailySummaryTitle(m, { previousDay, pausedCount });
   const note=previousDay?'尚未收到今日业务回执，以下显示最近业务日的结果。':
@@ -1194,6 +1197,8 @@ function setupTaskStatusFilter() {
 document.addEventListener('DOMContentLoaded', () => {
   renderRecentPages(state.view);
   installNavigationSurfaces();
+  installAppearanceControls();
+  installLiquidGlass();
   installCompactTopbar({topbar:document.querySelector('.topbar')});
   const accountFilter = el('select'); accountFilter.id = 'task-account'; accountFilter.setAttribute('aria-label', '筛选账号');
   $('#task-status').after(accountFilter); accountFilter.addEventListener('change', applyTaskFilter);

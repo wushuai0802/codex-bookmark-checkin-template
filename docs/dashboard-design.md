@@ -1,8 +1,9 @@
 # Dashboard surfaces and navigation
 
-The dashboard uses solid data surfaces with light glass on the header,
-navigation and selection menus. This keeps evidence text readable in both
-themes. The visual and interaction study references [FlClash's UI update](https://github.com/chen08209/FlClash/commit/7c9627fffb35f2615fbfaa64b4b3a0c5834c52ed);
+The dashboard offers off, standard and enhanced liquid-glass modes in Settings
+under Appearance. Card coverage, refraction strength, transparency and elastic
+feedback can be changed independently and persist in the current browser.
+The visual and interaction study references [FlClash's UI update](https://github.com/chen08209/FlClash/commit/7c9627fffb35f2615fbfaa64b4b3a0c5834c52ed);
 the browser implementation is independently authored and does not include its
 Dart, capture pipeline or shaders.
 
@@ -37,7 +38,20 @@ dialogs. Selection menus remain bounded, scrollable and keyboard accessible;
 their opening origin follows the trigger, and selection applies immediately.
 Press feedback and short, cancellable animations respect reduced motion.
 
-Without backdrop-filter, glass surfaces fall back to solid backgrounds.
-Full background refraction and slide-to-pick gestures are deferred until a
-separate touch and performance evaluation; ordinary clicks and keyboard
-selection remain the default.
+The optical layer uses a rounded-rectangle distance field encoded as a bounded
+displacement texture. Standard mode refracts the actual backdrop; enhanced
+mode separates RGB samples for edge dispersion. A bevel mask combines a clear
+refractive rim with a hazier center. A separate sheen responds to press position
+without moving text. Visible surfaces receive filters; detached and offscreen
+surfaces release them, and geometry textures use a bounded cache.
+
+SVG backdrop displacement is enabled on Chromium browsers with the relevant
+CSS support. Other engines use a compatible blur and highlight surface, and
+Settings identifies that mode. Without backdrop-filter, surfaces retain their
+solid tint. The optical browser check compares real rendered pixels with
+displacement enabled and zeroed; it also checks settings persistence, refresh
+and filter cleanup. Viewport emulation does not establish physical-device
+performance or identical rendering across engines.
+
+Ordinary clicks and keyboard selection remain the menu interaction; optional
+slide-to-pick gestures are outside this material update.

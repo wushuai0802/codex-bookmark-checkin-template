@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../public/theme.js', import.meta.url), 'utf8');
-function harness(saved, dark = false, blocked = false, search = '') {
+function harness(saved, dark = false, blocked = false, search = '', appearance = null) {
   const events = {}, systemEvents = {}, docEvents = {}, selectEvents = {};
   const writes = [];
   const system = { matches: dark, addEventListener: (key, fn) => { systemEvents[key] = fn; } };
@@ -14,7 +14,7 @@ function harness(saved, dark = false, blocked = false, search = '') {
   const window = { location: { search }, matchMedia: () => system, addEventListener: (key, fn) => { events[key] = fn; },
     get localStorage() {
       if (blocked) throw new Error('Storage disabled');
-      return { getItem: () => saved, setItem: (key, value) => writes.push([key, value]) };
+      return { getItem: key => key==='fabricAppearance'?appearance:saved, setItem: (key, value) => writes.push([key, value]) };
     } };
   vm.runInNewContext(source, { window, document, URLSearchParams });
   return { root: document.documentElement, select, writes,
@@ -57,4 +57,10 @@ test('workspace appearance is default, with query-only glass previews and plain 
   const article = harness('dark', true, false, '?glass=article');
   assert.equal(article.root.dataset.glassPreview, 'article');
   assert.equal(article.root.dataset.theme, 'dark');
+});
+test('liquid-glass choices apply before styles and tolerate malformed storage',()=>{
+  const h=harness('dark',false,false,'',JSON.stringify({mode:'none',cards:false,motion:false}));
+  assert.equal(h.root.dataset.liquidGlass,'none');assert.equal(h.root.dataset.liquidCards,'false');
+  assert.equal(h.root.dataset.liquidMotion,'false');
+  assert.equal(harness(null,false,false,'','{broken').root.dataset.liquidGlass,'ultra');
 });

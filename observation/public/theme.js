@@ -3,6 +3,11 @@
   const glass = params.get('glass');
   if (params.get('ui') === 'cpam' || (params.get('ui') === null && glass === null)) document.documentElement.dataset.workspace = 'cpam';
   else if (glass !== 'off') document.documentElement.dataset.glassPreview = ['1','article','ios26','ios26-v2'].includes(glass) ? glass : 'ios26-v2';
+  let appearance = {};
+  try { appearance = JSON.parse(window.localStorage.getItem('fabricAppearance')) ?? {}; } catch { }
+  document.documentElement.dataset.liquidGlass = ['none','standard','ultra'].includes(appearance.mode) ? appearance.mode : 'ultra';
+  document.documentElement.dataset.liquidCards = String(appearance.cards !== false);
+  document.documentElement.dataset.liquidMotion = String(appearance.motion !== false);
   const key = 'fabricTheme';
   const normalize = value => ['light', 'dark', 'system'].includes(value) ? value : 'system';
   const system = window.matchMedia('(prefers-color-scheme: dark)');

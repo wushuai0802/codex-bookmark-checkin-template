@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/theme.css">
   <script src="/preview-styles.js"></script>
   <link rel="stylesheet" href="/workspace.css">
+  <link rel="stylesheet" href="/liquid-glass.css">
 </head>
 <body>
   <div class="app-shell">
@@ -68,7 +69,20 @@
       <div id="view-sites" class="view"><div class="toolbar"><div><p class="eyebrow">SITE CATALOG</p><h2>站点管理</h2></div><span class="muted">查看执行进度 · 管理提醒标记</span></div><div id="sites-grid" class="cards-grid"></div></div>
       <div id="view-accounts" class="view"><div class="toolbar"><div><p class="eyebrow">ACCOUNT ISOLATION</p><h2>账户管理</h2></div><span class="muted">仅显示脱敏账户引用</span></div><div id="accounts-grid" class="cards-grid"></div></div>
       <div id="view-ledger" class="view"><div class="toolbar"><div><p class="eyebrow">APPEND-ONLY HISTORY</p><h2>运行记录</h2><p id="ledger-result-count" class="filter-summary">最多显示最近 30 条</p></div><div class="ledger-filters" role="group" aria-label="运行记录筛选"><button type="button" data-ledger-filter="all">全部</button><button type="button" data-ledger-filter="pending">有待处理</button><button type="button" data-ledger-filter="changed">有变化</button></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>记录时间</th><th>业务日期</th><th>计划哈希</th><th>漂移</th><th>任务数</th><th>健康</th></tr></thead><tbody id="ledger-body"></tbody></table></div></article></div>
-      <div id="view-settings" class="view"><div class="toolbar"><div><p class="eyebrow">OPERATIONS</p><h2>运行设置</h2></div></div><div class="settings-panel"><div id="settings-content"></div></div></div>
+      <div id="view-settings" class="view"><div class="toolbar"><div><p class="eyebrow">OPERATIONS</p><h2>运行设置</h2></div></div><div class="settings-panel">
+        <section class="panel appearance-panel" aria-labelledby="appearance-title">
+          <h2 id="appearance-title">外观效果</h2><p class="appearance-intro">选择液态玻璃的质量和通透程度。设置保存在当前浏览器，立即生效。</p>
+          <div class="glass-mode-group" role="group" aria-label="液态玻璃效果">
+            <button type="button" data-glass-mode-choice="none" aria-pressed="false">关闭</button>
+            <button type="button" data-glass-mode-choice="standard" aria-pressed="false">标准</button>
+            <button type="button" data-glass-mode-choice="ultra" aria-pressed="true">增强</button>
+          </div>
+          <label class="glass-setting" for="glass-cards"><span>内容卡片使用玻璃</span><input id="glass-cards" type="checkbox" checked></label>
+          <label class="glass-setting" for="glass-motion"><span>弹性反馈</span><input id="glass-motion" type="checkbox" checked></label>
+          <label class="glass-setting" for="glass-refraction"><span>折射强度</span><output id="glass-refraction-value" for="glass-refraction">70%</output><input id="glass-refraction" type="range" min="0" max="100" value="70"></label>
+          <label class="glass-setting" for="glass-transparency"><span>通透程度</span><output id="glass-transparency-value" for="glass-transparency">70%</output><input id="glass-transparency" type="range" min="0" max="100" value="70"></label>
+          <p id="glass-capability" class="glass-capability"></p><button id="glass-reset" type="button" class="button secondary">恢复默认效果</button>
+        </section><div id="settings-content"></div></div></div>
     </main>
   </div>
   <script src="/app.js" type="module"></script>

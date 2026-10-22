@@ -1,6 +1,7 @@
 const active = new WeakMap();
 export const MOTION = Object.freeze({ fast:120, base:180, panel:220, exit:160 });
-export const reducedMotion = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+export const reducedMotion = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  || globalThis.document?.documentElement?.dataset.liquidMotion === 'false';
 
 export function stopMotion(node) {
   const animation = active.get(node);
