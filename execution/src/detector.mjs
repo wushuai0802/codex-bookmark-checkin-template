@@ -102,6 +102,15 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
     };
   }
 
+  // Some reverse proxies serve their complete 403 error document with HTTP
+  // 200. Its bare body is an access failure, even at a login URL; ordinary
+  // page content mentioning 403 must retain its account/check-in semantics.
+  if (/^https:\/\//i.test(String(url)) && !hasPassword && !challengeSelectors &&
+      /^(?:403\s+Forbidden\s*){1,2}(?:(?:nginx|openresty)(?:\/[0-9.]+)?)?$/i.test(normalizeText(bodyText))) {
+    return { status: "deferred", retryCause: "upstream_unavailable", failureCode: "site_server_error",
+      submissionAttempted: false, reason: "站点访问被服务器拒绝（403），等待恢复后核验" };
+  }
+
   // A login form can legitimately contain an image CAPTCHA.  Treating every
   // CAPTCHA marker as a standalone browser challenge hides the real action
   // required (refreshing the site's login session).
@@ -119,6 +128,7 @@ export function classifyPageText({ url = "", title = "", bodyText = "", hasPassw
     return { status: "deferred", retryCause: "rate_limit", reason: "站点触发频率限制，请稍后重试" };
   }
   if (/维护通知/.test(text) && /数据恢复与测试阶段.{0,16}暂时无法访问/.test(text) ||
+      /^(?:站点|站點|本站)(?:关闭|關閉|暂停|暫停)?(?:维护|維護)中(?:[，,。.!！\s]|$)/.test(normalizeText(bodyText)) ||
       /scheduled maintenance|(?:正在|系统|系統).{0,8}(?:维护|維護)|(?:维护|維護).{0,8}(?:进行中|進行中)/i.test(text)) {
     return { status: "deferred", retryCause: "upstream_unavailable", failureCode:'site_maintenance',siteCondition:'site_maintenance',
       reason: "站点公告维护中，今日暂停自动提交，次日再核验" };
