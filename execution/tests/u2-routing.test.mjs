@@ -87,6 +87,7 @@ test("U2 homepage-to-question navigation runs the dedicated solver before generi
     assert.equal(submissions, 0);
     assert.equal(result.status, "interactive_challenge");
     assert.equal(result.reason, "U2 验证题缺少题图");
+    assert.equal(result.failureCode, "u2_image_unavailable");
     assert.equal(result.submissionAttempted, false);
     assert.equal(result.candidateHistory.length, 1);
   } finally {

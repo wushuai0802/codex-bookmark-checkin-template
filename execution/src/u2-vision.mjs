@@ -219,12 +219,12 @@ export async function solveU2VisualChallenge(image, options, {
   timeoutMs = 60000,
 } = {}) {
   if (!Buffer.isBuffer(image) || !Array.isArray(options) || options.length < 2) {
-    return { answer: null, reason: "U2 题目输入无效" };
+    return { answer: null, failureCode: "u2_challenge_changed", reason: "U2 题目输入无效" };
   }
   const metadata = await sharp(image).metadata();
   const width = metadata.width ?? 0;
   const height = metadata.height ?? 0;
-  if (width < 300 || height < 200) return { answer: null, reason: "U2 验证图片尺寸异常" };
+  if (width < 300 || height < 200) return { answer: null, failureCode: "u2_image_unavailable", reason: "U2 验证图片尺寸异常" };
   const contentHeight = Math.max(1, height - 33);
 
   const reader = createReferenceReader(fetchImpl, requestTimeoutMs, timeoutMs);
@@ -237,6 +237,7 @@ export async function solveU2VisualChallenge(image, options, {
   if (new Set(references.map((item) => item.optionIndex)).size < 2) {
     return {
       answer: null,
+      failureCode: reader.expired() || reader.diagnostics.timedOutRequests > 0 ? "u2_reference_timeout" : "u2_reference_unavailable",
       reason: reader.expired() ? "候选作品封面读取超时，未继续识别" : "AniList 与 MyAnimeList 均未返回足够的候选作品封面",
       diagnostics: { ...reader.diagnostics, referenceDeadlineReached: reader.expired() },
     };
@@ -265,6 +266,7 @@ export async function solveU2VisualChallenge(image, options, {
   if (!best || (alternative && alternative.total - best.total < 0.01)) {
     return {
       answer: null,
+      failureCode: "u2_visual_ambiguous",
       reason: "候选作品封面匹配不够明确",
       diagnostics: best ? {
         best: {
@@ -291,7 +293,7 @@ export async function solveU2VisualChallenge(image, options, {
   let dottedSide = null;
   if (distanceRatio >= 1.22) dottedSide = best.left.distance > best.right.distance ? "left" : "right";
   else if (circleRatio >= 1.3) dottedSide = leftCircle > rightCircle ? "left" : "right";
-  if (!dottedSide) return { answer: null, reason: "无法可靠确定圆点位于哪一侧" };
+  if (!dottedSide) return { answer: null, failureCode: "u2_visual_ambiguous", reason: "无法可靠确定圆点位于哪一侧" };
 
   const chosen = dottedSide === "left" ? best.left.reference : best.right.reference;
   return {
