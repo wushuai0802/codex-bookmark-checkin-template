@@ -92,6 +92,29 @@ test('reviewed passive daily page reports a non-empty login view as login_requir
   }finally{await browser.close();}
 });
 
+test('server denial and active closure served as HTTP 200 survive passive PT readback without attendance requests',async()=>{
+  const origin='https://cspt.top',browser=await chromium.launch({headless:true,channel:'chrome'});
+  try{
+    for(const [body,failureCode] of [
+      ['<title>403 Forbidden</title><h1>403 Forbidden</h1><hr><center>nginx</center>','site_server_error'],
+      ['站点关闭维护中，请稍后再访问...谢谢','site_maintenance'],
+    ]){
+    const context=await browser.newContext({javaScriptEnabled:false,serviceWorkers:'block'}),visited=[];
+    await context.route('**/*',async route=>{
+      visited.push({url:route.request().url(),method:route.request().method()});
+      await route.fulfill({status:200,contentType:'text/html; charset=utf-8',body});
+    });
+    const page=await context.newPage(),policy=ptReadPolicy(origin);
+    const response=await page.goto(policy.url,{waitUntil:'domcontentloaded'});
+    const result=await readPtPassivePage(page,policy,{origin,httpStatus:response.status()});
+    assert.equal(result.failureCode,failureCode);assert.equal(result.retryCause,'upstream_unavailable');
+    assert.equal(result.submissionAttempted,false);assert.notEqual(result.evidence?.authoritative,true);
+    assert.deepEqual(visited,[{url:policy.url,method:'GET'}]);
+    await context.close();
+    }
+  }finally{await browser.close();}
+});
+
 test('homepage status legends cannot confirm check-in when the authenticated daily control is unsigned',async()=>{
   const origin='https://p.t-baozi.cc',browser=await chromium.launch({headless:true,channel:'chrome'});
   try{

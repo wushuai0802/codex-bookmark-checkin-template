@@ -44,6 +44,24 @@ test("站点的数据恢复公告进入上游延期状态，历史维护字样�
   assert.equal(maintenance.status, "deferred");
   assert.equal(maintenance.retryCause, "upstream_unavailable");
   assert.equal(classifyPageText({ bodyText: "历史维护通知 今日已签到" }).status, "already_signed");
+  const closed=classifyPageText({url:'https://tracker.example/index.php',bodyText:'站点关闭维护中，请稍后再访问...谢谢'});
+  assert.equal(closed.failureCode,'site_maintenance');assert.equal(closed.retryCause,'upstream_unavailable');
+  assert.equal(classifyPageText({bodyText:'历史公告：站点关闭维护中 今日已签到'}).status,'already_signed');
+});
+
+test('bare proxy 403 documents are external access failures, not stale sessions or missing success evidence',()=>{
+  for(const bodyText of ['403 Forbidden nginx','403 Forbidden\nnginx/1.28.0','403 Forbidden','403 Forbidden openresty']){
+    for(const url of ['https://tracker.example/index.php','https://tracker.example/login.php']){
+      const result=classifyPageText({url,bodyText});
+      assert.equal(result.failureCode,'site_server_error');assert.equal(result.retryCause,'upstream_unavailable');
+      assert.equal(result.submissionAttempted,false);assert.equal(result.status,'deferred');
+    }
+  }
+  assert.equal(classifyPageText({bodyText:'历史公告 403 Forbidden nginx 今日已签到'}).status,'already_signed');
+  assert.equal(classifyPageText({bodyText:'403 Forbidden nginx',hasPassword:true}).status,'login_required');
+  assert.equal(classifyPageText({bodyText:'403 Forbidden nginx',challengeSelectors:true}).status,'interactive_challenge');
+  assert.equal(classifyPageText({bodyText:'错误讨论：403 Forbidden nginx'}).status,'ready');
+  assert.notEqual(classifyPageText({url:'chrome-error://chromewebdata/',bodyText:'403 Forbidden nginx'}).failureCode,'site_server_error');
 });
 
 test("识别签到成功状态", () => {
