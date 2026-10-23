@@ -8,6 +8,18 @@ import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {runPtSite,projectPtSiteResult,spawnPtSiteChild} from '../src/pt-site-execution.mjs';
 
+test('U2 pre-submit diagnoses cross the PT transport without becoming an authentication failure',()=>{
+  const origin='https://u2.dmhy.org';
+  for(const failureCode of ['u2_reference_unavailable','u2_reference_timeout','u2_visual_ambiguous','u2_image_unavailable',
+    'u2_challenge_changed','u2_question_expired','u2_solver_failed']){
+    const value={origin,status:'needs_attention',failureCode,observedAt:new Date().toISOString(),
+      submissionAttempted:false,evidence:{source:'none',authoritative:false,summary:'U2 未提交'}};
+    const projected=projectPtSiteResult(value,origin);
+    assert.equal(projected.failureCode,failureCode);assert.equal(projected.submissionAttempted,false);
+    assert.equal(projected.status,'needs_attention');assert.equal(projected.evidence.authoritative,false);
+  }
+});
+
 test('PT transport preserves evidence identity and rejects future or conflicting success',()=>{
   const origin='https://pt.example',value={origin,status:'already_signed',observedAt:'2026-09-30T01:00:00Z',
     startedAt:'2026-09-30T00:58:00Z',businessDate:'2026-09-30',accountKey:'site-default',profileBinding:'a'.repeat(64),

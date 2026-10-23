@@ -100,6 +100,7 @@ test("U2 returns an unsubmitted answer on both-source network failure", async ()
     },
   });
   assert.equal(result.answer, null);
+  assert.equal(result.failureCode, "u2_reference_unavailable");
   assert.match(result.reason, /未返回足够/);
   assert.deepEqual([...sources].sort(), ["graphql.anilist.co", "myanimelist.net"]);
   assert.equal(result.diagnostics.failedRequests, 4);
@@ -119,6 +120,7 @@ test("U2 applies one reference deadline even if the injected transport ignores a
     },
   });
   assert.equal(result.answer, null);
+  assert.equal(result.failureCode, "u2_reference_timeout");
   assert.match(result.reason, /读取超时/);
   assert.equal(result.diagnostics.referenceDeadlineReached, true);
   assert.equal(result.diagnostics.timedOutRequests, 2);
@@ -151,4 +153,15 @@ test("U2 discards a malformed cover and recovers through backup references", asy
     },
   });
   assert.equal(result.answer, options[0]);
+});
+
+test("U2 distinguishes an ambiguous visual match from missing public references", async () => {
+  const { image, covers } = await visualFixture();
+  const result = await solveU2VisualChallenge(image, options, {
+    fetchImpl: async (url, init) => String(url) === "https://graphql.anilist.co"
+      ? aniListResponse(optionIndex(url, init)) : new Response(covers[0]),
+  });
+  assert.equal(result.answer, null);
+  assert.equal(result.failureCode, "u2_visual_ambiguous");
+  assert.match(result.reason, /匹配不够明确/);
 });
