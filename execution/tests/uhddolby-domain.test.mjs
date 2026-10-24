@@ -88,19 +88,28 @@ test('the native read uses only its own browser session and never launches login
     const context=await browser.newContext(),page=await context.newPage(),requests=[];
     await context.route('**/*',route=>{
       requests.push(route.request().url());
-      const body='<div id="info_block"><a href="userdetails.php?id=7">Fixture</a><a href="logout.php">退出</a> (签到已得20)</div>'+
-        '<a href="usercp.php">控制面板</a><a href="log.php">日志</a>';
+      const body=route.request().url()===origin+'/login.php'
+        ?'<form method="post" action="/takelogin.php"><input name="username"><input type="password" name="password">'+
+          '<input name="2fa"><input name="imagestring"><input type="hidden" name="imagehash" value="fixture_hash">'+
+          '<img width="120" height="30" src="/image.php?action=regimage&amp;imagehash=fixture_hash"><input type="submit"></form>'
+        :'<div id="info_block"><a href="userdetails.php?id=7">Fixture</a><a href="logout.php">退出</a> (签到已得20)</div>'+
+          '<a href="usercp.php">控制面板</a><a href="log.php">日志</a>';
       return route.fulfill({status:200,headers:{date:now.toUTCString(),'content-type':'text/html; charset=utf-8'},body});
     });
     await page.goto(origin+'/index.php');
-    const value=await runHddolbyNativeFlow({root:'fixture',config:{siteTwoFactorRecovery:{[origin]:{
+    const args={root:'fixture',config:{siteTwoFactorRecovery:{[origin]:{
       enabled:true,reviewed:true,provider:'bitwarden',allowPasswordLogin:true,adapterId:'hddolby-nexus-stepup-v1',expectedAccountId:'7'}}},
       page,mode:'ReadOnly',clock:()=>now,profileProof:async()=>true,
       scope:async()=>({binding:{profileBinding:'a'.repeat(64)},assertCurrent:async()=>true,release:async()=>{}}),
-      runTarget:async()=>{throw Error('A passive probe must never check in');}});
+      runTarget:async()=>{throw Error('A passive probe must never check in');}};
+    const value=await runHddolbyNativeFlow(args);
     assert.equal(value.status,'already_signed');assert.equal(value.submissionAttempted,false);assert.equal(value.evidence.authoritative,true);
     assert.ok(requests.every(url=>[origin+'/index.php',origin+'/log.php'].includes(url)));
     assert.equal(JSON.stringify(value).includes('Fixture'),false);
+    await page.goto(origin+'/login.php');requests.length=0;
+    const settled=await runHddolbyNativeFlow(args);
+    assert.equal(settled.status,'already_signed');assert.equal(settled.submissionAttempted,false);
+    assert.ok(requests.every(url=>[origin+'/index.php',origin+'/log.php'].includes(url)));
     await context.close();
   }finally{await browser.close();}
 });
