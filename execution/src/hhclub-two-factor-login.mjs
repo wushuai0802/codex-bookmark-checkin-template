@@ -22,11 +22,11 @@ const providerReasons=new Set(['disabled','profile_mismatch','session_missing','
 const providerReason=value=>value?.ready===false&&providerReasons.has(value.reason)?'provider_'+value.reason:'provider_unavailable';
 
 /** Only a boolean process/profile proof leaves this native browser check. */
-export async function verifyHhclubNativeProfile(profile,port){
+export async function verifyHhclubNativeProfile(profile,port,{executeProcess=execute}={}){
   if(process.platform!=='win32'||!path.isAbsolute(profile??'')||!Number.isSafeInteger(port)||port<=0||port>65535)return false;
-  const command="$matches=@(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" -ErrorAction SilentlyContinue|Where-Object {$line=[string]$_.CommandLine;$part=[regex]::Match($line,'(?:^|\\s)(?:\"--user-data-dir=([^\"]+)\"|--user-data-dir=\"([^\"]+)\"|--user-data-dir=([^\\s\"]+))');$dir=if($part.Groups[1].Success){$part.Groups[1].Value}elseif($part.Groups[2].Success){$part.Groups[2].Value}else{$part.Groups[3].Value};$portMatch=[regex]::IsMatch($line,'(?:^|\\s)\"?--remote-debugging-port='+[regex]::Escape($env:CHECKIN_HHCLUB_PORT)+'\"?(?:\\s|$)');$dir-and [IO.Path]::GetFullPath($dir).Equals($env:CHECKIN_HHCLUB_PROFILE,[StringComparison]::OrdinalIgnoreCase)-and $portMatch});if($matches.Count-eq 1){'true'}else{'false'}";
+  const command="$matches=@(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" -ErrorAction SilentlyContinue|Where-Object {$line=[string]$_.CommandLine;if([regex]::IsMatch($line,'(?:^|\\s)\"?--type(?:=|\\s|\"|$)')){return $false};$part=[regex]::Match($line,'(?:^|\\s)(?:\"--user-data-dir=([^\"]+)\"|--user-data-dir=\"([^\"]+)\"|--user-data-dir=([^\\s\"]+))');$dir=if($part.Groups[1].Success){$part.Groups[1].Value}elseif($part.Groups[2].Success){$part.Groups[2].Value}else{$part.Groups[3].Value};$portMatch=[regex]::IsMatch($line,'(?:^|\\s)\"?--remote-debugging-port='+[regex]::Escape($env:CHECKIN_HHCLUB_PORT)+'\"?(?:\\s|$)');$dir-and [IO.Path]::GetFullPath($dir).Equals($env:CHECKIN_HHCLUB_PROFILE,[StringComparison]::OrdinalIgnoreCase)-and $portMatch});if($matches.Count-eq 1){'true'}else{'false'}";
   try{
-    const {stdout}=await execute(path.join(process.env.SystemRoot??'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),
+    const {stdout}=await executeProcess(path.join(process.env.SystemRoot??'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),
       ['-NoProfile','-NonInteractive','-Command',command],{windowsHide:true,encoding:'utf8',timeout:8000,maxBuffer:2048,
         env:{...process.env,CHECKIN_HHCLUB_PROFILE:path.resolve(profile),CHECKIN_HHCLUB_PORT:String(port)}});
     return stdout.trim()==='true';
