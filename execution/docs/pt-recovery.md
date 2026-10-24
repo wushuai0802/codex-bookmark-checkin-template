@@ -21,6 +21,11 @@ The execution layer reads it again before a guarded supplement. Historical
 uncertainty records are retained; an already-signed read ends recovery without
 another submission.
 
+Resolve built-in and private read policies through the established execution
+reader before selecting a fallback engine. A native site's default policy
+must retain its original engine and Profile without requiring another private
+copy of that policy.
+
 Current confirmed server/TLS faults also appear as site availability in the
 regular task view and leave its success-rate denominator. The original task's
 submission state and retry guards remain intact. Generic network failures do

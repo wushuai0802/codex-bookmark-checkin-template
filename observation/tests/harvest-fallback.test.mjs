@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {planHarvestFallback,runHarvestFallback,pendingHarvestFallbackAttempts,reviewedFallbackReadOrigins} from '../src/harvest-fallback.mjs';
+import {planHarvestFallback,runHarvestFallback,pendingHarvestFallbackAttempts,reviewedFallbackReadOrigins,resolvedFallbackReadConfig} from '../src/harvest-fallback.mjs';
 
 const now=new Date('2026-09-20T02:00:00Z');
 const failed=(origin,account='7')=>({origin,userId:account,status:'failed',observedAt:'2026-09-20T09:55:00+08:00',evidence:{source:'harvest',authoritative:false}});
@@ -23,6 +23,26 @@ test('reviewed HDDolby account header readers enter the passive scheduler indepe
     {reviewed:true,mode:'safe_history_page',dailyHeader:true},{mode:'safe_history_page',dailyHeader:true},
     {reviewed:true,mode:'safe_history_page'}];
   assert.deepEqual(reviewedFallbackReadOrigins(catalog,origin=>policies[origins.indexOf(origin)]),origins.slice(0,2));
+});
+
+test('a built-in native read policy dispatches guarded recovery through the original engine without duplicating private policy',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-default-policy-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture(),origin='https://ourbits.club';f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
+  f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+  const privateConfig={disabledCheckinOrigins:['https://paused.example']},before=JSON.stringify(privateConfig);
+  const config=resolvedFallbackReadConfig(f.catalog,privateConfig,()=>({reviewed:true,mode:'safe_history_page',url:origin+'/index.php',nativeMainChrome:true}));
+  assert.equal(JSON.stringify(privateConfig),before);assert.equal(config.ptReadOnlyPolicies[origin].nativeMainChrome,true);
+  const passive={origin,status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',profileBinding:'b'.repeat(64),
+    accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+    evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:now.toISOString(),evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}};
+  const calls=[];
+  await runHarvestFallback({...f,root,config,execute:true,
+    runSite:async options=>{assert.equal(options.readOnly,true);calls.push('read');return passive;},
+    runEngine:async options=>{calls.push('original-engine');assert.deepEqual(options.origins,[origin]);assert.equal(options.fallbackRecheck,true);
+      return {businessDate:'2026-09-20',observedAt:now.toISOString(),results:[{...passive,status:'signed',submissionAttempted:true}]};}});
+  assert.deepEqual(calls,['read','original-engine']);
+  assert.equal(JSON.parse(fs.readFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json')).attempts[0].nativeRegisteredEngine,true);
 });
 
 test('historical HDDolby uncertainty permits a passive read and only its fresh bound log-header negative proof permits one guarded supplement',async t=>{

@@ -15,6 +15,17 @@ const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&
 const terminal=new Set(['signed','already_signed']);
 const failures=new Set(['failed','not_signed']);
 
+export function resolvedFallbackReadConfig(catalog,config,readPolicy){
+  const policies={...(config.ptReadOnlyPolicies??{})};
+  for(const site of catalog?.sites??[]){
+    try{
+      const policy=readPolicy(site.origin);
+      if(policy.reviewed===true&&policy.mode==='safe_history_page')policies[site.origin]=policy;
+    }catch{/* Preserve explicit private denials and unsupported capabilities. */}
+  }
+  return {...config,ptReadOnlyPolicies:policies};
+}
+
 export function reviewedFallbackReadOrigins(catalog,readPolicy){
   return (catalog?.sites??[]).filter(site=>{
     try{

@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {planHarvestFallback,runHarvestFallback,loadHarvestFallbackInputs,pendingHarvestFallbackAttempts,reviewedFallbackReadOrigins} from '../src/harvest-fallback.mjs';
+import {planHarvestFallback,runHarvestFallback,loadHarvestFallbackInputs,pendingHarvestFallbackAttempts,reviewedFallbackReadOrigins,resolvedFallbackReadConfig} from '../src/harvest-fallback.mjs';
 import {loadRuntimeConfig} from '../src/runtime-config.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url)),args=process.argv.slice(2);
 const value=name=>{const index=args.indexOf(name);return index<0?null:args[index+1];};
@@ -53,7 +53,8 @@ try{
     if(selected.protocol!=='https:'||selected.origin!==onlyOrigin||selected.username||selected.password)
       throw Error('fallback selection requires one exact HTTPS origin');}
   const {ptReadPolicy}=await import(pathToFileURL(path.join(runtime.legacyRoot,'src/pt-read-policy.mjs')));
-  const readOnlyOrigins=reviewedFallbackReadOrigins(inputs.catalog,origin=>ptReadPolicy(origin,inputs.config));
+  inputs.config=resolvedFallbackReadConfig(inputs.catalog,inputs.config,origin=>ptReadPolicy(origin,inputs.config));
+  const readOnlyOrigins=reviewedFallbackReadOrigins(inputs.catalog,origin=>inputs.config.ptReadOnlyPolicies[origin]);
   const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount,readOnlyOrigins,
     ...(onlyOrigin?{onlyOrigins:[onlyOrigin]}:{}),
     refreshHarvest:liveHarvestProbe(value('--harvest-ssh-target'),value('--harvest-db-path'))}):planHarvestFallback({...inputs,fallbackOnlyEnabled,readOnlyOrigins});
