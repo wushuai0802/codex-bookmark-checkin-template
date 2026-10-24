@@ -1,6 +1,28 @@
+import {request as playwrightRequest} from 'playwright-core';
+
 const originAllowed='https://www.hddolby.com';
 const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const unknown=code=>({status:'unknown',failureCode:code??'authoritative_status_unavailable',submissionAttempted:false});
+
+export async function readHddolbyDnsFailure(proxyServer,{createRequest=options=>playwrightRequest.newContext(options)}={}){
+  let anonymous;
+  try{
+    const proxy=new URL(proxyServer);
+    if(proxy.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(proxy.hostname)||!proxy.port||
+      proxy.username||proxy.password||proxy.pathname!=='/'||proxy.search||proxy.hash)return null;
+    anonymous=await createRequest({proxy:{server:proxy.origin},storageState:{cookies:[],origins:[]},ignoreHTTPSErrors:false});
+    const url='https://dns.google/resolve?name=www.hddolby.com&type=A&cd=0';
+    const response=await anonymous.get(url,{maxRedirects:0,maxRetries:0,ignoreHTTPSErrors:false,timeout:5000,
+      headers:{'Cache-Control':'no-cache'}});
+    if(response.status()!==200||response.url()!==url)return null;
+    const text=await response.text();if(text.length>16384)return null;
+    const value=JSON.parse(text),question=value.Question;
+    if(value.Status!==2||value.CD!==false||!Array.isArray(question)||question.length!==1||question[0].type!==1||
+      String(question[0].name).replace(/\.$/,'')!=='www.hddolby.com'||!/DNSSEC validation failure/i.test(value.Comment??''))return null;
+    return {...unknown('dns_validation_failed'),retryCause:'upstream_unavailable'};
+  }catch{return null;}
+  finally{await anonymous?.dispose().catch(()=>{});}
+}
 
 export function hddolbyHeaderSigned(header){
   if(!header?.authenticated||!Array.isArray(header.userIds)||header.userIds.length!==1||header.unsigned)return false;
@@ -33,7 +55,8 @@ export function hddolbyDailyStatusProof(result,now=new Date()){
 
 // The current user's header on this ordinary page supplies the daily reward.
 // The page itself may deny access to site logs; no public log row is trusted.
-export async function readHddolbyHeader(context,{origin=originAllowed,now=new Date(),extractHeader,expectedAccountId}={}){
+export async function readHddolbyHeader(context,{origin=originAllowed,now=new Date(),extractHeader,expectedAccountId,
+  proxyServer,dnsProbe=readHddolbyDnsFailure}={}){
   if(origin!==originAllowed)throw Error('HDDolby read origin is not reviewed');
   let parser;
   const extract=extractHeader??(async(html,url)=>{
@@ -82,6 +105,9 @@ export async function readHddolbyHeader(context,{origin=originAllowed,now=new Da
     return {status:unsigned?'not_signed':'already_signed',submissionAttempted:false,evidence:{source:'pt_page',authoritative:true,
       confirmedAt:now.toISOString(),businessDate:day(now),pagePath:'/log.php',
       statusSignal:unsigned?'hddolby_account_header_unsigned':'hddolby_account_header_signed'}};
-  }catch{return unknown('network_error');}
+  }catch{
+    if(proxyServer)try{const diagnostic=await dnsProbe(proxyServer);if(diagnostic)return diagnostic;}catch{}
+    return unknown('network_error');
+  }
   finally{await parser?.close().catch(()=>{});}
 }

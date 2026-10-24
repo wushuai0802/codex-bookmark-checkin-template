@@ -51,6 +51,7 @@ import {
 import { closeSharedContexts } from "./shared-context-lifecycle.mjs";
 import { nativePreflightFailure, nativeUnconfirmedSubmission } from "./native-preflight-result.mjs";
 import { currentNativePreflightResults, completedNativeRecovery } from "./native-preflight-receipt.mjs";
+import {piggoPasswordLoginEnabled} from './native-pt-two-factor.mjs';
 import {
   configuredOAuthAccounts,
   runOAuthAccount,
@@ -773,6 +774,11 @@ try {
         );
         const methods = [];
         const nativeRecoveryProfile = nativeWafProfileForOrigin(config, current.origin, rootDirectory);
+        if(piggoPasswordLoginEnabled(config,current.origin)&&nativeRecoveryProfile){
+          methods.push({method:'native_saved_password',executable:config.powershellExecutable||'pwsh.exe',
+            args:['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(rootDirectory,'scripts/Recover-NativeLogin.ps1'),
+              '-Origin',current.origin,'-LoginUrl',current.origin+'/login.php','-UserDataDirOverride',nativeRecoveryProfile]});
+        }
         if ((config.protectedCredentialOrigins ?? []).includes(current.origin)) {
           methods.push({
             method: "protected_credential",

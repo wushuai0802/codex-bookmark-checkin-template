@@ -14,6 +14,7 @@ const LOGIN_HELPER_STATUSES = new Set([
 ]);
 
 const LOGIN_FAILURE_CODES = new Set([
+  "login_required",
   "account_mismatch",
   "configuration_mismatch",
   "upstream_login_required",
@@ -41,6 +42,25 @@ const RETRYABLE_LOGIN_FAILURE_CODES = new Set([
 ]);
 
 const TERMINAL_DAILY_CHECKIN_STATUSES = new Set(["signed", "already_signed"]);
+
+export function nativePasswordLoginPage(pages,origin){
+  const candidates=pages.filter(page=>{try{const url=new URL(page.url());return url.origin===origin&&!url.username&&!url.password;}catch{return false;}});
+  return origin==='https://piggo.me'
+    ?[...candidates].reverse().find(page=>isCredentialLoginRoute(page.url()))??candidates.at(-1)??null
+    :candidates[0]??null;
+}
+
+export async function waitForNativePasswordLoginPage(getPages,origin,{timeoutMs=30000,clock=Date.now,
+  sleep=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds))}={}){
+  const deadline=clock()+timeoutMs;
+  do{
+    const page=nativePasswordLoginPage(getPages(),origin);
+    if(page)return page;
+    if(clock()>=deadline)return null;
+    await sleep(Math.min(250,Math.max(1,deadline-clock())));
+  }while(clock()<=deadline);
+  return null;
+}
 
 function safeTerminalDailyCheckin(value) {
   const status = String(value?.status ?? "");
@@ -120,6 +140,7 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
     failed: "登录恢复流程失败",
   };
   const failureMessages = {
+    login_required: "原 Profile 尚未取得有效登录会话",
     account_mismatch: "登录账号与配置身份不一致",
     configuration_mismatch: "OAuth 恢复配置不一致",
     upstream_login_required: "上游 OAuth 账号需要重新登录",

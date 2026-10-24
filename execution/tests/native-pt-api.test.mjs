@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import {readNativePtApiHeader,runNativePtApiCheckin} from '../src/native-pt-api.mjs';
+import {readNativePtApiHeader,readNativePtApiHeaderInContext,piggoNativePassiveContext,runNativePtApiCheckin} from '../src/native-pt-api.mjs';
 import {runNativePtGate} from '../src/native-pt-gate.mjs';
 
 const origin='https://piggo.me',url=origin+'/attendance.php',now=new Date('2026-10-11T04:00:00Z');
@@ -113,6 +113,36 @@ test('private opt-in, isolated binding and current bookmark scope are required b
   const main=fixture(t);main.config.ptReadOnlyPolicies[origin].nativeIsolatedChrome=false;main.config.ptReadOnlyPolicies[origin].nativeMainChrome=true;
   fs.writeFileSync(path.join(main.root,'config/config.json'),JSON.stringify(main.config));
   assert.equal((await readNativePtApiHeader(main)).status,'unconfirmed');assert.equal(main.launchCount,0);
+});
+
+test('native-login account verification reuses its proved context and rejects an unproved or changing Profile',async t=>{
+  for(const variant of ['valid','unproved','changed']){
+    const f=fixture(t),context=await f.launch({...f.config,automationUserDataDir:f.profile,ptPassiveReadOnly:true,
+      ptReadProxyServer:f.policy.proxyServer,failureScreenshots:false});
+    let checks=0;const profileProof=async()=>{checks++;return variant==='valid'||variant==='changed'&&checks===1;};
+    const key=process.platform==='win32'?f.profile.toLowerCase():f.profile;
+    const result=await readNativePtApiHeaderInContext({...f,context,profileProof,
+      expectedProfileBinding:crypto.createHash('sha256').update(key).digest('hex')});
+    assert.equal(result.status,variant==='valid'?'not_signed':'unconfirmed');assert.equal(f.launchCount,1);
+    assert.equal(f.contextClosed,0);assert.equal(f.calls.length,variant==='unproved'?0:1);assertNoPrivate(result);
+    await context.close();assert.equal(f.contextClosed,1);
+  }
+});
+
+test('native PigGo passive proof uses Chrome fetch credentials and route, never the separate API client or an action URL',async()=>{
+  let requests=0;
+  const page={url:()=>origin+'/login.php',context:()=>({newPage:async()=>({})}),evaluate:async(fn,target)=>{
+    const previous=globalThis.fetch;
+    globalThis.fetch=async(url,options)=>{requests++;assert.equal(url,origin+'/index.php');
+      assert.equal(options.method,'GET');assert.equal(options.credentials,'same-origin');assert.equal(options.redirect,'manual');assert.equal(options.cache,'no-store');
+      return {url,status:200,headers:{get:()=>now.toUTCString()},text:async()=>'<div>synthetic account header</div>'};};
+    try{return await fn(target);}finally{globalThis.fetch=previous;}
+  }};
+  const context=piggoNativePassiveContext(page),response=await context.request.get(origin+'/index.php');
+  assert.equal(response.status(),200);assert.equal(response.headers().date,now.toUTCString());assert.equal(requests,1);
+  for(const url of [origin+'/attendance.php','https://foreign.example/index.php',origin+'/index.php?claim=1'])
+    await assert.rejects(()=>context.request.get(url));
+  assert.equal(requests,1);
 });
 
 test('API index returns only bound safe negative proof from the reviewed authenticated private header',async t=>{

@@ -223,6 +223,7 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     let hddolbyVerified=false;
     if((readOnly||verifyBeforeSubmit)&&policy.hddolbyHeader===true){
       const result=await readHddolby(context,{origin:target.origin,now:clock(),
+        proxyServer:policy.proxyServer,
         expectedAccountId:config.siteTwoFactorRecovery?.[target.origin]?.expectedAccountId});
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during account header readback');
       if(readOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)

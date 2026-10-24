@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { normalizeOrigin, redactText } from './contracts.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
-import {ptStatuses} from './checkin-contract.generated.mjs';
+import {ptStatuses,siteFaultCodes} from './checkin-contract.generated.mjs';
 import {siteDisplayName} from './display-identity.mjs';
 import {canonicalPtOrigin} from './pt-coordination.generated.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
@@ -218,7 +218,7 @@ export function classifyPtEvidenceState(site) {
   const moved=item=>[item?.failureCode,item?.underlyingFailureCode].some(code=>['site_migration','bookmark_origin_changed'].includes(code));
   if (effective.fresh===true&&(effective.siteCondition === 'site_maintenance' || effective.retryCause==='rate_limit' ||
       moved(effective)||site.observations?.some(item=>item.fresh&&moved(item))||
-      ['tls_certificate_invalid', 'tls_handshake_failed', 'site_server_error'].includes(effective.failureCode))) {
+      siteFaultCodes.includes(effective.failureCode))) {
     return 'external_blocked';
   }
   if (submitted) {

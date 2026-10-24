@@ -30,3 +30,10 @@ Current confirmed server/TLS faults also appear as site availability in the
 regular task view and leave its success-rate denominator. The original task's
 submission state and retry guards remain intact. Generic network failures do
 not qualify for this exclusion.
+
+If HDDolby's page connection fails, its configured passive reader can query a
+validating public resolver through a separate anonymous request context. Only
+an explicit DNSSEC failure for the exact configured domain becomes a site DNS
+fault. This does not establish account/day status, change local DNS settings,
+disable validation or authorize a submission. The shared site-fault contract
+keeps PT classification and overview-rate exclusions consistent.

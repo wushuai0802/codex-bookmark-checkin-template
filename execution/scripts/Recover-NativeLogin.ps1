@@ -51,6 +51,12 @@ try {
             $factorHandled = $null -ne $factor -and $factor.attempted -is [bool] -and $factor.accepted -is [bool]
             if ($factorHandled -or [string]$nativeLoginResult.failureCode -ceq 'two_factor_required' -or $null -eq $nativeLoginResult) { break }
         }
+        if (-not $loginSucceeded -and $originValue -ceq 'https://piggo.me') {
+            $nativeLoginResult = $null
+            try { $nativeLoginResult = ($nativeLoginOutput -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop } catch {}
+            $factor = $nativeLoginResult.nativeTwoFactorRecovery
+            if ($null -eq $nativeLoginResult -or ($null -ne $factor -and $factor.attempted -is [bool] -and $factor.accepted -is [bool])) { break }
+        }
         if (-not $loginSucceeded -and $loginAttempt -lt 3) {
             # The account password store can take a few seconds to become
             # available after a cold native Chrome launch.  Reuse the same
