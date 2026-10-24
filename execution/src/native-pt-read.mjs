@@ -43,7 +43,7 @@ export function nativePtReadBinding(config,target,{root,isolated=false}={}){
 const successful=new Set(['signed','already_signed','not_signed']);
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const normalizeOrigin=value=>new URL(value).origin.replace(/^https:\/\/www\./,'https://');
-const failureCodes=new Set(['accessibility_unavailable','window_not_created','window_merged','target_not_loaded',
+const failureCodes=new Set(['accessibility_unavailable','window_not_created','window_merged','target_not_loaded','login_required','browser_route_conflict',
   'two_factor_required','authoritative_status_unavailable','network_error','tls_certificate_invalid','tls_handshake_failed',
   'native_readback_unavailable']);
 const proxyPreflightCodes=new Set(['native_proxy_configuration_invalid','native_proxy_origin_not_registered','native_proxy_profile_conflict']);
@@ -196,6 +196,7 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
     const proxyPreflight=value.status==='unconfirmed'&&value.failureCode==='native_readback_unavailable'&&
       proxyPreflightCodes.has(value.nativeProxyFailureCode)&&value.nativeReadback?.stage==='preflight'&&
       value.nativeReadback?.code==='profile_binding_unavailable';
+    const routeConflict=proxyPreflight&&value.nativeProxyFailureCode==='native_proxy_profile_conflict';
     const inspected=value.inspection??{};
     const facts={sameOrigin:inspected.sameOrigin===true,authenticated:inspected.authenticated===true,waf:inspected.waf===true,
       loginRoute:inspected.loginRoute===true,siteBodyLoaded:inspected.siteBodyLoaded===true,
@@ -219,7 +220,8 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
         code==='two_factor_required'?`${label} 只读回读需要二次验证`:code==='network_error'?'站点连接未能建立，尚未读取签到页面':
         code==='tls_certificate_invalid'?'站点证书验证未通过，尚未读取签到页面':
         code==='tls_handshake_failed'?'站点 TLS 连接未能建立，尚未读取签到页面':`${label} 只读回读未取得当日权威证据`,
-      ...(accepted?{evidence}:{failureCode:failureCodes.has(value.failureCode)?value.failureCode:'authoritative_status_unavailable'}),
+      ...(accepted?{evidence}:{failureCode:routeConflict?'browser_route_conflict':code==='login_required'?'login_required':
+        failureCodes.has(value.failureCode)?value.failureCode:'authoritative_status_unavailable'}),
       submissionAttempted:false,nativeReadback};
     // Recovery consumes the verified child receipt from the same actual
     // profile. Keep this bounded projection separate from page diagnostics.

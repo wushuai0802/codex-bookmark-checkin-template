@@ -121,6 +121,23 @@ function Start-Process {throw 'Unexpected browser startup'}
   }
 });
 
+test('a reviewed read-only caller may reuse an existing main Chrome route while writes and invalid proxy settings stay blocked',async()=>{
+  const command=harness+`$config=[pscustomobject]@{chromeExecutable='C:\\Program Files\\Chrome\\chrome.exe'}
+$root='D:\\fixture main';$proxy='http://100.100.10.20:7893'
+$processes=@([pscustomobject]@{Name='chrome.exe';ExecutablePath=$config.chromeExecutable;CommandLine=('chrome.exe "--user-data-dir='+$root+'"')})
+$rows=@(foreach($scenario in @('read','write','read_invalid')){
+ try{Assert-NativePtMainChromeProxy -Config $config -ProfileRoot $root -Origin 'https://ourbits.club' -ProxyServer $(if($scenario -eq 'read_invalid'){'http://8.8.8.8:7893'}else{$proxy}) -Processes $processes -ReadOnly:($scenario -ne 'write');[pscustomobject]@{scenario=$scenario;code=''}}
+ catch{[pscustomobject]@{scenario=$scenario;code=[string]$_.Exception.Data['NativePtProxyFailureCode']}}
+});ConvertTo-Json -InputObject $rows -Compress`;
+  for(const shell of shells){
+    const rows=await fixture(shell,command);
+    assert.deepEqual(rows.map(row=>row.code),['','native_proxy_profile_conflict','native_proxy_configuration_invalid'],shell);
+  }
+  const source=fs.readFileSync(path.join(scripts,'Invoke-MainChromeCheckinAccessibility.ps1'),'utf8');
+  const assertions=source.split(/\r?\n/).filter(line=>/^\s*Assert-NativePtMainChromeProxy /.test(line));
+  assert.equal(assertions.length,2);for(const line of assertions)assert.match(line,/-ReadOnly:\$ReadOnly/);
+});
+
 test('actual dedicated launcher applies the route, preserves offscreen flags and removes a conflicting direct bypass',async t=>{
   const f=runtimeFixture(t);const targetScripts=path.join(f.root,'scripts');fs.mkdirSync(targetScripts);
   for(const file of ['Open-PlainLoginChrome.ps1','Native-PtChromeProxy.ps1','CheckinContract.generated.ps1','Resolve-Runtime.ps1'])

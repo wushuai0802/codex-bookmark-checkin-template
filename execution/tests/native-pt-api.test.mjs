@@ -66,7 +66,7 @@ function fixture(t,{configChange={},scope=true,network=[{}],lease=true,gateChang
       assert.equal(options.maxRedirects,0);assert.equal(options.maxRetries,0);assert.equal(options.ignoreHTTPSErrors,false);
       const token='html-'+index;snapshots.set(token,record.snapshot??header());
       return {status:()=>record.status??200,url:()=>record.responseUrl??requested,
-        headers:()=>({date:record.date===undefined?now.toUTCString():record.date}),text:async()=>token};
+        headers:()=>({date:record.date===undefined?now.toUTCString():record.date,...(record.location?{location:record.location}:{})}),text:async()=>token};
     }},newPage:async()=>({route:context.route,setContent:async(content,options)=>{
       assert.match(content,/Content-Security-Policy/);assert.match(content,/script-src &#39;none&#39;/);
       assert.doesNotMatch(content,/PRIVATE/);assert.equal(options.waitUntil,'domcontentloaded');
@@ -195,6 +195,34 @@ test('HTTP status, exact response URL, fresh Shanghai Date and strict TLS are ma
     assert.equal(result.status,'unconfirmed');assert.equal(result.submissionAttempted,false);assert.equal(result.evidence,undefined);
     assert.equal(f.calls.length,1);assert.equal(f.parserClosed,0);assert.equal(f.contextClosed,1);assertNoPrivate(result);
   }
+});
+
+test('a fresh same-origin login redirect reports expired authentication without following it or starting an attendance intent',async t=>{
+  for(const location of ['/login.php',origin+'/login.php?returnto=%2Findex.php']){
+    const f=fixture(t,{network:[{status:302,location}]}),result=await readNativePtApiHeader(f);
+    assert.equal(result.status,'login_required');assert.equal(result.failureCode,'login_required');
+    assert.equal(result.submissionAttempted,false);assert.equal(result.evidence,undefined);
+    assert.equal(result.inspection.loginRoute,true);assert.equal(result.inspection.authenticated,false);
+    assert.deepEqual(f.calls.map(call=>call.url),[origin+'/index.php']);
+    assert.equal(f.parserClosed,0);assert.equal(f.contextClosed,1);assert.equal(fs.existsSync(journal(f)),false);
+    assertNoPrivate(result);
+  }
+  const credentialRedirect=new URL(origin+'/login.php');credentialRedirect.username='user';
+  for(const location of ['https://foreign.example/login.php','http://piggo.me/login.php',
+    credentialRedirect.href,'/attendance.php','/login.php#fragment']){
+    const f=fixture(t,{network:[{status:302,location}]}),result=await readNativePtApiHeader(f);
+    assert.equal(result.status,'unconfirmed');assert.equal(result.evidence,undefined);assert.equal(f.calls.length,1);
+    assert.equal(result.submissionAttempted,false);assert.equal(fs.existsSync(journal(f)),false);assertNoPrivate(result);
+  }
+  const f=fixture(t,{network:[{status:302,location:'/login.php',date:new Date(now.getTime()-300001).toUTCString()}]});
+  assert.equal((await readNativePtApiHeader(f)).status,'unconfirmed');
+});
+
+test('a login redirect after attendance keeps the original submission unknown and never retries',async t=>{
+  const f=fixture(t,{network:[{}, {status:302,location:'/login.php'}]}),result=await runNativePtApiCheckin(f);
+  assert.equal(result.failureCode,'submission_outcome_unknown');assert.equal(result.submissionAttempted,true);
+  assert.deepEqual(f.calls.map(call=>call.url),[origin+'/index.php',url]);
+  assert.equal(JSON.parse(fs.readFileSync(journal(f))).attempts[0].state,'submitted');assertNoPrivate(result);
 });
 
 test('already-signed API index returns immediately with no attendance GET or journal change',async t=>{

@@ -151,6 +151,7 @@ test('WAF, login, window, stale evidence and cross-origin results retain safe di
   ]){
     const result=await inspectNativePtHeader({...args,execute:async()=>({stdout:JSON.stringify(value),stderr:'',exitCode:2})});
     assert.equal(result.nativeReadback.code,code);assert.equal(result.nativeReadback.exitCode,2);assert.equal(result.status,status);
+    if(code==='login_required')assert.equal(result.failureCode,'login_required');
     assert.equal(result.submissionAttempted,false);assert.equal(result.evidence,undefined);
   }
 });
@@ -164,7 +165,8 @@ test('a blocked private proxy route remains a safe preflight failure instead of 
       evidence:receipt(args).evidence};
     const result=await inspectNativePtHeader({...args,execute:async()=>({stdout:JSON.stringify(child),stderr:'PRIVATE STDERR',exitCode:2})});
     assert.equal(result.status,'unconfirmed');assert.equal(result.submissionAttempted,false);
-    assert.equal(result.failureCode,'native_readback_unavailable');assert.equal(result.nativeReadback.stage,'preflight');
+    assert.equal(result.failureCode,nativeProxyFailureCode==='native_proxy_profile_conflict'?'browser_route_conflict':'native_readback_unavailable');
+    assert.equal(result.nativeReadback.stage,'preflight');
     assert.equal(result.nativeReadback.code,'profile_binding_unavailable');assert.equal(result.evidence,undefined);
     assert.equal(result.readbackReceipt,undefined);assert.equal(result.profileBinding,receipt(args).profileBinding);
     if(nativeProxyFailureCode==='native_proxy_profile_conflict')assert.match(result.reason,/Chrome/);

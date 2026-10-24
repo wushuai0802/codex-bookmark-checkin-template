@@ -5,6 +5,40 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {taskStatusLabel,taskStatusSummary,matchesTask} from '../public/dashboard-model.mjs';
+import {overviewMetrics,projectOverviewSnapshot} from '../public/overview-model.mjs';
+
+test('a current PT server fault is excluded from overview rates while its unknown submission remains unchanged',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-site-fault-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const now=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),at=now.toISOString();
+  const origin='https://fixture.example',taskId='task_cccccccccccccccccccccccc';
+  const snapshot={snapshotId:'snap_aaaaaaaaaaaaaaaaaaaaaaaa',generatedAt:at,businessDate:day,mode:'shadow_read_only',planHash:'a'.repeat(64),
+    counts:{logicalSites:1,executionUnits:1,status:{needs_attention:1}},
+    tasks:[{taskId,businessDate:day,origin,logicalSiteKey:origin,observedStatus:'needs_attention',condition:'submission_outcome_unknown',
+      failureCode:'submission_outcome_unknown',submissionAttempted:true}],
+    receipts:[{taskId,status:'needs_attention',observedAt:at,evidence:{source:'none',authoritative:false,verification:'submission_outcome_unknown',summary:'原始提交待核验'}}],
+    ptStatus:{businessDate:day,generatedAt:at,sites:[{origin,effective:{source:'execution-supplement',status:'unknown',fresh:true,
+      failureCode:'site_server_error',retryCause:'upstream_unavailable',observedAt:at,authoritative:false,
+      evidence:{source:'none',authoritative:false,summary:'站点服务端故障'}}}]}};
+  const file=path.join(root,'shadow-beta-snapshot.json'),save=()=>fs.writeFileSync(file,JSON.stringify(snapshot));save();
+  const instance=createDashboardServer({dataDir:root,bind:'127.0.0.1',port:0});await new Promise(resolve=>instance.server.listen(0,resolve));
+  t.after(()=>new Promise(resolve=>instance.server.close(resolve)));
+  const base='http://127.0.0.1:'+instance.server.address().port;
+  for(const code of ['site_server_error','tls_certificate_invalid','tls_handshake_failed']){
+    snapshot.ptStatus.sites[0].effective.failureCode=code;save();const before=fs.readFileSync(file,'utf8');
+    const body=await(await fetch(base+'/api/overview')).json(),task=body.tasks[0],metrics=overviewMetrics(projectOverviewSnapshot(body));
+    assert.equal(taskStatusLabel(task),'等待站点恢复');assert.equal(taskStatusSummary(task),'站点服务端故障');
+    assert.equal(task.failureCode,'submission_outcome_unknown');assert.equal(task.condition,'submission_outcome_unknown');
+    assert.equal(task.submissionAttempted,true);assert.equal(task.evidence.authoritative,false);
+    assert.equal(metrics.excludedSiteIssues,1);assert.equal(metrics.eligible,0);assert.equal(metrics.verifiedSuccess,0);
+    assert.equal(matchesTask(task,{status:'external'}),true);assert.equal(matchesTask(task,{status:'verification'}),false);
+    assert.equal(fs.readFileSync(file,'utf8'),before);assert.equal(body.operationTargets[0].actions.retry,false);
+  }
+  snapshot.ptStatus.sites[0].effective.failureCode='network_error';save();
+  let body=await(await fetch(base+'/api/overview')).json();
+  assert.equal(body.tasks[0].availability,undefined);assert.equal(overviewMetrics(projectOverviewSnapshot(body)).excludedSiteIssues,0);
+  snapshot.ptStatus.sites[0].effective.failureCode='site_server_error';snapshot.ptStatus.sites[0].effective.fresh=false;save();
+  body=await(await fetch(base+'/api/overview')).json();assert.equal(body.tasks[0].availability,undefined);
+});
 
 test('live task APIs show current maintenance after midnight while keeping the original uncertain execution and operation guards',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-maintenance-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

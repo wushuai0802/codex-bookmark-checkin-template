@@ -59,8 +59,8 @@ async function validateControllerLease(root){
   validateEngineLease({root:integration.v2ProjectRoot,legacyRoot:root});
 }
 
-function responseCurrent(response,url,now){
-  if(response.status()!==200||response.url()!==url)return false;
+function responseFresh(response,url,now){
+  if(response.url()!==url)return false;
   const headers=response.headers(),value=Object.entries(headers).find(([key])=>key.toLowerCase()==='date')?.[1];
   const at=Date.parse(value??'');
   return Number.isFinite(at)&&day(at)===day(now)&&at<=now.getTime()+60_000&&now.getTime()-at<=5*60_000;
@@ -182,7 +182,16 @@ async function fetchPage(context,url,policy,clock){
   const response=await context.request.get(url,{timeout:15000,maxRedirects:0,maxRetries:0,ignoreHTTPSErrors:false,
     failOnStatusCode:false,headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}});
   const now=clock();
-  if(!responseCurrent(response,url,now))return null;
+  if(!responseFresh(response,url,now))return null;
+  if([301,302,303,307,308].includes(response.status())){
+    try{
+      const next=new URL(response.headers().location,url);
+      if(next.protocol==='https:'&&next.origin===new URL(url).origin&&!next.username&&!next.password&&!next.hash&&next.pathname==='/login.php')
+        return {rejected:'login_required',now};
+    }catch{/* An unreviewed redirect supplies no account or daily evidence. */}
+    return null;
+  }
+  if(response.status()!==200)return null;
   const snapshot=await parsePage(context,await response.text(),url,policy);
   if(day(clock())!==day(now))return null;
   return {snapshot,now};
@@ -191,6 +200,8 @@ async function fetchPage(context,url,policy,clock){
 async function readInContext(context,state,clock){
   const page=await fetchPage(context,state.policy.url,state.policy,clock);
   if(!page)return {result:unavailable(state.identity),accountId:null};
+  if(page.rejected==='login_required')return {result:{...unavailable(state.identity,'login_required',
+    {...emptyInspection(),currentUrl:state.policy.url,sameOrigin:true,loginRoute:true}),status:'login_required'},accountId:null};
   const {snapshot}=page;let {now}=page;
   const auth=authenticatedSnapshot(snapshot,state,state.policy.url);
   const counts=dailyControls(auth.controls,state.policy);
@@ -205,7 +216,7 @@ async function readInContext(context,state,clock){
   if(audience&&auth.authenticated){
     const profileUrl=state.origin+'/userdetails.php?id='+auth.accountId;
     const profile=await fetchPage(context,profileUrl,state.policy,clock);
-    if(profile&&day(profile.now)===day(now)){
+    if(profile?.snapshot&&day(profile.now)===day(now)){
       const profileAuth=authenticatedSnapshot(profile.snapshot,state,profileUrl);
       const profileCounts=dailyControls(profileAuth.controls,state.policy);
       const profileSigned=profileCounts.signed.length>0||audienceSignedHeader(profileAuth.headerText);
@@ -305,7 +316,7 @@ export async function runNativePtApiCheckin({root,origin,url,launch=launchAutoma
     // The reviewed mature endpoint performs attendance on this single GET.
     // There is no POST discovery, captcha handling, redirect or retry here.
     const completed=await fetchPage(context,url,state.policy,clock);
-    if(!completed||day(completed.now)!==startedDay)return unknown(state.identity);
+    if(!completed?.snapshot||day(completed.now)!==startedDay)return unknown(state.identity);
     const after=authenticatedSnapshot(completed.snapshot,state,url);
     const evidence=after.authenticated&&after.accountId===before.accountId?formalCompletion(completed.snapshot.bodyText,completed.now):null;
     if(!evidence)return unknown(state.identity);

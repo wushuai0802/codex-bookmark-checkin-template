@@ -85,9 +85,13 @@ function Get-NativePtChromeSwitchValues([string]$CommandLine, [string]$Name) {
 
 function Assert-NativePtMainChromeProxy {
     param($Config, [string]$ProfileRoot, [string]$Origin, [string]$ProxyServer,
-        [AllowEmptyCollection()][object[]]$Processes)
+        [AllowEmptyCollection()][object[]]$Processes, [switch]$ReadOnly)
     if (-not $ProxyServer) { return }
     $expected = ConvertTo-NativePtChromeProxyServer $ProxyServer
+    # A reviewed home-page read may reuse the user's already-running Chrome
+    # route. It neither changes that route nor permits an attendance action.
+    # Write-capable callers continue to require the exact configured proxy.
+    if ($ReadOnly) { return }
     $profileRootPath = [IO.Path]::GetFullPath($ProfileRoot).TrimEnd('\', '/')
     $executable = [IO.Path]::GetFullPath([string]$Config.chromeExecutable)
     if (-not $PSBoundParameters.ContainsKey('Processes')) {

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {planHarvestFallback,runHarvestFallback,pendingHarvestFallbackAttempts} from '../src/harvest-fallback.mjs';
+import {planHarvestFallback,runHarvestFallback,pendingHarvestFallbackAttempts,reviewedFallbackReadOrigins,resolvedFallbackReadConfig} from '../src/harvest-fallback.mjs';
 
 const now=new Date('2026-09-20T02:00:00Z');
 const failed=(origin,account='7')=>({origin,userId:account,status:'failed',observedAt:'2026-09-20T09:55:00+08:00',evidence:{source:'harvest',authoritative:false}});
@@ -14,6 +14,61 @@ const fixture=()=>({
     {origin:'https://uncertain.example',userId:'7',status:'unknown',observedAt:null}
   ],taskCompletion:{resultId:5,status:'completed',startedAt:'2026-09-20T09:14:00+08:00',completedAt:'2026-09-20T09:16:00+08:00'}},catalog:{sites:[{origin:'https://ourbits.club'},{origin:'https://external.example',entryUrl:'https://external.example/attendance'},{origin:'https://signed.example',entryUrl:'https://signed.example/'}]},
   plan:{targets:[{origin:'https://ourbits.club',folderNames:['PT白名单']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
+});
+
+test('reviewed HDDolby account header readers enter the passive scheduler independently of the Nexus dailyHeader flag',()=>{
+  const origins=['https://www.hddolby.com','https://nexus.example','https://unreviewed.example','https://unsupported.example'];
+  const catalog={sites:origins.map(origin=>({origin}))};
+  const policies=[{reviewed:true,mode:'safe_history_page',hddolbyHeader:true},
+    {reviewed:true,mode:'safe_history_page',dailyHeader:true},{mode:'safe_history_page',dailyHeader:true},
+    {reviewed:true,mode:'safe_history_page'}];
+  assert.deepEqual(reviewedFallbackReadOrigins(catalog,origin=>policies[origins.indexOf(origin)]),origins.slice(0,2));
+});
+
+test('a built-in native read policy dispatches guarded recovery through the original engine without duplicating private policy',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-default-policy-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const f=fixture(),origin='https://ourbits.club';f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
+  f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+  const privateConfig={disabledCheckinOrigins:['https://paused.example']},before=JSON.stringify(privateConfig);
+  const config=resolvedFallbackReadConfig(f.catalog,privateConfig,()=>({reviewed:true,mode:'safe_history_page',url:origin+'/index.php',nativeMainChrome:true}));
+  assert.equal(JSON.stringify(privateConfig),before);assert.equal(config.ptReadOnlyPolicies[origin].nativeMainChrome,true);
+  const passive={origin,status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',profileBinding:'b'.repeat(64),
+    accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+    evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:now.toISOString(),evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}};
+  const calls=[];
+  await runHarvestFallback({...f,root,config,execute:true,
+    runSite:async options=>{assert.equal(options.readOnly,true);calls.push('read');return passive;},
+    runEngine:async options=>{calls.push('original-engine');assert.deepEqual(options.origins,[origin]);assert.equal(options.fallbackRecheck,true);
+      return {businessDate:'2026-09-20',observedAt:now.toISOString(),results:[{...passive,status:'signed',submissionAttempted:true}]};}});
+  assert.deepEqual(calls,['read','original-engine']);
+  assert.equal(JSON.parse(fs.readFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json')).attempts[0].nativeRegisteredEngine,true);
+});
+
+test('historical HDDolby uncertainty permits a passive read and only its fresh bound log-header negative proof permits one guarded supplement',async t=>{
+  for(const variant of ['valid','old-proof','wrong-path','foreign-signal','already-signed']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-hddolby-recovery-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);
+    const f=fixture(),origin='https://www.hddolby.com';f.harvest.sites=[failed(origin)];
+    f.catalog.sites=[{origin,entryUrl:origin+'/attendance.php'}];f.plan.targets=[];f.latest.results=[];
+    fs.mkdirSync(path.join(root,'outputs'),{recursive:true});
+    const oldFile=path.join(root,'outputs/harvest-fallback-attempts-2026-09-19.json');
+    fs.writeFileSync(oldFile,JSON.stringify({businessDate:'2026-09-19',attempts:[{origin,state:'outcome_unknown',startedAt:'2026-09-19T01:00:00Z'}]}));
+    const original=fs.readFileSync(oldFile,'utf8'),at=new Date(now.getTime()-(variant==='old-proof'?31_000:0));
+    const passive={origin,status:variant==='already-signed'?'already_signed':'not_signed',observedAt:at.toISOString(),businessDate:'2026-09-20',
+      profileBinding:'b'.repeat(64),accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+      evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:at.toISOString(),evidenceScope:'site_account_day',
+        pagePath:variant==='wrong-path'?'/index.php':'/log.php',statusSignal:variant==='already-signed'?'hddolby_account_header_signed':
+          variant==='foreign-signal'?'other_header_unsigned':'hddolby_account_header_unsigned'}};
+    const calls=[],readOnlyOrigins=reviewedFallbackReadOrigins(f.catalog,()=>({reviewed:true,mode:'safe_history_page',hddolbyHeader:true}));
+    const preview=planHarvestFallback({...f,readOnlyOrigins});
+    assert.equal(pendingHarvestFallbackAttempts(root,preview,{now,readOnlyOrigins}).length,1);
+    await runHarvestFallback({...f,root,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins,
+      runSite:async options=>{calls.push(options.readOnly?'read':options.verifyBeforeSubmit?'guarded':'unguarded');
+        return options.readOnly?passive:{...passive,status:'signed',submissionAttempted:true,operationMode:'legacy_checkin',readSafety:'attendance_page_risk'};}});
+    assert.deepEqual(calls,variant==='valid'?['read','guarded']:['read'],variant);
+    assert.equal(fs.readFileSync(oldFile,'utf8'),original);
+  }
 });
 
 test('a current execution or supplement migration stops fallback without clearing its unknown submit',()=>{
