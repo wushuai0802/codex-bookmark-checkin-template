@@ -22,6 +22,8 @@ const expectedOrigin = new URL(process.argv[3]).origin;
 const actualProfile = path.resolve(rootDirectory, process.argv[4] || config.automationUserDataDir || "");
 const hhclub = expectedOrigin === "https://hhanclub.net";
 const hddolbyLogin=expectedOrigin==='https://www.uhddolby.com'&&config.siteTwoFactorRecovery?.[expectedOrigin]?.allowPasswordLogin===true;
+const nativeMode=process.argv[5]??'Login';
+if(!['Login','ReadOnly','Checkin'].includes(nativeMode)||nativeMode!=='Login'&&!hddolbyLogin)throw Error('Native login mode rejected');
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-login.mjs <port> <origin>");
 
 const browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
@@ -32,6 +34,11 @@ let twoFactorRecovery = null;
 try {
   page = await waitForNativePasswordLoginPage(()=>browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
+  if(nativeMode!=='Login'){
+    await page.waitForLoadState('domcontentloaded',{timeout:15000}).catch(()=>{});
+    const {runHddolbyNativeFlow}=await import('./hddolby-native-flow.mjs');
+    console.log(JSON.stringify(await runHddolbyNativeFlow({root:rootDirectory,config,profile:actualProfile,port,page,mode:nativeMode})));
+  }else{
   if(piggoPasswordLoginEnabled(config,expectedOrigin)||hddolbyLogin)await guardPiggoPasswordAutofill(page,expectedOrigin);
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
@@ -223,6 +230,7 @@ try {
     title: await page.title(),
   }));
   if (status !== "logged_in") process.exitCode = 2;
+  }
 } catch(error){
   if(page)throw error;
   const pageKinds=browser.contexts().flatMap(context=>context.pages()).map(candidate=>{

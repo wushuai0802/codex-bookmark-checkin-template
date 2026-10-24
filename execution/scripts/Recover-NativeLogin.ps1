@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Origin,
     [string]$LoginUrl,
-    [string]$UserDataDirOverride
+    [string]$UserDataDirOverride,
+    [ValidateSet('Login','ReadOnly','Checkin')][string]$Mode='Login'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,6 +29,10 @@ $existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-
 if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法恢复登录。' }
 
 $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
+if ($Mode -cne 'Login') {
+    if ($originValue -cne 'https://www.uhddolby.com') { throw '原生只读或签到模式未审阅。' }
+    $targetUrl = [uri]::new($originUri, '/index.php')
+}
 try {
     # Chrome stores synced/account passwords in "Login Data For Account".
     # Keeping --disable-sync on this native recovery window prevents that store
@@ -39,6 +44,11 @@ try {
     & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri) -UserDataDirOverride $profilePath
     $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
     $loginSucceeded = $false
+    if ($Mode -cne 'Login') {
+        & $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue $profilePath $Mode
+        if ($LASTEXITCODE -ne 0) { throw '原生 HDDolby 回读未完成。' }
+        $loginSucceeded = $true
+    }
     for ($loginAttempt = 1; $loginAttempt -le 3 -and -not $loginSucceeded; $loginAttempt++) {
         $nativeLoginOutput = @(& $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue $profilePath)
         $nativeLoginExitCode = $LASTEXITCODE

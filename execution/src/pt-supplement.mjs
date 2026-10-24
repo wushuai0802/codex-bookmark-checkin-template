@@ -99,7 +99,8 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
   acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader,readAvailability=readPtPublicAvailability,
   readHddolby=readHddolbyHeader,recoverLogin=recoverPtLogin,readPassive=readPtPassivePage,
-  fallbackAttemptId,validateLoginResume=validatePtLoginResume,readLoginProfile=readHhclubProfileState}={}){
+  fallbackAttemptId,validateLoginResume=validatePtLoginResume,readLoginProfile=readHhclubProfileState,
+  runHddolbyNative=recoverPtLogin}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
   const bytes=fs.readFileSync(catalogFile);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase())throw Error('PT catalog changed');
@@ -188,6 +189,19 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       if(result.submissionAttempted!==false)throw Error('Native PT read did not prove submission was disabled');
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
       return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},clock());
+    }
+    if(target.origin==='https://www.uhddolby.com'&&supportedLogin&&loginOpt?.enabled===true&&loginOpt.reviewed===true&&loginOpt.provider==='bitwarden'){
+      if(!readOnly&&!verifyBeforeSubmit)throw Error('Native HDDolby requires a passive check before submission');
+      let result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'ReadOnly',clock});
+      if(!readOnly&&result.status==='login_required'){
+        const login=await recoverLoginOnce();
+        result=login.status==='logged_in'?await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'ReadOnly',clock}):login;
+      }
+      await validateScope();
+      if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('Native HDDolby scope changed');
+      if(!readOnly&&!loginRecoveryOnly&&result.status==='not_signed'&&result.evidence?.authoritative===true)
+        result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'Checkin',clock});
+      return publicSupplementResult(target.origin,{...metadata,...result},clock());
     }
     if(canRecoverLogin&&!verifyBeforeSubmit&&fallbackAttemptId!==undefined){
       const firstDispatch=()=>validateLoginResume({root:legacyRoot,origin:target.origin,accountKey:binding.accountKey,

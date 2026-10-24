@@ -452,7 +452,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         if(dailyAttempts.length>=3){
           outcomes.push({origin:candidate.origin,state:'daily_guard_recovery_limit'});continue;
         }
-        const recoveredHdd=attempt=>authenticationRecovery&&candidate.origin==='https://www.uhddolby.com'&&
+        const recoveredHdd=attempt=>candidate.origin==='https://www.uhddolby.com'&&
           attempt.accountKey===candidate.accountKey&&attempt.outcome?.profileBinding===checked.profileBinding&&
           Number.isFinite(Date.parse(attempt.finishedAt??''))&&Date.parse(attempt.finishedAt)<Date.parse(checked.evidence.confirmedAt);
         if(dailyAttempts.some(a=>!recoverableUnsubmittedProfileGuard(a,candidate,checked,clock(),options)&&!recoveredHdd(a))){

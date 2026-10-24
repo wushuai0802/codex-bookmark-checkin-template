@@ -53,7 +53,8 @@ test('new-domain HDDolby login recovery is opt-in and authentication-only; an al
   }
 });
 
-test('an older ambiguous new-domain attempt needs newer exact-Profile post-login negative proof before one guarded supplement',async t=>{
+test('an older ambiguous new-domain attempt needs fresh exact-Profile negative proof, with or without login recovery',async t=>{
+  for(const variant of ['authentication-needed','native-ready','wrong-binding','stale-proof']){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'uhdd-post-login-proof-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));configureUnifiedFixture(root);
   const f=fixture(),origin='https://www.uhddolby.com',binding='b'.repeat(64);
   f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/attendance.php'}];f.plan.targets=[];f.latest.results=[];
@@ -66,16 +67,19 @@ test('an older ambiguous new-domain attempt needs newer exact-Profile post-login
   await runHarvestFallback({...f,root,config,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins:[origin],runSite:async options=>{
     calls.push(options.readOnly?'read':options.loginRecoveryOnly?'authenticate':'supplement');
     if(!options.readOnly&&!options.loginRecoveryOnly)assert.equal(options.verifyBeforeSubmit,true);
-    return {origin,status:options.readOnly?'login_required':options.loginRecoveryOnly?'not_signed':'signed',
-      observedAt:now.toISOString(),businessDate:'2026-09-20',accountKey:'site-default',profileBinding:binding,
+    const login=options.readOnly&&variant==='authentication-needed',submit=!options.readOnly&&!options.loginRecoveryOnly;
+    return {origin,status:login?'login_required':submit?'signed':'not_signed',
+      observedAt:now.toISOString(),businessDate:'2026-09-20',accountKey:'site-default',profileBinding:variant==='wrong-binding'?'c'.repeat(64):binding,
       operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:!options.readOnly&&!options.loginRecoveryOnly,
-      evidence:{source:options.readOnly?'none':'pt_page',authoritative:!options.readOnly,businessDate:'2026-09-20',confirmedAt:now.toISOString(),
-        evidenceScope:'site_account_day',pagePath:'/log.php',statusSignal:'hddolby_account_header_unsigned'}};
+      evidence:{source:login?'none':'pt_page',authoritative:!login,businessDate:'2026-09-20',
+        confirmedAt:variant==='stale-proof'?new Date(now.getTime()-31_000).toISOString():now.toISOString(),
+        evidenceScope:'site_account_day',pagePath:'/log.php',statusSignal:submit?'hddolby_account_header_signed':'hddolby_account_header_unsigned'}};
   }});
-  assert.deepEqual(calls,['read','authenticate','supplement']);
+  assert.deepEqual(calls,variant==='authentication-needed'?['read','authenticate','supplement']:variant==='native-ready'?['read','supplement']:['read']);
   const state=JSON.parse(fs.readFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json'));
   assert.equal(state.attempts[0].outcome.failureCode,'submission_outcome_unknown');
-  assert.equal(state.attempts[1].recoveryEvidence.evidence.statusSignal,'hddolby_account_header_unsigned');
+  if(state.attempts.length>1)assert.equal(state.attempts[1].recoveryEvidence.evidence.statusSignal,'hddolby_account_header_unsigned');
+  }
 });
 
 test('a built-in native read policy dispatches guarded recovery through the original engine without duplicating private policy',async t=>{
