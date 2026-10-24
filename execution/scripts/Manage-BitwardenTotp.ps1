@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([ValidateSet('Status','Unlock','Disable')][string]$Action='Status')
+param([ValidateSet('Status','Unlock','Disable','MigrateHddolbyDomain')][string]$Action='Status', [string]$BackupRoot)
 
 $ErrorActionPreference='Stop'
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
@@ -65,6 +65,7 @@ function Get-AuxiliarySiteContract([string]$Origin){
     switch -CaseSensitive ($Origin){
         'https://piggo.me'{return @{itemName='piggo.me';adapterId='piggo-nexus-stepup-v1'}}
         'https://www.hddolby.com'{return @{itemName='www.hddolby.com';adapterId='hddolby-nexus-stepup-v1'}}
+        'https://www.uhddolby.com'{return @{itemName='www.hddolby.com';adapterId='hddolby-nexus-stepup-v1'}}
         'https://hhanclub.net'{return @{itemName='hhanclub.net';adapterId='hhclub-nexus-login-v1'}}
     }
     return $null
@@ -225,6 +226,97 @@ try{
     if(-not $validCreated-or $created-gt [DateTimeOffset]::UtcNow-or $created.Year-lt 2000){throw 'Protected credential date invalid'}
     $authorizations=@(Get-AuxiliaryAuthorizations $payload)
     if(@($authorizations|Where-Object{Test-AuxiliaryRoute $_ $provider.routes.PSObject.Properties[$_.origin].Value}).Count-eq 0){throw 'Auxiliary enrollment differs from configuration'}
+    if($Action-ceq 'MigrateHddolbyDomain'){
+        $from='https://www.hddolby.com';$to='https://www.uhddolby.com'
+        $oldRoute=$provider.routes.PSObject.Properties[$from]
+        $newRoute=$provider.routes.PSObject.Properties[$to]
+        if(-not $oldRoute-and $newRoute-and @($authorizations|Where-Object{$_.origin-ceq $to-and (Test-AuxiliaryRoute $_ $newRoute.Value)}).Count-eq 1){
+            @{migrated=$false;alreadyConfigured=$true;origin=$to}|ConvertTo-Json -Compress;return
+        }
+        $grant=@($authorizations|Where-Object{$_.origin-ceq $from})
+        if($payload.schemaVersion-ne 2-or -not $oldRoute-or $newRoute-or $grant.Count-ne 1-or
+            -not(Test-AuxiliaryRoute $grant[0] $oldRoute.Value)-or @($authorizations|Where-Object{$_.origin-ceq $to}).Count){throw 'Domain enrollment mismatch'}
+        if(-not $BackupRoot-or $BackupRoot-notmatch '^[A-Za-z]:[\\/]'-or
+            [IO.Path]::GetFullPath($BackupRoot).TrimEnd([char[]]'\/')-eq [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($BackupRoot)).TrimEnd([char[]]'\/')-or
+            (Test-Path -LiteralPath $BackupRoot)){throw 'Dedicated migration backup required'}
+        $integration=Get-Content -LiteralPath (Join-Path $root 'data/v2-integration.json') -Raw|ConvertFrom-Json
+        $catalog=Get-Content -LiteralPath $integration.harvestPtGate.catalogFile -Raw|ConvertFrom-Json
+        $bookmarks=Get-Content -LiteralPath $cfg.bookmarksPath -Raw|ConvertFrom-Json
+        $script:DomainBookmarkMatched=$false
+        function Test-MigrationBookmarks($Node,[bool]$InScope=$false,[string]$ParentId=''){
+            if($null-eq $Node){return}
+            $inside=$InScope-or ([string]$Node.id-ceq [string]$catalog.scope.folderId-and $ParentId-ceq [string]$catalog.scope.parentId)
+            if($inside-and $Node.type-ceq 'url'){
+                try{$u=[uri][string]$Node.url;if($u.GetLeftPart([UriPartial]::Authority)-ceq $to-and
+                    $u.AbsolutePath-cin @('/index.php','/attendance.php')-and -not $u.Query-and -not $u.Fragment-and -not $u.UserInfo){$script:DomainBookmarkMatched=$true}}catch{}
+            }
+            foreach($child in @($Node.children)){Test-MigrationBookmarks $child $inside ([string]$Node.id)}
+        }
+        foreach($node in @($bookmarks.roots.PSObject.Properties.Value)){Test-MigrationBookmarks $node}
+        if(-not $script:DomainBookmarkMatched){throw 'New domain must be in the exact PT bookmark folder'}
+        [void](New-Item -ItemType Directory -Path $BackupRoot)
+        $originalCfg=[IO.File]::ReadAllText($cfgPath);$originalLocal=[IO.File]::ReadAllText($localCfgPath)
+        $originalProtected=[IO.File]::ReadAllText([string]$provider.sessionFile)
+        [IO.File]::WriteAllText((Join-Path $BackupRoot 'config.json'),$originalCfg,[Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $BackupRoot 'config.local.json'),$originalLocal,[Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $BackupRoot 'session.dpapi.json'),$originalProtected,[Text.UTF8Encoding]::new($false))
+        function Move-HddolbySetting($Map){
+            if(-not $Map){return};$property=$Map.PSObject.Properties[$from]
+            if(-not $property){return};if($Map.PSObject.Properties[$to]){throw 'Conflicting new-domain configuration'}
+            $value=$property.Value
+            if($value-is [string]){$value=$value.Replace($from,$to)}
+            elseif($value-is [array]){$value=@($value|ForEach-Object{if($_-isnot [string]){throw 'URL migration type invalid'};$_.Replace($from,$to)})}
+            elseif($value.PSObject.Properties['url']){$value.url=([string]$value.url).Replace($from,$to)}
+            if($value-isnot [string]-and $value.PSObject.Properties['origin']){$value.origin=$to}
+            $Map.PSObject.Properties.Remove($from);$Map|Add-Member -NotePropertyName $to -NotePropertyValue $value
+        }
+        try{
+            foreach($document in @($cfg,$localCfg)){
+                foreach($name in @('ptReadOnlyPolicies','siteTwoFactorRecovery','savedLoginUrls','relatedCandidateUrls')){Move-HddolbySetting $document.$name}
+                Move-HddolbySetting $document.bitwardenTotp.routes
+                foreach($name in @('disabledCheckinOrigins','excludedOrigins')){
+                    if($document.PSObject.Properties[$name]){$document.$name=@($document.$name|ForEach-Object{if($_-ceq $from){$to}else{$_}})}
+                }
+                if(-not $document.savedLoginUrls){$document|Add-Member savedLoginUrls ([pscustomobject]@{})}
+                $document.savedLoginUrls|Add-Member -NotePropertyName $to -NotePropertyValue ($to+'/login.php') -Force
+                $opt=$document.siteTwoFactorRecovery.PSObject.Properties[$to].Value
+                if(-not $opt){throw 'Two-factor settings missing'}
+                $opt|Add-Member allowPasswordLogin $true -Force;$opt|Add-Member loginSource 'bitwarden' -Force
+                if($document.baiduOcr.enabled-eq $true){$document.baiduOcr|Add-Member allowedOrigins @(@($document.baiduOcr.allowedOrigins)+$to|Select-Object -Unique) -Force}
+            }
+            if($cfg.baiduOcr.enabled-eq $true){
+                if(-not $localCfg.baiduOcr){$localCfg|Add-Member baiduOcr ([pscustomobject]@{})}
+                $localCfg.baiduOcr|Add-Member allowedOrigins @($cfg.baiduOcr.allowedOrigins) -Force
+            }
+            $grant[0].origin=$to
+            $plainText=$null;if($secure){$secure.Dispose();$secure=$null}
+            $secure=ConvertTo-SecureString ($payload|ConvertTo-Json -Compress -Depth 8) -AsPlainText -Force
+            $outer.protectedPayload=ConvertFrom-SecureString $secure
+            Write-AuxiliaryAtomic ([string]$provider.sessionFile) ($outer|ConvertTo-Json -Compress)
+            Save-AuxiliaryConfiguration $cfg $localCfg
+            $manifestFiles=@(
+                @{path=$cfgPath;backup='config.json'},
+                @{path=$localCfgPath;backup='config.local.json'},
+                @{path=[string]$provider.sessionFile;backup='session.dpapi.json'}
+            )
+            function Get-MigrationHash([string]$Path){
+                $algorithm=[Security.Cryptography.SHA256]::Create()
+                try{return ([BitConverter]::ToString($algorithm.ComputeHash([IO.File]::ReadAllBytes($Path)))).Replace('-','')}
+                finally{$algorithm.Dispose()}
+            }
+            foreach($entry in $manifestFiles){
+                $entry.beforeHash=Get-MigrationHash (Join-Path $BackupRoot $entry.backup)
+                $entry.afterHash=Get-MigrationHash $entry.path
+            }
+            [IO.File]::WriteAllText((Join-Path $BackupRoot 'manifest.json'),(@{schemaVersion=1;runtimeRoot=$root;from=$from;to=$to;files=$manifestFiles}|ConvertTo-Json -Compress -Depth 6),[Text.UTF8Encoding]::new($false))
+        }catch{
+            Write-AuxiliaryAtomic ([string]$provider.sessionFile) $originalProtected
+            Write-AuxiliaryAtomic $cfgPath $originalCfg;Write-AuxiliaryAtomic $localCfgPath $originalLocal
+            throw
+        }
+        @{migrated=$true;origin=$to;profileUnchanged=$true;itemUnchanged=$true;otherAuthorizationsUnchanged=$true}|ConvertTo-Json -Compress
+        return
+    }
     $plainText=$null;$secure.Dispose();$secure=$null
     Write-Host '请在本机输入密码库主密码；如需重新登录，输入密码库邮箱及自身二次验证码。'
     $status=(Invoke-AuxiliaryCli @('status','--nointeraction'))|ConvertFrom-Json

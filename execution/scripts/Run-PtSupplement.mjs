@@ -9,7 +9,7 @@ import {readBookmarkPlan} from '../src/bookmarks.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 try {
   const [origin,catalogFile,catalogHash,mode]=process.argv.slice(2);
-  if(mode && !['--read-only','--verify-before-submit'].includes(mode))throw Error('unknown PT supplement mode');
+  if(mode && !['--read-only','--verify-before-submit','--recover-login-only'].includes(mode))throw Error('unknown PT supplement mode');
   const fallbackAttemptId=process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
   if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId))throw Error('invalid PT fallback attempt');
   const integration=JSON.parse(fs.readFileSync(path.join(root,'data/v2-integration.json'),'utf8'));
@@ -26,7 +26,7 @@ try {
     const plan=catalog.registration==='current-execution-plan'?await readBookmarkPlan(currentConfig.bookmarksPath,currentConfig):undefined;
     return validateCurrentPtCatalog(catalog,{bookmarksPath:currentConfig.bookmarksPath,config:currentConfig,plan});
   };
-  const result=await runPtSupplement({root,origin,catalogFile,catalogHash,readOnly:mode==='--read-only',verifyBeforeSubmit:mode==='--verify-before-submit',validateScope,
+  const result=await runPtSupplement({root,origin,catalogFile,catalogHash,readOnly:mode==='--read-only',verifyBeforeSubmit:['--verify-before-submit','--recover-login-only'].includes(mode),loginRecoveryOnly:mode==='--recover-login-only',validateScope,
     ...(fallbackAttemptId!==undefined?{fallbackAttemptId}:{})});
   console.log(JSON.stringify(result));
 } catch (error) {

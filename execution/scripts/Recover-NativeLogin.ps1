@@ -44,7 +44,7 @@ try {
         $nativeLoginExitCode = $LASTEXITCODE
         $nativeLoginOutput | Write-Output
         $loginSucceeded = $nativeLoginExitCode -eq 0
-        if (-not $loginSucceeded -and $originValue -ceq 'https://hhanclub.net') {
+        if (-not $loginSucceeded -and $originValue -cin @('https://hhanclub.net','https://www.uhddolby.com')) {
             $nativeLoginResult = $null
             try { $nativeLoginResult = ($nativeLoginOutput -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop } catch {}
             $factor = $nativeLoginResult.siteTwoFactorRecovery

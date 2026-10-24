@@ -7,6 +7,7 @@ import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {readHddolbyHeader,hddolbyDailyStatusProof} from './hddolby-readonly.mjs';
 
 const origin='https://www.hddolby.com',adapterId='hddolby-nexus-stepup-v1';
+const origins=new Set([origin,'https://www.uhddolby.com']);
 const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const result=(reason,attempted=false,accepted=false)=>({twoFactorRecovery:{reason,attempted,accepted}});
 const authenticationPath='/take2fa.php';
@@ -25,6 +26,8 @@ export function hddolbyTwoFactorFormReviewed(form){
 }
 
 async function inspectForm(page){
+  const origin=new URL(page.url()).origin;
+  if(!origins.has(origin))return null;
   const forms=await page.locator('form').evaluateAll((forms,expected)=>forms.map(form=>{
     const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;};
     let sameOrigin=false,path='',returntoPath='',returntoUnsafe=true;
@@ -45,6 +48,8 @@ async function inspectForm(page){
 // Windows' system proxy, so the passive reader uses tightly bounded browser
 // GETs instead of copying cookies to another client or disabling TLS checks.
 export function hddolbyPassiveContext(page){
+  const origin=new URL(page.url()).origin;
+  if(!origins.has(origin))throw Error('Passive origin rejected');
   return {newPage:()=>page.context().newPage(),request:{get:async(url)=>{
     const target=new URL(url),current=new URL(page.url());
     if(current.origin!==origin||target.origin!==origin||target.search||target.hash||
@@ -68,10 +73,10 @@ function readJournal(file){
   if(fs.statSync(file).size>1_048_576)throw Error('State rejected');
   const journal=JSON.parse(fs.readFileSync(file,'utf8'));
   if(journal?.schemaVersion!==1||!Array.isArray(journal.attempts)||journal.attempts.length>4096||
-    journal.attempts.some(a=>a?.origin!==origin||a.accountKey!=='site-default'||
+    journal.attempts.some(a=>!origins.has(a?.origin)||a.accountKey!=='site-default'||
       !/^[a-f0-9]{64}$/.test(a.profileBinding??'')||!['pending','accepted','rejected','unknown'].includes(a.state)||
       !Number.isFinite(Date.parse(a.attemptedAt))||day(a.attemptedAt)!==a.businessDate))throw Error('State rejected');
-  return {schemaVersion:1,attempts:journal.attempts.map(a=>({origin,accountKey:'site-default',profileBinding:a.profileBinding,
+  return {schemaVersion:1,attempts:journal.attempts.map(a=>({origin:a.origin,accountKey:'site-default',profileBinding:a.profileBinding,
     businessDate:a.businessDate,state:a.state,attemptedAt:a.attemptedAt,
     ...(Number.isFinite(Date.parse(a.finishedAt))?{finishedAt:a.finishedAt}:{})}))};
 }
@@ -86,6 +91,9 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
   validate=validateSiteTwoFactorScope,inspect=inspectForm,read=readHddolbyHeader,
   prepare=prepareBitwardenTotp,withTotp=withBitwardenTotp,
   acquire=acquireRunLock,release=releaseRunLock,passive=hddolbyPassiveContext}={}){
+  let origin;
+  try{origin=new URL(page.url()).origin;}catch{return result('challenge_invalid');}
+  if(!origins.has(origin))return result('challenge_invalid');
   const optIn=config.siteTwoFactorRecovery?.[origin];
   if(optIn?.enabled!==true||optIn.reviewed!==true||optIn.provider!=='bitwarden'||optIn.adapterId!==adapterId)
     return result('disabled');
@@ -105,7 +113,7 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
     if(!hddolbyDailyStatusProof(before,now()))return result('passive_proof_unavailable');
     if(before.status==='already_signed')return {...result('already_signed'),readback:before};
     let journal=readJournal(file);
-    const alreadyTried=()=>journal.attempts.some(a=>a.profileBinding===scope.binding.profileBinding&&a.businessDate===startedDay);
+    const alreadyTried=()=>journal.attempts.some(a=>a.origin===origin&&a.profileBinding===scope.binding.profileBinding&&a.businessDate===startedDay);
     if(alreadyTried())return result('daily_recovery_limit');
     const form=await inspect(page);
     if(!hddolbyTwoFactorFormReviewed(form))return result('protocol_unverified');

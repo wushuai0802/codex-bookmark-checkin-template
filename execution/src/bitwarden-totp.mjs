@@ -10,6 +10,7 @@ const piggoOrigin = 'https://piggo.me';
 export const bitwardenTotpSiteContracts = Object.freeze({
   [piggoOrigin]: Object.freeze({itemName:'piggo.me',adapterId:'piggo-nexus-stepup-v1'}),
   'https://www.hddolby.com': Object.freeze({itemName:'www.hddolby.com',adapterId:'hddolby-nexus-stepup-v1'}),
+  'https://www.uhddolby.com': Object.freeze({itemName:'www.hddolby.com',adapterId:'hddolby-nexus-stepup-v1'}),
   'https://hhanclub.net': Object.freeze({itemName:'hhanclub.net',adapterId:'hhclub-nexus-login-v1'}),
 });
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -21,7 +22,8 @@ const reasons = new Set(['disabled','origin_not_allowed','profile_mismatch','inv
   'provider_busy','server_mismatch','vault_locked','vault_unauthenticated','vault_state_invalid',
   'cli_status_failed','cli_status_invalid','vault_sync_failed','totp_read_failed','totp_invalid',
   'totp_near_rotation','clock_invalid','clock_unstable','totp_wait_failed','totp_consumer_failed',
-  'helper_failed','helper_output_invalid','prepared','totp_ready','totp_consumed']);
+  'helper_failed','helper_output_invalid','prepared','totp_ready','totp_consumed',
+  'login_not_allowed','login_read_failed','login_invalid','login_ready','login_consumed']);
 
 function clearInheritedVaultSecrets() {
   for (const key of Object.keys(process.env)) {
@@ -120,11 +122,16 @@ async function helper(policy,mode,execute) {
       path.join(policy.root,'scripts','Get-BitwardenTotp.ps1'),'-Root',policy.root,'-Origin',policy.origin,
       '-ProfileBinding',policy.profileBinding,'-AccountKey',policy.accountKey,'-AdapterId',policy.adapterId,'-Mode',mode],{encoding:'utf8',windowsHide:true,
       env:childEnvironment(),timeout:mode === 'Prepare' ? 90_000 : 45_000,maxBuffer:65_536});
-    if (typeof output?.stdout !== 'string' || output.stdout.length > 4_096) return fail('helper_output_invalid');
+    if (typeof output?.stdout !== 'string' || output.stdout.length > (mode==='Login'?16_384:4_096)) return fail('helper_output_invalid');
     value=JSON.parse(output.stdout.trim().replace(/^\uFEFF/,''));
     if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.ready !== 'boolean'
       || !reasons.has(value.reason)) return fail('helper_output_invalid');
     if (!value.ready) return fail(value.reason);
+    if(mode==='Login'){
+      if(value.reason!=='login_ready'||typeof value.username!=='string'||!value.username||value.username.length>320||
+        /[\x00-\x1f]/.test(value.username)||typeof value.password!=='string'||!value.password||value.password.length>1024)return fail('login_invalid');
+      return {ready:true,reason:'login_ready',username:value.username,password:value.password};
+    }
     if (mode === 'Prepare') {
       if (value.reason !== 'prepared' || Object.keys(value).some(key=>!['ready','reason'].includes(key))) return fail('helper_output_invalid');
       return {ready:true,reason:'prepared'};
@@ -137,6 +144,7 @@ async function helper(policy,mode,execute) {
   finally {
     if (output) { output.stdout=''; output.stderr=''; }
     if (value && typeof value === 'object') value.code='';
+    if(value&&typeof value==='object'){value.username='';value.password='';}
   }
 }
 
@@ -147,6 +155,26 @@ export async function prepareBitwardenTotp({root,origin,binding,config,execute=e
   if (!loaded || typeof execute !== 'function') return fail('invalid_configuration');
   const policy=bitwardenTotpConfiguration(loaded,root,origin,binding);
   return policy.ready ? helper(policy,'Prepare',execute) : policy;
+}
+
+/** Selected login fields stay within a bound consumer; never return them to a caller or logger. */
+export async function withBitwardenLogin({root,origin,binding,config,consume,execute=executeFile}={}){
+  clearInheritedVaultSecrets();
+  const loaded=loadConfiguration(root,config),opt=loaded?.siteTwoFactorRecovery?.[origin];
+  if(origin!=='https://www.uhddolby.com'||opt?.enabled!==true||opt.reviewed!==true||opt.allowPasswordLogin!==true||
+    opt.loginSource!=='bitwarden'||typeof consume!=='function')return fail('login_not_allowed');
+  const policy=bitwardenTotpConfiguration(loaded,root,origin,binding);if(!policy.ready)return policy;
+  const result=await helper(policy,'Login',execute);
+  if(!result.ready)return result;
+  const credential={username:result.username,password:result.password};
+  try{await consume(credential);return {ready:true,reason:'login_consumed'};}
+  catch{return fail('login_invalid');}
+  finally{
+    credential.username='';
+    credential.password='';
+    result.username='';
+    result.password='';
+  }
 }
 
 function timeWindow(clock,periodMs) {

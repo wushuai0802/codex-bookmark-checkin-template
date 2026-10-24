@@ -1,4 +1,8 @@
-# Bitwarden 二级验证辅助
+# Bitwarden 登录与二级验证辅助
+
+HDDolby 的当前域名为 `https://www.uhddolby.com`。旧域名授权可通过 `Manage-BitwardenTotp.ps1 -Action MigrateHddolbyDomain -BackupRoot <专用备份目录>` 显式迁移；该入口要求新域名已在原签到书签范围中，仅替换原 HDDolby 封存授权的目的域名，保留条目 UUID、原条目名称、账号、Profile、Windows SID、密码库账号和会话。其他授权不变，旧域名历史记录保留。普通 Unlock 不承担迁移或扩大授权。
+
+迁移后的私有 `siteTwoFactorRecovery` 可显式选择 `allowPasswordLogin: true` 与 `loginSource: bitwarden`。登录消费者在活跃执行租约和原 Profile 范围内，仅读取封存 UUID 的 username/password 字段，复用原 Nexus 图片验证码识别，再取当前 TOTP 填写新站的 2fa 字段。登录字段仅通过内存交给固定同源表单，消费后清空，不导出条目、笔记或 TOTP 种子。只读核验始终不登录；需要恢复时先执行认证专用阶段，再根据原账号当日状态决定是否补签。
 
 这是原生签到执行层的可选恢复入口，默认关闭。TOTP 提供器只允许以下已审阅的站点和协议；具体消费者仍须核实真实验证需求、当前账号和 Profile。已有当日完成证据不读取密码库，也不再次提交签到。
 
@@ -6,6 +10,7 @@
 | --- | --- | --- |
 | `https://piggo.me` | `piggo.me` | `piggo-nexus-stepup-v1` |
 | `https://www.hddolby.com` | `www.hddolby.com` | `hddolby-nexus-stepup-v1` |
+| `https://www.uhddolby.com`（迁移后的实际站点） | `www.hddolby.com`（保留原条目） | `hddolby-nexus-stepup-v1` |
 | `https://hhanclub.net` | `hhanclub.net` | `hhclub-nexus-login-v1` |
 
 只支持每站一个 `site-default` 账号。GitHub 等其他来源未加入允许清单；相似域名、不同子域名和未经审阅的协议也不能取码。HHCLUB 的普通登录还包含用户名、密码和图片验证码，TOTP 辅助不能替代这些步骤或绕过验证。

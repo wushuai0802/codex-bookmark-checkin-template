@@ -79,7 +79,10 @@ test('configuration refuses repository, external paths, credentials URLs, noncan
 });
 
 test('additional reviewed adapters require the exact caller and configured account/protocol tuple',()=>{
-  assert.deepEqual(Object.keys(bitwardenTotpSiteContracts),supportedSites.map(site=>site.origin));
+  assert.deepEqual(Object.keys(bitwardenTotpSiteContracts),[
+    ...supportedSites.slice(0,2).map(site=>site.origin),'https://www.uhddolby.com',supportedSites[2].origin,
+  ]);
+  assert.deepEqual(bitwardenTotpSiteContracts['https://www.uhddolby.com'],bitwardenTotpSiteContracts['https://www.hddolby.com']);
   const config=configuration();
   for(const site of supportedSites)config.bitwardenTotp.routes[site.origin]=routeFor(site);
   for(const site of supportedSites.slice(1)){

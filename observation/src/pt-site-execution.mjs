@@ -50,10 +50,10 @@ export function projectPtSiteResult(value,origin){
     ...(value.submissionAttempted===false?{submissionAttempted:false}:{})};
 }
 
-export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,fallbackAttemptId,spawnChild=spawn,timeoutMs=600_000}){
+export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,spawnChild=spawn,timeoutMs=600_000}){
   const script=path.join(legacyRoot,'scripts/Run-PtSupplement.mjs');
   if(!fs.existsSync(script))throw Error('PT site execution helper is missing');
-  const command=[script,origin,catalogFile,catalogHash,...(readOnly?['--read-only']:verifyBeforeSubmit?['--verify-before-submit']:[])];
+  const command=[script,origin,catalogFile,catalogHash,...(readOnly?['--read-only']:loginRecoveryOnly?['--recover-login-only']:verifyBeforeSubmit?['--verify-before-submit']:[])];
   if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId))throw Error('invalid PT fallback attempt');
   const childEnv={...process.env,CHECKIN_V2_ENGINE_ROOT:root,CHECKIN_V2_ENGINE_LEASE:lease.owner.nonce,
     ...(verifyBeforeSubmit?{CHECKIN_PT_FALLBACK_RECHECK:'1'}:{})};
@@ -86,7 +86,8 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
 }
 
 export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catalogHash,
-  readOnly=false,verifyBeforeSubmit=false,fallbackAttemptId,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  if(loginRecoveryOnly&&(readOnly||origin!=='https://www.uhddolby.com'))throw Error('Invalid login-only recovery target');
   if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId)){
     const error=Error('PT fallback attempt is invalid');error.code='PT_PREFLIGHT';throw error;
   }
@@ -102,7 +103,8 @@ export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catal
   if(integration.executionEngine!=='v1'||path.resolve(integration.v2ProjectRoot).toLowerCase()!==path.resolve(root).toLowerCase())throw Error('PT site gateway binding mismatch');
   const lease=acquire(root);
   try {
-    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit,
+    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit:verifyBeforeSubmit||loginRecoveryOnly,
+      ...(loginRecoveryOnly?{loginRecoveryOnly:true}:{}),
       ...(fallbackAttemptId!==undefined?{fallbackAttemptId}:{})});
     return projectPtSiteResult(value,origin);
   } finally {release(lease);}

@@ -1118,7 +1118,7 @@ async function tryOpenCdCaptcha(page, expectedOrigin, config) {
 }
 
 export async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config,read=readHddolbyHeader,recover=recoverHddolbyTwoFactor) {
-  if (expectedOrigin !== "https://www.hddolby.com") return null;
+  if (!["https://www.hddolby.com","https://www.uhddolby.com"].includes(expectedOrigin)) return null;
   const current = new URL(page.url());
   if (current.origin !== expectedOrigin || current.pathname !== "/take2fa.php") return null;
 

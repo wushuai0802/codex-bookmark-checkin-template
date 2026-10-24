@@ -1,24 +1,27 @@
 import {request as playwrightRequest} from 'playwright-core';
 
 const originAllowed='https://www.hddolby.com';
+const originsAllowed=new Set([originAllowed,'https://www.uhddolby.com']);
 const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const unknown=code=>({status:'unknown',failureCode:code??'authoritative_status_unavailable',submissionAttempted:false});
 
-export async function readHddolbyDnsFailure(proxyServer,{createRequest=options=>playwrightRequest.newContext(options)}={}){
+export async function readHddolbyDnsFailure(proxyServer,{origin=originAllowed,createRequest=options=>playwrightRequest.newContext(options)}={}){
   let anonymous;
   try{
+    if(!originsAllowed.has(origin))return null;
+    const hostname=new URL(origin).hostname;
     const proxy=new URL(proxyServer);
     if(proxy.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(proxy.hostname)||!proxy.port||
       proxy.username||proxy.password||proxy.pathname!=='/'||proxy.search||proxy.hash)return null;
     anonymous=await createRequest({proxy:{server:proxy.origin},storageState:{cookies:[],origins:[]},ignoreHTTPSErrors:false});
-    const url='https://dns.google/resolve?name=www.hddolby.com&type=A&cd=0';
+    const url='https://dns.google/resolve?name='+hostname+'&type=A&cd=0';
     const response=await anonymous.get(url,{maxRedirects:0,maxRetries:0,ignoreHTTPSErrors:false,timeout:5000,
       headers:{'Cache-Control':'no-cache'}});
     if(response.status()!==200||response.url()!==url)return null;
     const text=await response.text();if(text.length>16384)return null;
     const value=JSON.parse(text),question=value.Question;
     if(value.Status!==2||value.CD!==false||!Array.isArray(question)||question.length!==1||question[0].type!==1||
-      String(question[0].name).replace(/\.$/,'')!=='www.hddolby.com'||!/DNSSEC validation failure/i.test(value.Comment??''))return null;
+      String(question[0].name).replace(/\.$/,'')!==hostname||!/DNSSEC validation failure/i.test(value.Comment??''))return null;
     return {...unknown('dns_validation_failed'),retryCause:'upstream_unavailable'};
   }catch{return null;}
   finally{await anonymous?.dispose().catch(()=>{});}
@@ -57,7 +60,7 @@ export function hddolbyDailyStatusProof(result,now=new Date()){
 // The page itself may deny access to site logs; no public log row is trusted.
 export async function readHddolbyHeader(context,{origin=originAllowed,now=new Date(),extractHeader,expectedAccountId,
   proxyServer,dnsProbe=readHddolbyDnsFailure}={}){
-  if(origin!==originAllowed)throw Error('HDDolby read origin is not reviewed');
+  if(!originsAllowed.has(origin))throw Error('HDDolby read origin is not reviewed');
   let parser;
   const extract=extractHeader??(async(html,url)=>{
     if(!parser){
@@ -87,6 +90,9 @@ export async function readHddolbyHeader(context,{origin=originAllowed,now=new Da
   });
   const read=async path=>{
     const url=origin+path,response=await context.request.get(url,{timeout:15000,maxRedirects:0,headers:{'Cache-Control':'no-cache'}});
+    if([301,302,303,307,308].includes(response.status())){
+      try{if(new URL(response.headers().location??'',url).href===origin+'/login.php')return {loginRequired:true};}catch{}
+    }
     if(response.status()!==200||response.url()!==url)return null;
     const at=Date.parse(response.headers().date??'');
     if(!Number.isFinite(at)||day(at)!==day(now)||Math.abs(at-now.getTime())>5*60_000)return null;
@@ -94,8 +100,10 @@ export async function readHddolbyHeader(context,{origin=originAllowed,now=new Da
   };
   try{
     const index=await read('/index.php');
+    if(index?.loginRequired)return {status:'login_required',failureCode:'login_required',submissionAttempted:false};
     if(!index?.authenticated||index.userIds?.length!==1||!index.logLinked)return unknown();
     const header=await read('/log.php');
+    if(header?.loginRequired)return {status:'login_required',failureCode:'login_required',submissionAttempted:false};
     if(!header?.authenticated||header.userIds?.length!==1)return unknown();
     if(header.userIds[0]!==index.userIds[0])return unknown('account_mismatch');
     if(expectedAccountId!==undefined&&(!/^\d{1,20}$/.test(String(expectedAccountId))||
@@ -106,7 +114,7 @@ export async function readHddolbyHeader(context,{origin=originAllowed,now=new Da
       confirmedAt:now.toISOString(),businessDate:day(now),pagePath:'/log.php',
       statusSignal:unsigned?'hddolby_account_header_unsigned':'hddolby_account_header_signed'}};
   }catch{
-    if(proxyServer)try{const diagnostic=await dnsProbe(proxyServer);if(diagnostic)return diagnostic;}catch{}
+    if(proxyServer)try{const diagnostic=await dnsProbe(proxyServer,{origin});if(diagnostic)return diagnostic;}catch{}
     return unknown('network_error');
   }
   finally{await parser?.close().catch(()=>{});}

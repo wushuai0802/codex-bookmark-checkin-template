@@ -330,10 +330,11 @@ export function piggoPasswordLoginEnabled(config,origin=ORIGIN){
   return origin===ORIGIN&&opt?.enabled===true&&opt.reviewed===true&&opt.provider==='bitwarden'&&opt.allowPasswordLogin===true;
 }
 
-export async function guardPiggoPasswordAutofill(page){
+export async function guardPiggoPasswordAutofill(page,origin=ORIGIN){
+  if(![ORIGIN,'https://www.uhddolby.com'].includes(origin))throw Error('Password autofill origin rejected');
   await page.route('**/*',async route=>{
     const request=route.request();let target;try{target=new URL(request.url());}catch{return route.abort('blockedbyclient');}
-    if(target.origin===ORIGIN&&(!['GET','HEAD'].includes(request.method())||
+    if(target.origin===origin&&(!['GET','HEAD'].includes(request.method())||
       ['/takelogin.php','/attendance.php'].includes(target.pathname)))return route.abort('blockedbyclient');
     return route.continue();
   });
