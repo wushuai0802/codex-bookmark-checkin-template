@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {recoverPiggoPasswordLogin,piggoPasswordFormReviewed,piggoPasswordLoginEnabled} from '../src/native-pt-two-factor.mjs';
+import {recoverPiggoPasswordLogin,piggoPasswordFormReviewed,piggoPasswordLoginEnabled,guardPiggoPasswordAutofill} from '../src/native-pt-two-factor.mjs';
 import {runNativePtGate} from '../src/native-pt-gate.mjs';
 
 const origin='https://piggo.me',home=origin+'/index.php',login=origin+'/login.php';
@@ -78,6 +78,24 @@ test('PigGo normal-login assistance needs explicit private consent and a reviewe
   for(const changed of [{sameOrigin:false},{actionPath:'/attendance.php'},{method:'GET'},{sameWindow:false},{basePresent:true},
     {fieldsReviewed:false},{usernameFilled:false},{passwordFilled:false},{otpEmpty:false},{logoutChecked:true},{usernameHash:''}])
     assert.equal(piggoPasswordFormReviewed({...form,...changed}),false);
+});
+
+test('the real default provider path loads lazily and stops safely before CLI use when the fixture has no vault authorization',async t=>{
+  const f=fixture(t),{prepare,withTotp,...args}=f.args;
+  const result=await recoverPiggoPasswordLogin(args);
+  assert.equal(result.status,'needs_attention');assert.equal(result.nativeTwoFactorRecovery.reason,'provider_disabled');
+  assert.equal(f.posts,0);assert.equal(f.reads,0);assert.equal(fs.existsSync(f.journal),false);noSecrets(result,f.journal);
+});
+
+test('autofill Enter cannot submit the password form before the reviewed OTP consumer takes ownership',async()=>{
+  let handler;
+  await guardPiggoPasswordAutofill({route:async(_pattern,value)=>{handler=value;}});
+  for(const [method,url,allowed] of [['POST',origin+'/takelogin.php',false],['GET',origin+'/takelogin.php',false],
+    ['GET',origin+'/attendance.php',false],['GET',origin+'/index.php',true],['GET',origin+'/login.php',true]]){
+    let continued=false,aborted=false;
+    await handler({request:()=>({url:()=>url,method:()=>method}),continue:async()=>{continued=true;},abort:async()=>{aborted=true;}});
+    assert.equal(continued,allowed);assert.equal(aborted,!allowed);
+  }
 });
 
 test('one scoped OTP login persists intent first, registers authoritative native proof and never reads or exports a password',async t=>{

@@ -330,6 +330,15 @@ export function piggoPasswordLoginEnabled(config,origin=ORIGIN){
   return origin===ORIGIN&&opt?.enabled===true&&opt.reviewed===true&&opt.provider==='bitwarden'&&opt.allowPasswordLogin===true;
 }
 
+export async function guardPiggoPasswordAutofill(page){
+  await page.route('**/*',async route=>{
+    const request=route.request();let target;try{target=new URL(request.url());}catch{return route.abort('blockedbyclient');}
+    if(target.origin===ORIGIN&&(!['GET','HEAD'].includes(request.method())||
+      ['/takelogin.php','/attendance.php'].includes(target.pathname)))return route.abort('blockedbyclient');
+    return route.continue();
+  });
+}
+
 export async function inspectPiggoPasswordForm(page){
   if(page.url()!==ORIGIN+'/login.php')return null;
   try{return await page.evaluate(async origin=>{
@@ -352,7 +361,7 @@ export async function inspectPiggoPasswordForm(page){
 }
 
 export async function recoverPiggoPasswordLogin({root,origin,page,profile,profileProof,submit,clock=()=>new Date(),
-  gate=runNativePtGate,inspectForm=inspectPiggoPasswordForm,prepare=prepareBitwardenTotp,withTotp=withBitwardenTotp,
+  gate=runNativePtGate,inspectForm=inspectPiggoPasswordForm,prepare,withTotp,
   readHeader=readNativePtApiHeaderInContext,acquire=acquireRunLock,release=releaseRunLock}={}){
   if(origin!==ORIGIN)return {handled:false};
   let state,lock,attempted=false,accepted=false,reason='recovery_unavailable',route,otp;
@@ -391,6 +400,10 @@ export async function recoverPiggoPasswordLogin({root,origin,page,profile,profil
     if(await register(before)){reason='already_authenticated';return outcome(true);}
     let journal=readRecoveryState(root);
     if(attemptedToday(journal,binding,startedDay,'password_login')){reason='daily_recovery_limit';return outcome(false);}
+    if(!prepare||!withTotp){
+      const provider=await import('./bitwarden-totp.mjs');
+      prepare??=provider.prepareBitwardenTotp;withTotp??=provider.withBitwardenTotp;
+    }
     const ready=await prepare({root,origin:ORIGIN,binding,config:state.config});
     if(ready?.ready!==true){reason=providerFailure(ready);return outcome(false);}
     const renewed=await inspectForm(page);
@@ -416,7 +429,7 @@ export async function recoverPiggoPasswordLogin({root,origin,page,profile,profil
           if(!attempted||request.method()!=='POST'||target.href!==ORIGIN+'/takelogin.php'||posts>=1)return requestRoute.abort('blockedbyclient');
           posts++;return requestRoute.continue();
         }
-        if(target.origin===ORIGIN&&target.pathname==='/attendance.php')return requestRoute.abort('blockedbyclient');
+        if(target.origin===ORIGIN&&['/attendance.php','/takelogin.php'].includes(target.pathname))return requestRoute.abort('blockedbyclient');
         return requestRoute.continue();
       };
       await page.route('**/*',route);

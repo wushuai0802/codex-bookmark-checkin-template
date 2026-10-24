@@ -9,7 +9,7 @@ import { safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
 import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
 import { recoverHhclubTwoFactorLogin, verifyHhclubNativeProfile } from "./hhclub-two-factor-login.mjs";
-import {recoverPiggoPasswordLogin} from './native-pt-two-factor.mjs';
+import {recoverPiggoPasswordLogin,piggoPasswordLoginEnabled,guardPiggoPasswordAutofill} from './native-pt-two-factor.mjs';
 import {readNativePtApiHeaderInContext,piggoNativePassiveContext} from './native-pt-api.mjs';
 import {waitForNativePasswordLoginPage} from './login-recovery.mjs';
 
@@ -31,6 +31,7 @@ let twoFactorRecovery = null;
 try {
   page = await waitForNativePasswordLoginPage(()=>browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
+  if(piggoPasswordLoginEnabled(config,expectedOrigin))await guardPiggoPasswordAutofill(page);
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   await acceptConfiguredLoginTerms(page, expectedOrigin, config);
