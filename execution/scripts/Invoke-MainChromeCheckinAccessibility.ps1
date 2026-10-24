@@ -101,7 +101,7 @@ $script:nativeLocalSubmissionAttempted = $false
 $script:checkinClickAttempted = $false
 try {
     $nativePtProxyServer = Resolve-NativePtChromeProxy $config $originValue
-    Assert-NativePtMainChromeProxy -Config $config -ProfileRoot $sourceRoot -Origin $originValue -ProxyServer $nativePtProxyServer
+    Assert-NativePtMainChromeProxy -Config $config -ProfileRoot $sourceRoot -Origin $originValue -ProxyServer $nativePtProxyServer -ReadOnly:$ReadOnly
     $nativeDecision = Initialize-NativePtGuard -Root $root -Origin $originValue -Url $Url -ProfilePath $profilePath -MainProfile -ReadOnly:$ReadOnly
 } catch {
     $nativeDecision = Get-NativePtChromeProxyFailure $_
@@ -622,7 +622,7 @@ try {
     $arguments += $targetUri.AbsoluteUri
     # Chrome's existing root process owns proxy flags. A new-window launch
     # cannot change them, even when it selects another profile directory.
-    Assert-NativePtMainChromeProxy -Config $config -ProfileRoot $sourceRoot -Origin $originValue -ProxyServer $nativePtProxyServer
+    Assert-NativePtMainChromeProxy -Config $config -ProfileRoot $sourceRoot -Origin $originValue -ProxyServer $nativePtProxyServer -ReadOnly:$ReadOnly
     # Start a normal off-screen window before URI discovery. Restoring a
     # minimized HWND would reveal its on-screen restore bounds.
     # Cleanup hides it while restoring safe bounds for the user's profile.

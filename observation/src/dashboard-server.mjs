@@ -381,10 +381,13 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   const availabilityByOrigin=new Map();
   if(ptStatus?.businessDate===today)for(const site of ptStatus.sites){
     const current=site.effective,at=Date.parse(current?.observedAt??'');
-    if(current?.siteCondition!=='site_maintenance'||['signed','already_signed'].includes(current.status)||current.fresh!==true||!Number.isFinite(at)||
+    const condition=current?.siteCondition==='site_maintenance'?'site_maintenance':
+      ['tls_certificate_invalid','tls_handshake_failed','site_server_error'].includes(current?.failureCode)?'upstream_unavailable':null;
+    if(!condition||['signed','already_signed'].includes(current.status)||current.fresh!==true||!Number.isFinite(at)||
        !Number.isFinite(Date.parse(snapshot.generatedAt))||at>Date.parse(snapshot.generatedAt)+60_000)continue;
-    availabilityByOrigin.set(site.origin,{condition:'site_maintenance',businessDate:ptStatus.businessDate,
-      observedAt:current.observedAt,summary:current.evidence?.summary||conditionLabels.site_maintenance});
+    availabilityByOrigin.set(site.origin,{condition,businessDate:ptStatus.businessDate,
+      ...(condition==='upstream_unavailable'?{failureCode:current.failureCode}:{}),
+      observedAt:current.observedAt,summary:current.evidence?.summary||conditionLabels[condition]});
   }
   const tasks = (snapshot?.tasks ?? []).map((task) => {
     const merged=mergeCanaryTask(task, receiptByTask.get(task.taskId), canaryByTask.get(task.taskId));

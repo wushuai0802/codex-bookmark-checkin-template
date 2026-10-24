@@ -1,7 +1,13 @@
 import {conditionLabels,statusLabels,externalRetryCauses,ptSiteDisplayNames} from './checkin-contract.generated.mjs';
 
-export function taskStatusCondition(task){return task?.availability?.condition==='site_maintenance'?'site_maintenance':task?.condition;}
-export function taskStatusSummary(task){return task?.availability?.condition==='site_maintenance'?task.availability.summary:task?.evidence?.summary;}
+const siteFaultCodes=['tls_certificate_invalid','tls_handshake_failed','site_server_error'];
+function availabilityCondition(task){
+  const value=task?.availability;
+  return value?.condition==='site_maintenance'?'site_maintenance':
+    value?.condition==='upstream_unavailable'&&siteFaultCodes.includes(value.failureCode)?'upstream_unavailable':null;
+}
+export function taskStatusCondition(task){return availabilityCondition(task)??task?.condition;}
+export function taskStatusSummary(task){return availabilityCondition(task)?task.availability.summary:task?.evidence?.summary;}
 export function cancelledTask(task){return task?.observedStatus==='not_available'&&task?.evidence?.verification==='task_disabled'&&
   task.evidence.authoritative===true&&task.evidence.rawSource==='configuration';}
 export function taskStatusLabel(task){return cancelledTask(task)?conditionLabels.task_disabled:
@@ -14,7 +20,7 @@ export function siteSideTask(task){
   const condition=taskStatusCondition(task);
   if(['site_maintenance','rate_limit','site_migration','bookmark_origin_changed'].includes(condition))return true;
   return condition==='upstream_unavailable'&&['tls_certificate_invalid','tls_handshake_failed','site_server_error',
-    'oauth_upstream_unavailable','oauth_upstream_circuit_open'].includes(task.failureCode);
+    'oauth_upstream_unavailable','oauth_upstream_circuit_open'].includes(availabilityCondition(task)?task.availability.failureCode:task.failureCode);
 }
 
 // Charts and their drill-down filters share the same presentation buckets.

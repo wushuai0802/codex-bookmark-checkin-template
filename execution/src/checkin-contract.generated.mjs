@@ -92,6 +92,7 @@ export const ptFailureMessages = Object.freeze({
   "upstream_unavailable": "站点服务暂时不可用，等待恢复后有限复核",
   "rate_limit": "站点触发频率限制，等待冷却后重试",
   "login_required": "执行会话需要重新登录",
+  "browser_route_conflict": "常用 Chrome 的线路与站点专用线路不一致，须关闭常用 Chrome 后按专用线路核验",
   "upstream_login_required": "上游登录已失效，需要恢复登录",
   "two_factor_required": "站点要求完成二次验证",
   "interactive_challenge": "站点要求完成浏览器验证",
