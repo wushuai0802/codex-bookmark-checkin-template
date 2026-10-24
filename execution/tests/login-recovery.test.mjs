@@ -5,7 +5,17 @@ import {
   loginHelperOutcome,
   parseLoginHelperResult,
   resolveLoginRecoveryUrl,
+  nativePasswordLoginPage,
 } from "../src/login-recovery.mjs";
+
+test('PigGo native recovery selects its newest actual login tab rather than a restored error or home page',()=>{
+  const origin='https://piggo.me',page=url=>({url:()=>url});
+  const old=page(origin+'/takelogin.php'),older=page(origin+'/login.php?previous=1'),fresh=page(origin+'/login.php');
+  assert.equal(nativePasswordLoginPage([old,older,page('https://foreign.example/login.php'),fresh],origin),fresh);
+  assert.equal(nativePasswordLoginPage([old],origin),old);
+  assert.equal(nativePasswordLoginPage([page('https://foreign.example/login.php')],origin),null);
+  assert.equal(nativePasswordLoginPage([old,fresh],'https://other.example'),null);
+});
 
 test("登录助手必须明确返回 logged_in 才算成功", () => {
   assert.deepEqual(parseLoginHelperResult('startup\n{"status":"logged_in"}\n'), { status: "logged_in" });

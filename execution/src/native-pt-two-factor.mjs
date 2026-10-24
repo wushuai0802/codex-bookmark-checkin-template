@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {launchAutomationContext} from './browser.mjs';
 import {nativePtReadBinding} from './native-pt-read.mjs';
-import {readNativePtApiHeader} from './native-pt-api.mjs';
+import {readNativePtApiHeader,readNativePtApiHeaderInContext,piggoNativePassiveContext} from './native-pt-api.mjs';
 import {runNativePtGate} from './native-pt-gate.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 
@@ -75,18 +75,20 @@ function readRecoveryState(root){
   if(value?.schemaVersion!==1||!Array.isArray(value.attempts)||value.attempts.length>4096||
     value.attempts.some(entry=>entry?.origin!==ORIGIN||entry.accountKey!=='site-default'||
       !/^[a-f0-9]{64}$/.test(entry.profileBinding??'')||!['pending','accepted','rejected','unknown'].includes(entry.state)||
-      !Number.isFinite(Date.parse(entry.attemptedAt??''))||entry.businessDate!==day(entry.attemptedAt)))throw Error('state');
+      !Number.isFinite(Date.parse(entry.attemptedAt??''))||entry.businessDate!==day(entry.attemptedAt)||
+      entry.phase!==undefined&&!['stepup','password_login'].includes(entry.phase)))throw Error('state');
   // Project only the non-secret fields, even if another writer added content.
   return {schemaVersion:1,attempts:value.attempts.map(entry=>({origin:entry.origin,accountKey:entry.accountKey,
     profileBinding:entry.profileBinding,businessDate:entry.businessDate,state:entry.state,attemptedAt:entry.attemptedAt,
+    ...(entry.phase?{phase:entry.phase}:{}),
     ...(Number.isFinite(Date.parse(entry.finishedAt??''))?{finishedAt:entry.finishedAt}:{}),
     ...(['authentication_accepted','authentication_rejected','authentication_unknown','authentication_redirected',
       'authentication_http_error','authentication_response_invalid'].includes(entry.reason)?{reason:entry.reason}:{})}))};
 }
 
-function attemptedToday(state,binding,businessDate){
+function attemptedToday(state,binding,businessDate,phase='stepup'){
   return state.attempts.some(entry=>entry.origin===ORIGIN&&entry.accountKey===binding.accountKey&&
-    entry.profileBinding===binding.profileBinding&&entry.businessDate===businessDate);
+    entry.profileBinding===binding.profileBinding&&entry.businessDate===businessDate&&(entry.phase??'stepup')===phase);
 }
 
 function writeRecoveryState(root,state){
@@ -314,5 +316,146 @@ export async function recoverNativePtTwoFactor({root,origin,nativeDiagnostic,exp
     if(closeContext)try{await closeContext();}catch{}
     if(lock)try{await release(lock);}catch{}
     for(const [key,value] of savedEnvironment)process.env[key]=value;
+  }
+}
+
+export function piggoPasswordFormReviewed(form){
+  return form?.sameOrigin===true&&form.actionPath==='/takelogin.php'&&form.method==='POST'&&form.sameWindow===true&&
+    form.basePresent===false&&form.fieldsReviewed===true&&form.usernameFilled===true&&form.passwordFilled===true&&
+    form.otpEmpty===true&&form.logoutChecked===false&&/^[a-f0-9]{64}$/.test(form.usernameHash??'');
+}
+
+export function piggoPasswordLoginEnabled(config,origin=ORIGIN){
+  const opt=config?.nativePtTwoFactorRecovery?.[origin];
+  return origin===ORIGIN&&opt?.enabled===true&&opt.reviewed===true&&opt.provider==='bitwarden'&&opt.allowPasswordLogin===true;
+}
+
+export async function inspectPiggoPasswordForm(page){
+  if(page.url()!==ORIGIN+'/login.php')return null;
+  try{return await page.evaluate(async origin=>{
+    const visible=element=>{const style=getComputedStyle(element),rect=element.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0;};
+    const forms=[...document.forms].filter(form=>form.querySelector('input[name="username"]')&&form.querySelector('input[type="password"]'));
+    if(forms.length!==1)return null;
+    const form=forms[0],field=name=>{const fields=[...form.querySelectorAll('input')].filter(input=>input.name===name);return fields.length===1?fields[0]:null;};
+    const username=field('username'),password=field('password'),otp=field('two_step_code'),secret=field('secret'),logout=field('logout');
+    if(!username||!password||!otp||!secret||username.type!=='text'||password.type!=='password'||otp.type!=='text'||secret.type!=='hidden'||
+      ![username,password,otp].every(element=>visible(element)&&!element.disabled&&!element.readOnly))return null;
+    let target;try{target=new URL(form.action,location.href);}catch{return null;}
+    const fieldsReviewed=[...form.elements].every(element=>['username','password','two_step_code','secret','logout'].includes(element.name)||
+      ['button','submit','reset'].includes(element.type));
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(username.value.normalize('NFKC').trim().toLowerCase()));
+    return {sameOrigin:target.origin===origin&&!target.username&&!target.password&&!target.search&&!target.hash,actionPath:target.pathname,
+      method:form.method.toUpperCase(),sameWindow:!form.target||form.target==='_self',basePresent:!!document.querySelector('base[href]'),fieldsReviewed,
+      usernameFilled:!!username.value,passwordFilled:!!password.value,otpEmpty:!otp.value,logoutChecked:logout?.checked===true,
+      usernameHash:[...new Uint8Array(bytes)].map(value=>value.toString(16).padStart(2,'0')).join('')};
+  },ORIGIN);}catch{return null;}
+}
+
+export async function recoverPiggoPasswordLogin({root,origin,page,profile,profileProof,submit,clock=()=>new Date(),
+  gate=runNativePtGate,inspectForm=inspectPiggoPasswordForm,prepare=prepareBitwardenTotp,withTotp=withBitwardenTotp,
+  readHeader=readNativePtApiHeaderInContext,acquire=acquireRunLock,release=releaseRunLock}={}){
+  if(origin!==ORIGIN)return {handled:false};
+  let state,lock,attempted=false,accepted=false,reason='recovery_unavailable',route,otp;
+  const outcome=authenticated=>({handled:true,status:authenticated?'logged_in':'needs_attention',
+    ...(!authenticated?{failureCode:'two_factor_required'}:{}),nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason}});
+  try{
+    const config=read(path.join(root,'config/config.json'));
+    if(!piggoPasswordLoginEnabled(config,origin))return {handled:false};
+    const binding=nativePtReadBinding(config,{origin:ORIGIN,accountKey:'site-default'},{root,isolated:true});
+    state=settings(root,origin,binding.profileBinding);
+    if(!state||canonical(profile??'')!==canonical(binding.profile)||typeof profileProof!=='function'||typeof submit!=='function'){
+      reason='configuration_invalid';return outcome(false);
+    }
+    await validateControllerLease(root);
+    const runner=read(path.join(root,'tmp/run.lock'));
+    if(!Number.isSafeInteger(runner.pid)||runner.pid<=0||typeof runner.nonce!=='string')throw Error('runner');
+    process.kill(runner.pid,0);
+    lock=await acquire(path.join(root,'tmp/piggo-password-login.lock'));
+    const dateClock=()=>nowDate(clock),startedDay=day(dateClock());
+    const bind=async()=>{
+      const value=await gate({root,origin:ORIGIN,url:HOME,profile:binding.profile,mainProfile:false,phase:'bind',clock:dateClock});
+      return value?.managed===true&&value.allow===true&&value.accountKey==='site-default'&&value.profileBinding===binding.profileBinding&&
+        sameConfiguration(state)&&day(dateClock())===startedDay&&await profileProof();
+    };
+    if(!await bind()){reason='scope_unavailable';return outcome(false);}
+    const form=await inspectForm(page);
+    if(!piggoPasswordFormReviewed(form)){reason='login_form_unreviewed';return outcome(false);}
+    const verify=()=>readHeader({root,origin:ORIGIN,context:piggoNativePassiveContext(page),expectedProfileBinding:binding.profileBinding,profileProof,clock:dateClock,gate});
+    const register=async value=>{
+      const receipt=receiptFor(value,state,dateClock());
+      if(!receipt)return false;
+      const saved=await gate({root,origin:ORIGIN,url:HOME,profile:binding.profile,mainProfile:false,phase:'readback',receipt,clock:dateClock});
+      return saved?.allow===true&&saved.receiptAccepted===true;
+    };
+    const before=await verify();
+    if(await register(before)){reason='already_authenticated';return outcome(true);}
+    let journal=readRecoveryState(root);
+    if(attemptedToday(journal,binding,startedDay,'password_login')){reason='daily_recovery_limit';return outcome(false);}
+    const ready=await prepare({root,origin:ORIGIN,binding,config:state.config});
+    if(ready?.ready!==true){reason=providerFailure(ready);return outcome(false);}
+    const renewed=await inspectForm(page);
+    if(!piggoPasswordFormReviewed(renewed)||renewed.usernameHash!==form.usernameHash||!await bind()){
+      reason='login_form_changed';return outcome(false);
+    }
+    let callbackUsed=false,accepting=true,pending,provided;
+    const consumeCode=async(code,metadata)=>{
+      const latest=await inspectForm(page);
+      if(!piggoPasswordFormReviewed(latest)||latest.usernameHash!==form.usernameHash||!await bind()){
+        reason='login_form_changed';return;
+      }
+      await validateControllerLease(root);
+      const at=dateClock();
+      if(!/^\d{6}$/.test(code)||!Number.isFinite(metadata?.validUntilMs)||metadata.validUntilMs-at.getTime()<MIN_CODE_REMAINING_MS||
+        metadata.validUntilMs-at.getTime()>30_000){reason='totp_expired';return;}
+      journal=readRecoveryState(root);
+      if(attemptedToday(journal,binding,startedDay,'password_login')){reason='daily_recovery_limit';return;}
+      let posts=0;
+      route=async requestRoute=>{
+        const request=requestRoute.request();let target;try{target=new URL(request.url());}catch{return requestRoute.abort();}
+        if(!['GET','HEAD'].includes(request.method())){
+          if(!attempted||request.method()!=='POST'||target.href!==ORIGIN+'/takelogin.php'||posts>=1)return requestRoute.abort('blockedbyclient');
+          posts++;return requestRoute.continue();
+        }
+        if(target.origin===ORIGIN&&target.pathname==='/attendance.php')return requestRoute.abort('blockedbyclient');
+        return requestRoute.continue();
+      };
+      await page.route('**/*',route);
+      const entry={origin:ORIGIN,accountKey:'site-default',profileBinding:binding.profileBinding,businessDate:startedDay,
+        phase:'password_login',state:'pending',attemptedAt:dateClock().toISOString()};
+      journal.attempts.push(entry);writeRecoveryState(root,journal);attempted=true;reason='authentication_unknown';
+      try{
+        // Filling an OTP can itself trigger a site's input listener. Persist
+        // first and let the firewall admit at most one authentication POST.
+        const responseWait=typeof page.waitForResponse==='function'?page.waitForResponse(response=>
+          response.url()===ORIGIN+'/takelogin.php'&&response.request().method()==='POST',{timeout:20000}).catch(()=>null):null;
+        otp=page.locator('input[name="two_step_code"]');await otp.fill(code);
+        if(!await bind()||metadata.validUntilMs-dateClock().getTime()<MIN_CODE_REMAINING_MS)throw Error('expired authentication scope');
+        if(posts===0)await submit();
+        if(responseWait)await responseWait;
+        await page.waitForLoadState('domcontentloaded',{timeout:20000}).catch(()=>{});
+        for(let read=0;read<3;read++){
+          const verified=await verify();
+          if(posts===1&&await register(verified)){accepted=true;reason='authentication_accepted';break;}
+          if(read<2&&typeof page.waitForTimeout==='function')await page.waitForTimeout(350);
+        }
+      }catch{/* Preserve one unknown authentication; never publish raw form or provider errors. */}
+      entry.state=accepted?'accepted':'unknown';entry.finishedAt=dateClock().toISOString();
+      try{writeRecoveryState(root,journal);}catch{}
+    };
+    try{provided=await withTotp({root,origin:ORIGIN,binding,config:state.config,clock:()=>dateClock().getTime(),consume:(code,metadata)=>{
+      if(!accepting||callbackUsed)return Promise.resolve();
+      callbackUsed=true;pending=consumeCode(code,metadata);return pending;
+    }});}catch{/* Provider errors cannot replace the outcome of an already dispatched authentication. */}
+    finally{accepting=false;}
+    if(pending)await pending;
+    if(!attempted&&reason==='recovery_unavailable')reason=providerFailure(provided);
+    return outcome(accepted);
+  }catch{return outcome(false);}
+  finally{
+    if(route&&!attempted)try{await page.unroute('**/*',route);}catch{}
+    if(otp&&page.url()===ORIGIN+'/login.php')try{
+      if(typeof otp.evaluate==='function')await otp.evaluate(element=>{element.value='';});else await otp.fill('');
+    }catch{}
+    if(lock)try{await release(lock);}catch{}
   }
 }

@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import crypto from 'node:crypto';
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,9 @@ import { safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
 import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
 import { recoverHhclubTwoFactorLogin, verifyHhclubNativeProfile } from "./hhclub-two-factor-login.mjs";
+import {recoverPiggoPasswordLogin} from './native-pt-two-factor.mjs';
+import {readNativePtApiHeaderInContext,piggoNativePassiveContext} from './native-pt-api.mjs';
+import {nativePasswordLoginPage} from './login-recovery.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -25,9 +29,7 @@ let failureCode = null;
 let page = null;
 let twoFactorRecovery = null;
 try {
-  page = browser.contexts().flatMap((context) => context.pages()).find((candidate) => {
-    try { return new URL(candidate.url()).origin === expectedOrigin; } catch { return false; }
-  });
+  page = nativePasswordLoginPage(browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
@@ -103,7 +105,9 @@ try {
         ? await waitForLoginSubmitEnabled(page, submit, expectedOrigin, config)
         : false;
       if (submit && challengeReady && submitReady) {
-        const assisted = await recoverHhclubTwoFactorLogin({root:rootDirectory,origin:expectedOrigin,config,page,
+        let assisted = await recoverHhclubTwoFactorLogin({root:rootDirectory,origin:expectedOrigin,config,page,
+          profile:actualProfile,submit:()=>submit.click(),profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
+        if(!assisted.handled)assisted=await recoverPiggoPasswordLogin({root:rootDirectory,origin:expectedOrigin,page,
           profile:actualProfile,submit:()=>submit.click(),profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
         if (assisted.handled) {
           twoFactorRecovery = assisted;
@@ -191,11 +195,21 @@ try {
     && !visiblePassword) {
     status = "logged_in";
   }
+  if(expectedOrigin==='https://piggo.me'&&status==='logged_in'&&config.ptReadOnlyPolicies?.[expectedOrigin]?.nativeApiHeaderFallback===true){
+    const key=process.platform==='win32'?actualProfile.toLowerCase():actualProfile;
+    const verified=await readNativePtApiHeaderInContext({root:rootDirectory,origin:expectedOrigin,context:piggoNativePassiveContext(page),
+      expectedProfileBinding:crypto.createHash('sha256').update(key).digest('hex'),
+      profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
+    if(!['already_signed','not_signed'].includes(verified.status)||verified.evidence?.authoritative!==true){
+      status='needs_attention';failureCode=verified.status==='login_required'?'login_required':'two_factor_required';
+    }
+  }
   if (status === "logged_in") await page.waitForTimeout(3000);
   console.log(JSON.stringify({
     origin: expectedOrigin,
     status,
     ...(twoFactorRecovery?.siteTwoFactorRecovery ? { siteTwoFactorRecovery: twoFactorRecovery.siteTwoFactorRecovery } : {}),
+    ...(twoFactorRecovery?.nativeTwoFactorRecovery ? { nativeTwoFactorRecovery: twoFactorRecovery.nativeTwoFactorRecovery } : {}),
     ...(failureCode ? { failureCode, attentionKind: "trusted_device_initialization" } : {}),
     finalUrl: safeLogUrl(page.url()),
     title: await page.title(),

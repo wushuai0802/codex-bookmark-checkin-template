@@ -1,12 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright-core';
-import {hddolbyHeaderSigned,hddolbyHeaderUnsigned,readHddolbyHeader,hddolbyDailyProof,hddolbyDailyStatusProof} from '../src/hddolby-readonly.mjs';
+import {hddolbyHeaderSigned,hddolbyHeaderUnsigned,readHddolbyHeader,hddolbyDailyProof,hddolbyDailyStatusProof,readHddolbyDnsFailure} from '../src/hddolby-readonly.mjs';
 import {tryHddolbyPostRedirectVerification} from '../src/browser.mjs';
 import {ptReadPolicy} from '../src/pt-read-policy.mjs';
 import {publicSupplementResult} from '../src/pt-supplement.mjs';
 const origin='https://www.hddolby.com',now=new Date('2026-10-03T04:00:00Z');
 const header={authenticated:true,userIds:['7'],logLinked:true,text:'鲸币 [使用] (签到已得10)',unsigned:false};
+
+test('HDDolby DNS attribution requires a validating resolver failure for the exact domain in an anonymous context',async()=>{
+  let payload={Status:2,CD:false,Question:[{name:'www.hddolby.com.',type:1}],Comment:'DNSSEC validation failure'},closed=0,created=0;
+  const options={createRequest:async settings=>{
+    created++;assert.deepEqual(settings.storageState,{cookies:[],origins:[]});assert.equal(settings.ignoreHTTPSErrors,false);
+    return {get:async(url,args)=>{
+      assert.equal(url,'https://dns.google/resolve?name=www.hddolby.com&type=A&cd=0');
+      assert.equal(args.maxRedirects,0);assert.equal(args.ignoreHTTPSErrors,false);assert.deepEqual(Object.keys(args.headers),['Cache-Control']);
+      return {status:()=>200,url:()=>url,text:async()=>JSON.stringify(payload)};
+    },dispose:async()=>{closed++;}};
+  }};
+  const result=await readHddolbyDnsFailure('http://127.0.0.1:7890',options);
+  assert.equal(result.failureCode,'dns_validation_failed');assert.equal(result.retryCause,'upstream_unavailable');
+  assert.equal(result.submissionAttempted,false);assert.equal(result.evidence,undefined);
+  const valid=payload;
+  for(const change of [{Status:0},{CD:true},{Comment:'temporary network error'},{Question:[{name:'other.example.',type:1}]}]){
+    payload={...valid,...change};assert.equal(await readHddolbyDnsFailure('http://127.0.0.1:7890',options),null);
+  }
+  const before=created;assert.equal(await readHddolbyDnsFailure('http://8.8.8.8:7890',options),null);
+  assert.equal(created,before);assert.equal(closed,created);
+});
+
+test('HDDolby connection failure retains confirmed DNS cause without daily evidence or probing a successful header',async()=>{
+  const diagnostic={status:'unknown',failureCode:'dns_validation_failed',retryCause:'upstream_unavailable',submissionAttempted:false};let probes=0;
+  const result=await readHddolbyHeader({request:{get:async()=>{throw Error('transport unavailable');}}},
+    {proxyServer:'http://127.0.0.1:7890',dnsProbe:async()=>{probes++;return diagnostic;}});
+  assert.equal(result,diagnostic);assert.equal(result.evidence,undefined);assert.equal(probes,1);
+  const f=fixture();await readHddolbyHeader(f.context,{origin,now,extractHeader:f.extractHeader,proxyServer:'http://127.0.0.1:7890',
+    dnsProbe:async()=>{probes++;return diagnostic;}});assert.equal(probes,1);
+});
 function fixture({change={},status=200,date=now.toUTCString()}={}){
   const calls=[];
   const context={request:{get:async(url,options)=>{

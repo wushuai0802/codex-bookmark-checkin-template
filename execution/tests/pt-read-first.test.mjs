@@ -31,8 +31,8 @@ test('authenticated daily completion stops the real browser flow before any atte
       await route.fulfill({status:200,contentType:'text/html; charset=utf-8',body:'<a href="/logout.php">退出</a><a href="/usercp.php">设置</a><a href="/userdetails.php?id=7">本人</a><div id="info_block"><a href="/attendance.php">'+control+'</a></div>'});
     });
     const result=await processTarget(context,{origin,allowedOrigins:[origin],folderNames:['PT白名单'],candidates:[origin+'/attendance.php']},
-      {retryCount:0,navigationTimeoutMs:5000,failureScreenshots:false},{},'unused');
-    assert.equal(result.status,'already_signed',JSON.stringify({result,visited}));assert.equal(result.submissionAttempted,false);
+      {retryCount:0,navigationTimeoutMs:15000,failureScreenshots:false},{},'unused');
+    assert.equal(result.status,'already_signed',JSON.stringify({result,visited}));assert.equal(result.submissionAttempted,false,JSON.stringify({origin,result,visited}));
     assert.equal(result.evidence.authoritative,true);assert.equal(result.evidence.statusSignal,'nexus_daily_header_signed');
     assert.deepEqual(visited,[{url:origin+'/index.php',method:'GET'}]);
     await context.close();

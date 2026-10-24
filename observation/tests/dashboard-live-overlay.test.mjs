@@ -23,7 +23,7 @@ test('a current PT server fault is excluded from overview rates while its unknow
   const instance=createDashboardServer({dataDir:root,bind:'127.0.0.1',port:0});await new Promise(resolve=>instance.server.listen(0,resolve));
   t.after(()=>new Promise(resolve=>instance.server.close(resolve)));
   const base='http://127.0.0.1:'+instance.server.address().port;
-  for(const code of ['site_server_error','tls_certificate_invalid','tls_handshake_failed']){
+  for(const code of ['site_server_error','tls_certificate_invalid','tls_handshake_failed','dns_validation_failed']){
     snapshot.ptStatus.sites[0].effective.failureCode=code;save();const before=fs.readFileSync(file,'utf8');
     const body=await(await fetch(base+'/api/overview')).json(),task=body.tasks[0],metrics=overviewMetrics(projectOverviewSnapshot(body));
     assert.equal(taskStatusLabel(task),'等待站点恢复');assert.equal(taskStatusSummary(task),'站点服务端故障');

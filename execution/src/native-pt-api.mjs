@@ -273,6 +273,39 @@ export async function readNativePtApiHeader({root,origin,launch=launchAutomation
   finally{await context?.close().catch(()=>{});}
 }
 
+export async function readNativePtApiHeaderInContext({root,origin,context,expectedProfileBinding,profileProof,
+  clock=()=>new Date(),gate=runNativePtGate}={}){
+  let state;
+  try{
+    state=settings(root,origin);
+    if(state.binding.profileBinding!==expectedProfileBinding||typeof profileProof!=='function'||!await profileProof())
+      return unavailable(state.identity,'native_readback_unavailable');
+    const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock});
+    if(bound.allow!==true||bound.profileBinding!==state.identity.profileBinding||bound.accountKey!==state.identity.accountKey)
+      return unavailable(state.identity,'native_readback_unavailable');
+    const value=(await readInContext(context,state,clock)).result;
+    return await profileProof()?value:unavailable(state.identity,'native_readback_unavailable');
+  }catch{return unavailable(state?.identity,'native_readback_unavailable');}
+}
+
+// A native CDP context's API client does not inherit Chrome's command-line
+// proxy. Keep this passive account read inside the verified Chrome session.
+export function piggoNativePassiveContext(page){
+  const origin='https://piggo.me',url=origin+'/index.php';
+  return {newPage:()=>page.context().newPage(),request:{get:async target=>{
+    if(new URL(page.url()).origin!==origin||target!==url)throw Error('Passive request rejected');
+    const value=await page.evaluate(async destination=>{
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+      try{
+        const response=await fetch(destination,{method:'GET',credentials:'same-origin',redirect:'manual',cache:'no-store',signal:controller.signal});
+        const body=await response.text();if(body.length>2_000_000)throw Error('Passive page too large');
+        return {url:response.url,status:response.status,date:response.headers.get('date'),body};
+      }finally{clearTimeout(timer);}
+    },target);
+    return {url:()=>value.url,status:()=>value.status,headers:()=>({date:value.date}),text:async()=>value.body};
+  }}};
+}
+
 function formalCompletion(text,now){
   const patterns=/(?:今日|今天|当日|當日).{0,18}(?:已签到|已簽到|已经签到|已經簽到|签到成功|簽到成功)|(?:已签到|已簽到|已经签到|已經簽到).{0,18}(?:今日|今天|当日|當日)|本次(?:签到|簽到).{0,18}(?:获得|獲得).{0,10}\d/g;
   for(const match of String(text??'').matchAll(patterns)){

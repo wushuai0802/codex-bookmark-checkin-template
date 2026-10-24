@@ -1,6 +1,5 @@
-import {conditionLabels,statusLabels,externalRetryCauses,ptSiteDisplayNames} from './checkin-contract.generated.mjs';
+import {conditionLabels,statusLabels,externalRetryCauses,ptSiteDisplayNames,siteFaultCodes} from './checkin-contract.generated.mjs';
 
-const siteFaultCodes=['tls_certificate_invalid','tls_handshake_failed','site_server_error'];
 function availabilityCondition(task){
   const value=task?.availability;
   return value?.condition==='site_maintenance'?'site_maintenance':
@@ -19,7 +18,7 @@ export function siteSideTask(task){
   if(['signed','already_signed','not_available'].includes(task?.observedStatus))return false;
   const condition=taskStatusCondition(task);
   if(['site_maintenance','rate_limit','site_migration','bookmark_origin_changed'].includes(condition))return true;
-  return condition==='upstream_unavailable'&&['tls_certificate_invalid','tls_handshake_failed','site_server_error',
+  return condition==='upstream_unavailable'&&[...siteFaultCodes,
     'oauth_upstream_unavailable','oauth_upstream_circuit_open'].includes(availabilityCondition(task)?task.availability.failureCode:task.failureCode);
 }
 

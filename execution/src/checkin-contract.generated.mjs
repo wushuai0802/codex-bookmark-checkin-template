@@ -18,6 +18,12 @@ export const externalRetryCauses = Object.freeze([
   "rate_limit",
   "harvest_waiting"
 ]);
+export const siteFaultCodes = Object.freeze([
+  "tls_certificate_invalid",
+  "tls_handshake_failed",
+  "site_server_error",
+  "dns_validation_failed"
+]);
 export const ptSiteDisplayNames = Object.freeze({
   "https://ptsbao.club": "烧包"
 });
@@ -108,6 +114,7 @@ export const ptFailureMessages = Object.freeze({
   "account_mismatch": "页面账号与执行绑定不一致",
   "harvest_waiting": "Harvest 当日任务尚未完成，暂缓补签",
   "network_error": "页面访问失败，尚未取得签到状态",
+  "dns_validation_failed": "站点域名 DNSSEC 校验失败，等待站点修复域名解析",
   "authoritative_status_unavailable": "页面尚无可确认的今日签到证据",
   "checkin_control_unavailable": "签到控件尚未稳定可点击，未提交签到",
   "site_migration": "站点明确提示已迁移，请核对并更新书签地址",
