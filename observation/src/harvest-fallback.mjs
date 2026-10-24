@@ -50,7 +50,7 @@ function verifiedGuardedRecovery(checked,candidate,now,{readOnlyOrigins}){
      ((candidate.origin==='https://open.cd'&&signal==='open_cd_daily_unsigned')||
       (candidate.kind==='registered_review'&&signal==='nexus_daily_header_unsigned')||
       (candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin)&&
-        (signal==='nexus_daily_header_unsigned'||candidate.origin==='https://www.hddolby.com'&&
+        (signal==='nexus_daily_header_unsigned'||['https://www.hddolby.com','https://www.uhddolby.com'].includes(candidate.origin)&&
           signal==='hddolby_account_header_unsigned'&&evidence.pagePath==='/log.php'&&now.getTime()-at<=30_000)));
 }
 
@@ -410,13 +410,23 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         break;
       }
     }
-    let recoveryEvidence=null;
+    let recoveryEvidence=null,authenticationRecovery=false;
     if(canVerify){
       const verification={origin:candidate.origin,accountKey:candidate.accountKey,startedAt:clock().toISOString(),state:'in_progress'};
       state.verifications??=[];state.verifications.push(verification);writeAtomic(stateFile,state);
       try{
-        const checked=currentPassivePtResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash,readOnly:true}),clock());
+        let checked=currentPassivePtResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash,readOnly:true}),clock());
         if(checked.accountKey!==candidate.accountKey)throw Error('passive account mismatch');
+        const loginOpt=config.siteTwoFactorRecovery?.[candidate.origin];
+        authenticationRecovery=candidate.kind==='fallback_only'&&candidate.origin==='https://www.uhddolby.com'&&
+          checked.status==='login_required'&&checked.submissionAttempted===false&&loginOpt?.enabled===true&&loginOpt.reviewed===true&&
+          loginOpt.provider==='bitwarden'&&loginOpt.adapterId==='hddolby-nexus-stepup-v1'&&loginOpt.allowPasswordLogin===true;
+        if(authenticationRecovery){
+          const binding=checked.profileBinding;
+          verification.authenticationRecovery=true;writeAtomic(stateFile,state);
+          checked=currentPassivePtResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash,loginRecoveryOnly:true}),clock());
+          if(checked.accountKey!==candidate.accountKey||checked.profileBinding!==binding)throw Error('authentication binding changed');
+        }
         verification.outcome=checked;verification.state='completed';verification.finishedAt=clock().toISOString();
         recordPtVerification(root,checked,{now:clock(),lockHeld:true,attemptState:state});writeAtomic(stateFile,state);
         if(['signed','already_signed'].includes(checked.status)){
@@ -430,8 +440,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
           outcomes.push({origin:candidate.origin,state:'passive_result_unverified',v1Status:checked.status,
             ...(checked.failureCode?{failureCode:checked.failureCode}:{}),readOnly:true});continue;
         }
-        if(checked.status!=='not_signed'||checked.evidence?.authoritative!==true||
-           !guardedRecovery){
+        if(checked.status!=='not_signed'||checked.evidence?.authoritative!==true||!guardedRecovery){
           outcomes.push({origin:candidate.origin,state:'passive_result_unverified',v1Status:checked.status});continue;
         }
         // This does not close or relabel historical uncertainty. A fresh, bound
@@ -443,7 +452,10 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         if(dailyAttempts.length>=3){
           outcomes.push({origin:candidate.origin,state:'daily_guard_recovery_limit'});continue;
         }
-        if(dailyAttempts.some(a=>!recoverableUnsubmittedProfileGuard(a,candidate,checked,clock(),options))){
+        const recoveredHdd=attempt=>candidate.origin==='https://www.uhddolby.com'&&
+          attempt.accountKey===candidate.accountKey&&attempt.outcome?.profileBinding===checked.profileBinding&&
+          Number.isFinite(Date.parse(attempt.finishedAt??''))&&Date.parse(attempt.finishedAt)<Date.parse(checked.evidence.confirmedAt);
+        if(dailyAttempts.some(a=>!recoverableUnsubmittedProfileGuard(a,candidate,checked,clock(),options)&&!recoveredHdd(a))){
           outcomes.push({origin:candidate.origin,state:'daily_attempt_limit'});continue;
         }
       }catch(error){
@@ -476,6 +488,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
        workerPid:workerLock.owner.pid,workerNonce:workerLock.owner.nonce};
     if(harvestWakeup)attempt.harvestWakeup=true;
     if(recoveryEvidence)attempt.recoveryEvidence=recoveryEvidence;
+    if(authenticationRecovery)attempt.authenticationRecovery=true;
     if(Number.isFinite(Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])))
       attempt.recoveredAt=recoveredAtByAccount[recoveryIdentity(candidate)];
     state.attempts.push(attempt);writeAtomic(stateFile,state);

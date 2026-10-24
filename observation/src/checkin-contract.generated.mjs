@@ -219,6 +219,11 @@ export const ptReadPolicies = Object.freeze({
     "selector": "#info_block",
     "hddolbyHeader": true
   },
+  "https://www.uhddolby.com": {
+    "url": "https://www.uhddolby.com/log.php",
+    "selector": "#info_block",
+    "hddolbyHeader": true
+  },
   "https://ptsbao.club": {
     "selector": "#info_block",
     "actionPath": "/attendance.php",

@@ -83,7 +83,7 @@ export function ptReadPolicy(origin,config={}){
   if(url.protocol!=='https:'||url.origin!==origin||url.username||url.password||url.hash||
      /attendance|check[-_]?in|sign[_-]?(?:in|out)|logout|delete|submit|confirm|claim/i.test(decodeURIComponent(url.pathname))||
      [...url.searchParams].some(([key,value])=>!['id','page'].includes(key)||!/^\d{1,12}$/.test(value)))throw unsafe();
-  if(policy.hddolbyHeader===true&&(origin!=='https://www.hddolby.com'||url.href!==origin+'/log.php'||
+  if(policy.hddolbyHeader===true&&(!['https://www.hddolby.com','https://www.uhddolby.com'].includes(origin)||url.href!==origin+'/log.php'||
     policy.selector!=='#info_block'||policy.nativeMainChrome||policy.selfProfileHeader))throw unsafe();
   ptReadProxy({...(origin==='https://audiences.me'&&policy.nativeApiHeaderFallback===true?config:{}),
     ptPassiveReadOnly:true,ptReadProxyServer:policy.proxyServer,

@@ -5,7 +5,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ProfileBinding,
     [string]$AccountKey = 'site-default',
     [string]$AdapterId = '',
-    [ValidateSet('Prepare','Get')][string]$Mode = 'Get'
+    [ValidateSet('Prepare','Get','Login')][string]$Mode = 'Get'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +38,7 @@ function Get-ProviderSiteContract([string]$SiteOrigin) {
     switch -CaseSensitive ($SiteOrigin) {
         'https://piggo.me' { return @{itemName='piggo.me';adapterId='piggo-nexus-stepup-v1'} }
         'https://www.hddolby.com' { return @{itemName='www.hddolby.com';adapterId='hddolby-nexus-stepup-v1'} }
+        'https://www.uhddolby.com' { return @{itemName='www.hddolby.com';adapterId='hddolby-nexus-stepup-v1'} }
         'https://hhanclub.net' { return @{itemName='hhanclub.net';adapterId='hhclub-nexus-login-v1'} }
     }
     return $null
@@ -214,6 +215,21 @@ try {
     $config = [IO.File]::ReadAllText($configPath) | ConvertFrom-Json
     $rule = $config.bitwardenTotp
     $route = $rule.routes.PSObject.Properties[$Origin].Value
+    if($Mode-ceq 'Login'){
+        $opt=$config.siteTwoFactorRecovery.PSObject.Properties[$Origin].Value
+        if($Origin-cne 'https://www.uhddolby.com'-or $opt.enabled-ne $true-or $opt.reviewed-ne $true-or
+            $opt.allowPasswordLogin-ne $true-or $opt.loginSource-cne 'bitwarden'){Stop-Provider 'login_not_allowed'}
+        try{
+            $integration=Get-Content -LiteralPath (Join-Path $Root 'data/v2-integration.json') -Raw|ConvertFrom-Json
+            $controller=[IO.Path]::GetFullPath([string]$integration.v2ProjectRoot)
+            $controllerConfig=Get-Content -LiteralPath (Join-Path $controller 'config/runtime.local.json') -Raw|ConvertFrom-Json
+            $lease=Get-Content -LiteralPath (Join-Path $controller 'data/v2-run.lock') -Raw|ConvertFrom-Json
+            if($integration.executionEngine-cne 'v1'-or -not [string]::Equals($controller,[IO.Path]::GetFullPath($env:CHECKIN_V2_ENGINE_ROOT),[StringComparison]::OrdinalIgnoreCase)-or
+                $controllerConfig.executionEngine-cne 'v1'-or -not [string]::Equals([IO.Path]::GetFullPath([string]$controllerConfig.legacyRoot),$Root,[StringComparison]::OrdinalIgnoreCase)-or
+                [string]$lease.nonce-cne $env:CHECKIN_V2_ENGINE_LEASE-or -not $lease.pid){throw 'lease'}
+            [void][Diagnostics.Process]::GetProcessById([int]$lease.pid)
+        }catch{Stop-Provider 'login_not_allowed'}
+    }
     if ($rule.enabled -isnot [bool] -or $rule.enabled -ne $true -or
         $route.enabled -isnot [bool] -or $route.enabled -ne $true) { Stop-Provider 'disabled' }
     $legacy = $Origin -ceq 'https://piggo.me'
@@ -339,6 +355,15 @@ try {
             } finally { if (Test-Path -LiteralPath $temporary -PathType Leaf) { Remove-Item -LiteralPath $temporary -Force } }
         }
         $result = @{ready=$true;reason='prepared'}
+    } elseif($Mode-ceq 'Login') {
+        $loginUsername=(Invoke-ProviderCli @('get','username',([string]$route.itemId),'--raw','--nointeraction') 15 'login_read_failed').Trim()
+        $loginPassword=Invoke-ProviderCli @('get','password',([string]$route.itemId),'--raw','--nointeraction') 15 'login_read_failed'
+        if($loginPassword.EndsWith("`r`n")){$loginPassword=$loginPassword.Substring(0,$loginPassword.Length-2)}
+        elseif($loginPassword.EndsWith("`n")){$loginPassword=$loginPassword.Substring(0,$loginPassword.Length-1)}
+        Confirm-ProviderStatus
+        if(-not $loginUsername-or $loginUsername.Length-gt 320-or $loginUsername-match '[\x00-\x1f]'-or
+            -not $loginPassword-or $loginPassword.Length-gt 1024){Stop-Provider 'login_invalid'}
+        $result=@{ready=$true;reason='login_ready';username=$loginUsername;password=$loginPassword}
     } else {
         $before = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $validUntil = ([Math]::Floor($before / 30000) + 1) * 30000
@@ -360,6 +385,7 @@ try {
     $payload = $null
     $payloadText = $null
     $code = $null
+    $loginUsername=$null;$loginPassword=$null
     $envelope = $null
     if ($null -ne $protected) { $protected.Dispose() }
     if ($null -ne $lockHandle) { $lockHandle.Dispose() }
@@ -368,3 +394,4 @@ try {
 # call this directly in an interactive terminal to display a current TOTP.
 $result | ConvertTo-Json -Compress -Depth 3
 if ($result.PSObject.Properties['code'] -or $result.ContainsKey('code')) { $result.code = $null }
+if($result.ContainsKey('username')){$result.username=$null;$result.password=$null}

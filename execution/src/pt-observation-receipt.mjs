@@ -68,8 +68,10 @@ export function verifiedPtObservation(root,target,config,now=new Date()){
 export function freshPtUnsignedObservation(root,target,config,{now=new Date(),after=-Infinity,profileBinding}={}){
   const result=boundPtObservation(root,target,config,{now,statuses:['not_signed'],after,profileBinding});
   const confirmed=Date.parse(result?.evidence?.confirmedAt??'');
-  if(!result||now.getTime()-confirmed>5*60_000||
-    !['nexus_daily_header_unsigned','open_cd_daily_unsigned'].includes(result.evidence.statusSignal))return null;
+  if(!result||now.getTime()-confirmed>5*60_000)return null;
+  const hdd=['https://www.hddolby.com','https://www.uhddolby.com'].includes(target.origin)&&
+    result.evidence.statusSignal==='hddolby_account_header_unsigned'&&result.evidence.pagePath==='/log.php'&&now.getTime()-confirmed<=30_000;
+  if(!hdd&&!['nexus_daily_header_unsigned','open_cd_daily_unsigned'].includes(result.evidence.statusSignal))return null;
   return result;
 }
 

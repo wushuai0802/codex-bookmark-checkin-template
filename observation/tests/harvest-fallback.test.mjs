@@ -25,6 +25,63 @@ test('reviewed HDDolby account header readers enter the passive scheduler indepe
   assert.deepEqual(reviewedFallbackReadOrigins(catalog,origin=>policies[origins.indexOf(origin)]),origins.slice(0,2));
 });
 
+test('new-domain HDDolby login recovery is opt-in and authentication-only; an already-signed receipt never submits again',async t=>{
+  for(const variant of ['new','unsubmitted-login','unknown-submit','disabled']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'uhdd-auth-fallback-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));configureUnifiedFixture(root);
+    const f=fixture(),origin='https://www.uhddolby.com';
+    f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/attendance.php'}];f.plan.targets=[];f.latest.results=[];
+    const config={siteTwoFactorRecovery:{[origin]:{enabled:true,reviewed:true,provider:'bitwarden',adapterId:'hddolby-nexus-stepup-v1',allowPasswordLogin:variant!=='disabled'}}};
+    if(variant==='unsubmitted-login'||variant==='unknown-submit'){
+      fs.mkdirSync(root+'/outputs',{recursive:true});
+      fs.writeFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json',JSON.stringify({schemaVersion:1,businessDate:'2026-09-20',attempts:[{
+        origin,accountKey:'site-default',businessDate:'2026-09-20',state:'completed',submissionState:variant==='unknown-submit'?'unknown':'not_submitted',
+        startedAt:'2026-09-20T01:00:00Z',finishedAt:'2026-09-20T01:01:00Z',v1Status:'login_required',
+        outcome:{origin,status:'login_required',submissionAttempted:variant==='unknown-submit'}
+      }]}));
+    }
+    const calls=[];const result=await runHarvestFallback({...f,root,config,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins:[origin],
+      runSite:async options=>{
+        calls.push(options.readOnly?'read':'recover');
+        if(!options.readOnly)assert.equal(options.loginRecoveryOnly,true);
+        return {origin,status:options.readOnly?'login_required':'already_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',
+          profileBinding:'b'.repeat(64),accountKey:'site-default',operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
+          evidence:{source:options.readOnly?'none':'pt_page',authoritative:!options.readOnly,businessDate:'2026-09-20',confirmedAt:now.toISOString(),
+            evidenceScope:'site_account_day',pagePath:'/log.php',statusSignal:'hddolby_account_header_signed'}};
+      }});
+    assert.deepEqual(calls,variant==='disabled'?['read']:['read','recover'],variant);
+    if(calls.length===2)assert.equal(result.outcomes.at(-1).v1Status,'already_signed');
+  }
+});
+
+test('an older ambiguous new-domain attempt needs fresh exact-Profile negative proof, with or without login recovery',async t=>{
+  for(const variant of ['authentication-needed','native-ready','wrong-binding','stale-proof']){
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'uhdd-post-login-proof-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));configureUnifiedFixture(root);
+  const f=fixture(),origin='https://www.uhddolby.com',binding='b'.repeat(64);
+  f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/attendance.php'}];f.plan.targets=[];f.latest.results=[];
+  fs.mkdirSync(root+'/outputs',{recursive:true});
+  const earlier={origin,accountKey:'site-default',businessDate:'2026-09-20',state:'completed',startedAt:'2026-09-20T01:00:00Z',finishedAt:'2026-09-20T01:01:00Z',
+    outcome:{origin,profileBinding:binding,submissionAttempted:true,failureCode:'submission_outcome_unknown'}};
+  fs.writeFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json',JSON.stringify({schemaVersion:1,businessDate:'2026-09-20',attempts:[earlier]}));
+  const config={siteTwoFactorRecovery:{[origin]:{enabled:true,reviewed:true,provider:'bitwarden',adapterId:'hddolby-nexus-stepup-v1',allowPasswordLogin:true}}};
+  const calls=[];
+  await runHarvestFallback({...f,root,config,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins:[origin],runSite:async options=>{
+    calls.push(options.readOnly?'read':options.loginRecoveryOnly?'authenticate':'supplement');
+    if(!options.readOnly&&!options.loginRecoveryOnly)assert.equal(options.verifyBeforeSubmit,true);
+    const login=options.readOnly&&variant==='authentication-needed',submit=!options.readOnly&&!options.loginRecoveryOnly;
+    return {origin,status:login?'login_required':submit?'signed':'not_signed',
+      observedAt:now.toISOString(),businessDate:'2026-09-20',accountKey:'site-default',profileBinding:variant==='wrong-binding'?'c'.repeat(64):binding,
+      operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:!options.readOnly&&!options.loginRecoveryOnly,
+      evidence:{source:login?'none':'pt_page',authoritative:!login,businessDate:'2026-09-20',
+        confirmedAt:variant==='stale-proof'?new Date(now.getTime()-31_000).toISOString():now.toISOString(),
+        evidenceScope:'site_account_day',pagePath:'/log.php',statusSignal:submit?'hddolby_account_header_signed':'hddolby_account_header_unsigned'}};
+  }});
+  assert.deepEqual(calls,variant==='authentication-needed'?['read','authenticate','supplement']:variant==='native-ready'?['read','supplement']:['read']);
+  const state=JSON.parse(fs.readFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json'));
+  assert.equal(state.attempts[0].outcome.failureCode,'submission_outcome_unknown');
+  if(state.attempts.length>1)assert.equal(state.attempts[1].recoveryEvidence.evidence.statusSignal,'hddolby_account_header_unsigned');
+  }
+});
+
 test('a built-in native read policy dispatches guarded recovery through the original engine without duplicating private policy',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-default-policy-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   configureUnifiedFixture(root);

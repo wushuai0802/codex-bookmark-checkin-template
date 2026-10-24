@@ -95,15 +95,17 @@ export async function readPtRewardCounter(context,origin,config){
 }
 
 export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,clock=()=>now?new Date(now):new Date(),
-  readOnly=false,verifyBeforeSubmit=false,validateScope=()=>{},
+  readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,validateScope=()=>{},
   launch=launchAutomationContext,runTarget=processTarget,readReward=readPtRewardCounter,
   acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader,readAvailability=readPtPublicAvailability,
   readHddolby=readHddolbyHeader,recoverLogin=recoverPtLogin,readPassive=readPtPassivePage,
-  fallbackAttemptId,validateLoginResume=validatePtLoginResume,readLoginProfile=readHhclubProfileState}={}){
+  fallbackAttemptId,validateLoginResume=validatePtLoginResume,readLoginProfile=readHhclubProfileState,
+  runHddolbyNative=recoverPtLogin}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
   const bytes=fs.readFileSync(catalogFile);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase())throw Error('PT catalog changed');
   const target=ptSupplementTarget(JSON.parse(bytes.toString('utf8')),origin);
+  if(loginRecoveryOnly&&(readOnly||!verifyBeforeSubmit||origin!=='https://www.uhddolby.com'))throw Error('Login-only recovery is not reviewed for this target');
   const startedAt=clock();
   const legacyRoot=path.resolve(root);
   const config=JSON.parse(fs.readFileSync(path.join(legacyRoot,'config/config.json'),'utf8'));
@@ -136,8 +138,9 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   const lock=await acquire(path.join(legacyRoot,'tmp/run.lock'));
   let context;
   const loginOpt=config.siteTwoFactorRecovery?.[target.origin];
-  const canRecoverLogin=!readOnly&&target.origin==='https://hhanclub.net'&&loginOpt?.enabled===true&&
-    loginOpt.reviewed===true&&loginOpt.provider==='bitwarden'&&loginOpt.adapterId==='hhclub-nexus-login-v1';
+  const supportedLogin=target.origin==='https://hhanclub.net'&&loginOpt?.adapterId==='hhclub-nexus-login-v1'||
+    target.origin==='https://www.uhddolby.com'&&loginOpt?.adapterId==='hddolby-nexus-stepup-v1'&&loginOpt.allowPasswordLogin===true;
+  const canRecoverLogin=!readOnly&&supportedLogin&&loginOpt?.enabled===true&&loginOpt.reviewed===true&&loginOpt.provider==='bitwarden';
   let loginRecoveryUsed=false;
   const recoverLoginOnce=async()=>{
     if(loginRecoveryUsed)return {handled:true,status:'needs_attention',failureCode:'two_factor_required'};
@@ -158,6 +161,12 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     const readPolicy=ptReadPolicy(target.origin,config);
     context=await launch({...safeConfig,ptPassiveReadOnly:true,
       ...(readPolicy.proxyServer?{ptReadProxyServer:readPolicy.proxyServer}:{})});
+    if(readPolicy.hddolbyHeader===true){
+      const result=await readHddolby(context,{origin:target.origin,now:clock(),proxyServer:readPolicy.proxyServer,expectedAccountId:loginOpt.expectedAccountId});
+      if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
+      return {...result,submissionAttempted:false,operationMode:'safe_history_page',readSafety:'reviewed_passive',
+        ...(login.siteTwoFactorRecovery?{siteTwoFactorRecovery:login.siteTwoFactorRecovery}:{})};
+    }
     await installPtReadFirewall(context,readPolicy);
     const page=await context.newPage();
     try{
@@ -180,6 +189,19 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       if(result.submissionAttempted!==false)throw Error('Native PT read did not prove submission was disabled');
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
       return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},clock());
+    }
+    if(target.origin==='https://www.uhddolby.com'&&supportedLogin&&loginOpt?.enabled===true&&loginOpt.reviewed===true&&loginOpt.provider==='bitwarden'){
+      if(!readOnly&&!verifyBeforeSubmit)throw Error('Native HDDolby requires a passive check before submission');
+      let result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'ReadOnly',clock});
+      if(!readOnly&&result.status==='login_required'){
+        const login=await recoverLoginOnce();
+        result=login.status==='logged_in'?await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'ReadOnly',clock}):login;
+      }
+      await validateScope();
+      if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('Native HDDolby scope changed');
+      if(!readOnly&&!loginRecoveryOnly&&result.status==='not_signed'&&result.evidence?.authoritative===true)
+        result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'Checkin',clock});
+      return publicSupplementResult(target.origin,{...metadata,...result},clock());
     }
     if(canRecoverLogin&&!verifyBeforeSubmit&&fallbackAttemptId!==undefined){
       const firstDispatch=()=>validateLoginResume({root:legacyRoot,origin:target.origin,accountKey:binding.accountKey,
@@ -222,11 +244,12 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     await validateScope();
     let hddolbyVerified=false;
     if((readOnly||verifyBeforeSubmit)&&policy.hddolbyHeader===true){
-      const result=await readHddolby(context,{origin:target.origin,now:clock(),
+      let result=await readHddolby(context,{origin:target.origin,now:clock(),
         proxyServer:policy.proxyServer,
         expectedAccountId:config.siteTwoFactorRecovery?.[target.origin]?.expectedAccountId});
+      if(canRecoverLogin&&result.status==='login_required')result=await recoverAndRead(result);
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during account header readback');
-      if(readOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)
+      if(readOnly||loginRecoveryOnly||result.status!=='not_signed'||result.evidence?.authoritative!==true)
         return publicSupplementResult(target.origin,{...metadata,...result},clock());
       await context.close();context=null;
       await validateScope();

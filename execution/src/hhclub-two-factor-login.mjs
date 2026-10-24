@@ -8,7 +8,10 @@ import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 
 export const hhclubTwoFactorAdapter='hhclub-nexus-login-v1';
 const ORIGIN='https://hhanclub.net',LOGIN=ORIGIN+'/login.php',HOME=ORIGIN+'/index.php';
-const inLoginForm=selector=>['takelogin.php','/takelogin.php',ORIGIN+'/takelogin.php']
+const UHD='https://www.uhddolby.com';
+const loginDefinition=origin=>origin===ORIGIN?{origin,adapterId:hhclubTwoFactorAdapter,otp:'two_step_code',secret:true,journal:'hhclub-authentication'}:
+  origin===UHD?{origin,adapterId:'hddolby-nexus-stepup-v1',otp:'2fa',secret:false,journal:'hddolby-password-authentication'}:null;
+const inLoginForm=(selector,origin=ORIGIN)=>['takelogin.php','/takelogin.php',origin+'/takelogin.php']
   .map(action=>'form[action="'+action+'"] '+selector).join(', ');
 const execute=promisify(execFile);
 const day=at=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(at));
@@ -33,19 +36,20 @@ export async function verifyHhclubNativeProfile(profile,port,{executeProcess=exe
   }catch{return false;}
 }
 
-export async function inspectHhclubLogin(page,{allowFilledOtp=false}={}){
-  if(page.url()!==LOGIN)return null;
+export async function inspectHhclubLogin(page,{allowFilledOtp=false,origin=ORIGIN}={}){
+  const definition=loginDefinition(origin);
+  if(!definition||page.url()!==origin+'/login.php')return null;
   try{
-    return await page.evaluate(async({origin,allowFilledOtp})=>{
+    return await page.evaluate(async({origin,allowFilledOtp,otpName,secretRequired})=>{
       if(location.href!==origin+'/login.php')return null;
       const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;};
       const forms=[...document.forms].filter(f=>f.method.toUpperCase()==='POST'&&f.action===origin+'/takelogin.php');
       if(forms.length!==1||forms[0].target&&!['_self'].includes(forms[0].target))return null;
       const form=forms[0],field=name=>{const a=[...form.querySelectorAll('input')].filter(e=>e.name===name);return a.length===1?a[0]:null;};
-      const username=field('username'),password=field('password'),otp=field('two_step_code'),captcha=field('imagestring'),
+      const username=field('username'),password=field('password'),otp=field(otpName),captcha=field('imagestring'),
         secret=field('secret'),imagehash=field('imagehash');
-      if(!username||!password||!otp||!captcha||!secret||!imagehash||username.type!=='text'||password.type!=='password'||
-        !['text','tel','number'].includes(otp.type)||captcha.type!=='text'||secret.type!=='hidden'||imagehash.type!=='hidden'||
+      if(!username||!password||!otp||!captcha||secretRequired&&!secret||!imagehash||username.type!=='text'||password.type!=='password'||
+        !['text','tel','number'].includes(otp.type)||captcha.type!=='text'||secret&&secret.type!=='hidden'||imagehash.type!=='hidden'||
         ![username,password,otp,captcha].every(visible)||[username,password,otp,captcha].some(e=>e.disabled||e.readOnly)||
         form.querySelectorAll('button[type="submit"],input[type="submit"]').length!==1||document.querySelector('base[href]'))return null;
       const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(username.value.normalize('NFKC').trim().toLowerCase()));
@@ -53,27 +57,27 @@ export async function inspectHhclubLogin(page,{allowFilledOtp=false}={}){
         try{
           const url=new URL(image.src,origin);
           return url.protocol==='https:'&&url.origin===origin&&url.pathname==='/image.php'&&!url.username&&!url.password&&!url.hash&&
-            [...url.searchParams.keys()].every(key=>['action','imagehash','secret'].includes(key))&&
-            ['action','imagehash','secret'].every(key=>url.searchParams.getAll(key).length===1)&&url.searchParams.get('action')==='regimage'&&
-            url.searchParams.get('imagehash')===imagehash.value&&url.searchParams.get('secret')===secret.value&&visible(image);
+            [...url.searchParams.keys()].every(key=>(secretRequired?['action','imagehash','secret']:['action','imagehash']).includes(key))&&
+            (secretRequired?['action','imagehash','secret']:['action','imagehash']).every(key=>url.searchParams.getAll(key).length===1)&&url.searchParams.get('action')==='regimage'&&
+            url.searchParams.get('imagehash')===imagehash.value&&(!secretRequired||url.searchParams.get('secret')===secret.value)&&visible(image);
         }catch{return false;}
       });
       let captchaBinding='';
       if(images.length===1){
-        const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(imagehash.value+'\0'+secret.value+'\0'+images[0].src));
+        const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(imagehash.value+'\0'+(secret?.value??'')+'\0'+images[0].src));
         captchaBinding=[...new Uint8Array(hash)].map(n=>n.toString(16).padStart(2,'0')).join('');
       }
       return {usernameHash:[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join(''),
         passwordFilled:Boolean(password.value),captchaFilled:/^[A-Za-z0-9]{1,16}$/.test(captcha.value.trim()),
-        hiddenReady:Boolean(secret.value&&imagehash.value),otpReady:allowFilledOtp||!otp.value,
+        hiddenReady:Boolean((!secretRequired||secret.value)&&imagehash.value),otpReady:allowFilledOtp||!otp.value,
         captchaImageReady:images.length===1,captchaBinding,captchaLength:Number.isSafeInteger(captcha.maxLength)?captcha.maxLength:-1,
         submitReady:![...form.querySelectorAll('button[type="submit"],input[type="submit"]')][0].disabled};
-    },{origin:ORIGIN,allowFilledOtp});
+    },{origin,allowFilledOtp,otpName:definition.otp,secretRequired:definition.secret});
   }catch{return null;}
 }
 
 /** Prepare one ordinary image CAPTCHA only; no password read, login or TOTP. */
-export async function prepareHhclubLoginCaptcha(page,{config={},usernameHash,assertCurrent,inspect=inspectHhclubLogin,
+export async function prepareHhclubLoginCaptcha(page,{config={},usernameHash,assertCurrent,inspect=inspectHhclubLogin,origin=ORIGIN,
   recognize,secondOpinion}={}){
   let screenshot,recognition,captchaWritten=false,prepared=false;
   const fail=()=>({prepared:false,reason:'login_not_ready'});
@@ -88,7 +92,7 @@ export async function prepareHhclubLoginCaptcha(page,{config={},usernameHash,ass
     // recognizer capability, not an assertion about the site's login policy.
     if(before.captchaImageReady!==true||!/^[a-f0-9]{64}$/.test(before.captchaBinding??'')||
       before.captchaLength>0&&before.captchaLength!==6)return fail();
-    const image=page.locator(inLoginForm('img[src*="image.php"]'));
+    const image=page.locator(inLoginForm('img[src*="image.php"]',origin));
     if(await image.count()!==1)return fail();
     const box=await image.boundingBox();
     if(!box||![box.x,box.y,box.width,box.height].every(Number.isFinite)||box.width<20||box.height<10||
@@ -100,12 +104,12 @@ export async function prepareHhclubLoginCaptcha(page,{config={},usernameHash,ass
     recognition=await recognize(screenshot);
     const threshold=Math.max(70,Math.min(100,Number(config.baiduOcr?.minimumLocalConfidence)||70));
     if(!/^[A-Z0-9]{6}$/.test(recognition?.code??'')||!Number.isFinite(Number(recognition?.confidence))||Number(recognition.confidence)<threshold)
-      recognition=await secondOpinion(screenshot,recognition,{config,origin:ORIGIN,length:6,alphabet:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
+      recognition=await secondOpinion(screenshot,recognition,{config,origin,length:6,alphabet:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'});
     if(!/^[A-Z0-9]{6}$/.test(recognition?.code??'')||!Number.isFinite(Number(recognition?.confidence))||
       Number(recognition.confidence)<threshold||Number(recognition.confidence)>100||!await assertCurrent())return fail();
     const fresh=await inspect(page);
     if(!credentialsReady(fresh)||fresh.captchaFilled===true||fresh.captchaImageReady!==true||fresh.captchaBinding!==before.captchaBinding)return fail();
-    const input=page.locator(inLoginForm('input[name="imagestring"]'));
+    const input=page.locator(inLoginForm('input[name="imagestring"]',origin));
     if(await input.count()!==1)return fail();
     captchaWritten=true;await input.fill(recognition.code);
     if(await input.evaluate((element,expected)=>element.value===expected,recognition.code)!==true)return fail();
@@ -116,16 +120,16 @@ export async function prepareHhclubLoginCaptcha(page,{config={},usernameHash,ass
     prepared=true;return {prepared:true,reason:'captcha_prepared'};
   }catch{return fail();}
   finally{
-    if(captchaWritten&&!prepared)try{if(page.url()===LOGIN)await page.locator(inLoginForm('input[name="imagestring"]')).fill('');}catch{}
+    if(captchaWritten&&!prepared)try{if(page.url()===origin+'/login.php')await page.locator(inLoginForm('input[name="imagestring"]',origin)).fill('');}catch{}
     if(screenshot)try{screenshot.fill(0);}catch{};
     if(recognition&&typeof recognition==='object')try{recognition.code='';}catch{}
   }
 }
 
-export async function readHhclubAuthenticated(page,{expectedAccountId,now=new Date()}={}){
+export async function readHhclubAuthenticated(page,{expectedAccountId,now=new Date(),origin=ORIGIN}={}){
   try{
     const current=new URL(page.url());
-    if(current.origin!==ORIGIN||!['/login.php','/takelogin.php','/index.php','/'].includes(current.pathname))return null;
+    if(!loginDefinition(origin)||current.origin!==origin||!['/login.php','/takelogin.php','/index.php','/'].includes(current.pathname))return null;
     const html=await page.evaluate(async({origin,nowMs})=>{
       if(location.origin!==origin)return null;
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
@@ -142,18 +146,47 @@ export async function readHhclubAuthenticated(page,{expectedAccountId,now=new Da
         html=await response.text();if(!html||html.length>2_000_000)return null;
       }finally{clearTimeout(timer);}
       return html;
-    },{origin:ORIGIN,nowMs:now.getTime()});
+    },{origin,nowMs:now.getTime()});
     if(typeof html!=='string')return null;
-    const state=await page.evaluate(parseHhclubProfileDocument,{html,origin:ORIGIN,expectedAccountId:String(expectedAccountId)});
+    const state=await page.evaluate(parseHhclubProfileDocument,{html,origin,expectedAccountId:String(expectedAccountId)});
     return state?{authenticated:state.authenticated===true,accountMatched:state.accountMatched===true,signed:false}:null;
   }catch{return null;}
+}
+
+export async function fillNexusBitwardenCredentials({root,origin,page,profile,config,profileProof=async()=>false,
+  scope=validateSiteTwoFactorScope,inspect=inspectHhclubLogin,withLogin,prepare}={}){
+  if(origin!==UHD)return {handled:false};
+  const definition=loginDefinition(origin),opt=config?.siteTwoFactorRecovery?.[origin];
+  if(opt?.enabled!==true||opt.reviewed!==true||opt.allowPasswordLogin!==true||opt.loginSource!=='bitwarden')return {handled:false};
+  let guard,filled=false;
+  try{
+    if(!/^[a-f0-9]{64}$/.test(opt.usernameHash??''))return {handled:true,filled:false,reason:'configuration_invalid'};
+    guard=await scope({root,origin,config,profile,adapterId:definition.adapterId});
+    if(!guard||!await profileProof())return {handled:true,filled:false,reason:'scope_unavailable'};
+    const current=await readHhclubAuthenticated(page,{origin,expectedAccountId:String(opt.expectedAccountId)});
+    if(current?.authenticated)return {handled:true,filled:false,authenticated:current.accountMatched===true,reason:current.accountMatched?'already_authenticated':'account_mismatch'};
+    const form=await inspect(page,{origin});
+    if(!form?.hiddenReady||!form.otpReady||!form.submitReady||!form.captchaImageReady)return {handled:true,filled:false,reason:'login_not_ready'};
+    if(!withLogin||!prepare){const provider=await import('./bitwarden-totp.mjs');withLogin??=provider.withBitwardenLogin;prepare??=provider.prepareBitwardenTotp;}
+    if((await prepare({root,origin,binding:guard.binding,config}))?.ready!==true)return {handled:true,filled:false,reason:'provider_unavailable'};
+    const value=await withLogin({root,origin,binding:guard.binding,config,consume:async credential=>{
+      const hash=crypto.createHash('sha256').update(credential.username.normalize('NFKC').trim().toLowerCase()).digest('hex');
+      if(hash!==opt.usernameHash||!await guard.assertCurrent()||!await profileProof()||page.url()!==origin+'/login.php')throw Error('credential scope');
+      await page.locator(inLoginForm('input[name="username"]',origin)).fill(credential.username);
+      await page.locator(inLoginForm('input[name="password"]',origin)).fill(credential.password);
+      const after=await inspect(page,{origin});filled=after?.usernameHash===opt.usernameHash&&after.passwordFilled===true&&await guard.assertCurrent();
+      if(!filled)throw Error('credential scope');
+    }});
+    return {handled:true,filled:filled&&value.ready===true,reason:filled?'credentials_filled':'provider_unavailable'};
+  }catch{return {handled:true,filled:false,reason:'recovery_unavailable'};}
+  finally{if(guard)try{await guard.release();}catch{}}
 }
 
 // Both readers use this inert DOM contract. No input value or attendance
 // control is read; only the current login form and own account are classified.
 function parseHhclubProfileDocument({html,origin,expectedAccountId}){
   try{
-      if(origin!=='https://hhanclub.net'||typeof html!=='string'||!html||html.length>2_000_000||
+      if(!['https://hhanclub.net','https://www.uhddolby.com'].includes(origin)||typeof html!=='string'||!html||html.length>2_000_000||
         !/^[1-9][0-9]{0,19}$/.test(String(expectedAccountId??'')))return null;
       const doc=new DOMParser().parseFromString(html,'text/html');
       if(doc.querySelector('base[href]'))return null;
@@ -170,7 +203,7 @@ function parseHhclubProfileDocument({html,origin,expectedAccountId}){
         }catch{return false;}
       });
       if(ordinaryLogin)return {authenticated:false,accountMatched:false,signed:false,loginRequired:true};
-      const blocks=doc.querySelectorAll('#user-info-panel');if(blocks.length!==1)return null;
+      const blocks=doc.querySelectorAll(origin==='https://hhanclub.net'?'#user-info-panel':'#info_block');if(blocks.length!==1)return null;
       const links=[...doc.querySelectorAll('a[href]')].flatMap(a=>{
         try{const u=new URL(a.getAttribute('href'),origin);return u.origin===origin&&!u.username&&!u.password?[{u}]:[];}catch{return [];}
       });
@@ -218,11 +251,11 @@ export async function readHhclubProfileState(context,{expectedAccountId,now=new 
   finally{if(parser)try{await parser.close();}catch{}}
 }
 
-function journal(file){
+function journal(file,origin=ORIGIN,adapterId=hhclubTwoFactorAdapter){
   if(!fs.existsSync(file))return {schemaVersion:1,attempts:[]};
   const value=read(file);
   if(value.schemaVersion!==1||!Array.isArray(value.attempts)||value.attempts.length>4096||value.attempts.some(e=>
-    e.origin!==ORIGIN||e.accountKey!=='site-default'||e.adapterId!==hhclubTwoFactorAdapter||!/^[a-f0-9]{64}$/.test(e.profileBinding??'')||
+    e.origin!==origin||e.accountKey!=='site-default'||e.adapterId!==adapterId||!/^[a-f0-9]{64}$/.test(e.profileBinding??'')||
     !['pending','accepted','rejected','unknown'].includes(e.state)||!Number.isFinite(Date.parse(e.attemptedAt??''))||e.businessDate!==day(e.attemptedAt)))throw Error('state');
   return {schemaVersion:1,attempts:value.attempts.map(e=>({origin:e.origin,accountKey:e.accountKey,adapterId:e.adapterId,
     profileBinding:e.profileBinding,businessDate:e.businessDate,state:e.state,attemptedAt:e.attemptedAt,
@@ -238,19 +271,22 @@ function save(file,value){
 export async function recoverHhclubTwoFactorLogin({root,origin=ORIGIN,config,page,profile,submit,clock=Date.now,
   scope=validateSiteTwoFactorScope,inspect=inspectHhclubLogin,readAuthenticated=readHhclubAuthenticated,
   prepare,withTotp,prepareCaptcha=prepareHhclubLoginCaptcha,acquire=acquireRunLock,release=releaseRunLock,profileProof=async()=>true}={}){
-  if(origin!==ORIGIN)return {handled:false};
-  let guard,authLock,attempted=false,accepted=false,otpWritten=false,reason='recovery_unavailable';
+  const definition=loginDefinition(origin);if(!definition)return {handled:false};
+  const adapterId=definition.adapterId,rawInspect=inspect;
+  inspect=(value,options={})=>rawInspect(value,{...options,origin});
+  let guard,authLock,attempted=false,accepted=false,otpWritten=false,reason='recovery_unavailable',authRoute,authPosts=0;
   try{
     if(!config)config=read(path.join(root,'config/config.json'));
-    const opt=config.siteTwoFactorRecovery?.[ORIGIN];
+    const opt=config.siteTwoFactorRecovery?.[origin];
     if(opt?.enabled!==true)return {handled:false};
-    if(opt.reviewed!==true||opt.provider!=='bitwarden'||opt.adapterId!==hhclubTwoFactorAdapter||
+    if(origin===UHD&&opt.allowPasswordLogin!==true)return {handled:false};
+    if(opt.reviewed!==true||opt.provider!=='bitwarden'||opt.adapterId!==adapterId||
       !/^[1-9][0-9]{0,19}$/.test(String(opt.expectedAccountId??''))||!/^[a-f0-9]{64}$/.test(opt.usernameHash??'')||
       typeof submit!=='function'||!page)return result('configuration_invalid');
-    guard=await scope({root,origin:ORIGIN,config,profile,clock,adapterId:hhclubTwoFactorAdapter});
+    guard=await scope({root,origin,config,profile,clock,adapterId});
     if(!guard||!await profileProof())return result('scope_unavailable');
-    const startedDay=day(date(clock)),stateFile=path.join(root,'data/bitwarden/hhclub-authentication.json');
-    const proof=()=>readAuthenticated(page,{expectedAccountId:String(opt.expectedAccountId),now:date(clock)});
+    const startedDay=day(date(clock)),stateFile=path.join(root,'data/bitwarden/'+definition.journal+'.json');
+    const proof=()=>readAuthenticated(page,{expectedAccountId:String(opt.expectedAccountId),now:date(clock),origin});
     const before=await proof();
     if(before?.authenticated){
       if(!before.accountMatched)return result('account_mismatch');
@@ -262,17 +298,17 @@ export async function recoverHhclubTwoFactorLogin({root,origin=ORIGIN,config,pag
         value.hiddenReady===true&&value.otpReady===true&&value.submitReady===true;
     };
     if(!await readyForm()){
-      const preparedCaptcha=await prepareCaptcha(page,{config,usernameHash:opt.usernameHash,inspect,
+      const preparedCaptcha=await prepareCaptcha(page,{config,usernameHash:opt.usernameHash,inspect,origin,
         assertCurrent:async()=>await guard.assertCurrent()&&await profileProof()});
       if(preparedCaptcha?.prepared!==true||!await readyForm())return result('login_not_ready');
     }
-    try{authLock=await acquire(path.join(root,'data/bitwarden/hhclub-authentication.lock'));}catch{return result('authentication_busy');}
-    let state;try{state=journal(stateFile);}catch{return result('recovery_state_invalid');}
+    try{authLock=await acquire(path.join(root,'data/bitwarden/'+definition.journal+'.lock'));}catch{return result('authentication_busy');}
+    let state;try{state=journal(stateFile,origin,adapterId);}catch{return result('recovery_state_invalid');}
     const used=()=>state.attempts.some(e=>e.profileBinding===guard.binding.profileBinding&&e.businessDate===startedDay);
     if(used())return result('daily_recovery_limit');
     if(!prepare||!withTotp){const provider=await import('./bitwarden-totp.mjs');prepare??=provider.prepareBitwardenTotp;withTotp??=provider.withBitwardenTotp;}
     if(!await guard.assertCurrent()||!await profileProof())return result('scope_unavailable');
-    const prepared=await prepare({root,origin:ORIGIN,binding:guard.binding,config});
+    const prepared=await prepare({root,origin,binding:guard.binding,config});
     if(prepared?.ready!==true)return result(providerReason(prepared));
     const refreshed=await proof();
     if(refreshed?.authenticated){
@@ -290,24 +326,39 @@ export async function recoverHhclubTwoFactorLogin({root,origin=ORIGIN,config,pag
       if(!Number.isSafeInteger(metadata?.validUntilMs)||metadata.validUntilMs-at.getTime()<3000||
         metadata.validUntilMs-at.getTime()>30_000){reason='totp_expired';return;}
       if(!await guard.assertCurrent()||!await profileProof()||!await readyForm()){reason='scope_unavailable';return;}
+      let entry;
+      if(origin===UHD){
+        state=journal(stateFile,origin,adapterId);if(used()){reason='daily_recovery_limit';return;}
+        entry={origin,accountKey:'site-default',adapterId,profileBinding:guard.binding.profileBinding,businessDate:startedDay,state:'pending',attemptedAt:at.toISOString()};
+        state.attempts.push(entry);save(stateFile,state);attempted=true;reason='authentication_unknown';
+        authRoute=async route=>{
+          const request=route.request();let url;try{url=new URL(request.url());}catch{return route.abort('blockedbyclient');}
+          if(!['GET','HEAD'].includes(request.method())){
+            if(request.method()!=='POST'||url.href!==origin+'/takelogin.php'||authPosts>=1)return route.abort('blockedbyclient');
+            authPosts++;return route.continue();
+          }
+          if(url.origin===origin&&['/attendance.php','/takelogin.php'].includes(url.pathname))return route.abort('blockedbyclient');
+          return route.continue();
+        };
+        await page.route('**/*',authRoute);
+      }
       otpWritten=true;
-      const otp=page.locator(inLoginForm('input[name="two_step_code"]'));
+      const otp=page.locator(inLoginForm('input[name="'+definition.otp+'"]',origin));
       await otp.fill(code);
       if(await otp.evaluate((element,expected)=>element.value===expected,code)!==true){reason='otp_field_not_ready';return;}
       const dispatch=date(clock);
       if(day(dispatch)!==startedDay){reason='business_day_changed';return;}
       if(metadata.validUntilMs-dispatch.getTime()<3000||metadata.validUntilMs-dispatch.getTime()>30_000){reason='totp_expired';return;}
       if(!await guard.assertCurrent()||!await profileProof()||!await readyForm(true)){reason='scope_unavailable';return;}
-      state=journal(stateFile);if(used()){reason='daily_recovery_limit';return;}
+      if(origin!==UHD){state=journal(stateFile,origin,adapterId);if(used()){reason='daily_recovery_limit';return;}}
       const finalDispatch=date(clock);
       if(day(finalDispatch)!==startedDay){reason='business_day_changed';return;}
       if(metadata.validUntilMs-finalDispatch.getTime()<3000||metadata.validUntilMs-finalDispatch.getTime()>30_000){reason='totp_expired';return;}
-      const entry={origin:ORIGIN,accountKey:'site-default',adapterId:hhclubTwoFactorAdapter,profileBinding:guard.binding.profileBinding,
-        businessDate:startedDay,state:'pending',attemptedAt:finalDispatch.toISOString()};
-      state.attempts.push(entry);save(stateFile,state);
+      if(!entry){entry={origin,accountKey:'site-default',adapterId,profileBinding:guard.binding.profileBinding,
+        businessDate:startedDay,state:'pending',attemptedAt:finalDispatch.toISOString()};state.attempts.push(entry);save(stateFile,state);}
       attempted=true;reason='authentication_unknown';
       try{
-        await submit();
+        if(origin!==UHD||authPosts===0)await submit();
         await page.waitForLoadState('domcontentloaded',{timeout:15000}).catch(()=>{});
         if(day(date(clock))===startedDay&&await guard.assertCurrent()){
           const after=await proof();
@@ -324,7 +375,7 @@ export async function recoverHhclubTwoFactorLogin({root,origin=ORIGIN,config,pag
     };
     const consume=(code,metadata)=>{if(!accepting||called)return Promise.resolve();called=true;pending=use(code,metadata);return pending;};
     let providerResult;
-    try{providerResult=await withTotp({root,origin:ORIGIN,binding:guard.binding,config,consume,clock});}catch{}
+    try{providerResult=await withTotp({root,origin,binding:guard.binding,config,consume,clock});}catch{}
     finally{accepting=false;}
     if(pending)await pending;
     if(!attempted&&reason==='provider_unavailable')reason=providerReason(providerResult);
@@ -332,7 +383,7 @@ export async function recoverHhclubTwoFactorLogin({root,origin=ORIGIN,config,pag
   }catch{return result(attempted?'authentication_unknown':'recovery_unavailable',attempted,accepted);}
   finally{
     // Never carry an unused/failed code into another submit, helper or retry.
-    try{if(otpWritten&&page?.url()===LOGIN)await page.locator('input[name="two_step_code"]').fill('');}catch{}
+    try{if(otpWritten&&page?.url()===origin+'/login.php')await page.locator('input[name="'+definition.otp+'"]').fill('');}catch{}
     if(authLock)try{await release(authLock);}catch{}
     if(guard)try{await guard.release();}catch{}
   }

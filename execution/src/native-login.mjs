@@ -8,7 +8,7 @@ import { connectOverCdpWithRetry } from "./native-cdp.mjs";
 import { safeLogUrl } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
 import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
-import { recoverHhclubTwoFactorLogin, verifyHhclubNativeProfile } from "./hhclub-two-factor-login.mjs";
+import { recoverHhclubTwoFactorLogin, verifyHhclubNativeProfile,fillNexusBitwardenCredentials } from "./hhclub-two-factor-login.mjs";
 import {recoverPiggoPasswordLogin,piggoPasswordLoginEnabled,guardPiggoPasswordAutofill} from './native-pt-two-factor.mjs';
 import {readNativePtApiHeaderInContext,piggoNativePassiveContext} from './native-pt-api.mjs';
 import {waitForNativePasswordLoginPage} from './login-recovery.mjs';
@@ -21,6 +21,9 @@ const port = Number.parseInt(process.argv[2], 10);
 const expectedOrigin = new URL(process.argv[3]).origin;
 const actualProfile = path.resolve(rootDirectory, process.argv[4] || config.automationUserDataDir || "");
 const hhclub = expectedOrigin === "https://hhanclub.net";
+const hddolbyLogin=expectedOrigin==='https://www.uhddolby.com'&&config.siteTwoFactorRecovery?.[expectedOrigin]?.allowPasswordLogin===true;
+const nativeMode=process.argv[5]??'Login';
+if(!['Login','ReadOnly','Checkin'].includes(nativeMode)||nativeMode!=='Login'&&!hddolbyLogin)throw Error('Native login mode rejected');
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-login.mjs <port> <origin>");
 
 const browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
@@ -31,7 +34,12 @@ let twoFactorRecovery = null;
 try {
   page = await waitForNativePasswordLoginPage(()=>browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
-  if(piggoPasswordLoginEnabled(config,expectedOrigin))await guardPiggoPasswordAutofill(page);
+  if(nativeMode!=='Login'){
+    await page.waitForLoadState('domcontentloaded',{timeout:15000}).catch(()=>{});
+    const {runHddolbyNativeFlow}=await import('./hddolby-native-flow.mjs');
+    console.log(JSON.stringify(await runHddolbyNativeFlow({root:rootDirectory,config,profile:actualProfile,port,page,mode:nativeMode})));
+  }else{
+  if(piggoPasswordLoginEnabled(config,expectedOrigin)||hddolbyLogin)await guardPiggoPasswordAutofill(page,expectedOrigin);
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   await acceptConfiguredLoginTerms(page, expectedOrigin, config);
@@ -46,7 +54,13 @@ try {
       && await password.evaluate((element) => Boolean(element.value))
     );
     let filled = await fieldsFilled();
-    if (!filled) {
+    if(hddolbyLogin){
+      const imported=await fillNexusBitwardenCredentials({root:rootDirectory,origin:expectedOrigin,config,page,profile:actualProfile,
+        profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
+      filled=imported.filled===true&&await fieldsFilled();
+      if(imported.authenticated===true)twoFactorRecovery={handled:true,status:'logged_in',siteTwoFactorRecovery:{attempted:false,accepted:false,reason:'already_authenticated'}};
+    }
+    if (!filled&&!hddolbyLogin) {
       // Chrome may anchor the password-manager popup to either field.  Trying
       // both also handles credentials saved on /sign-up but restored on
       // /sign-in without reading or printing either field's value.
@@ -172,7 +186,7 @@ try {
 
   const finalLocation = new URL(page.url());
   const visiblePassword = await page.locator('input[type="password"]:visible').count() > 0;
-  if (hhclub && !twoFactorRecovery?.handled && !visiblePassword) {
+  if ((hhclub||hddolbyLogin) && !twoFactorRecovery?.handled && !visiblePassword) {
     const assisted = await recoverHhclubTwoFactorLogin({root:rootDirectory,origin:expectedOrigin,config,page,
       profile:actualProfile,submit:async()=>{throw new Error("Login form unavailable");},
       profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
@@ -216,6 +230,7 @@ try {
     title: await page.title(),
   }));
   if (status !== "logged_in") process.exitCode = 2;
+  }
 } catch(error){
   if(page)throw error;
   const pageKinds=browser.contexts().flatMap(context=>context.pages()).map(candidate=>{

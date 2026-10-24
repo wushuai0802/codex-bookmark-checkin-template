@@ -9,13 +9,15 @@ import {validateSiteTwoFactorScope} from '../src/two-factor-scope.mjs';
 import {acquireRunLock,releaseRunLock} from '../src/run-lock.mjs';
 
 const ORIGIN='https://hhanclub.net',LOGIN=ORIGIN+'/login.php',CODE='789345',PRIVATE='MUST_NOT_ESCAPE';
-function fixture(t,{signed=false,authenticated=false,matched=true,accept=true,rejected=false,submitError=false,providerError=false}={}){
+function fixture(t,{signed=false,authenticated=false,matched=true,accept=true,rejected=false,submitError=false,providerError=false,origin=ORIGIN}={}){
+  const adapter=origin===ORIGIN?hhclubTwoFactorAdapter:'hddolby-nexus-stepup-v1';
+  const journalName=origin===ORIGIN?'hhclub-authentication':'hddolby-password-authentication';
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'hhclub-login-')),profile=path.join(root,'data/profile'),controller=path.join(root,'controller');
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   for(const part of ['config','data/profile','tmp','controller/config','controller/data','controller/src'])fs.mkdirSync(path.join(root,part),{recursive:true});
   fs.writeFileSync(path.join(profile,'Local State'),'SYNTHETIC_PROFILE');
-  const config={automationUserDataDir:profile,bookmarksPath:path.join(root,'bookmarks'),siteTwoFactorRecovery:{[ORIGIN]:
-    {enabled:true,reviewed:true,provider:'bitwarden',adapterId:hhclubTwoFactorAdapter,expectedAccountId:'123',usernameHash:'a'.repeat(64)}}};
+  const config={automationUserDataDir:profile,bookmarksPath:path.join(root,'bookmarks'),siteTwoFactorRecovery:{[origin]:
+    {enabled:true,reviewed:true,provider:'bitwarden',adapterId:adapter,expectedAccountId:'123',usernameHash:'a'.repeat(64),...(origin!==ORIGIN?{allowPasswordLogin:true}:{})}}};
   const configFile=path.join(root,'config/config.json'),saveConfig=()=>fs.writeFileSync(configFile,JSON.stringify(config));saveConfig();
   const nonce=crypto.randomUUID();
   fs.writeFileSync(path.join(root,'data/v2-integration.json'),JSON.stringify({executionEngine:'v1',v2ProjectRoot:controller}));
@@ -30,20 +32,22 @@ function fixture(t,{signed=false,authenticated=false,matched=true,accept=true,re
   const form={usernameHash:'a'.repeat(64),passwordFilled:true,captchaFilled:true,hiddenReady:true,otpReady:true,submitReady:true};
   const inspectOwner=async pid=>({alive:pid===process.pid,startedAt:null});
   const acquire=file=>acquireRunLock(file,{inspectProcess:inspectOwner});
-  const page={url:()=>LOGIN,locator:selector=>({fill:async value=>{fills.push(value);if(value)assert.ok(selector.includes('two_step_code'));},
+  let authRoute;
+  const page={url:()=>origin+'/login.php',route:async(_pattern,value)=>{authRoute=value;},locator:selector=>({fill:async value=>{fills.push(value);if(value)assert.ok(selector.includes(origin===ORIGIN?'two_step_code':'input[name="2fa"]'));},
     evaluate:async(fn,expected)=>fn({value:fills.at(-1)},expected)}),
     waitForLoadState:async()=>{},evaluate:async()=>rejected};
-  const args={root,origin:ORIGIN,config,page,profile,clock:()=>at,acquire,
+  const args={root,origin,config,page,profile,clock:()=>at,acquire,
     scope:options=>{scopeChecks++;return validateSiteTwoFactorScope({...options,acquire,inspectOwner,ancestors:async()=>new Set([process.pid]),
-      readPlan:async()=>({exactScopeConfigured:true,targets:[{origin:ORIGIN,candidates:[ORIGIN+'/attendance.php']}]})});},
+      readPlan:async()=>({exactScopeConfigured:true,targets:[{origin,candidates:[origin+'/attendance.php']}]})});},
     inspect:async()=>form,readAuthenticated:async()=>({authenticated:authenticated||recovered,accountMatched:matched,signed}),
     prepare:async()=>{prepares++;return {ready:true,reason:'prepared'};},
     withTotp:async options=>{codes++;if(providerError)throw Error(PRIVATE);await options.consume(CODE,{validUntilMs:at+20_000});return PRIVATE;},
     submit:async()=>{
       submits++;
-      const state=JSON.parse(fs.readFileSync(path.join(root,'data/bitwarden/hhclub-authentication.json')));
+      const state=JSON.parse(fs.readFileSync(path.join(root,'data/bitwarden/'+journalName+'.json')));
       assert.equal(state.attempts.at(-1).state,'pending');assert.ok(fs.existsSync(path.join(root,'tmp/run.lock')));
-      assert.ok(fs.existsSync(path.join(root,'data/bitwarden/hhclub-authentication.lock')));
+      assert.ok(fs.existsSync(path.join(root,'data/bitwarden/'+journalName+'.lock')));
+      if(origin!==ORIGIN)await authRoute({request:()=>({url:()=>origin+'/takelogin.php',method:()=> 'POST'}),continue:async()=>{},abort:async()=>{throw Error('unexpected');}});
       if(submitError)throw Error(PRIVATE+CODE);if(accept)recovered=true;
     }};
   return {args,root,config,configFile,form,saveConfig,setTime:v=>{at=new Date(v).getTime();},loseSession:()=>{recovered=false;},
@@ -69,6 +73,14 @@ test('real normal login TOTP is delivered once to the original submit and own ac
   const journal=JSON.parse(fs.readFileSync(path.join(f.root,'data/bitwarden/hhclub-authentication.json')));
   assert.equal(journal.attempts.length,1);assert.equal(journal.attempts[0].state,'accepted');safe(journal);
   assert.equal(fs.existsSync(path.join(f.root,'tmp/run.lock')),false);
+});
+
+test('the new HDDolby domain reuses the same bounded Nexus algorithm with its reviewed 2fa field and pinned account',async t=>{
+  const f=fixture(t,{origin:'https://www.uhddolby.com'}),value=await recoverHhclubTwoFactorLogin(f.args);
+  assert.equal(value.status,'logged_in');assert.equal(f.codes,1);assert.equal(f.submits,1);assert.deepEqual(f.fills,[CODE,'']);safe(value);
+  const journal=JSON.parse(fs.readFileSync(path.join(f.root,'data/bitwarden/hddolby-password-authentication.json')));
+  assert.equal(journal.attempts[0].origin,'https://www.uhddolby.com');assert.equal(journal.attempts[0].adapterId,'hddolby-nexus-stepup-v1');
+  assert.equal(journal.attempts[0].state,'accepted');
 });
 
 test('wrong username/profile, missing CAPTCHA/password/hidden state, disabled and paused targets never read TOTP',async t=>{

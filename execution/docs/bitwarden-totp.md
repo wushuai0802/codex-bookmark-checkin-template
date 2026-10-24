@@ -1,4 +1,8 @@
-# Bitwarden 二级验证辅助
+# Bitwarden 登录与二级验证辅助
+
+HDDolby 的当前域名为 `https://www.uhddolby.com`。旧域名授权可通过 `Manage-BitwardenTotp.ps1 -Action MigrateHddolbyDomain -BackupRoot <专用备份目录>` 显式迁移；该入口要求新域名已在原签到书签范围中，仅替换原 HDDolby 封存授权的目的域名，保留条目 UUID、原条目名称、账号、Profile、Windows SID、密码库账号和会话。其他授权不变，旧域名历史记录保留。普通 Unlock 不承担迁移或扩大授权。
+
+迁移后的私有 `siteTwoFactorRecovery` 可显式选择 `allowPasswordLogin: true` 与 `loginSource: bitwarden`。登录消费者在活跃执行租约和原 Profile 范围内，仅读取封存 UUID 的 username/password 字段，复用原 Nexus 图片验证码识别，再取当前 TOTP 填写新站的 2fa 字段。登录字段仅通过内存交给固定同源表单，消费后清空，不导出条目、笔记或 TOTP 种子。只读核验始终不登录；需要恢复时先执行认证专用阶段，再根据原账号当日状态决定是否补签。
 
 这是原生签到执行层的可选恢复入口，默认关闭。TOTP 提供器只允许以下已审阅的站点和协议；具体消费者仍须核实真实验证需求、当前账号和 Profile。已有当日完成证据不读取密码库，也不再次提交签到。
 
@@ -6,6 +10,7 @@
 | --- | --- | --- |
 | `https://piggo.me` | `piggo.me` | `piggo-nexus-stepup-v1` |
 | `https://www.hddolby.com` | `www.hddolby.com` | `hddolby-nexus-stepup-v1` |
+| `https://www.uhddolby.com`（迁移后的实际站点） | `www.hddolby.com`（保留原条目） | `hddolby-nexus-stepup-v1` |
 | `https://hhanclub.net` | `hhanclub.net` | `hhclub-nexus-login-v1` |
 
 只支持每站一个 `site-default` 账号。GitHub 等其他来源未加入允许清单；相似域名、不同子域名和未经审阅的协议也不能取码。HHCLUB 的普通登录还包含用户名、密码和图片验证码，TOTP 辅助不能替代这些步骤或绕过验证。
@@ -31,6 +36,8 @@ origin, accountKey, profileBinding, itemId, itemName, adapterId
 日常使用既有每日调度，不新增并行签到任务。真实辅助凭据失效会在既有结果/通知中提示解锁，不把通知失败或密码库不可用作为再次提交的理由。
 
 HDDolby 消费者只处理实际 `/take2fa.php` 的同源 POST 表单，保留站点提供的隐藏字段，严格核对返回路径。先用本人账户栏确认今天已签或未签；已签直接结束，结果不明不取码。认证后重新读取本人日状态，确认未签才接着走原签到流程。直接打开没有有效返回路径的验证码表单不触发自动认证。
+
+新域名的核验和补签使用原生 Chrome 中的原 Profile 和网络会话，避免认证成功后切换到无法读取登录态的请求上下文。只读模式不自动登录、不取码、不访问签到页；认证模式仍只恢复登录。正式补签须匹配父任务现有意图、当日原账号/Profile 的新鲜未签回执，然后在该原生会话内调用原成熟签到器一次，并重新读取本人账户栏。不会导出或复制 Cookie。
 
 HHCLUB 消费者仅增强 `/login.php` 到 `/takelogin.php` 的原密码登录。核对私有 opt-in 的本人账号 ID、归一化用户名哈希、原 Profile 和完整表单后，使用原图片验证码识别器在内存完成图片码，再填写 TOTP。图片验证码格式或置信度不达标时不读 TOTP、不提交。
 

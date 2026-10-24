@@ -126,7 +126,9 @@ elseif ($loginProxy) {
 }
 elseif ($origins.Count -eq 1 -and $config.ptReadOnlyPolicies) {
     $policy = $config.ptReadOnlyPolicies.PSObject.Properties[[string]$origins[0]].Value
-    if ($policy.nativeIsolatedChrome -eq $true -and $policy.nativeApiHeaderFallback -eq $true -and $policy.proxyServer) {
+    $hddolbyPassword = [string]$origins[0] -ceq 'https://www.uhddolby.com' -and $policy.hddolbyHeader -eq $true -and
+        $config.siteTwoFactorRecovery.PSObject.Properties[[string]$origins[0]].Value.allowPasswordLogin -eq $true
+    if (($policy.nativeIsolatedChrome -eq $true -and $policy.nativeApiHeaderFallback -eq $true -or $hddolbyPassword) -and $policy.proxyServer) {
         $ptProxy = [uri][string]$policy.proxyServer
         if ($ptProxy.Scheme -ne 'http' -or $ptProxy.DnsSafeHost -notin @('127.0.0.1','localhost','::1') -or
             -not $ptProxy.Port -or $ptProxy.UserInfo -or $ptProxy.AbsolutePath -ne '/' -or $ptProxy.Query -or $ptProxy.Fragment) {
