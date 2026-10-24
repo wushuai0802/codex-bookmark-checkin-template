@@ -6,6 +6,7 @@ import {
   parseLoginHelperResult,
   resolveLoginRecoveryUrl,
   nativePasswordLoginPage,
+  waitForNativePasswordLoginPage,
 } from "../src/login-recovery.mjs";
 
 test('PigGo native recovery selects its newest actual login tab rather than a restored error or home page',()=>{
@@ -15,6 +16,15 @@ test('PigGo native recovery selects its newest actual login tab rather than a re
   assert.equal(nativePasswordLoginPage([old],origin),old);
   assert.equal(nativePasswordLoginPage([page('https://foreign.example/login.php')],origin),null);
   assert.equal(nativePasswordLoginPage([old,fresh],'https://other.example'),null);
+});
+
+test('a ready native debugging port waits for its target page and never selects an unrelated tab',async()=>{
+  const origin='https://piggo.me',blank={url:()=> 'about:blank'},foreign={url:()=> 'https://foreign.example/'},login={url:()=>origin+'/login.php'};
+  let at=0,reads=0;
+  const options={timeoutMs:1000,clock:()=>at,sleep:async milliseconds=>{at+=milliseconds;}};
+  const page=await waitForNativePasswordLoginPage(()=>++reads<3?[blank,foreign]:[blank,login],origin,options);
+  assert.equal(page,login);assert.equal(reads,3);
+  at=0;assert.equal(await waitForNativePasswordLoginPage(()=>[blank,foreign],origin,options),null);assert.equal(at,1000);
 });
 
 test("登录助手必须明确返回 logged_in 才算成功", () => {

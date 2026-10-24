@@ -11,7 +11,7 @@ import { classifyPageText, readPageTwoFactorStructure } from "./detector.mjs";
 import { recoverHhclubTwoFactorLogin, verifyHhclubNativeProfile } from "./hhclub-two-factor-login.mjs";
 import {recoverPiggoPasswordLogin} from './native-pt-two-factor.mjs';
 import {readNativePtApiHeaderInContext,piggoNativePassiveContext} from './native-pt-api.mjs';
-import {nativePasswordLoginPage} from './login-recovery.mjs';
+import {waitForNativePasswordLoginPage} from './login-recovery.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -29,7 +29,7 @@ let failureCode = null;
 let page = null;
 let twoFactorRecovery = null;
 try {
-  page = nativePasswordLoginPage(browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
+  page = await waitForNativePasswordLoginPage(()=>browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
@@ -215,6 +215,14 @@ try {
     title: await page.title(),
   }));
   if (status !== "logged_in") process.exitCode = 2;
+} catch(error){
+  if(page)throw error;
+  const pageKinds=browser.contexts().flatMap(context=>context.pages()).map(candidate=>{
+    try{const url=new URL(candidate.url());return url.origin===expectedOrigin?'site':url.protocol==='about:'?'blank':
+      url.protocol==='chrome-error:'?'network_error':'other';}catch{return 'unavailable';}
+  });
+  console.log(JSON.stringify({origin:expectedOrigin,status:'needs_attention',failureCode:'browser_startup',stage:'target_page',pageKinds}));
+  process.exitCode=2;
 } finally {
   await browser.close().catch(() => {});
 }

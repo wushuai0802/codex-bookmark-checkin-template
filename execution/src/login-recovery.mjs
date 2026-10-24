@@ -50,6 +50,18 @@ export function nativePasswordLoginPage(pages,origin){
     :candidates[0]??null;
 }
 
+export async function waitForNativePasswordLoginPage(getPages,origin,{timeoutMs=30000,clock=Date.now,
+  sleep=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds))}={}){
+  const deadline=clock()+timeoutMs;
+  do{
+    const page=nativePasswordLoginPage(getPages(),origin);
+    if(page)return page;
+    if(clock()>=deadline)return null;
+    await sleep(Math.min(250,Math.max(1,deadline-clock())));
+  }while(clock()<=deadline);
+  return null;
+}
+
 function safeTerminalDailyCheckin(value) {
   const status = String(value?.status ?? "");
   if (!TERMINAL_DAILY_CHECKIN_STATUSES.has(status)) return null;
