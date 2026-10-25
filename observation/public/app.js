@@ -476,7 +476,7 @@ function renderDailySummary(data) {
   const title = dailySummaryTitle(m, { previousDay, pausedCount });
   const note=previousDay?'尚未收到今日业务回执，以下显示最近业务日的结果。':
     !m.fresh?'当前快照已过期，保留上次完整结果；执行来源状态单独显示。':
-    m.total?`${m.verifiedSuccess} 项已核验${counts.proof?`，${counts.proof} 条回执待补证`:''}。同站多账号分别核验。`:'当前还没有可展示的今日回执。';
+    m.total?`${m.verifiedSuccess} 项已核验${counts.proof?`，${counts.proof} 条回执待补证`:''}。${data.supplementTaskCount?`覆盖日常计划及 ${data.supplementTaskCount} 个 PT 补签站点。`:'同站多账号分别核验。'}`:'当前还没有可展示的今日回执。';
   append(copy, el('p', 'eyebrow', `业务日期 ${data?.businessDate??'—'} · ${freshness.businessLabel}`),el('h2',null,title),el('p','daily-note',note));
   const progress=el('button','daily-progress');progress.type='button';
   progress.setAttribute('aria-label',`查看核验率口径：${m.verifiedSuccess} / ${m.eligible}${m.rate===null?'，暂无参与项':`，约 ${m.rate}%`}`);
@@ -504,7 +504,7 @@ function renderFormulaDetails(data){
   close.addEventListener('click',()=>navigation.closeOverlay());append(heading,title,close);dialog.append(heading);
   dialog.append(el('p','formula-result',m.eligible?`${m.verifiedSuccess} / ${m.eligible} ≈ ${m.rate}%`:'当前没有参与核验的任务'));
   dialog.append(el('p','formula-description','分子只包含有当日权威成功证据的账号任务。收到成功回执，仍需核验后才能计入。'));
-  for(const [label,value] of [['计划账号任务',m.total],['确认未开放',m.verifiedUnavailable],['已按配置取消',m.cancelled],
+  for(const [label,value] of [['全部已授权任务',m.total],['日常计划',data.planCounts?.executionUnits??m.total],['PT 补签',data.supplementTaskCount??0],['确认未开放',m.verifiedUnavailable],['已按配置取消',m.cancelled],
     ['站点方原因',m.excludedSiteIssues],['参与核验',m.eligible],['回执待补证',counts.proof]]){
     const row=el('div','detail-row');append(row,el('span','muted',label),el('strong',null,`${value} 项`));dialog.append(row);
   }
@@ -517,7 +517,7 @@ function renderReadiness(data) {
   const node = $('#readiness-content'); node.replaceChildren();
   const reconciliation=data?.reconciliation??{}, pt=data?.ptStatus?.counts??{};
   for(const [label,value,caption] of [
-    ['计划回执', `${data?.counts?.logicalSites??0} 站 · ${data?.counts?.executionUnits??0} 个账号`, reconciliation.missingCount?`${reconciliation.missingCount} 项缺少回执`:'回执已收齐，业务结果分别核验'],
+    ['计划回执', `${data?.planCounts?.logicalSites??data?.counts?.logicalSites??0} 站 · ${data?.planCounts?.executionUnits??data?.counts?.executionUnits??0} 个账号`, reconciliation.missingCount?`${reconciliation.missingCount} 项缺少回执`:'回执已收齐，业务结果分别核验'],
     ['账号对账', (reconciliation.conflictCount??0)===0?'无冲突':`${reconciliation.conflictCount} 项冲突`, '以执行层账号为准'],
     ['PT 监测', `${pt.sites??0} 站`, `${pt.inLegacyPlan??0} 日常 · ${pt.fallbackOnly??0} 仅补签`]
   ]){
@@ -676,7 +676,7 @@ function renderPtStatus(data) {
     const effective = site.effective ?? {};
     const category = ptStatusCategory(site);
     const evidenceState=ptEvidenceState(site);
-    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? category === 'confirmed' ? '今日已确认，无需补签' : '已授权补签，先核验今日状态' : '不在补签范围'));
+    const scopeCell = el('td'); append(scopeCell, el('span', 'status-chip', site.disabledByConfig ? '已暂停' : site.inLegacyPlan ? '日常签到' : site.fallbackEnabled ? '仅补签' : '仅观测'), el('span', 'subtext', site.disabledByConfig ? '按配置停用，不参与核验率' : site.inLegacyPlan ? '执行层可复核' : site.fallbackEnabled ? category === 'confirmed' ? '今日已确认，无需补签' : '已授权补签，先核验今日状态' : '不在补签范围'));
     const ptCondition=ptStatusCondition(site);
     const statusCell = el('td'); const chip = statusChip(effective.status ?? 'unknown',{observedStatus:effective.status??'unknown',condition:ptCondition});
     const likelySigned = effective.status === 'unknown' && effective.fresh && !effective.authoritative &&
@@ -685,6 +685,7 @@ function renderPtStatus(data) {
     else if(category==='reported')chip.textContent='执行成功';
     if (!effective.fresh) { chip.className = 'status-chip unknown stale'; chip.textContent = effective.observedAt ? `历史：${STATUS_LABELS[effective.status] ?? '未知'}` : '暂无今日记录'; }
     if(category==='unknown'&&['monitor_only_unconfirmed','verification_pending','guarded_read_needed','external_blocked'].includes(evidenceState))chip.textContent=PT_EVIDENCE_LABELS[evidenceState];
+    if(evidenceState==='disabled')chip.textContent=PT_EVIDENCE_LABELS.disabled;
     append(statusCell, chip, site.discrepancy ? el('span', 'subtext discrepancy-text', '来源状态不一致') : null);
     const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', site.reconciledFromUnknown ? '当日只读证据已闭环，原记录保留' : category==='reported' ? '执行回执待补证' : effective.authoritative ? '权威证据' : evidenceState==='monitor_only_unconfirmed' ? '没有回执不代表签到失败' : '状态待核验'));
     const observedCell = el('td'); append(observedCell, el('span', null, formatTime(effective.observedAt)), el('span', 'subtext', effective.fresh ? '当日回执' : effective.observedAt ? '历史记录 · 非今日确认' : '暂无今日记录'));

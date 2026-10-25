@@ -100,7 +100,7 @@ try {
             $dailyDue = $now -ge $scheduled -and [string]$state.lastSuccessDate -ne $now.ToString('yyyy-MM-dd')
             $monitorEnabled = Test-Path -LiteralPath (Join-Path $opsRoot 'config\pt-monitor.local.json')
             $lastSyncAt = try { [datetime]$state.lastSuccessAt } catch { [datetime]::MinValue }
-            $monitorDue = $monitorEnabled -and ($now - $lastSyncAt).TotalMinutes -ge 30
+            $monitorDue = $monitorEnabled -and ($now - $lastSyncAt).TotalMinutes -ge 20
             $due = $sourceChanged -or $v2Changed -or $dailyDue -or $monitorDue
             if ($ForceSync -or ($due -and ($null -eq $retryAt -or $now -ge $retryAt))) {
                 $normalSyncAttempted = $true

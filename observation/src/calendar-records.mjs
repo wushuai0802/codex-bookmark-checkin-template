@@ -7,5 +7,6 @@ export function ptCalendarSummaries(ptStatus){
     displayName:shortLabel(site.displayName),identity:displayIdentity({label:'本站账号'}),taskKind:'pt',inLegacyPlan:site.inLegacyPlan===true,
     observedStatus:site.effective?.fresh?site.effective.status:'unknown',observedAt:site.effective?.observedAt??null,
     evidence:{source:site.effective?.evidence?.source??'none',authoritative:site.effective?.authoritative===true&&site.effective?.fresh===true,
+      ...(site.effective?.evidence?.verification==='task_disabled'?{verification:'task_disabled',rawSource:'configuration'}:{}),
       summary:redactText(site.effective?.evidence?.summary??''),redacted:true}}));
 }

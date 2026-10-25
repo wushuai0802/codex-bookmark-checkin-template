@@ -8,6 +8,7 @@ import {runPtSite,projectPtSiteResult} from './pt-site-execution.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
 import {ptAttemptReconciled} from './pt-reconciliation.mjs';
 import {currentPassivePtResult,recordPtVerification} from './pt-verification.mjs';
+import {ptCapabilities} from './pt-capabilities.mjs';
 import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted,harvestTaskFailed} from './pt-coordination.generated.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
@@ -31,7 +32,7 @@ export function reviewedFallbackReadOrigins(catalog,readPolicy){
     try{
       const policy=readPolicy(site.origin);
       return policy.reviewed===true&&policy.mode==='safe_history_page'&&
-        (policy.dailyHeader===true||policy.hddolbyHeader===true);
+        ptCapabilities(site.origin,policy).guardedSubmit;
     }catch{return false;}
   }).map(site=>site.origin);
 }

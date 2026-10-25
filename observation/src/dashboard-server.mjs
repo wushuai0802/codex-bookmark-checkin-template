@@ -21,9 +21,10 @@ import {createDashboardGenerationReader} from './dashboard-generation.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {releaseInfo} from './release-info.mjs';
 import {operationTargets,enqueueOperation,operationView} from './dashboard-operations.mjs';
-import {matchesTask,cancelledTask} from '../public/dashboard-model.mjs';
+import {matchesTask} from '../public/dashboard-model.mjs';
 import {classifyPtEvidenceState,ptUnknownReconciled} from './pt-status.mjs';
 import {confirmedPtByTask} from './daily-reconciliation.mjs';
+import {authorizedWorkload} from './workload-view.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -246,6 +247,9 @@ export function publicPtStatus(ptStatus) {
         accountRef: typeof site.accountRef === 'string' && /^acct_[a-f0-9]{16}$/.test(site.accountRef) ? site.accountRef : null,
         inLegacyPlan: site.inLegacyPlan === true,
         fallbackEnabled: site.fallbackEnabled === true,
+        ...(site.disabledByConfig===true?{disabledByConfig:true}:{}),
+        ...(site.capabilities&&typeof site.capabilities.read==='boolean'&&typeof site.capabilities.guardedSubmit==='boolean'
+          ?{capabilities:{read:site.capabilities.read,guardedSubmit:site.capabilities.read&&site.capabilities.guardedSubmit}}:{}),
         ...(['prior_outcome_unknown','submission_outcome_unknown','unverified_prior_attempt'].includes(site.recovery?.code)&&
           /^\d{4}-\d{2}-\d{2}$/.test(site.recovery?.blockedSince??'')?{recovery:{code:site.recovery.code,
             blockedSince:site.recovery.blockedSince,summary:redactText(site.recovery.summary)}}:{}),
@@ -418,40 +422,12 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
       merged.availability=availabilityByOrigin.get(task.origin);
     return merged;
   });
-  const sites = new Map();
-  const accounts = new Map();
-  for (const task of tasks) {
-    const site = sites.get(task.origin) ?? {
-      origin: task.origin, logicalSiteKey: task.logicalSiteKey,
-      displayName: task.displayName,
-      logicalGroup: task.logicalGroup, executionUnitCount: 0,
-      status: {}, accounts: new Set()
-    };
-    site.executionUnitCount += 1;
-    site.status[task.observedStatus ?? 'unknown'] = (site.status[task.observedStatus ?? 'unknown'] ?? 0) + 1;
-    if (task.accountRef) site.accounts.add(task.accountRef);
-    sites.set(task.origin, site);
-    if (task.accountRef) {
-      const accountGroup = `${task.origin}|${task.accountRef}`;
-      const account = accounts.get(accountGroup) ?? { accountRef: task.accountRef, identity: task.identity,
-        displayName: task.displayName, origin: task.origin, taskCount: 0, sites: new Set(), status: {} };
-      account.taskCount += 1;
-      account.sites.add(task.origin);
-      account.status[task.observedStatus ?? 'unknown'] = (account.status[task.observedStatus ?? 'unknown'] ?? 0) + 1;
-      accounts.set(accountGroup, account);
-    }
-  }
-  const serializeGroup = (value) => ({ ...value, accounts: value.accounts ? [...value.accounts].sort() : undefined, sites: value.sites ? [...value.sites].sort() : undefined });
-  const status = {};
-  for (const task of tasks) status[task.observedStatus ?? 'unknown'] = (status[task.observedStatus ?? 'unknown'] ?? 0) + 1;
-  const successes=tasks.filter(task=>['signed','already_signed'].includes(task.observedStatus));
-  const cancelled=tasks.filter(cancelledTask);
-  const unavailable=tasks.filter(task=>task.observedStatus==='not_available'&&!cancelled.includes(task));
-  const verified=task=>task.evidence?.authoritative===true;
-  const evidenceQuality={verifiedSuccess:successes.filter(verified).length,unverifiedSuccess:successes.filter(task=>!verified(task)).length,verifiedUnavailable:unavailable.filter(verified).length,unverifiedUnavailable:unavailable.filter(task=>!verified(task)).length,cancelled:cancelled.length};
-  const execution={webExecutionEnabled:false,owners:tasks.reduce((counts,task)=>{counts[task.executionOwner]=(counts[task.executionOwner]??0)+1;return counts;},{}),syncedAt:runtime?.generatedAt??null};
   const projectedSnapshot=publicSnapshot(snapshot);
-  if(projectedSnapshot){projectedSnapshot.counts.status=status;projectedSnapshot.evidenceQuality=evidenceQuality;}
+  const workload=authorizedWorkload({tasks,ptStatus,businessDate:snapshot?.businessDate,counts:projectedSnapshot?.counts});
+  const {status,evidenceQuality}=workload;
+  const execution={webExecutionEnabled:false,owners:workload.tasks.reduce((counts,task)=>{counts[task.executionOwner]=(counts[task.executionOwner]??0)+1;return counts;},{}),syncedAt:runtime?.generatedAt??null};
+  if(projectedSnapshot){projectedSnapshot.counts=workload.counts;projectedSnapshot.planCounts=workload.planCounts;
+    projectedSnapshot.supplementTaskCount=workload.supplementTaskCount;projectedSnapshot.evidenceQuality=evidenceQuality;}
   return {
     snapshot: projectedSnapshot,
     evidenceQuality,
@@ -459,9 +435,9 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
     readiness: evaluateShadowHistory(ledger),
     ptStatus,
     status,
-    tasks,
-    sites: [...sites.values()].map(serializeGroup).sort((a, b) => a.origin.localeCompare(b.origin)),
-    accounts: [...accounts.values()].map(serializeGroup).sort((a, b) => a.accountRef.localeCompare(b.accountRef)),
+    tasks:workload.tasks,
+    sites:workload.sites,
+    accounts:workload.accounts,
     ledger: ledger.slice(-30).map((record) => ({
       recordId: record.recordId, recordedAt: record.recordedAt,
       snapshotId: record.snapshotId, businessDate: record.businessDate,

@@ -2,6 +2,13 @@
 
 ## Native PT recovery contract: 2026-10-25
 
+The global dashboard now combines regular account work with authorized PT-only
+supplements, without changing the regular execution plan. Counts and drill-downs
+share that projection; pure monitoring, pauses and site faults retain their
+exclusions. Manual operations refresh exact bookmark scope into immutable,
+operation-owned catalog files. PT-only uncertain submissions have a separate
+bounded passive follow-up budget; those reads never increase the write budget.
+
 HDDolby native readback and attendance now use explicit session entrypoints;
 `recoverPtLogin` remains authentication-only. A fresh current native observation
 is handed to the existing submit guard while the parent intent, account/Profile

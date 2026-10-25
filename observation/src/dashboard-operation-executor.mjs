@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {operationTargets} from './dashboard-operations.mjs';
@@ -10,7 +9,8 @@ import {recordPtVerification} from './pt-verification.mjs';
 import {runHarvestFallback} from './harvest-fallback.mjs';
 import {runLegacyEngine} from './legacy-engine.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
-import {ptReadPolicies} from './checkin-contract.generated.mjs';
+import {sitePtCapabilities} from './pt-capabilities.mjs';
+import {refreshEvidenceCatalog,withCurrentPtCatalog} from './pt-catalog.mjs';
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const dayAt=now=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
 
@@ -25,7 +25,7 @@ export function validateDashboardOperation(request,snapshot,now=new Date()){
   return target;
 }
 
-export async function executeDashboardOperation(root,request,{now=new Date(),runSite=runPtSite,runEngine=runLegacyEngine,runFallback=runHarvestFallback,openLogin}={}){
+export async function executeDashboardOperation(root,request,{now=new Date(),runSite=runPtSite,runEngine=runLegacyEngine,runFallback=runHarvestFallback,openLogin,refreshCatalog=refreshEvidenceCatalog}={}){
   const snapshot=read(path.join(root,'outputs/shadow-beta-snapshot.json')),target=validateDashboardOperation(request,snapshot,now);
   if(target.skip)return {status:'completed',message:'今日任务已处理，无需重复执行',resultStatus:target.status};
   const runtime=loadRuntimeConfig(root);
@@ -36,7 +36,7 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
     const integration=read(path.join(legacy,'data/v2-integration.json')),gate=integration.harvestPtGate;
     const catalogFile=gate?.catalogFile;
     if(!catalogFile)throw Error('PT catalog unavailable');
-    const bytes=fs.readFileSync(catalogFile),catalogHash=crypto.createHash('sha256').update(bytes).digest('hex'),catalog=JSON.parse(bytes);
+    return withCurrentPtCatalog({root,catalogFile,origin:target.origin,now,refresh:refreshCatalog},async({catalogFile,catalogHash,catalog})=>{
     if(request.action==='verify'){
       const result=await runSite({root,origin:target.origin,catalogFile,catalogHash,readOnly:true});
       recordPtVerification(root,result);
@@ -57,25 +57,23 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
       return {status:'completed',message:'执行层已确认今日签到完成',resultStatus:outcome.v1Status??'already_signed'};
     if(['passive_verification_cooldown','deferred_busy','deferred_preflight'].includes(outcome?.state))return {status:'queued',message:'等待执行器空闲或既有冷却结束',nextEligibleAt:new Date(Date.now()+5*60_000).toISOString()};
     return {status:'blocked',message:'本次未满足补签条件；保留记录，先查看核验结果',resultStatus:outcome?.v1Status??'unknown'};
+    });
   }
   if(request.action==='login'){
     // An explicit login request may have waited in the queue while the site
     // finished signing. Reuse the existing bound passive gateway before
     // opening another manual window; this step never performs a supplement.
-    if(target.pt&&accountKey==='site-default'&&ptReadPolicies[target.origin]){
+    if(target.pt&&accountKey==='site-default'&&sitePtCapabilities(target.pt).read){
       let gate;try{gate=read(path.join(legacy,'data/v2-integration.json')).harvestPtGate;}catch{}
       if(gate?.catalogFile&&fs.existsSync(gate.catalogFile)){
-        const bytes=fs.readFileSync(gate.catalogFile),catalogHash=crypto.createHash('sha256').update(bytes).digest('hex');
-        const temporary=path.join(root,'tmp','login-read-'+crypto.randomUUID()+'.json');
-        fs.mkdirSync(path.dirname(temporary),{recursive:true});fs.writeFileSync(temporary,bytes,{mode:0o600,flag:'wx'});
         let result;
-        try{result=await runSite({root,origin:target.origin,catalogFile:temporary,catalogHash,readOnly:true});}
+        try{result=await withCurrentPtCatalog({root,catalogFile:gate.catalogFile,origin:target.origin,now,refresh:refreshCatalog},
+          input=>runSite({root,origin:target.origin,catalogFile:input.catalogFile,catalogHash:input.catalogHash,readOnly:true}));}
         catch(error){
           if(['PT_PREFLIGHT','PT_ACCOUNT_MISMATCH','PT_PROFILE_MISMATCH'].includes(error.code))throw error;
           // A network/read-capability failure does not cancel the user's
           // already-authorized manual login request. Its normal locks remain.
         }
-        finally{try{fs.unlinkSync(temporary);}catch{/* Cleanup cannot replace the bound read result. */}}
         if(result){
           if(result.accountKey!==accountKey)throw Error('passive login check account changed');
           recordPtVerification(root,result);

@@ -3,7 +3,7 @@ import {cancelledTask,ledgerCancelledCount} from './dashboard-model.mjs';
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 function scopedEntry(entry,scope){
-  const regular=entry.tasks??[],pt=entry.ptSummaries;
+  const regular=(entry.tasks??[]).filter(task=>task.ptSupplementOnly!==true),pt=entry.ptSummaries;
   if(scope==='regular'||!Array.isArray(pt)&&scope==='all')return {...entry,ptRecorded:Array.isArray(pt)};
   let selected=scope==='pt'?(Array.isArray(pt)?pt:regular.filter(t=>t.taskKind==='pt')):[...regular];
   if(scope==='all')for(const item of pt??[]){
@@ -23,7 +23,8 @@ export function calendarPtSummaries(ptStatus){
   return ptStatus.sites.map(site=>({taskId:site.siteRef,origin:site.origin,accountRef:site.accountRef??null,
     displayName:site.displayName,taskKind:'pt',inLegacyPlan:site.inLegacyPlan===true,
     observedStatus:site.effective?.fresh?site.effective.status:'unknown',observedAt:site.effective?.observedAt??null,
-    evidence:site.effective?.evidence??null}));
+    evidence:site.effective?.evidence?.verification==='task_disabled'
+      ?{...site.effective.evidence,rawSource:'configuration'}:site.effective?.evidence??null}));
 }
 
 export function dailyRecords({ledger = [], snapshot = null, tasks = [],ptStatus=snapshot?.ptStatus,scope='all',now=Date.now()} = {}) {

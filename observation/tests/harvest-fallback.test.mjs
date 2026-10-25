@@ -54,8 +54,8 @@ test('one explicit manual request can recover after automatic budgets only from 
 test('reviewed HDDolby account header readers enter the passive scheduler independently of the Nexus dailyHeader flag',()=>{
   const origins=['https://www.hddolby.com','https://nexus.example','https://unreviewed.example','https://unsupported.example'];
   const catalog={sites:origins.map(origin=>({origin}))};
-  const policies=[{reviewed:true,mode:'safe_history_page',hddolbyHeader:true},
-    {reviewed:true,mode:'safe_history_page',dailyHeader:true},{mode:'safe_history_page',dailyHeader:true},
+  const policies=[{reviewed:true,mode:'safe_history_page',url:origins[0]+'/log.php',selector:'#info_block',hddolbyHeader:true},
+    {reviewed:true,mode:'safe_history_page',url:origins[1]+'/index.php',selector:'#info_block',dailyHeader:true},{mode:'safe_history_page',dailyHeader:true},
     {reviewed:true,mode:'safe_history_page'}];
   assert.deepEqual(reviewedFallbackReadOrigins(catalog,origin=>policies[origins.indexOf(origin)]),origins.slice(0,2));
 });
@@ -152,7 +152,7 @@ test('historical HDDolby uncertainty permits a passive read and only its fresh b
       evidence:{source:'pt_page',authoritative:true,businessDate:'2026-09-20',confirmedAt:at.toISOString(),evidenceScope:'site_account_day',
         pagePath:variant==='wrong-path'?'/index.php':'/log.php',statusSignal:variant==='already-signed'?'hddolby_account_header_signed':
           variant==='foreign-signal'?'other_header_unsigned':'hddolby_account_header_unsigned'}};
-    const calls=[],readOnlyOrigins=reviewedFallbackReadOrigins(f.catalog,()=>({reviewed:true,mode:'safe_history_page',hddolbyHeader:true}));
+    const calls=[],readOnlyOrigins=reviewedFallbackReadOrigins(f.catalog,()=>({reviewed:true,mode:'safe_history_page',url:origin+'/log.php',selector:'#info_block',hddolbyHeader:true}));
     const preview=planHarvestFallback({...f,readOnlyOrigins});
     assert.equal(pendingHarvestFallbackAttempts(root,preview,{now,readOnlyOrigins}).length,1);
     await runHarvestFallback({...f,root,execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins,

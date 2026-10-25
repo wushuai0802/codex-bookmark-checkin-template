@@ -10,7 +10,7 @@ submission; unknown evidence does not qualify as disabled or successful.
 | Site maintenance notice | Pause automatic submissions for the business day; check again next day. |
 | Temporary upstream outage | Keep the existing bounded probes, shared-upstream circuit breaker and late recovery window. Show waiting for the site, not a local execution failure. |
 | Rate limit | Honor the cooldown and daily cap. |
-| Harvest still running | Wait for its result before considering a supplement. |
+| Harvest still running | Evaluate the site's owner and reviewed recovery capability; a whole-batch wait is not required for execution-owned or guarded recovery paths. A display cache never authorizes a write. |
 | Prior submission outcome unknown | Read back using the actual execution Profile. A fresh authenticated, exact daily unsigned control can authorize one new guarded attempt; an inconclusive read cannot. Maintenance or an expired entitlement does not clear this state. |
 | Login, identity or local execution problem | Keep the specific attention/error result and the appropriate recovery path. |
 | Reported completion missing evidence | Perform a bounded passive recheck; do not submit again or invent a receipt. |

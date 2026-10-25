@@ -39,6 +39,7 @@ export const nativePtHeaderOrigins = Object.freeze([
 ]);
 export const conditionLabels = Object.freeze({
   "task_disabled": "已取消",
+  "not_signed": "未签到（已确认）",
   "site_maintenance": "站点维护",
   "upstream_unavailable": "等待站点恢复",
   "rate_limit": "等待限频恢复",

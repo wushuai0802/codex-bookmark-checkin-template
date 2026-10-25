@@ -18,6 +18,24 @@ async function start(options) {
   return { instance, base: `http://127.0.0.1:${address.port}` };
 }
 
+test('overview and task API expose the same authorized PT-only pending work and manual capability',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-workload-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current);
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:current.toISOString()});snapshot.businessDate=day;
+  const count=snapshot.tasks.length,origin='https://www.uhddolby.com';
+  snapshot.ptStatus={businessDate:day,generatedAt:current.toISOString(),sites:[{siteRef:'pt_'+('b'.repeat(16)),origin,displayName:'HDDolby',
+    inLegacyPlan:false,fallbackEnabled:true,effective:{source:'execution-supplement',status:'not_signed',fresh:true,authoritative:true,
+      observedAt:current.toISOString(),submissionAttempted:false,evidence:{source:'pt_page',authoritative:true,businessDate:day,
+        confirmedAt:current.toISOString(),statusSignal:'hddolby_account_header_unsigned',evidenceScope:'site_account_day',readSafety:'reviewed_passive',profileBinding:'a'.repeat(64)}}}]};
+  fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+  const {instance,base}=await start({dataDir:root});t.after(()=>new Promise(resolve=>instance.server.close(resolve)));
+  const view=await (await fetch(base+'/api/overview')).json();
+  assert.equal(view.tasks.length,count+1);assert.equal(view.snapshot.counts.executionUnits,count+1);assert.equal(view.snapshot.planCounts.executionUnits,count);
+  assert.equal(view.operationTargets.find(target=>target.origin===origin).actions.retry,true);
+  const filtered=await (await fetch(base+'/api/tasks?status=actionable&q=uhddolby')).json();assert.equal(filtered.total,1);
+  assert.equal(filtered.tasks[0].origin,origin);assert.equal(filtered.tasks[0].accountRef,null);
+});
+
 function close(instance) {
   return new Promise((resolve) => instance.server.close(resolve));
 }
