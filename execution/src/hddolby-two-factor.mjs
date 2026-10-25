@@ -5,6 +5,7 @@ import {prepareBitwardenTotp,withBitwardenTotp} from './bitwarden-totp.mjs';
 import {validateSiteTwoFactorScope} from './two-factor-scope.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {readHddolbyHeader,hddolbyDailyStatusProof} from './hddolby-readonly.mjs';
+import {nativeProviderFailure} from './pt-native-diagnostic.mjs';
 
 const origin='https://www.hddolby.com',adapterId='hddolby-nexus-stepup-v1';
 const origins=new Set([origin,'https://www.uhddolby.com']);
@@ -122,7 +123,8 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
     if(!hddolbyTwoFactorFormReviewed(form))return result('protocol_unverified');
     if(!await scope.assertCurrent()||day(now())!==startedDay)return result('scope_unavailable');
     const providerArgs={root,origin,binding:scope.binding,config};
-    if((await prepare(providerArgs))?.ready!==true)return result('provider_unavailable');
+    const prepared=await prepare(providerArgs);
+    if(prepared?.ready!==true)return result(nativeProviderFailure(prepared));
     before=await readStatus();
     if(!hddolbyDailyStatusProof(before,now()))return result('passive_proof_unavailable');
     if(before.status==='already_signed')return {...result('already_signed'),readback:before};
@@ -203,9 +205,9 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
       entry.finishedAt=now().toISOString();writeJournal(file,journal);
       await page.waitForLoadState('domcontentloaded',{timeout:15_000}).catch(()=>{});
     };
-    try{await withTotp({...providerArgs,clock,consume:(code,metadata)=>{
+    try{const supplied=await withTotp({...providerArgs,clock,consume:(code,metadata)=>{
       if(!active||used)return Promise.resolve();used=true;pending=consume(code,metadata);return pending;
-    }});}
+    }});if(!used&&supplied?.ready!==true)reason=nativeProviderFailure(supplied);}
     finally{active=false;if(pending)await pending;}
     if(!accepted)return result(reason,attempted,accepted);
     if(day(now())!==startedDay||!await scope.assertCurrent())return result('business_day_changed',attempted,accepted);

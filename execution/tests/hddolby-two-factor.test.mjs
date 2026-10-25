@@ -91,6 +91,17 @@ test('already signed skips both cache preparation and current-code access',async
   assert.equal(value.twoFactorRecovery.reason,'already_signed');assert.equal(value.readback.status,'already_signed');
   assert.equal(f.counts.prepare,0);assert.equal(f.counts.provider,0);assert.equal(f.counts.submit,0);
 });
+
+test('known vault failures retain a bounded cause without reading or exposing a code',async t=>{
+  for(const stage of ['prepare','get']){
+    const f=fixture(t,{read:async()=>proof()});
+    if(stage==='prepare')f.args.prepare=async()=>({ready:false,reason:'profile_mismatch'});
+    else f.args.withTotp=async()=>({ready:false,reason:'vault_locked'});
+    const value=await recoverHddolbyTwoFactor(f.args);
+    assert.equal(value.twoFactorRecovery.reason,stage==='prepare'?'provider_profile_mismatch':'provider_vault_locked');
+    assert.equal(value.twoFactorRecovery.attempted,false);assert.equal(f.counts.submit,0);
+  }
+});
 test('a bound accepted authentication needs account/day proof and clears the ephemeral field',async t=>{
   const f=fixture(t),value=await recoverHddolbyTwoFactor(f.args);
   assert.deepEqual(value.twoFactorRecovery,{reason:'authentication_accepted',attempted:true,accepted:true});
