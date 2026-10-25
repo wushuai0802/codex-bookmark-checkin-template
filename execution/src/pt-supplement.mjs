@@ -129,6 +129,9 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   const nativeRead=readOnly&&(policy?.nativeMainChrome===true||policy?.nativeIsolatedChrome===true);
   const binding=nativeRead?nativePtReadBinding(config,target,{root:legacyRoot,isolated:policy.nativeIsolatedChrome===true}):ptExecutionBinding(config,legacyRoot,target);
   const profile=binding.profile;
+  if(process.env.CHECKIN_PT_EXPECTED_PROFILE_BINDING!==undefined&&process.env.CHECKIN_PT_EXPECTED_PROFILE_BINDING!==binding.profileBinding){
+    const error=Error('PT worker Profile changed before dispatch');error.code='PT_PREFLIGHT';error.preflightReason='scope_unavailable';throw error;
+  }
   if(!nativeRead&&!fs.existsSync(path.join(profile,'Local State')))throw Error('execution browser profile is unavailable');
   const readRules=file=>{try{return JSON.parse(fs.readFileSync(path.join(legacyRoot,file),'utf8')).rules??[];}catch(error){if(error.code==='ENOENT')return [];throw error;}};
   const rules=[...readRules('config/qa-rules.json'),...readRules('config/qa-rules.local.json')];
@@ -138,7 +141,7 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   const metadata={accountKey:binding.accountKey,profileBinding:binding.profileBinding,startedAt:startedAt.toISOString(),
     operationMode:policy?.mode??'legacy_checkin',readSafety:policy?'reviewed_passive':'attendance_page_risk'};
   const lock=await acquire(path.join(legacyRoot,'tmp/run.lock'));
-  let context;
+  let context,mutationPossible=false;
   const loginOpt=config.siteTwoFactorRecovery?.[target.origin];
   const supportedLogin=target.origin==='https://hhanclub.net'&&loginOpt?.adapterId==='hhclub-nexus-login-v1'||
     target.origin==='https://www.uhddolby.com'&&loginOpt?.adapterId==='hddolby-nexus-stepup-v1'&&loginOpt.allowPasswordLogin===true;
@@ -197,10 +200,15 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       // Checkin performs its own fresh passive read in the same native session.
       // Do not launch an extra read-only browser between the parent's proof and it.
       const nativeMode=readOnly||loginRecoveryOnly?'ReadOnly':'Checkin';
+      mutationPossible=nativeMode==='Checkin';
       let result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:nativeMode,clock});
+      if(result.submissionAttempted===false)mutationPossible=false;
       if(!readOnly&&result.status==='login_required'){
         const login=await recoverLoginOnce();
-        result=login.status==='logged_in'?await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:nativeMode,clock}):login;
+        if(login.status==='logged_in'){
+          mutationPossible=nativeMode==='Checkin';result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:nativeMode,clock});
+          if(result.submissionAttempted===false)mutationPossible=false;
+        }else result=login;
       }
       await validateScope();
       if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('Native HDDolby scope changed');
@@ -294,7 +302,9 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       metadata.operationMode='legacy_checkin';metadata.readSafety='attendance_page_risk';
     }
     const before=await readReward(context,target.origin,safeConfig);
+    mutationPossible=true;
     let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+    if(result?.submissionAttempted===false)mutationPossible=false;
     if(canRecoverLogin&&result?.status==='login_required'){
       result=await recoverAndRead(result);
       if(result.status==='not_signed'&&result.evidence?.authoritative===true){
@@ -302,7 +312,8 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
         await validateScope();
         if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
         context=await launch({...safeConfig,ptPassiveReadOnly:false});
-        result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+        mutationPossible=true;result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+        if(result?.submissionAttempted===false)mutationPossible=false;
       }
     }
     if(terminal.has(result?.status)&&result?.evidence?.authoritative!==true&&
@@ -318,6 +329,11 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       }
     }
     return publicSupplementResult(target.origin,{...result,...metadata},clock());
+  } catch(error) {
+    if(mutationPossible&&error.code==='PT_PREFLIGHT')return publicSupplementResult(target.origin,{...metadata,
+      status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,
+      operationMode:'legacy_checkin',readSafety:'attendance_page_risk'},clock());
+    throw error;
   } finally {
     try{await context?.close();}finally{await release(lock);}
   }

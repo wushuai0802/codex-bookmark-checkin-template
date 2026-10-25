@@ -24,6 +24,22 @@ export const siteFaultCodes = Object.freeze([
   "site_server_error",
   "dns_validation_failed"
 ]);
+export const deploymentIssueCodes = Object.freeze([
+  "execution_package_drift",
+  "execution_lock_drift",
+  "execution_version_drift",
+  "execution_dependency_drift",
+  "execution_dependency_invalid",
+  "execution_metadata_unavailable",
+  "observation_package_drift",
+  "observation_lock_drift",
+  "observation_version_drift",
+  "observation_dependency_drift",
+  "observation_dependency_invalid",
+  "observation_metadata_unavailable",
+  "integrity_check_failed",
+  "pt_cleanup_pending"
+]);
 export const ptSiteDisplayNames = Object.freeze({
   "https://ptsbao.club": "烧包"
 });

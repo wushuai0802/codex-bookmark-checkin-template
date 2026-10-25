@@ -24,6 +24,21 @@ test('Depth Studio completed header is authoritative only on its authenticated d
   assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，wushuai0802',controls:[]}).status,'unknown');
 });
 
+test('a scope failure after a possible native submission remains unknown instead of becoming an unsubmitted preflight',async t=>{
+  for(const submitted of [true,false]){
+    const args=fixture(t),origin='https://www.uhddolby.com',file=path.join(args.root,'config/config.json');
+    const config=JSON.parse(fs.readFileSync(file));config.siteTwoFactorRecovery={[origin]:{enabled:true,reviewed:true,provider:'bitwarden',
+      adapterId:'hddolby-nexus-stepup-v1',allowPasswordLogin:true}};fs.writeFileSync(file,JSON.stringify(config));
+    fs.writeFileSync(args.catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
+    const catalogHash=crypto.createHash('sha256').update(fs.readFileSync(args.catalogFile)).digest('hex');let changed=false;
+    const run=()=>runPtSupplement({...args,origin,catalogHash,verifyBeforeSubmit:true,
+      acquire:async()=>({}),release:async()=>{},validateScope:async()=>{if(changed)throw Object.assign(Error('scope changed'),{code:'PT_PREFLIGHT'});},
+      runHddolbyNative:async()=>{changed=true;return {status:'needs_attention',submissionAttempted:submitted};}});
+    if(submitted){const value=await run();assert.equal(value.failureCode,'submission_outcome_unknown');assert.equal(value.submissionAttempted,true);}
+    else await assert.rejects(run(),error=>error.code==='PT_PREFLIGHT');
+  }
+});
+
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-site-fallback-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

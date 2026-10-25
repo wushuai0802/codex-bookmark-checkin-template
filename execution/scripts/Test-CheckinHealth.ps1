@@ -475,7 +475,16 @@ $useUserScheduler = $userSchedulerConfigured -and -not $windowsTaskOwnsExecution
 $effectiveSchedulerReady = if ($useUserScheduler) {
     $startupEntryPresent -and $schedulerCount -eq 1 -and $watchdogCount -eq 1 -and $supervisorCount -eq 1
 } else { [bool]$scheduledTaskReady }
+$deploymentIntegrity = [pscustomobject]@{ managed = $false; consistent = $true; busy = $false; issues = @() }
+if ((Test-Path -LiteralPath (Join-Path $root 'release.json')) -and (Test-Path -LiteralPath (Join-Path $root 'src/deployment-integrity.mjs'))) {
+    try {
+        . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
+        $integrityNode = Resolve-CheckinNode $config
+        $deploymentIntegrity = (& $integrityNode (Join-Path $root 'src/deployment-integrity.mjs') $root) | ConvertFrom-Json
+    } catch { $deploymentIntegrity = [pscustomobject]@{ managed = $true; consistent = $false; busy = $false; issues = @('integrity_check_failed') } }
+}
 $checks = [ordered]@{
+    deploymentIntegrity = [bool]($deploymentIntegrity.busy -or $deploymentIntegrity.consistent)
     configPresent = $true
     bookmarksReadable = Test-Path -LiteralPath ([string]$config.bookmarksPath)
     chromeExecutablePresent = Test-Path -LiteralPath ([string]$config.chromeExecutable)
@@ -530,6 +539,7 @@ $result = [ordered]@{
     reason = if (-not $healthy) { 'checks_failed' } elseif ($reportStatus -eq 'complete_with_attention') { 'ok_with_attention' } else { 'ok' }
     checkedAt = (Get-Date).ToString('o')
     failedChecks = $failedChecks
+    deployment = $deploymentIntegrity
     schedule = [string]$config.schedule
     schedulerMode = if ($useUserScheduler) { 'user_scheduler' } elseif ($scheduledTask) { 'windows_task' } else { 'none' }
     schedulerExpectedProbeIntervalMinutes = $probeInterval

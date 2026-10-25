@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
+import {reconcilePtWorker} from './pt-worker-lifecycle.mjs';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {buildSnapshot,writeSnapshot} from './bridge.mjs';
@@ -47,9 +48,10 @@ export function readLegacyHealth({root,legacyRoot,spawnHealth=spawnSync}={}) {
   if(!shell||!fs.existsSync(script))return null;
   try{
     const result=spawnHealth(shell,['-NoProfile','-NonInteractive','-File',script],{cwd:legacyRoot,windowsHide:true,encoding:'utf8',timeout:60_000,maxBuffer:1_000_000});
-    if(result.status!==0||result.error)return null;
+    if(![0,2].includes(result.status)||result.error)return null;
     const health=JSON.parse(result.stdout);
     if(typeof health.healthy!=='boolean'||!Number.isFinite(Date.parse(health.checkedAt))||!Array.isArray(health.failedChecks))return null;
+    if(result.status===2&&health.healthy!==false)return null;
     return health;
   }catch{return null;}
 }
@@ -138,6 +140,7 @@ export async function runLegacyEngine({root=path.resolve('.'),mode='dry-run',acc
   }
   const startedAt=new Date().toISOString();let output;
   try{
+    await reconcilePtWorker(root,{legacyRoot});
     fs.mkdirSync(path.join(root,'logs'),{recursive:true});
     const logFile=path.join(root,'logs',`v1-engine-${Date.now()}.log`);output=fs.openSync(logFile,'a',0o600);
     const exitCode=await new Promise((resolve,reject)=>{

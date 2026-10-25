@@ -1012,8 +1012,9 @@ function renderSettings(data) {
   const content = $('#settings-content'); content.replaceChildren();
   const rows = [
     ['项目版本',data?.release?.version??'—'],['部署提交',data?.release?.revision?.slice(0,12)??'源码运行'],
-    ['系统角色', '执行层签到 · 观测层对账与面板'], ['今日执行', `${snapshot.counts?.executionUnits??0} 个账号任务 · ${(data?.status?.signed??0) + (data?.status?.already_signed??0)} 项已完成`],
-    ['Harvest 对账', '每日任务完成后复核登记的 PT 站点'], ['补签规则', '先核验今日状态，再由执行层受限补签'],
+    ['运行校验',snapshot.health?.deployment?.issues?.includes('pt_cleanup_pending')?'等待清理':snapshot.health?.deployment?.busy?'更新中':snapshot.health?.deployment?.consistent===false?'需复核':snapshot.health?.deployment?.managed?'一致':'本地安装'],
+    ['系统角色', '执行层签到 · 观测层对账与面板'], ['今日任务', `${snapshot.counts?.executionUnits??0} 项已授权 · ${data.evidenceQuality?.verifiedSuccess??0} 项已核验`],
+    ['Harvest 对账', '按站点归属与最新回执核验'], ['补签规则', '先核验今日状态，再由执行层受限补签'],
     ['人工控制', '只读核验、受限补签、绑定登录和续跑'],['执行电脑',data?.operations?.worker?.online?'在线':'等待连接'],
     ['计划来源', snapshot.source?.system === 'legacy-checkin' ? '书签签到计划' : snapshot.source?.system ?? '书签签到计划'],
     ['认证状态', data?.authConfigured ? '已配置' : '仅回环访问'], ['数据目录', '服务端已配置（路径不展示）']

@@ -11,6 +11,7 @@ import {runLegacyEngine} from './legacy-engine.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {sitePtCapabilities} from './pt-capabilities.mjs';
 import {refreshEvidenceCatalog,withCurrentPtCatalog} from './pt-catalog.mjs';
+import {reconcilePtWorker} from './pt-worker-lifecycle.mjs';
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const dayAt=now=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
 
@@ -98,12 +99,14 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
         target.origin+(target.pt?'/login.php':'/login');
       if(new URL(url).origin!==target.origin)throw Error('login URL binding mismatch');
       let engine,runner;
-      try{engine=acquireExecutionLock(root);runner=await acquireRunLock(path.join(legacy,'tmp/run.lock'));
+      try{engine=acquireExecutionLock(root);await reconcilePtWorker(root,{legacyRoot:legacy});runner=await acquireRunLock(path.join(legacy,'tmp/run.lock'));
         execFileSync(runtime.powershellExecutable??'pwsh',['-NoProfile','-File',path.join(legacy,'scripts/Open-PlainLoginChrome.ps1'),
           '-Urls',url,'-UserDataDirOverride',binding.profile,'-EnablePasswordManager'],{windowsHide:true,encoding:'utf8',timeout:30000});
       }finally{if(runner)await releaseRunLock(runner);if(engine)releaseExecutionLock(engine);}
     }
-    return {status:'waiting_login',message:'已在执行电脑打开绑定窗口；完成登录并关闭窗口后，点击“登录后继续”'};
+    return {status:'waiting_login',message:target.kind==='pt'
+      ?'已打开绑定窗口；登录并关闭后可只读核验，未签到时再补签'
+      :'已在执行电脑打开绑定窗口；完成登录并关闭窗口后，点击“登录后继续”'};
   }
   const result=await runEngine({root,mode:'execute',origins:[target.origin],accountKeys:[accountKey],notify:false});
   const outcome=result.results?.find(r=>r.origin===target.origin&&(r.accountKey??'site-default')===accountKey);

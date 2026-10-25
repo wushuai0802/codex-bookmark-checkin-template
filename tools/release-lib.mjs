@@ -60,9 +60,17 @@ export function assertNoManualHandoff(root){
 export function planRelease({source,executionRoot,observationRoot,opsRoot,files,revision,version}={}){
   const roots={execution:path.resolve(executionRoot),observation:path.resolve(observationRoot),...(opsRoot?{operations:path.resolve(opsRoot)}:{})};
   for(const root of Object.values(roots))if(root===path.parse(root).root)throw Error('runtime root cannot be a drive root');
-  const canonical=value=>process.platform==='win32'?value.toLowerCase():value;
+  const canonical=value=>{let resolved=path.resolve(value);try{resolved=fs.realpathSync.native(resolved);}catch{}
+    return process.platform==='win32'?resolved.toLowerCase():resolved;};
   if(new Set(Object.values(roots).map(canonical)).size!==Object.values(roots).length)throw Error('execution, observation and operations roots must be distinct');
   source=path.resolve(source);
+  let gitRoot=null,sourceTree=null;
+  try{gitRoot=execFileSync('git',['rev-parse','--show-toplevel'],{cwd:source,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{}
+  if(gitRoot&&canonical(path.resolve(gitRoot))===canonical(source)){
+    if(execFileSync('git',['status','--porcelain=v1','--untracked-files=normal'],{cwd:source,encoding:'utf8'}).trim())
+      throw Error('release source has uncommitted changes; commit and verify it first');
+    sourceTree=execFileSync('git',['rev-parse','HEAD^{tree}'],{cwd:source,encoding:'utf8'}).trim();
+  }
   files??=execFileSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:source,encoding:'utf8'}).trim().split(/\r?\n/).filter(file=>managed.test(file));
   if(roots.operations){
     const operationCode=[...files].filter(file=>file.startsWith('observation/')&&
@@ -77,7 +85,8 @@ export function planRelease({source,executionRoot,observationRoot,opsRoot,files,
     return {file,beforeHash:fileHash(to),afterHash};
   });
   const detectedRevision=revision??execFileSync('git',['rev-parse','HEAD'],{cwd:source,encoding:'utf8'}).trim();
-  return {schemaVersion:1,source,roots,revision:detectedRevision,version:version??JSON.parse(fs.readFileSync(path.join(source,'package.json'),'utf8')).version,
+  const artifactHash=crypto.createHash('sha256').update(JSON.stringify(entries.map(entry=>[entry.file,entry.afterHash]))).digest('hex');
+  return {schemaVersion:1,source,roots,revision:detectedRevision,sourceTree,artifactHash,version:version??JSON.parse(fs.readFileSync(path.join(source,'package.json'),'utf8')).version,
     createdAt:new Date().toISOString(),files:entries,protections:protectedPaths(roots).map(file=>({file,hash:fileHash(file)}))};
 }
 
@@ -86,6 +95,8 @@ export async function withRuntimeLocks(plan,run){
   const {acquireRunLock,releaseRunLock}=await import(pathToFileURL(path.join(plan.source,'execution/src/run-lock.mjs')));
   let worker,engine,runner;
   try{worker=acquireExecutionLock(plan.roots.observation,{name:'harvest-fallback.lock'});engine=acquireExecutionLock(plan.roots.observation);
+    const {reconcilePtWorker}=await import(pathToFileURL(path.join(plan.source,'observation/src/pt-worker-lifecycle.mjs')));
+    await reconcilePtWorker(plan.roots.observation,{legacyRoot:plan.roots.execution});
     runner=await acquireRunLock(path.join(plan.roots.execution,'tmp/run.lock'));return await run();
   }finally{if(runner)await releaseRunLock(runner);if(engine)releaseExecutionLock(engine);if(worker)releaseExecutionLock(worker);}
 }
@@ -109,24 +120,33 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
     for(const entry of prepared)if(entry.beforeHash){const to=safeFile(backup,entry.file);fs.mkdirSync(path.dirname(to),{recursive:true});fs.copyFileSync(entry.to,to);}
     const markers=Object.fromEntries(Object.entries(plan.roots).map(([layer,root])=>[layer,fs.existsSync(marker(root))?fs.readFileSync(marker(root),'utf8'):null]));
     const release={...plan,appliedAt:new Date().toISOString(),markers};
-    const markerBytes=JSON.stringify({version:plan.version,revision:plan.revision,deployedAt:release.appliedAt});
+    const markerBytes=Object.fromEntries(Object.keys(plan.roots).map(layer=>[layer,JSON.stringify({version:plan.version,revision:plan.revision,
+      deployedAt:release.appliedAt,sourceTree:plan.sourceTree??null,artifactHash:plan.artifactHash??null,
+      packageHash:plan.files.find(entry=>entry.file===layer+'/package.json')?.afterHash??null,
+      lockHash:plan.files.find(entry=>entry.file===layer+'/package-lock.json')?.afterHash??null})]));
     atomic(path.join(backup,'manifest.json'),JSON.stringify(release,null,2));
     const modified=[];
     try{
+      for(const root of Object.values(plan.roots))atomic(path.join(root,'tmp/release-in-progress.json'),JSON.stringify({kind:'managed-release',pid:process.pid,startedAt:release.appliedAt}));
       for(const entry of prepared)if(entry.beforeHash!==entry.afterHash){atomic(entry.to,entry.bytes);modified.push(entry);}
       for(const p of plan.protections)if(fileHash(p.file)!==p.hash)throw Error('protected configuration changed during deployment');
-      for(const root of Object.values(plan.roots))atomic(marker(root),markerBytes);
+      for(const [layer,root] of Object.entries(plan.roots))atomic(marker(root),markerBytes[layer]);
     }catch(error){
       for(const entry of modified.reverse()){
         if(fileHash(entry.to)!==entry.afterHash)continue;
         if(entry.beforeHash)atomic(entry.to,fs.readFileSync(safeFile(backup,entry.file)));
         else {const saved=safeFile(backup,'retired/'+entry.file);fs.mkdirSync(path.dirname(saved),{recursive:true});fs.renameSync(entry.to,saved);}
       }
-      for(const [layer,root] of Object.entries(plan.roots))if(fs.existsSync(marker(root))&&fs.readFileSync(marker(root),'utf8')===markerBytes){
+      for(const [layer,root] of Object.entries(plan.roots))if(fs.existsSync(marker(root))&&fs.readFileSync(marker(root),'utf8')===markerBytes[layer]){
         if(markers[layer]!=null)atomic(marker(root),markers[layer]);
         else fs.renameSync(marker(root),path.join(backup,layer+'-failed-release.json'));
       }
       throw error;
+    }finally{
+      for(const root of Object.values(plan.roots)){
+        const file=path.join(root,'tmp/release-in-progress.json');
+        if(fs.existsSync(file))try{if(JSON.parse(fs.readFileSync(file,'utf8')).pid===process.pid)fs.unlinkSync(file);}catch{}
+      }
     }
     return {backup,files:prepared.length,changed:prepared.filter(e=>e.beforeHash!==e.afterHash).length,revision:plan.revision,version:plan.version};
   });
@@ -152,5 +172,18 @@ export async function rollbackRelease(backup,{lock=withRuntimeLocks}={}){
   });
 }
 
-export function auditRelease(plan){return {version:plan.version,revision:plan.revision,
-  files:plan.files.length,drift:plan.files.filter(entry=>fileHash(destination(plan.roots,entry.file))!==entry.afterHash).map(entry=>entry.file)};}
+export function auditRelease(plan){
+  const dependencyDrift=[];
+  for(const layer of ['execution','observation']){
+    const root=plan.roots[layer],pkg=path.join(root,'package.json'),lock=path.join(root,'package-lock.json');
+    if(!fs.existsSync(pkg)||!fs.existsSync(lock))continue;
+    const dependencies=JSON.parse(fs.readFileSync(pkg,'utf8')).dependencies??{},packages=JSON.parse(fs.readFileSync(lock,'utf8')).packages??{};
+    for(const name of Object.keys(dependencies)){
+      const expected=packages['node_modules/'+name]?.version,file=path.join(root,'node_modules',name,'package.json');
+      let actual=null;try{actual=JSON.parse(fs.readFileSync(file,'utf8')).version;}catch{}
+      if(expected&&actual!==expected)dependencyDrift.push({package:layer+'/'+name,expected,actual});
+    }
+  }
+  return {version:plan.version,revision:plan.revision,sourceTree:plan.sourceTree??null,artifactHash:plan.artifactHash??null,
+    files:plan.files.length,drift:plan.files.filter(entry=>fileHash(destination(plan.roots,entry.file))!==entry.afterHash).map(entry=>entry.file),dependencyDrift};
+}

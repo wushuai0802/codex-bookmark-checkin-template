@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {planRelease,applyRelease,rollbackRelease,auditRelease,assertNoManualHandoff} from '../../tools/release-lib.mjs';
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'release-drill-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const source=path.join(root,'source'),executionRoot=path.join(root,'execution'),observationRoot=path.join(root,'observation');
@@ -13,6 +14,30 @@ function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'release-dri
   fs.writeFileSync(executionRoot+'/src/runner.mjs','old runner');fs.writeFileSync(executionRoot+'/config/config.json','private config');
   return {root,source,executionRoot,observationRoot,files:['execution/src/runner.mjs','observation/public/app.js','observation/Dockerfile'],revision:'a'.repeat(40),version:'1.1.0'};}
 const lock=async(_plan,run)=>run();
+
+test('a real Git source must be committed and its source tree/artifact identity is recorded',async t=>{
+  const f=fixture(t),git=args=>execFileSync('git',args,{cwd:f.source,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+  const email=['fixture','example.test'].join('@');
+  git(['init','--quiet']);git(['add','--all']);git(['-c','user.name=Fixture','-c','user.email='+email,'commit','--quiet','-m','fixture']);
+  const plan=planRelease(f);assert.match(plan.sourceTree,/^[a-f0-9]{40}$/);assert.match(plan.artifactHash,/^[a-f0-9]{64}$/);
+  const applied=await applyRelease(plan,{backupRoot:f.root+'/backups',lock});
+  const marker=JSON.parse(fs.readFileSync(f.executionRoot+'/release.json'));assert.equal(marker.sourceTree,plan.sourceTree);assert.equal(marker.artifactHash,plan.artifactHash);
+  assert.equal(fs.existsSync(f.executionRoot+'/tmp/release-in-progress.json'),false);
+  fs.writeFileSync(f.source+'/execution/src/runner.mjs','unreviewed change');assert.throws(()=>planRelease(f),/uncommitted/);
+  await rollbackRelease(applied.backup,{lock});
+});
+
+test('release audit detects installed dependency drift independently of code-file hashes',async t=>{
+  const f=fixture(t),pkg='execution/package.json',lockfile='execution/package-lock.json';
+  fs.writeFileSync(f.source+'/'+pkg,JSON.stringify({version:f.version,dependencies:{'fixture-sdk':'1.0.0'}}));
+  fs.writeFileSync(f.source+'/'+lockfile,JSON.stringify({packages:{'node_modules/fixture-sdk':{version:'1.0.0'}}}));
+  fs.mkdirSync(f.executionRoot+'/node_modules/fixture-sdk',{recursive:true});
+  const installed=f.executionRoot+'/node_modules/fixture-sdk/package.json';fs.writeFileSync(installed,JSON.stringify({version:'1.0.0'}));
+  const plan=planRelease({...f,files:[...f.files,pkg,lockfile]});await applyRelease(plan,{backupRoot:f.root+'/backups',lock});
+  assert.deepEqual(auditRelease(plan).dependencyDrift,[]);
+  fs.writeFileSync(installed,JSON.stringify({version:'2.0.0'}));
+  assert.deepEqual(auditRelease(plan).drift,[]);assert.deepEqual(auditRelease(plan).dependencyDrift,[{package:'execution/fixture-sdk',expected:'1.0.0',actual:'2.0.0'}]);
+});
 
 test('all actual pending handoff states and an active manual process prevent code replacement',async t=>{
   const f=fixture(t);fs.mkdirSync(f.executionRoot+'/tmp');

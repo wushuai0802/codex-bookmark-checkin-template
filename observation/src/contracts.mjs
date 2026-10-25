@@ -1,5 +1,11 @@
 import crypto from 'node:crypto';
+import {deploymentIssueCodes} from './checkin-contract.generated.mjs';
 export {taskStatuses as STATUS_VALUES} from './checkin-contract.generated.mjs';
+export function projectDeployment(value){
+  if(!value||typeof value!=='object')return undefined;
+  return {managed:value.managed===true,consistent:value.consistent===null?null:value.consistent===true,busy:value.busy===true,
+    issues:Array.isArray(value.issues)?value.issues.filter(code=>deploymentIssueCodes.includes(code)).slice(0,10):[]};
+}
 
 // The all-zero value is reserved as a missing-plan sentinel and must never
 // cross an execution boundary as if it were a real fingerprint.

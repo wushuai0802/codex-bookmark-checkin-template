@@ -30,6 +30,7 @@ function previousHealthReport(previous){
   if(!health||typeof health!=='object'||!health.sourceCheckedAt)return undefined;
   const count=boundedCount(health.failedCheckCount,1000);
   return {healthy:health.healthy===true,checkedAt:health.sourceCheckedAt,
+    ...(health.deployment?{deployment:health.deployment}:{}),
     reason:typeof health.reason==='string'?health.reason:undefined,
     failedChecks:Array.from({length:count},()=>({}))};
 }

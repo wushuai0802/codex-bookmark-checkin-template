@@ -25,7 +25,9 @@ try{
     const file=path.join(directory,request.id+'.json');save(file,{request,phase:'running'});
     let result;
     try{result=await executeDashboardOperation(root,request);}
-    catch(error){result=/already active|已有一个签到任务|占用/.test(error.message)?
+    catch(error){result=error.code==='PT_CLEANUP_PENDING'
+      ?{status:'queued',message:'上次任务尚未完成清理，稍后自动复核',nextEligibleAt:new Date(Date.now()+5*60_000).toISOString()}:
+      /already active|已有一个签到任务|占用/.test(error.message)?
       {status:'queued',message:'执行器或登录窗口正忙，稍后继续',nextEligibleAt:new Date(Date.now()+5*60_000).toISOString()}:
       {status:'blocked',message:'当前执行条件不满足；请刷新状态后先核验，未强制提交'};}
     save(file,{request,result,phase:'finished'});remote({mode:'finish',id:request.id,claimToken:request.claimToken,...result});save(file,{request,result,published:true});

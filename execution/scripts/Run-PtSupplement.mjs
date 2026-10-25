@@ -9,7 +9,10 @@ import {readBookmarkPlan} from '../src/bookmarks.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 try {
   const [origin,catalogFile,catalogHash,mode]=process.argv.slice(2);
-  if(mode && !['--read-only','--verify-before-submit','--recover-login-only'].includes(mode))throw Error('unknown PT supplement mode');
+  if(mode && !['--execute','--read-only','--verify-before-submit','--recover-login-only'].includes(mode))throw Error('unknown PT supplement mode');
+  const workerArgument=process.argv[6];
+  if(workerArgument!==undefined&&(!/^--worker-owner=[a-f0-9-]{36}$/.test(workerArgument)||
+    workerArgument!=='--worker-owner='+process.env.CHECKIN_PT_CHILD_OWNER))throw Error('PT worker owner mismatch');
   const fallbackAttemptId=process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
   if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId))throw Error('invalid PT fallback attempt');
   const integration=JSON.parse(fs.readFileSync(path.join(root,'data/v2-integration.json'),'utf8'));

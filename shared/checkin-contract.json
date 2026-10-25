@@ -7,6 +7,7 @@
   },
   "externalRetryCauses": ["upstream_unavailable", "rate_limit", "harvest_waiting"],
   "siteFaultCodes": ["tls_certificate_invalid", "tls_handshake_failed", "site_server_error", "dns_validation_failed"],
+  "deploymentIssueCodes": ["execution_package_drift","execution_lock_drift","execution_version_drift","execution_dependency_drift","execution_dependency_invalid","execution_metadata_unavailable","observation_package_drift","observation_lock_drift","observation_version_drift","observation_dependency_drift","observation_dependency_invalid","observation_metadata_unavailable","integrity_check_failed","pt_cleanup_pending"],
   "ptSiteDisplayNames": {"https://ptsbao.club": "烧包"},
   "ptOriginAliases": {"https://www.open.cd": "https://open.cd"},
   "nativePtHeaderOrigins": ["https://audiences.me", "https://ourbits.club", "https://piggo.me", "https://www.hdkyl.in", "https://ptsbao.club"],

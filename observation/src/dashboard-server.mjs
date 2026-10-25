@@ -7,7 +7,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLedger } from './shadow-ledger.mjs';
-import { redactText } from './contracts.mjs';
+import { redactText,projectDeployment } from './contracts.mjs';
 import { healthIsFresh, timestampFresh } from './freshness.mjs';
 import { evaluateShadowHistory } from './shadow-acceptance.mjs';
 import { displayIdentity, shortLabel } from './display-identity.mjs';
@@ -351,7 +351,8 @@ function publicSnapshot(snapshot, now = new Date().toISOString()) {
         maxAgeHours: typeof snapshot.health.freshness.maxAgeHours === 'number' && snapshot.health.freshness.maxAgeHours > 0 ? snapshot.health.freshness.maxAgeHours : 26
       } : { fresh: false, ageHours: null, maxAgeHours: 26 },
       reason: typeof snapshot.health.reason === 'string' ? snapshot.health.reason.slice(0, 240) : null,
-      failedCheckCount: Number.isInteger(snapshot.health.failedCheckCount) && snapshot.health.failedCheckCount >= 0 ? snapshot.health.failedCheckCount : null
+      failedCheckCount: Number.isInteger(snapshot.health.failedCheckCount) && snapshot.health.failedCheckCount >= 0 ? snapshot.health.failedCheckCount : null,
+      ...(projectDeployment(snapshot.health.deployment)?{deployment:projectDeployment(snapshot.health.deployment)}:{})
     } : null
   };
 }
