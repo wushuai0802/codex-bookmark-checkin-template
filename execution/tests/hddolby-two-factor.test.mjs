@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {recoverHddolbyTwoFactor,hddolbyTwoFactorFormReviewed,hddolbyPassiveContext} from '../src/hddolby-two-factor.mjs';
+import {chromium} from 'playwright-core';
+import {recoverHddolbyTwoFactor,hddolbyTwoFactorFormReviewed,hddolbyPassiveContext,inspectHddolbyTwoFactorForm} from '../src/hddolby-two-factor.mjs';
 import {tryHddolbyPostRedirectVerification} from '../src/browser.mjs';
 
 const origin='https://www.hddolby.com',adapterId='hddolby-nexus-stepup-v1';
@@ -14,14 +15,57 @@ function proof(status='not_signed',at=now){return {status,submissionAttempted:fa
 function form(){return {sameOrigin:true,path:'/take2fa.php',method:'POST',returntoPath:'/attendance.php',returntoUnsafe:false,
   passwordPresent:false,visible:true,sameWindow:true,fields:[{name:'type',type:'hidden'},{name:'returnto',type:'hidden'},
     {name:'2fa',type:'text',visible:true,enabled:true},{name:'',type:'submit',visible:true,enabled:true}]};}
+
+test('Nexus table-owned controls work without DOM ancestry, persist before input, and submit at most one authentication request',async t=>{
+  const browser=await chromium.launch({channel:'chrome',headless:true});
+  t.after(()=>browser.close());
+  for(const variant of ['click','input-submit','foreign-form']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'hdd-form-owner-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    const site='https://www.uhddolby.com',context=await browser.newContext(),page=await context.newPage();
+    let posts=0,providerCalls=0;
+    await context.route('**/*',async route=>{
+      const request=route.request(),url=new URL(request.url());
+      if(url.origin!==site)return route.abort();
+      if(request.method()==='POST'){
+        assert.equal(url.pathname,'/take2fa.php');posts++;
+        const audit=JSON.parse(fs.readFileSync(path.join(root,'data/bitwarden/hddolby-authentication.json'),'utf8'));
+        assert.equal(audit.attempts.length,1);assert.equal(audit.attempts[0].state,'pending');
+        const body=new URLSearchParams(request.postData());
+        assert.equal(body.get('2fa'),code);assert.equal(body.get('type'),'fixture');assert.equal(body.get('returnto'),'/index.php');
+        return route.fulfill({status:302,headers:{location:site+'/index.php'}});
+      }
+      if(url.pathname==='/index.php')return route.fulfill({status:200,body:'fixture authenticated'});
+      const action=variant==='foreign-form'?'https://other.example/take2fa.php':'/take2fa.php';
+      return route.fulfill({status:200,contentType:'text/html',body:
+        '<table><form method="post" action="'+action+'"><tr><td><input type="hidden" name="type" value="fixture">'+
+        '<input type="hidden" name="returnto" value="/index.php"><input name="2fa" type="text"><input type="submit" value="Continue">'+
+        '</td></tr></form></table><button type="button">Theme</button>'+
+        (variant==='input-submit'?'<script>document.getElementsByName("2fa")[0].addEventListener("input",function(){if(this.value.length===6){window.name="fixture-input-submit";this.form.requestSubmit();}});</script>':'')});
+    });
+    await page.goto(site+'/take2fa.php');
+    assert.equal(await page.locator('form input').count(),0);
+    const inspected=await inspectHddolbyTwoFactorForm(page);
+    assert.equal(Boolean(inspected),variant!=='foreign-form');
+    const value=await recoverHddolbyTwoFactor({root,page,config:{automationUserDataDir:path.join(root,'data/profile'),siteTwoFactorRecovery:{[site]:{
+      enabled:true,reviewed:true,provider:'bitwarden',adapterId,expectedAccountId:'7'}}},clock:()=>now.getTime(),
+      validate:async()=>({binding:{accountKey:'site-default',profileBinding:binding,adapterId},assertCurrent:async()=>true,release:async()=>{}}),
+      read:async()=>proof(posts?'already_signed':'not_signed'),prepare:async()=>({ready:true}),
+      withTotp:async({consume})=>{providerCalls++;await consume(code,{validUntilMs:now.getTime()+15_000});}});
+    assert.equal(posts,variant==='foreign-form'?0:1);assert.equal(providerCalls,variant==='foreign-form'?0:1);
+    assert.equal(value.twoFactorRecovery.accepted,variant!=='foreign-form',JSON.stringify({variant,...value}));
+    if(variant==='input-submit')assert.equal(await page.evaluate(()=>window.name),'fixture-input-submit');
+    assert.doesNotMatch(JSON.stringify(value),new RegExp(code));
+    await context.close();
+  }
+});
 function fixture(t,overrides={}){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'hdd-two-factor-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const counts={prepare:0,provider:0,submit:0,release:0},fills=[];
   const response={url:()=>origin+'/take2fa.php',request:()=>({method:()=> 'POST'}),status:()=>302,
     allHeaders:async()=>({location:origin+'/attendance.php'}),text:async()=>''};
-  const input={count:async()=>1,fill:async value=>{fills.push(value);}},submit={count:async()=>1,click:async()=>{counts.submit++;}};
+  const input={count:async()=>1,evaluate:async()=>true,fill:async value=>{fills.push(value);}},submit={count:async()=>1,evaluate:async()=>true,click:async()=>{counts.submit++;}};
   const page={url:()=>origin+'/take2fa.php',locator:selector=>selector.includes('[name="2fa"]')?input:submit,
-    waitForResponse:async predicate=>predicate(response)?response:null,waitForLoadState:async()=>{}};
+    waitForResponse:async predicate=>predicate(response)?response:null,waitForLoadState:async()=>{},route:async()=>{},unroute:async()=>{}};
   const config={automationUserDataDir:path.join(root,'data/chrome-user-data'),siteTwoFactorRecovery:{[origin]:{
     enabled:true,reviewed:true,provider:'bitwarden',adapterId,expectedAccountId:'7'}}};
   const scope={binding:{accountKey:'site-default',profileBinding:binding,adapterId},assertCurrent:async()=>true,
