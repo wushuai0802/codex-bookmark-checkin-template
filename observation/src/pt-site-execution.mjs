@@ -5,6 +5,7 @@ import path from 'node:path';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {ptFailureMessages,ptRetryCauses,ptResultStatuses} from './checkin-contract.generated.mjs';
+import {projectPtNativeDiagnostic} from './pt-native-diagnostic.generated.mjs';
 
 const statuses=new Set(ptResultStatuses);
 const diagnosticCodes=new Set(Object.keys(ptFailureMessages));
@@ -12,6 +13,7 @@ export function projectPtDiagnostic(value={}){
   return {...(diagnosticCodes.has(value.failureCode)?{failureCode:value.failureCode}:{}),
     ...(diagnosticCodes.has(value.underlyingFailureCode)?{underlyingFailureCode:value.underlyingFailureCode}:{}),
     ...(ptRetryCauses.includes(value.retryCause)?{retryCause:value.retryCause}:{}),
+    ...(projectPtNativeDiagnostic(value.nativeFlow)?{nativeFlow:projectPtNativeDiagnostic(value.nativeFlow)}:{}),
     ...(value.siteCondition==='site_maintenance'?{siteCondition:'site_maintenance'}:{})};
 }
 const sources=new Set(['api','page_text','usage_log','pt_page','none']);

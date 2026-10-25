@@ -8,9 +8,10 @@ import {ptDiagnostic} from './pt-diagnostics.mjs';
 import {nativePtReadBinding,inspectNativePtHeader} from './native-pt-read.mjs';
 import {readOurbitsProfile} from './pt-profile-read.mjs';
 import {readHddolbyHeader} from './hddolby-readonly.mjs';
-import {recoverPtLogin} from './pt-login-recovery.mjs';
+import {recoverPtLogin,runHddolbyNative as runNativeHddolby} from './pt-login-recovery.mjs';
 import {readHhclubProfileState} from './hhclub-two-factor-login.mjs';
 import {validatePtLoginResume} from './pt-login-resume-guard.mjs';
+import {projectPtNativeDiagnostic} from './pt-native-diagnostic.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
@@ -60,6 +61,7 @@ export function publicSupplementResult(origin,result,now=new Date()){
     ...(!authoritative&&diagnostic.underlyingFailureCode?{underlyingFailureCode:diagnostic.underlyingFailureCode}:{}),
     ...(diagnostic.retryCause?{retryCause:diagnostic.retryCause,
       ...(Number.isFinite(Date.parse(result.nextEligibleAt))?{nextEligibleAt:new Date(result.nextEligibleAt).toISOString()}:{} )}:{}),
+    ...(projectPtNativeDiagnostic(result?.nativeFlow)?{nativeFlow:projectPtNativeDiagnostic(result.nativeFlow)}:{}),
     operationMode:result?.operationMode??'unknown',readSafety:result?.readSafety??'unknown',
     ...(result?.profileBinding?{profileBinding:result.profileBinding,accountKey:result.accountKey??'site-default'}:{}),
     businessDate:dayAt(now),...(result?.startedAt?{startedAt:result.startedAt}:{}),
@@ -100,7 +102,7 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
   acquire=acquireRunLock,release=releaseRunLock,inspectNative=inspectNativePtHeader,readAvailability=readPtPublicAvailability,
   readHddolby=readHddolbyHeader,recoverLogin=recoverPtLogin,readPassive=readPtPassivePage,
   fallbackAttemptId,validateLoginResume=validatePtLoginResume,readLoginProfile=readHhclubProfileState,
-  runHddolbyNative=recoverPtLogin}={}){
+  runHddolbyNative=runNativeHddolby}={}){
   if(!/^[a-f0-9]{64}$/i.test(catalogHash??''))throw Error('catalog hash is required');
   const bytes=fs.readFileSync(catalogFile);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==catalogHash.toLowerCase())throw Error('PT catalog changed');
@@ -192,15 +194,16 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     }
     if(target.origin==='https://www.uhddolby.com'&&supportedLogin&&loginOpt?.enabled===true&&loginOpt.reviewed===true&&loginOpt.provider==='bitwarden'){
       if(!readOnly&&!verifyBeforeSubmit)throw Error('Native HDDolby requires a passive check before submission');
-      let result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'ReadOnly',clock});
+      // Checkin performs its own fresh passive read in the same native session.
+      // Do not launch an extra read-only browser between the parent's proof and it.
+      const nativeMode=readOnly||loginRecoveryOnly?'ReadOnly':'Checkin';
+      let result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:nativeMode,clock});
       if(!readOnly&&result.status==='login_required'){
         const login=await recoverLoginOnce();
-        result=login.status==='logged_in'?await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'ReadOnly',clock}):login;
+        result=login.status==='logged_in'?await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:nativeMode,clock}):login;
       }
       await validateScope();
       if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('Native HDDolby scope changed');
-      if(!readOnly&&!loginRecoveryOnly&&result.status==='not_signed'&&result.evidence?.authoritative===true)
-        result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:'Checkin',clock});
       return publicSupplementResult(target.origin,{...metadata,...result},clock());
     }
     if(canRecoverLogin&&!verifyBeforeSubmit&&fallbackAttemptId!==undefined){

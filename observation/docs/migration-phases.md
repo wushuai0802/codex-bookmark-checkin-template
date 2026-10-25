@@ -1,5 +1,15 @@
 # Production Boundary and Historical Work
 
+## Native PT recovery contract: 2026-10-25
+
+HDDolby native readback and attendance now use explicit session entrypoints;
+`recoverPtLogin` remains authentication-only. A fresh current native observation
+is handed to the existing submit guard while the parent intent, account/Profile
+and execution ownership remain unchanged. Safe diagnostics survive both result
+projections. A human-requested single-site retry has its own durable request ID
+and current passive check; scheduled budgets do not change, and the same request
+cannot replay a submission. Unknown history is preserved.
+
 ## Native secondary-verification recovery: 2026-10-13
 
 The established Windows native runner can now recover a reviewed PigGo

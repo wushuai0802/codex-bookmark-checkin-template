@@ -16,6 +16,41 @@ const fixture=()=>({
   plan:{targets:[{origin:'https://ourbits.club',folderNames:['PT白名单']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
 });
 
+test('one explicit manual request can recover after automatic budgets only from fresh matching unsigned evidence, without replaying its id',async t=>{
+  for(const variant of ['manual','automatic','wrong-profile','unconfirmed']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-manual-budget-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);
+    const f=fixture(),origin='https://www.uhddolby.com',binding='b'.repeat(64),manualRecoveryId=crypto.randomUUID();
+    f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/attendance.php'}];f.plan.targets=[];f.latest.results=[];
+    fs.mkdirSync(root+'/outputs',{recursive:true});
+    const original={schemaVersion:1,businessDate:'2026-09-20',attempts:Array.from({length:3},()=>({
+      origin,accountKey:'site-default',businessDate:'2026-09-20',state:'completed',startedAt:'2026-09-20T00:00:00Z',finishedAt:'2026-09-20T00:01:00Z',
+      outcome:{origin,profileBinding:binding,submissionAttempted:true,failureCode:'submission_outcome_unknown'}})),
+      verifications:Array.from({length:3},()=>({origin,accountKey:'site-default',state:'completed',startedAt:'2026-09-20T00:00:00Z'}))};
+    fs.writeFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json',JSON.stringify(original));
+    const calls=[];
+    const args={...f,root,config:{},execute:true,catalogFile:'fixture',catalogHash:'a'.repeat(64),readOnlyOrigins:[origin],onlyOrigins:[origin],
+      ...(variant==='automatic'?{}:{manualRecoveryId}),runSite:async options=>{
+        calls.push(options.readOnly?'read':'submit');
+        return {origin,status:options.readOnly?(variant==='unconfirmed'?'unknown':'not_signed'):'needs_attention',
+          observedAt:now.toISOString(),businessDate:'2026-09-20',accountKey:'site-default',profileBinding:variant==='wrong-profile'?'c'.repeat(64):binding,
+          operationMode:options.readOnly?'safe_history_page':'legacy_checkin',readSafety:options.readOnly?'reviewed_passive':'attendance_page_risk',
+          submissionAttempted:!options.readOnly,...(!options.readOnly?{failureCode:'submission_outcome_unknown'}:{}),
+          evidence:options.readOnly&&variant!=='unconfirmed'?{source:'pt_page',authoritative:true,confirmedAt:now.toISOString(),businessDate:'2026-09-20',
+            evidenceScope:'site_account_day',pagePath:'/log.php',statusSignal:'hddolby_account_header_unsigned'}:{source:'none',authoritative:false}};
+      }};
+    await runHarvestFallback(args);
+    assert.deepEqual(calls,variant==='automatic'?[]:variant==='manual'?['read','submit']:['read']);
+    const state=JSON.parse(fs.readFileSync(root+'/outputs/harvest-fallback-attempts-2026-09-20.json'));
+    assert.deepEqual(state.attempts.slice(0,3),original.attempts);
+    if(variant==='manual'){
+      assert.equal(state.attempts.at(-1).manualRecoveryId,manualRecoveryId);
+      const again=await runHarvestFallback(args);
+      assert.equal(again.outcomes.at(-1).state,'manual_recovery_already_attempted');assert.deepEqual(calls,['read','submit']);
+    }
+  }
+});
+
 test('reviewed HDDolby account header readers enter the passive scheduler independently of the Nexus dailyHeader flag',()=>{
   const origins=['https://www.hddolby.com','https://nexus.example','https://unreviewed.example','https://unsupported.example'];
   const catalog={sites:origins.map(origin=>({origin}))};

@@ -49,7 +49,7 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
     const result=await runFallback({root,now,execute:true,harvest:refreshHarvest(),refreshHarvest,catalog,catalogFile,catalogHash,
       plan:read(path.join(legacy,'data/last-valid-bookmark-plan.json')),latest:read(path.join(legacy,'logs/latest.json')),config,
       fallbackReport:fs.existsSync(fallbackFile)?read(fallbackFile):null,fallbackOnlyEnabled:runtime.ptFallbackOnlyEnabled,
-      readOnlyOrigins:[target.origin],onlyOrigins:[target.origin]});
+      readOnlyOrigins:[target.origin],onlyOrigins:[target.origin],manualRecoveryId:request.id});
     const outcome=result.outcomes?.find(o=>o.origin===target.origin);
     if(!outcome&&result.assessments?.some(a=>a.origin===target.origin&&['confirmed_by_harvest','confirmed_by_executor','confirmed_by_executor_supplement'].includes(a.state)))
       return {status:'completed',message:'最新回执已确认今日完成，无需补签',resultStatus:'already_signed'};

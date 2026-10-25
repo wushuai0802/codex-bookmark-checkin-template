@@ -54,6 +54,8 @@
     "network_error": "页面访问失败，尚未取得签到状态",
     "dns_validation_failed": "站点域名 DNSSEC 校验失败，等待站点修复域名解析",
     "authoritative_status_unavailable": "页面尚无可确认的今日签到证据",
+    "native_readback_unavailable": "原生浏览器核验未完成，保留具体阶段后复核",
+    "configuration_mismatch": "执行范围或账号配置已变化，须重新核对",
     "checkin_control_unavailable": "签到控件尚未稳定可点击，未提交签到",
     "site_migration": "站点明确提示已迁移，请核对并更新书签地址",
     "bookmark_origin_changed": "页面已离开书签授权来源，请核对并更新书签地址",
