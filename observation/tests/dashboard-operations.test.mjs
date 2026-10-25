@@ -9,10 +9,19 @@ import {createDashboardServer} from '../src/dashboard-server.mjs';
 import {buildSnapshot,writeSnapshot} from '../src/bridge.mjs';
 import {fileURLToPath} from 'node:url';
 import {createLedgerRecord,appendLedgerRecord} from '../src/shadow-ledger.mjs';
+import {boundMonitorCatalog} from '../src/monitor-catalog.mjs';
 const now=new Date('2026-09-30T06:00:00Z'),origin='https://cspt.top';
 const fixture=()=>({businessDate:'2026-09-30',generatedAt:now.toISOString(),planHash:'a'.repeat(64),tasks:[],ptStatus:{sites:[{
   origin,accountRef:null,inLegacyPlan:false,fallbackEnabled:true,effective:{status:'not_signed',authoritative:true,fresh:true}}]}});
 function workspace(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-ops-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root;}
+function catalogFixture(root,legacy,at=new Date()){
+  const bookmarksPath=path.join(root,'Bookmarks');
+  fs.writeFileSync(bookmarksPath,JSON.stringify({roots:{bookmark_bar:{type:'folder',id:'1',children:[{
+    type:'folder',id:'2',name:'PT',children:[{type:'url',id:'3',name:'Site',url:origin+'/attendance.php'}]}]}}}));
+  fs.writeFileSync(path.join(legacy,'config/config.json'),JSON.stringify({bookmarksPath}));
+  const file=path.join(root,'catalog.json');
+  fs.writeFileSync(file,JSON.stringify(boundMonitorCatalog(bookmarksPath,{parentId:'1',folderId:'2'},at)));return file;
+}
 test('dashboard requests are exact-scoped, idempotent and never submit from the server',t=>{
   const root=workspace(t),snapshot=fixture(),input={origin,accountRef:null,action:'verify'};
   const first=enqueueOperation(root,input,snapshot,now),second=enqueueOperation(root,input,snapshot,now);
@@ -76,14 +85,14 @@ test('Windows verification dispatch stays read-only and records the exact accoun
   const root=workspace(t),current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current);
   const legacy=path.join(root,'legacy'),snapshot={...fixture(),businessDate:day,generatedAt:current.toISOString()};
   for(const dir of ['config','outputs','legacy/config','legacy/data'])fs.mkdirSync(path.join(root,dir),{recursive:true});
-  const catalogFile=path.join(root,'catalog.json');fs.writeFileSync(catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
+  const catalogFile=catalogFixture(root,legacy,current);
   fs.writeFileSync(root+'/config/runtime.local.json',JSON.stringify({executionEngine:'v1',legacyRoot:legacy}));
-  fs.writeFileSync(legacy+'/config/config.json','{}');fs.writeFileSync(legacy+'/data/v2-integration.json',JSON.stringify({harvestPtGate:{catalogFile}}));
+  fs.writeFileSync(legacy+'/data/v2-integration.json',JSON.stringify({harvestPtGate:{catalogFile}}));
   fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot));
   let calls=0;
   const request={id:'op_'+('b'.repeat(32)),origin,action:'verify',businessDate:day,planHash:snapshot.planHash,expiresAt:new Date(current.getTime()+600000).toISOString()};
   const result=await executeDashboardOperation(root,request,{runSite:async options=>{
-    calls++;assert.equal(options.readOnly,true);assert.equal(options.origin,origin);
+    calls++;assert.equal(options.readOnly,true);assert.equal(options.origin,origin);assert.notEqual(options.catalogFile,catalogFile);
     return {origin,status:'already_signed',accountKey:'site-default',profileBinding:'a'.repeat(64),businessDate:day,observedAt:current.toISOString(),
       operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,
       evidence:{source:'pt_page',authoritative:true,businessDate:day,confirmedAt:current.toISOString(),evidenceScope:'site_account_day',summary:'今日已签到'}};
@@ -114,8 +123,7 @@ test('a fresh passive completion or logged-in state avoids a redundant PT login 
   const root=workspace(t),current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current),legacy=path.join(root,'legacy');
   for(const dir of ['config','outputs','legacy/config','legacy/data'])fs.mkdirSync(path.join(root,dir),{recursive:true});
   fs.writeFileSync(root+'/config/runtime.local.json',JSON.stringify({executionEngine:'v1',legacyRoot:legacy}));
-  fs.writeFileSync(legacy+'/config/config.json','{}');
-  const catalogFile=root+'/catalog.json';fs.writeFileSync(catalogFile,JSON.stringify({sites:[{origin,entryUrl:origin+'/attendance.php'}]}));
+  const catalogFile=catalogFixture(root,legacy,current);
   fs.writeFileSync(legacy+'/data/v2-integration.json',JSON.stringify({harvestPtGate:{catalogFile}}));
   const snapshot=fixture();snapshot.businessDate=day;snapshot.generatedAt=current.toISOString();snapshot.ptStatus.sites[0].effective.status='login_required';
   fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(snapshot));

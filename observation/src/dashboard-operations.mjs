@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
-import {ptReadPolicies} from './checkin-contract.generated.mjs';
 import {ptStatusCondition} from '../public/dashboard-model.mjs';
+import {sitePtCapabilities} from './pt-capabilities.mjs';
 const dayAt=now=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now);
 const active=new Set(['queued','running']);
 const states=new Set(['queued','running','completed','waiting_login','blocked','expired','interrupted']);
@@ -13,20 +13,31 @@ const key=target=>target.origin+'|'+(target.accountRef??'site-default');
 export function operationTargets(snapshot){
   const receipts=new Map((snapshot.receipts??[]).map(r=>[r.taskId,r]));
   const result=(snapshot.tasks??[]).map(task=>({...task,evidence:task.evidence??receipts.get(task.taskId)?.evidence,
-    status:task.observedStatus,kind:'regular'}));
+    status:task.observedStatus,kind:task.ptSupplementOnly===true?'pt':'regular'}));
   for(const site of snapshot.ptStatus?.sites??[]){
-    const existing=result.filter(t=>t.origin===site.origin&&(!site.accountRef||site.accountRef===t.accountRef));
-    if(existing.length===1){existing[0].pt=site;continue;}
-    if(!site.inLegacyPlan)result.push({origin:site.origin,accountRef:null,displayName:site.displayName,status:site.effective?.status,kind:'pt',pt:site,evidence:site.effective?.evidence});
+    const existing=result.filter(t=>t.origin===site.origin&&(!site.accountRef||t.ptSupplementOnly===true||site.accountRef===t.accountRef));
+    if(existing.length===1){
+      const target=existing[0];target.pt=site;
+      const disabled=site.disabledByConfig===true||target.evidence?.verification==='task_disabled';
+      if(!disabled&&site.effective?.fresh===true&&site.effective.authoritative===true&&['signed','already_signed','not_signed','not_available'].includes(site.effective.status)){
+        target.status=site.effective.status;target.evidence=site.effective.evidence;
+        target.failureCode=site.effective.failureCode;target.underlyingFailureCode=site.effective.underlyingFailureCode;
+      }
+      continue;
+    }
+    if(!site.inLegacyPlan)result.push({origin:site.origin,accountRef:null,displayName:site.displayName,status:site.effective?.status,kind:'pt',pt:site,
+      evidence:site.effective?.evidence,failureCode:site.effective?.failureCode,underlyingFailureCode:site.effective?.underlyingFailureCode});
   }
   return result.map(target=>{
     const uncertain=target.failureCode==='submission_outcome_unknown'||target.evidence?.verification==='submission_outcome_unknown'||target.pt?.recovery?.code==='submission_outcome_unknown';
+    const disabled=target.pt?.disabledByConfig===true||target.evidence?.verification==='task_disabled';
     const terminal=['signed','already_signed','not_available'].includes(target.status);
     const bookmarkReview=[target.failureCode,target.underlyingFailureCode,ptStatusCondition(target.pt)]
       .some(code=>['site_migration','bookmark_origin_changed'].includes(code));
-    const login=!terminal&&!uncertain&&!bookmarkReview&&(target.status==='login_required'||['login_required','upstream_login_required','two_factor_required','managed_challenge'].includes(target.failureCode));
-    const policy=ptReadPolicies[target.origin];
-    const actions={verify:Boolean(target.pt&&policy),retry:Boolean(!bookmarkReview&&target.kind==='pt'&&policy?.dailyHeader&&target.pt?.fallbackEnabled&&
+    const login=!disabled&&!terminal&&!uncertain&&!bookmarkReview&&(target.status==='login_required'||['login_required','upstream_login_required','two_factor_required','managed_challenge'].includes(target.failureCode));
+    const capability=sitePtCapabilities(target.pt??{origin:target.origin});
+    const actions={verify:Boolean(!disabled&&target.pt&&capability.read),retry:Boolean(!disabled&&!bookmarkReview&&!target.pt?.discrepancy&&capability.guardedSubmit&&target.pt?.fallbackEnabled&&
+      (!target.accountKey||target.accountKey==='site-default')&&
       target.pt.effective?.status==='not_signed'&&target.pt.effective?.authoritative&&target.pt.effective?.fresh),
       login,resume:login&&target.kind==='regular'};
     return {...target,actions};

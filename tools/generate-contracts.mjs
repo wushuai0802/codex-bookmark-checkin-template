@@ -31,3 +31,9 @@ const coordinationFile=path.join(root,'observation/src/pt-coordination.generated
 if(process.argv.includes('--check')){
   if(!fs.existsSync(coordinationFile)||fs.readFileSync(coordinationFile,'utf8').replaceAll('\r','')!==coordinationText)throw Error('generated PT coordination drift');
 }else fs.writeFileSync(coordinationFile,coordinationText);
+const diagnosticSource=fs.readFileSync(path.join(root,'execution/src/pt-native-diagnostic.mjs'),'utf8').replaceAll('\r','');
+const diagnosticText='// Generated from execution/src/pt-native-diagnostic.mjs. Run npm run contracts; do not edit.\n'+diagnosticSource;
+const diagnosticFile=path.join(root,'observation/src/pt-native-diagnostic.generated.mjs');
+if(process.argv.includes('--check')){
+  if(!fs.existsSync(diagnosticFile)||fs.readFileSync(diagnosticFile,'utf8').replaceAll('\r','')!==diagnosticText)throw Error('generated PT native diagnostic drift');
+}else fs.writeFileSync(diagnosticFile,diagnosticText);

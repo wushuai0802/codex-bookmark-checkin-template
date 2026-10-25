@@ -70,52 +70,54 @@ test('child receives the exact origin and lease; busy lock is retryable without 
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-child-protocol-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   fs.mkdirSync(path.join(root,'scripts'));fs.writeFileSync(path.join(root,'scripts/Run-PtSupplement.mjs'),'fixture');
-  const args={legacyRoot:root,root,origin:'https://pt.example',catalogFile:path.join(root,'catalog.json'),catalogHash:'a'.repeat(64),lease:{owner:{nonce:'lease-fixture'}}};
+  const args={legacyRoot:root,root,origin:'https://pt.example',catalogFile:path.join(root,'catalog.json'),catalogHash:'a'.repeat(64),lease:{owner:{nonce:'lease-fixture'}},
+    resolveScope:async()=>({profileBinding:'a'.repeat(64),privateProfile:null,shell:'pwsh.exe'})};
   const inheritedId=process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
   process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID=crypto.randomUUID();
   t.after(()=>{if(inheritedId===undefined)delete process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID;else process.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID=inheritedId;});
   const spawnChild=(_node,argv,options)=>{
-    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash]);
+    assert.deepEqual(argv.slice(1,5),[args.origin,args.catalogFile,args.catalogHash,'--execute']);
+    assert.match(argv[5],/^--worker-owner=[a-f0-9-]{36}$/);
     assert.equal(options.env.CHECKIN_V2_ENGINE_LEASE,'lease-fixture');
     assert.equal(options.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID,undefined);
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
-    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'login_required',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);});
+    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'login_required',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);child.emit('close',0,null);});
     return child;
   };
   assert.equal((await spawnPtSiteChild({...args,spawnChild})).status,'login_required');
   const fallbackAttemptId=crypto.randomUUID();
   const ownAttemptChild=(_node,argv,options)=>{
-    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash]);
+    assert.deepEqual(argv.slice(1,5),[args.origin,args.catalogFile,args.catalogHash,'--execute']);
     assert.equal(options.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID,fallbackAttemptId);
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
-    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'unknown',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);});
+    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'unknown',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);child.emit('close',0,null);});
     return child;
   };
   assert.equal((await spawnPtSiteChild({...args,fallbackAttemptId,spawnChild:ownAttemptChild})).status,'unknown');
   const readOnlyChild=(_node,argv,options)=>{
-    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash,'--read-only']);
+    assert.deepEqual(argv.slice(1,5),[args.origin,args.catalogFile,args.catalogHash,'--read-only']);
     assert.equal(options.env.CHECKIN_V2_ENGINE_LEASE,'lease-fixture');
     assert.equal(options.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID,undefined);
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
-    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'unknown',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);});
+    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'unknown',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);child.emit('close',0,null);});
     return child;
   };
   assert.equal((await spawnPtSiteChild({...args,readOnly:true,fallbackAttemptId,spawnChild:readOnlyChild})).status,'unknown');
   const guardedChild=(_node,argv,options)=>{
-    assert.deepEqual(argv.slice(1),[args.origin,args.catalogFile,args.catalogHash,'--verify-before-submit']);
+    assert.deepEqual(argv.slice(1,5),[args.origin,args.catalogFile,args.catalogHash,'--verify-before-submit']);
     assert.equal(options.env.CHECKIN_PT_FALLBACK_RECHECK,'1');
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
-    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'already_signed',observedAt:'2026-09-20T01:00:00Z',submissionAttempted:true,evidence:{source:'page_text',authoritative:true}}));child.emit('exit',0,null);});
+    setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'already_signed',observedAt:'2026-09-20T01:00:00Z',submissionAttempted:true,evidence:{source:'page_text',authoritative:true}}));child.emit('exit',0,null);child.emit('close',0,null);});
     return child;
   };
   assert.equal((await spawnPtSiteChild({...args,verifyBeforeSubmit:true,spawnChild:guardedChild})).status,'already_signed');
-  const busy=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};setImmediate(()=>child.emit('exit',3,null));return child;};
+  const busy=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};setImmediate(()=>{child.emit('exit',3,null);child.emit('close',3,null);});return child;};
   await assert.rejects(()=>spawnPtSiteChild({...args,spawnChild:busy}),/already active/);
   for(const diagnostic of [{error:'PT_PREFLIGHT',reason:'catalog_hash_changed'},
     {error:'PT_PREFLIGHT',reason:'arbitrary-private-output'},null]){
     const preflight=()=>{
       const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
-      setImmediate(()=>{child.stderr.write(diagnostic?JSON.stringify(diagnostic):'unstructured private output');child.emit('exit',4,null);});
+      setImmediate(()=>{child.stderr.write(diagnostic?JSON.stringify(diagnostic):'unstructured private output');child.emit('exit',4,null);child.emit('close',4,null);});
       return child;
     };
     await assert.rejects(()=>spawnPtSiteChild({...args,spawnChild:preflight}),error=>{

@@ -4,19 +4,21 @@ import crypto from 'node:crypto';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {runPtSite} from './pt-site-execution.mjs';
 import {recordPtVerification} from './pt-verification.mjs';
-import {boundMonitorCatalog,currentBoundMonitorCatalog} from './monitor-catalog.mjs';
-import {loadEffectiveConfig} from './effective-config.mjs';
+import {refreshEvidenceCatalog,withCurrentPtCatalog} from './pt-catalog.mjs';
+export {refreshEvidenceCatalog} from './pt-catalog.mjs';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {readLegacyHealth} from './legacy-engine.mjs';
 import {buildSnapshot,writeSnapshot} from './bridge.mjs';
 import {createLedgerRecord,appendLedgerRecord} from './shadow-ledger.mjs';
 import {commitDashboardGeneration} from './dashboard-generation.mjs';
 import {loadPtRecoveryDiagnostics} from './pt-reconciliation.mjs';
+import {sitePtCapabilities} from './pt-capabilities.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
 const readOptional=file=>fs.existsSync(file)?read(file):null;
 const MAX_PASSIVE_ATTEMPTS=2;
 const MAX_BUSY_WAKEUPS=24;
+const MAX_PT_ONLY_DAILY_READS=6;
 
 function boundedCount(value,max){
   const count=Number(value);
@@ -28,6 +30,7 @@ function previousHealthReport(previous){
   if(!health||typeof health!=='object'||!health.sourceCheckedAt)return undefined;
   const count=boundedCount(health.failedCheckCount,1000);
   return {healthy:health.healthy===true,checkedAt:health.sourceCheckedAt,
+    ...(health.deployment?{deployment:health.deployment}:{}),
     reason:typeof health.reason==='string'?health.reason:undefined,
     failedChecks:Array.from({length:count},()=>({}))};
 }
@@ -175,15 +178,28 @@ function candidateRecords(snapshot,catalog,state,now=new Date()){
     const key=identityKey(origin,accountKey);
     if(!unique.has(key))unique.set(key,{origin,accountKey,taskId:task.taskId});
   }
+  for(const site of snapshot.ptStatus?.sites??[]){
+    const value=site.effective??{},observed=Date.parse(value.observedAt??'');
+    const uncertain=value.failureCode==='submission_outcome_unknown'||value.submissionAttempted===true&&!['signed','already_signed'].includes(value.status);
+    if(site.inLegacyPlan||!site.fallbackEnabled||site.disabledByConfig||!origins.has(site.origin)||!sitePtCapabilities(site).read||
+      site.evidenceState==='external_blocked'||value.fresh!==true||!uncertain||!Number.isFinite(observed)||
+      dayAt(new Date(observed))!==today||now.getTime()-observed<60_000)continue;
+    const key=identityKey(site.origin);
+    if(!unique.has(key))unique.set(key,{origin:site.origin,accountKey:'site-default',ptOnly:true,
+      reviewKey:value.observedAt+'|'+(value.evidence?.profileBinding??''),reviewAt:value.observedAt});
+  }
   const due=[];
   for(const item of unique.values()){
     const previous=previousFor(state,item.origin,item.accountKey);
     if(previous&&previous.businessDate===today){
-      const attempts=boundedCount(previous.attempts,MAX_PASSIVE_ATTEMPTS);
+      const changedReview=item.ptOnly&&item.reviewKey!==previous.reviewKey&&Date.parse(item.reviewAt)>Date.parse(previous.checkedAt??'');
+      const attempts=changedReview?0:boundedCount(previous.attempts,MAX_PASSIVE_ATTEMPTS);
       const wakeups=boundedCount(previous.wakeups,MAX_BUSY_WAKEUPS);
       const next=Date.parse(previous.nextAttemptAt??'');
-      if(attempts>=MAX_PASSIVE_ATTEMPTS||wakeups>=MAX_BUSY_WAKEUPS||
-        (Number.isFinite(next)&&next>now.getTime()))continue;
+      const total=boundedCount(previous.totalAttempts??previous.attempts,MAX_PT_ONLY_DAILY_READS);
+      if(attempts>=MAX_PASSIVE_ATTEMPTS||wakeups>=MAX_BUSY_WAKEUPS||item.ptOnly&&total>=MAX_PT_ONLY_DAILY_READS||
+        (!changedReview&&Number.isFinite(next)&&next>now.getTime()))continue;
+      item.changedReview=changedReview;
     }
     due.push({...item,previous});
   }
@@ -203,20 +219,6 @@ export function ptEvidenceCandidates(snapshot,catalog,state,now=new Date()){
     .filter((origin,index,all)=>all.indexOf(origin)===index);
 }
 
-export async function refreshEvidenceCatalog(root,catalogFile,now=new Date()){
-  const runtime=read(path.join(root,'config/runtime.local.json')),config=loadEffectiveConfig(runtime.legacyRoot);
-  const previous=read(catalogFile);
-  const catalog=previous.registration==='current-execution-plan'||config.targetFolderNames?.length
-    ?await currentBoundMonitorCatalog(runtime.legacyRoot,previous.scope,now)
-    :boundMonitorCatalog(config.bookmarksPath,previous.scope,now);
-  const file=path.join(root,'data/pt-evidence-catalog.json');
-  fs.mkdirSync(path.dirname(file),{recursive:true});
-  const temporary=file+'.'+process.pid+'.tmp';
-  try{fs.writeFileSync(temporary,JSON.stringify(catalog),{mode:0o600});fs.renameSync(temporary,file);}
-  finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
-  return file;
-}
-
 export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>new Date(),runSite=runPtSite,record=recordPtVerification,refreshCatalog=refreshEvidenceCatalog,rebuild=null}={}){
   if(!Number.isInteger(maxSites)||maxSites<1||maxSites>4)throw Error('Evidence repair site limit must be 1..4');
   const lease=acquireExecutionLock(root,{name:'pt-evidence-repair.lock'});
@@ -233,11 +235,10 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
     for(const candidate of candidates){
       const origin=candidate.origin,accountKey=candidate.accountKey;
       if(dayAt(clock())!==snapshot.businessDate)break;
-      currentCatalog=await refreshCatalog(root,catalogFile,clock());
-      const hash=crypto.createHash('sha256').update(fs.readFileSync(currentCatalog)).digest('hex');
       const old=previousFor(state,origin,accountKey);
-      const previousAttempts=old?.businessDate===snapshot.businessDate
+      const previousAttempts=old?.businessDate===snapshot.businessDate&&!candidate.changedReview
         ?boundedCount(old.attempts,MAX_PASSIVE_ATTEMPTS):0;
+      const previousTotal=old?.businessDate===snapshot.businessDate?boundedCount(old.totalAttempts??old.attempts,MAX_PT_ONLY_DAILY_READS):0;
       const previousWakeups=old?.businessDate===snapshot.businessDate
         ?boundedCount(old.wakeups,MAX_BUSY_WAKEUPS):0;
       const attempts=old?.businessDate===snapshot.businessDate
@@ -248,7 +249,8 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
         // The passive V1 helper currently owns one bookmarked account per PT
         // origin. Never let it silently read another account's profile.
         if(accountKey!=='site-default'){const error=Error('passive account binding is not supported');error.code='PT_ACCOUNT_MISMATCH';throw error;}
-        const result=await runSite({root,origin,accountKey,catalogFile:currentCatalog,catalogHash:hash,readOnly:true});
+        const result=await withCurrentPtCatalog({root,catalogFile,origin,now:clock(),refresh:refreshCatalog},
+          input=>runSite({root,origin,accountKey,catalogFile:input.catalogFile,catalogHash:input.catalogHash,readOnly:true}));
         if(dayAt(clock())!==snapshot.businessDate)break;
         if(result?.accountKey&&result.accountKey!==accountKey){const error=Error('passive account mismatch');error.code='PT_ACCOUNT_MISMATCH';throw error;}
         // A diagnostic cannot erase the already reported completion. Only a
@@ -289,6 +291,7 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
       const stateKey=identityKey(origin,accountKey),recordedAttempts=outcome==='busy'||outcome==='busy_budget_exhausted'
         ?previousAttempts:attempts;
       const entry={businessDate:snapshot.businessDate,accountKey,attempts:['verified','existing_receipt'].includes(outcome)?2:recordedAttempts,
+        ...(candidate.ptOnly?{reviewKey:candidate.reviewKey,totalAttempts:previousTotal+(outcome==='busy'||outcome==='busy_budget_exhausted'?0:1)}:{}),
         wakeups,outcome,status:auditStatus,errorStage:errorInfo.errorStage,errorCode:errorInfo.errorCode,
         checkedAt:checkedAt.toISOString(),nextAttemptAt:new Date(checkedAt.getTime()+nextDelay).toISOString()};
       state.sites[stateKey]=entry;

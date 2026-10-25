@@ -5,6 +5,7 @@ import {prepareBitwardenTotp,withBitwardenTotp} from './bitwarden-totp.mjs';
 import {validateSiteTwoFactorScope} from './two-factor-scope.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {readHddolbyHeader,hddolbyDailyStatusProof} from './hddolby-readonly.mjs';
+import {nativeProviderFailure} from './pt-native-diagnostic.mjs';
 
 const origin='https://www.hddolby.com',adapterId='hddolby-nexus-stepup-v1';
 const origins=new Set([origin,'https://www.uhddolby.com']);
@@ -25,20 +26,23 @@ export function hddolbyTwoFactorFormReviewed(form){
     fields.filter(f=>f.type==='submit'&&f.visible===true&&f.enabled===true).length===1;
 }
 
-async function inspectForm(page){
+export async function inspectHddolbyTwoFactorForm(page){
   const origin=new URL(page.url()).origin;
   if(!origins.has(origin))return null;
   const forms=await page.locator('form').evaluateAll((forms,expected)=>forms.map(form=>{
     const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;};
+    // Nexus table markup can place controls outside the form's DOM subtree.
+    // The browser's form owner, rather than ancestry, determines submission.
+    const controls=[...form.elements].filter(e=>e.tagName==='INPUT'||e.tagName==='BUTTON'||e.tagName==='SELECT');
     let sameOrigin=false,path='',returntoPath='',returntoUnsafe=true;
     try{const action=new URL(form.action||location.href);sameOrigin=action.origin===expected&&!action.username&&!action.password&&!document.querySelector('base[href]');
       path=action.pathname;if(action.search||action.hash)sameOrigin=false;}catch{}
-    try{const raw=form.querySelector('input[name="returnto"]')?.value;
+    try{const returns=controls.filter(e=>e.name==='returnto'),raw=returns.length===1?returns[0].value:null;
       const target=new URL(raw||'',expected);returntoPath=target.pathname;
       returntoUnsafe=!raw||target.origin!==expected||!!target.username||!!target.password||!!target.search||!!target.hash;}catch{}
     return {sameOrigin,path,method:form.method.toUpperCase(),returntoPath,returntoUnsafe,
-      visible:visible(form),sameWindow:!form.target||form.target==='_self',passwordPresent:!!form.querySelector('input[type="password"]'),
-      fields:[...form.elements].filter(e=>e.tagName==='INPUT'||e.tagName==='BUTTON'||e.tagName==='SELECT')
+      visible:controls.some(e=>e.type!=='hidden'&&visible(e)),sameWindow:!form.target||form.target==='_self',passwordPresent:controls.some(e=>e.type==='password'),
+      fields:controls
         .map(e=>({name:e.name,type:e.type,visible:visible(e),enabled:!e.disabled}))};
   }),origin);
   return forms.length===1&&hddolbyTwoFactorFormReviewed(forms[0])?forms[0]:null;
@@ -88,7 +92,7 @@ function writeJournal(file,journal){
 }
 
 export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.now,
-  validate=validateSiteTwoFactorScope,inspect=inspectForm,read=readHddolbyHeader,
+  validate=validateSiteTwoFactorScope,inspect=inspectHddolbyTwoFactorForm,read=readHddolbyHeader,
   prepare=prepareBitwardenTotp,withTotp=withBitwardenTotp,
   acquire=acquireRunLock,release=releaseRunLock,passive=hddolbyPassiveContext}={}){
   let origin;
@@ -98,7 +102,7 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
   if(optIn?.enabled!==true||optIn.reviewed!==true||optIn.provider!=='bitwarden'||optIn.adapterId!==adapterId)
     return result('disabled');
   if(!/^\d{1,20}$/.test(String(optIn.expectedAccountId??'')))return result('configuration_invalid');
-  let scope,authLock,attempted=false,accepted=false,input;
+  let scope,authLock,attempted=false,accepted=false,input,authRoute,authPosts=0,acceptingAuth=false;
   const now=()=>new Date(clock());
   try{
     const current=new URL(page.url());
@@ -119,7 +123,8 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
     if(!hddolbyTwoFactorFormReviewed(form))return result('protocol_unverified');
     if(!await scope.assertCurrent()||day(now())!==startedDay)return result('scope_unavailable');
     const providerArgs={root,origin,binding:scope.binding,config};
-    if((await prepare(providerArgs))?.ready!==true)return result('provider_unavailable');
+    const prepared=await prepare(providerArgs);
+    if(prepared?.ready!==true)return result(nativeProviderFailure(prepared));
     before=await readStatus();
     if(!hddolbyDailyStatusProof(before,now()))return result('passive_proof_unavailable');
     if(before.status==='already_signed')return {...result('already_signed'),readback:before};
@@ -134,24 +139,54 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
       if(!await scope.assertCurrent()||day(now())!==startedDay){reason='scope_unavailable';return;}
       journal=readJournal(file);if(alreadyTried()){reason='daily_recovery_limit';return;}
       if(metadata.validUntilMs-now().getTime()<3000){reason='totp_expired';return;}
-      input=page.locator('form input[name="2fa"]:visible');
-      const submit=page.locator('form input[type="submit"]:visible, form button[type="submit"]:visible');
+      input=page.locator('input[name="2fa"]:visible');
+      const submit=page.locator('input[type="submit"]:visible, button[type="submit"]:visible');
       if(await input.count()!==1||await submit.count()!==1){reason='protocol_unverified';return;}
-      await input.fill(code);
-      if(metadata.validUntilMs-now().getTime()<3000||day(now())!==startedDay||!await scope.assertCurrent()){
-        reason='totp_expired';return;
-      }
-      if(metadata.validUntilMs-now().getTime()<3000||day(now())!==startedDay){reason='totp_expired';return;}
+      const owned=locator=>locator.evaluate((element,expected)=>{
+        const form=document.forms.length===1?document.forms[0]:null;
+        return !!form&&element.form===form&&form.method.toUpperCase()==='POST'&&form.action===expected+'/take2fa.php'&&
+          (!form.target||form.target==='_self')&&!document.querySelector('base[href]');
+      },origin);
+      if(!await owned(input)||!await owned(submit)){reason='protocol_unverified';return;}
+      if(metadata.validUntilMs-now().getTime()<3000||day(now())!==startedDay||!await scope.assertCurrent()){reason='totp_expired';return;}
       journal=readJournal(file);if(alreadyTried()){reason='daily_recovery_limit';return;}
       const entry={origin,accountKey:'site-default',profileBinding:scope.binding.profileBinding,businessDate:startedDay,
         state:'pending',attemptedAt:now().toISOString()};
       journal.attempts.push(entry);writeJournal(file,journal);
+      // Persist before filling: a page handler may submit on input. Fence the
+      // exact same-origin authentication POST to one dispatch in either case.
+      attempted=true;reason='authentication_unknown';acceptingAuth=true;
+      authRoute=async route=>{
+        const request=route.request();let url;try{url=new URL(request.url());}catch{return route.abort('blockedbyclient');}
+        if(!['GET','HEAD'].includes(request.method())){
+          if(!acceptingAuth||request.method()!=='POST'||url.href!==origin+authenticationPath||authPosts>=1)return route.abort('blockedbyclient');
+          authPosts++;return route.fallback();
+        }
+        if(url.origin===origin&&url.pathname==='/attendance.php'&&authPosts===0)return route.abort('blockedbyclient');
+        return route.fallback();
+      };
+      await page.route('**/*',authRoute);
       const responsePromise=page.waitForResponse(response=>{
         try{const url=new URL(response.url());return response.request().method()==='POST'&&url.origin===origin&&
           url.pathname===authenticationPath&&!url.search&&!url.hash;}catch{return false;}
       },{timeout:20_000}).catch(()=>null);
-      attempted=true;reason='authentication_unknown';
-      await submit.click({timeout:15_000}).catch(()=>{});
+      let filled=false;
+      try{await input.fill(code);filled=true;}catch{/* An input-triggered navigation may detach the field; await its response below. */}
+      if(filled&&authPosts===0){
+        try{
+          const currentForm=await inspect(page);
+          if(authPosts===0){
+            const validForm=hddolbyTwoFactorFormReviewed(currentForm)&&currentForm.returntoPath===form.returntoPath&&
+              await owned(input)&&await owned(submit);
+            if(authPosts===0&&!validForm)reason='protocol_unverified';
+            else if(authPosts===0){
+              const current=metadata.validUntilMs-now().getTime()>=3000&&day(now())===startedDay&&await scope.assertCurrent();
+              if(authPosts===0&&!current)reason='totp_expired';
+              else if(authPosts===0)await submit.click({timeout:15_000}).catch(()=>{});
+            }
+          }
+        }catch{/* A form disappearing after the input event does not lose a possible authentication response. */}
+      }
       const response=await responsePromise;
       if(response){
         if(response.status()>=300&&response.status()<400){
@@ -170,9 +205,9 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
       entry.finishedAt=now().toISOString();writeJournal(file,journal);
       await page.waitForLoadState('domcontentloaded',{timeout:15_000}).catch(()=>{});
     };
-    try{await withTotp({...providerArgs,clock,consume:(code,metadata)=>{
+    try{const supplied=await withTotp({...providerArgs,clock,consume:(code,metadata)=>{
       if(!active||used)return Promise.resolve();used=true;pending=consume(code,metadata);return pending;
-    }});}
+    }});if(!used&&supplied?.ready!==true)reason=nativeProviderFailure(supplied);}
     finally{active=false;if(pending)await pending;}
     if(!accepted)return result(reason,attempted,accepted);
     if(day(now())!==startedDay||!await scope.assertCurrent())return result('business_day_changed',attempted,accepted);
@@ -181,7 +216,9 @@ export async function recoverHddolbyTwoFactor({page,root,config={},clock=Date.no
     return {...result('authentication_accepted',attempted,accepted),readback:after};
   }catch{return result(accepted?'authentication_accepted_readback_unavailable':attempted?'authentication_unknown':'recovery_unavailable',attempted,accepted);}
   finally{
+    acceptingAuth=false;
     if(input)await input.fill('',{timeout:1000}).catch(()=>{});
+    if(authRoute)await page.unroute('**/*',authRoute).catch(()=>{});
     if(authLock)await release(authLock).catch(()=>{});
     if(scope)await scope.release().catch(()=>{});
   }

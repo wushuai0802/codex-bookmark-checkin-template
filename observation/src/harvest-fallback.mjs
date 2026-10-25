@@ -8,6 +8,7 @@ import {runPtSite,projectPtSiteResult} from './pt-site-execution.mjs';
 import {siteIdentityIndex} from './site-identity-index.mjs';
 import {ptAttemptReconciled} from './pt-reconciliation.mjs';
 import {currentPassivePtResult,recordPtVerification} from './pt-verification.mjs';
+import {ptCapabilities} from './pt-capabilities.mjs';
 import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted,harvestTaskFailed} from './pt-coordination.generated.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
@@ -31,7 +32,7 @@ export function reviewedFallbackReadOrigins(catalog,readPolicy){
     try{
       const policy=readPolicy(site.origin);
       return policy.reviewed===true&&policy.mode==='safe_history_page'&&
-        (policy.dailyHeader===true||policy.hddolbyHeader===true);
+        ptCapabilities(site.origin,policy).guardedSubmit;
     }catch{return false;}
   }).map(site=>site.origin);
 }
@@ -337,8 +338,11 @@ function claimWorker(root) {
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
-  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[],onlyOrigins=null}={}) {
+  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[],onlyOrigins=null,manualRecoveryId=null}={}) {
   const normalizedReadOnlyOrigins=[...new Set(readOnlyOrigins.map(originOf).filter(Boolean))];
+  if(manualRecoveryId!==null&&(!execute||!Array.isArray(onlyOrigins)||onlyOrigins.length!==1||
+    !/^(?:op_[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(manualRecoveryId)))
+    throw Error('Manual recovery requires one explicit bound request');
   let preview=planHarvestFallback({harvest,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled,
     readOnlyOrigins:normalizedReadOnlyOrigins});
   if(onlyOrigins){
@@ -376,7 +380,12 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     if(confirmedSupplement(currentSupplement,candidate.origin,preview.businessDate,candidateNow)){
       outcomes.push({origin:candidate.origin,state:'already_confirmed'});continue;
     }
-    const canVerify=passiveVerificationDue(state,candidate,normalizedReadOnlyOrigins,candidateNow);
+    const manualRecovery=manualRecoveryId!==null&&candidate.guardedSubmit===true&&normalizedReadOnlyOrigins.includes(candidate.origin);
+    if(manualRecoveryId!==null&&!manualRecovery){outcomes.push({origin:candidate.origin,state:'manual_recovery_reader_unavailable'});continue;}
+    if(manualRecovery&&state.attempts.some(a=>a.manualRecoveryId===manualRecoveryId)){
+      outcomes.push({origin:candidate.origin,state:'manual_recovery_already_attempted'});continue;
+    }
+    const canVerify=manualRecovery||passiveVerificationDue(state,candidate,normalizedReadOnlyOrigins,candidateNow);
     const readOnlyReview=candidate.readOnlyReview===true;
     if((readOnlyReview||candidate.guardedSubmit===true||
       (candidate.kind==='fallback_only'&&normalizedReadOnlyOrigins.includes(candidate.origin)))&&!canVerify){
@@ -413,6 +422,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     let recoveryEvidence=null,authenticationRecovery=false;
     if(canVerify){
       const verification={origin:candidate.origin,accountKey:candidate.accountKey,startedAt:clock().toISOString(),state:'in_progress'};
+      if(manualRecovery)verification.manualRecoveryId=manualRecoveryId;
       state.verifications??=[];state.verifications.push(verification);writeAtomic(stateFile,state);
       try{
         let checked=currentPassivePtResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash,readOnly:true}),clock());
@@ -449,13 +459,13 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         const dailyAttempts=state.attempts.filter(a=>a.origin===candidate.origin&&
           (a.accountKey??'site-default')===candidate.accountKey&&!['deferred_busy','deferred_preflight'].includes(a.state));
         const options={readOnlyOrigins:normalizedReadOnlyOrigins,config};
-        if(dailyAttempts.length>=3){
+        if(dailyAttempts.length>=3&&!manualRecovery){
           outcomes.push({origin:candidate.origin,state:'daily_guard_recovery_limit'});continue;
         }
-        const recoveredHdd=attempt=>candidate.origin==='https://www.uhddolby.com'&&
+        const boundAttemptBeforeProof=attempt=>(candidate.origin==='https://www.uhddolby.com'||manualRecovery)&&
           attempt.accountKey===candidate.accountKey&&attempt.outcome?.profileBinding===checked.profileBinding&&
           Number.isFinite(Date.parse(attempt.finishedAt??''))&&Date.parse(attempt.finishedAt)<Date.parse(checked.evidence.confirmedAt);
-        if(dailyAttempts.some(a=>!recoverableUnsubmittedProfileGuard(a,candidate,checked,clock(),options)&&!recoveredHdd(a))){
+        if(dailyAttempts.some(a=>!recoverableUnsubmittedProfileGuard(a,candidate,checked,clock(),options)&&!boundAttemptBeforeProof(a))){
           outcomes.push({origin:candidate.origin,state:'daily_attempt_limit'});continue;
         }
       }catch(error){
@@ -489,6 +499,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     if(harvestWakeup)attempt.harvestWakeup=true;
     if(recoveryEvidence)attempt.recoveryEvidence=recoveryEvidence;
     if(authenticationRecovery)attempt.authenticationRecovery=true;
+    if(manualRecovery)attempt.manualRecoveryId=manualRecoveryId;
     if(Number.isFinite(Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])))
       attempt.recoveredAt=recoveredAtByAccount[recoveryIdentity(candidate)];
     state.attempts.push(attempt);writeAtomic(stateFile,state);

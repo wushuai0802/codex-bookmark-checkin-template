@@ -6,3 +6,9 @@ node_modules/
 /tmp/
 /outputs/
 /work/
+# Private state from installations predating the execution/observation layout.
+/config/
+/data/
+/logs/
+/setup/answers.json
+/test-run.log

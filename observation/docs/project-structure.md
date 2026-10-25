@@ -12,9 +12,10 @@ observation layer calls that runner as a child and never owns browser state.
 | `src/dashboard-server.mjs`, `public/`, `scripts/sync-v2-status.ps1` | Observation dashboard and NAS status projection |
 | V1 runtime `src/`, `scripts/Run-Checkin.ps1` | Sole browser/check-in implementation |
 
-After Harvest's daily task reports completion, `src/harvest-fallback.mjs`
-compares its observations with the exact PT monitoring bookmarks and same-day
-execution results. Completed sites remain status-only. Daily-plan PT tasks use
+`src/harvest-fallback.mjs` compares current per-site Harvest ownership/results
+with the exact PT monitoring bookmarks and same-day execution results.
+Completed sites remain status-only. Reviewed guarded recovery and execution-owned
+sites need not wait for the whole Harvest batch. Daily-plan PT tasks use
 the existing gateway; the other monitored sites use `execution/src/pt-supplement.mjs`
 only after private opt-in and both execution locks. Reviewed passive daily
 state can permit bounded recovery; busy/preflight deferrals have a separate
@@ -46,9 +47,10 @@ account-bound recovery with explicit no-submission evidence can be considered
 for another attempt. The fallback attempt ledger is preserved across code
 rollback because restoring an older ledger cannot undo an external check-in.
 
-Regular monitored PT tasks now require a fresh Harvest completion result
+Regular monitored PT tasks require a fresh Harvest ownership/result check
 before the existing execution adapter can write, when the private integration
-binding opts in. The monitor-only fallback independently refreshes Harvest
+binding opts in. Completion, failure and a guarded fresh account-state proof are
+handled by their existing per-site policies. The monitor-only fallback independently refreshes Harvest
 before each candidate. A display cache does not authorize either path.
 
 Standalone Canary and transport modules remain because their compatibility

@@ -24,6 +24,22 @@ export const siteFaultCodes = Object.freeze([
   "site_server_error",
   "dns_validation_failed"
 ]);
+export const deploymentIssueCodes = Object.freeze([
+  "execution_package_drift",
+  "execution_lock_drift",
+  "execution_version_drift",
+  "execution_dependency_drift",
+  "execution_dependency_invalid",
+  "execution_metadata_unavailable",
+  "observation_package_drift",
+  "observation_lock_drift",
+  "observation_version_drift",
+  "observation_dependency_drift",
+  "observation_dependency_invalid",
+  "observation_metadata_unavailable",
+  "integrity_check_failed",
+  "pt_cleanup_pending"
+]);
 export const ptSiteDisplayNames = Object.freeze({
   "https://ptsbao.club": "烧包"
 });
@@ -39,6 +55,7 @@ export const nativePtHeaderOrigins = Object.freeze([
 ]);
 export const conditionLabels = Object.freeze({
   "task_disabled": "已取消",
+  "not_signed": "未签到（已确认）",
   "site_maintenance": "站点维护",
   "upstream_unavailable": "等待站点恢复",
   "rate_limit": "等待限频恢复",
@@ -116,6 +133,8 @@ export const ptFailureMessages = Object.freeze({
   "network_error": "页面访问失败，尚未取得签到状态",
   "dns_validation_failed": "站点域名 DNSSEC 校验失败，等待站点修复域名解析",
   "authoritative_status_unavailable": "页面尚无可确认的今日签到证据",
+  "native_readback_unavailable": "原生浏览器核验未完成，保留具体阶段后复核",
+  "configuration_mismatch": "执行范围或账号配置已变化，须重新核对",
   "checkin_control_unavailable": "签到控件尚未稳定可点击，未提交签到",
   "site_migration": "站点明确提示已迁移，请核对并更新书签地址",
   "bookmark_origin_changed": "页面已离开书签授权来源，请核对并更新书签地址",

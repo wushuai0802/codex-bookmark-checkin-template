@@ -5,6 +5,8 @@ import path from 'node:path';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {ptFailureMessages,ptRetryCauses,ptResultStatuses} from './checkin-contract.generated.mjs';
+import {projectPtNativeDiagnostic} from './pt-native-diagnostic.generated.mjs';
+import {beginPtWorker,cleanupPtWorker,ptWorkerScope,reconcilePtWorker,ptCleanupPendingError} from './pt-worker-lifecycle.mjs';
 
 const statuses=new Set(ptResultStatuses);
 const diagnosticCodes=new Set(Object.keys(ptFailureMessages));
@@ -12,6 +14,7 @@ export function projectPtDiagnostic(value={}){
   return {...(diagnosticCodes.has(value.failureCode)?{failureCode:value.failureCode}:{}),
     ...(diagnosticCodes.has(value.underlyingFailureCode)?{underlyingFailureCode:value.underlyingFailureCode}:{}),
     ...(ptRetryCauses.includes(value.retryCause)?{retryCause:value.retryCause}:{}),
+    ...(projectPtNativeDiagnostic(value.nativeFlow)?{nativeFlow:projectPtNativeDiagnostic(value.nativeFlow)}:{}),
     ...(value.siteCondition==='site_maintenance'?{siteCondition:'site_maintenance'}:{})};
 }
 const sources=new Set(['api','page_text','usage_log','pt_page','none']);
@@ -50,36 +53,61 @@ export function projectPtSiteResult(value,origin){
     ...(value.submissionAttempted===false?{submissionAttempted:false}:{})};
 }
 
-export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,spawnChild=spawn,timeoutMs=600_000}){
+export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,spawnChild=spawn,timeoutMs=600_000,
+  resolveScope=ptWorkerScope,cleanup=cleanupPtWorker,cleanupWaitMs=5000,cleanupTimeoutMs=25_000}){
   const script=path.join(legacyRoot,'scripts/Run-PtSupplement.mjs');
   if(!fs.existsSync(script))throw Error('PT site execution helper is missing');
-  const command=[script,origin,catalogFile,catalogHash,...(readOnly?['--read-only']:loginRecoveryOnly?['--recover-login-only']:verifyBeforeSubmit?['--verify-before-submit']:[])];
+  const ownerId=crypto.randomUUID(),scope=await resolveScope({legacyRoot,origin,readOnly});
+  if(!/^[a-f0-9]{64}$/.test(scope.profileBinding??'')){
+    const error=Error('PT worker Profile scope unavailable');error.code='PT_PREFLIGHT';error.preflightReason='scope_unavailable';throw error;
+  }
+  const command=[script,origin,catalogFile,catalogHash,readOnly?'--read-only':loginRecoveryOnly?'--recover-login-only':verifyBeforeSubmit?'--verify-before-submit':'--execute',
+    '--worker-owner='+ownerId];
   if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId))throw Error('invalid PT fallback attempt');
   const childEnv={...process.env,CHECKIN_V2_ENGINE_ROOT:root,CHECKIN_V2_ENGINE_LEASE:lease.owner.nonce,
+    CHECKIN_PT_CHILD_OWNER:ownerId,CHECKIN_PT_EXPECTED_PROFILE_BINDING:scope.profileBinding,
     ...(verifyBeforeSubmit?{CHECKIN_PT_FALLBACK_RECHECK:'1'}:{})};
   delete childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
   if(!readOnly&&fallbackAttemptId!==undefined)childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID=fallbackAttemptId;
+  const lifecycle=beginPtWorker(root,{ownerId,origin,legacyRoot,...scope,startedAt:new Date().toISOString(),state:'running'});
   const output=await new Promise((resolve,reject)=>{
-    const child=spawnChild(process.execPath,command,{cwd:legacyRoot,windowsHide:true,shell:false,
-      stdio:['ignore','pipe','pipe'],env:childEnv});
-    let stdout='',stderr='';
-    const timer=setTimeout(()=>{child.kill();reject(Error('PT site execution timed out'));},timeoutMs);
+    let child,stdout='',stderr='',settled=false,terminating=false,closed=false,timer;
+    const finish=async(error,value,cleared=true)=>{if(settled)return;settled=true;clearTimeout(timer);
+      if(cleared)try{await lifecycle.finish();}catch{error=ptCleanupPendingError();}error?reject(error):resolve(value);};
+    try{child=spawnChild(process.execPath,command,{cwd:legacyRoot,windowsHide:true,shell:false,
+      stdio:['ignore','pipe','pipe'],env:childEnv});}
+    catch(error){finish(error);return;}
+    const terminate=async error=>{
+      if(terminating||settled)return;terminating=true;clearTimeout(timer);
+      let complete=false;
+      try{complete=await lifecycle.cleanup(cleanup,cleanupTimeoutMs);}catch{}
+      if(complete&&!closed){
+        try{child.kill();}catch{}
+        let waitTimer;await Promise.race([new Promise(resolve=>child.once('close',resolve)),new Promise(resolve=>{waitTimer=setTimeout(resolve,cleanupWaitMs);})]);
+        clearTimeout(waitTimer);
+      }
+      if(!complete||!closed){finish(ptCleanupPendingError(),undefined,false);return;}
+      finish(error);
+    };
+    timer=setTimeout(()=>void terminate(Error('PT site execution timed out')),timeoutMs);
     const append=(current,chunk)=>{
-      if(current.length+chunk.length>64_000){child.kill();reject(Error('PT site output exceeded limit'));return current;}
+      if(current.length+chunk.length>64_000){void terminate(Error('PT site output exceeded limit'));return current;}
       return current+chunk;
     };
     child.stdout.on('data',chunk=>{stdout=append(stdout,chunk.toString('utf8'));});
     child.stderr.on('data',chunk=>{stderr=append(stderr,chunk.toString('utf8'));});
-    child.once('error',error=>{clearTimeout(timer);reject(error);});
-    child.once('exit',(code,signal)=>{clearTimeout(timer);if(code===3){reject(Error('V2 runner is already active'));return;}if(code===4){
+    child.once('error',error=>{if(!child.pid)finish(error);else void terminate(error);});
+    child.once('close',(code,signal)=>{closed=true;if(terminating||settled)return;
+      if(code===3){finish(Error('V2 runner is already active'));return;}if(code===4){
       const e=Error('PT preflight prevented browser submission');e.code='PT_PREFLIGHT';
       try{const diagnostic=JSON.parse(stderr.trim().split(/\r?\n/).at(-1));
         if(diagnostic.error==='PT_PREFLIGHT'&&['catalog_stale','catalog_hash_changed','registration_invalid','execution_plan_missing',
           'execution_plan_changed','bookmark_source_changed','site_scope_changed','scope_unavailable'].includes(diagnostic.reason))
           e.preflightReason=diagnostic.reason;
       }catch{/* Never propagate a child's raw stderr or private page text. */}
-      reject(e);return;
-    }if(signal||code!==0){reject(Error('PT site execution failed'));return;}resolve(stdout);});
+      finish(e);return;
+    }if(signal||code!==0){void terminate(Error('PT site execution failed'));return;}void finish(null,stdout);});
+    try{lifecycle.started(child.pid);}catch(error){void terminate(error);}
   });
   const line=output.trim().split(/\r?\n/).at(-1);
   return projectPtSiteResult(JSON.parse(line),origin);
@@ -103,6 +131,7 @@ export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catal
   if(integration.executionEngine!=='v1'||path.resolve(integration.v2ProjectRoot).toLowerCase()!==path.resolve(root).toLowerCase())throw Error('PT site gateway binding mismatch');
   const lease=acquire(root);
   try {
+    await reconcilePtWorker(root,{legacyRoot:runtime.legacyRoot});
     const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit:verifyBeforeSubmit||loginRecoveryOnly,
       ...(loginRecoveryOnly?{loginRecoveryOnly:true}:{}),
       ...(fallbackAttemptId!==undefined?{fallbackAttemptId}:{})});

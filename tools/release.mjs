@@ -15,7 +15,9 @@ try{
     if(!options['--manifest'])throw Error('manifest required');
     const plan=JSON.parse(fs.readFileSync(options['--manifest'],'utf8'));
     if(command==='apply'&&!options['--backup-root'])throw Error('backup root required');
-    console.log(JSON.stringify(command==='apply'?await applyRelease(plan,{backupRoot:options['--backup-root']}):auditRelease(plan)));
+    const result=command==='apply'?await applyRelease(plan,{backupRoot:options['--backup-root']}):auditRelease(plan);
+    console.log(JSON.stringify(result));
+    if(command==='audit'&&(result.drift.length||result.dependencyDrift.length))process.exitCode=2;
   }else if(command==='rollback'){
     if(!options['--backup'])throw Error('backup required');console.log(JSON.stringify(await rollbackRelease(options['--backup'])));
   }else throw Error('use plan, apply, audit or rollback');

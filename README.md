@@ -14,14 +14,16 @@ OAuth diagnostics and site-address change handling.
 
 The deployed Windows runner uses its existing private configuration and Chrome
 profiles. The observation package calls that runner through a bounded lease;
-the NAS dashboard does not hold credentials or execute browser actions. After
-Harvest's daily task completes, sites in the explicitly selected PT monitoring
-bookmarks without a confirmed result may receive a bounded execution-layer
-recheck after a fresh read of Harvest for each candidate. Regular monitored PT
-tasks use the same Harvest completion gate before browser actions when enabled
-in their private runtime binding.
+the NAS dashboard does not hold credentials or execute browser actions. Harvest
+reconciliation uses each site's owner and current result. Confirmed sites remain
+status-only. Execution-owned tasks and reviewed guarded recovery paths can proceed
+without waiting for the whole Harvest batch; each candidate still uses a fresh
+Harvest observation and the existing account/day submission guards. Sites without
+a reviewed passive capability retain their established first-dispatch conditions.
 Monitoring-only sites use a separate PT result file and do not join the regular
-daily plan. Uncertain submissions are never blindly replayed: audited fresh
+execution plan. Authorized PT supplements are included once in the dashboard's
+global counts and task filters; pure monitoring, configured pauses and site-side
+faults keep their separate classifications. Uncertain submissions are never blindly replayed: audited fresh
 daily-state evidence may permit bounded recovery after another executor check. This
 site-only fallback is disabled by default until the private runtime and its
 browser profile have been accepted.

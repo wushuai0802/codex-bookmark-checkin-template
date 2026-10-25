@@ -5,6 +5,17 @@ import { buildPtStatus, normalizePtStatusReport } from '../src/pt-status.mjs';
 const accountRef = 'acct_0123456789abcdef';
 const taskId = 'task_0123456789abcdef01234567';
 
+test('PT capability metadata reflects reviewed private readers and a configured pause without exposing private policy',()=>{
+  const origin='https://private-reader.example',base={generatedAt:'2026-10-25T04:00:00Z',businessDate:'2026-10-25',fallbackOnlyEnabled:true,
+    monitorCatalog:{sites:[{origin}]},readPolicies:{[origin]:{reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'.private-selector',dailyHeader:true}}};
+  const value=buildPtStatus(base).sites[0];assert.deepEqual(value.capabilities,{read:true,guardedSubmit:true});assert.equal(value.fallbackEnabled,true);
+  assert.doesNotMatch(JSON.stringify(value),/private-selector/);
+  const paused=buildPtStatus({...base,disabledOrigins:[origin]}).sites[0];
+  assert.equal(paused.disabledByConfig,true);assert.equal(paused.fallbackEnabled,false);assert.equal(paused.evidenceState,'disabled');
+  assert.equal(paused.effective.evidence.verification,'task_disabled');
+  assert.deepEqual(buildPtStatus({...base,readPolicies:{[origin]:{...base.readPolicies[origin],reviewed:false}}}).sites[0].capabilities,{read:false,guardedSubmit:false});
+});
+
 test('Harvest OpenCD www receipt matches the canonical bookmark and regular task',()=>{
   const result=buildPtStatus({generatedAt:'2026-10-02T02:00:00Z',businessDate:'2026-10-02',
     monitorCatalog:{sites:[{origin:'https://open.cd'}]},planTargets:[{origin:'https://open.cd'}],

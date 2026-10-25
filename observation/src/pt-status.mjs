@@ -5,6 +5,7 @@ import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {ptStatuses,siteFaultCodes} from './checkin-contract.generated.mjs';
 import {siteDisplayName} from './display-identity.mjs';
 import {canonicalPtOrigin} from './pt-coordination.generated.mjs';
+import {ptCapabilities} from './pt-capabilities.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
 export const PT_EVIDENCE_STATES=Object.freeze(['confirmed','guarded_read_needed','not_signed_confirmed',
   'verification_pending','monitor_only_unconfirmed','external_blocked','unavailable','disabled','unconfirmed']);
@@ -299,7 +300,7 @@ function mergeSiteObservations(observations, target) {
 
 export function buildPtStatus({
   tasks = [], receipts = [], planTargets = [], externalReport = null, fallbackReport = null, monitorCatalog = null,
-  fallbackOnlyEnabled = false, recoveryReport = null,
+  fallbackOnlyEnabled = false, recoveryReport = null, disabledOrigins = [], disabledAccountKeys = [], readPolicies = {},
   generatedAt = new Date().toISOString(), businessDate = null, maxAgeHours = 26
 } = {}) {
   const report = externalReport
@@ -403,8 +404,13 @@ export function buildPtStatus({
     }
   }
   const sites = [...grouped.values()].map((items) => {
+    const disabled=disabledOrigins.some(value=>{try{return normalizeOriginForStatus(value)===items[0].origin;}catch{return false;}})||
+      disabledAccountKeys.includes('site-default')&&!targets.has(items[0].origin);
     const site = {...mergeSiteObservations(items, targets.get(items[0].origin)??monitorSites.get(items[0].origin)),
-      fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)};
+      fallbackEnabled:fallbackOnlyEnabled && monitorSites.has(items[0].origin)&&!disabled,
+      capabilities:ptCapabilities(items[0].origin,readPolicies[items[0].origin]),...(disabled?{disabledByConfig:true}:{})};
+    if(disabled)site.effective={source:'configuration',status:'not_available',observedAt:generatedAt,fresh:true,authoritative:true,submissionAttempted:false,
+      evidence:{source:'configuration',authoritative:true,verification:'task_disabled',businessDate,summary:'已按配置暂停签到',redacted:true}};
     return site;
   }).sort((a, b) => a.origin.localeCompare(b.origin) || (a.accountRef ?? '').localeCompare(b.accountRef ?? ''));
   if(recoveryReport?.businessDate===businessDate)for(const site of sites){

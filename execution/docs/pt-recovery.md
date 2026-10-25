@@ -37,3 +37,21 @@ an explicit DNSSEC failure for the exact configured domain becomes a site DNS
 fault. This does not establish account/day status, change local DNS settings,
 disable validation or authorize a submission. The shared site-fault contract
 keeps PT classification and overview-rate exclusions consistent.
+## Native recovery and explicit manual retries
+
+The native HDDolby path keeps the parent's existing intent and account/Profile binding.
+It reads, dispatches the mature site flow and reads back within one native browser
+session. The original parent proof must have been fresh when that intent was created;
+a new authenticated unsigned proof is published under the same owner before dispatch.
+The mature submit guard therefore sees current evidence without relaxing its 30-second
+HDDolby freshness rule. Native diagnostics carry only reviewed stages, error codes,
+HTTP status and booleans, never page bodies, query strings or credentials.
+
+Automatic daily budgets remain unchanged. An explicitly requested, single-site manual
+retry carries its own durable request ID, performs another passive check and may use
+the same guarded recovery path after the automatic budget is exhausted. One request
+ID can create at most one attempt. Existing attempts are retained; current signed
+evidence, identity differences, active intents and unreviewed readers still prevent
+another submission. Dashboard retries use the queued operation ID. The CLI accepts
+`--manual-recovery-id <UUID>` only with `--apply` and one `--only-origin`, in addition
+to the existing fresh catalog/report hashes and live Harvest probe.

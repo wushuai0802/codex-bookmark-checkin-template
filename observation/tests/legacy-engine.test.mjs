@@ -66,6 +66,9 @@ test('fresh V1 health is consumed only from a valid read-only check',t=>{
  const healthy={healthy:true,checkedAt:new Date().toISOString(),failedChecks:[]};
  const valid=readLegacyHealth({...f,spawnHealth:()=>({status:0,stdout:JSON.stringify(healthy)})});
  assert.deepEqual(valid,healthy);
+ const failed={...healthy,healthy:false,failedChecks:['deploymentIntegrity'],deployment:{managed:true,consistent:false,busy:false,issues:['observation_package_drift']}};
+ assert.deepEqual(readLegacyHealth({...f,spawnHealth:()=>({status:2,stdout:JSON.stringify(failed)})}),failed);
+ assert.equal(readLegacyHealth({...f,spawnHealth:()=>({status:2,stdout:JSON.stringify(healthy)})}),null);
  assert.equal(readLegacyHealth({...f,spawnHealth:()=>({status:1,stdout:'{}'})}),null);
  assert.equal(readLegacyHealth({...f,spawnHealth:()=>({status:0,stdout:'{}'})}),null);
 });

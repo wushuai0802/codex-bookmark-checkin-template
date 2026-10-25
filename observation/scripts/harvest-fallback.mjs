@@ -52,11 +52,14 @@ try{
   if(onlyOrigin){const selected=new URL(onlyOrigin);
     if(selected.protocol!=='https:'||selected.origin!==onlyOrigin||selected.username||selected.password)
       throw Error('fallback selection requires one exact HTTPS origin');}
+  const manualRecoveryId=value('--manual-recovery-id');
+  if(manualRecoveryId&&(!execute||!onlyOrigin))throw Error('manual recovery needs --apply and one --only-origin');
   const {ptReadPolicy}=await import(pathToFileURL(path.join(runtime.legacyRoot,'src/pt-read-policy.mjs')));
   inputs.config=resolvedFallbackReadConfig(inputs.catalog,inputs.config,origin=>ptReadPolicy(origin,inputs.config));
   const readOnlyOrigins=reviewedFallbackReadOrigins(inputs.catalog,origin=>inputs.config.ptReadOnlyPolicies[origin]);
   const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount,readOnlyOrigins,
     ...(onlyOrigin?{onlyOrigins:[onlyOrigin]}:{}),
+    ...(manualRecoveryId?{manualRecoveryId}:{}),
     refreshHarvest:liveHarvestProbe(value('--harvest-ssh-target'),value('--harvest-db-path'))}):planHarvestFallback({...inputs,fallbackOnlyEnabled,readOnlyOrigins});
   const newAttempts=execute?null:pendingHarvestFallbackAttempts(root,result,{readOnlyOrigins}).length;
   const assessmentStates=Object.fromEntries([...new Set(result.assessments.map(item=>item.state))].sort().map(state=>[state,result.assessments.filter(item=>item.state===state).length]));

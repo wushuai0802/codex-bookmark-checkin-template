@@ -13,6 +13,33 @@ function snapshot(){return {businessDate:'2026-09-30',tasks:[{taskId:'t',origin,
   receipts:[{taskId:'t',evidence:{authoritative:false}}]};}
 const catalog={sites:[{origin}]};
 
+test('PT-only unknown submissions receive a separate bounded passive review, with a new post-write opportunity',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-only-passive-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs',{recursive:true});fs.mkdirSync(root+'/data');
+  const target='https://www.uhddolby.com',file=root+'/catalog.json';fs.writeFileSync(file,JSON.stringify({sites:[{origin:target}]}));
+  let current=new Date(now.getTime()-6*3600000),calls=0;
+  const view={businessDate:'2026-09-30',tasks:[],ptStatus:{sites:[{origin:target,inLegacyPlan:false,fallbackEnabled:true,evidenceState:'verification_pending',
+    effective:{status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,fresh:true,
+      observedAt:new Date(current.getTime()-120_000).toISOString(),evidence:{profileBinding:'a'.repeat(64)}}}]}};
+  const save=()=>fs.writeFileSync(root+'/outputs/shadow-beta-snapshot.json',JSON.stringify(view));save();
+  const args={root,catalogFile:file,clock:()=>current,refreshCatalog:async()=>file,
+    runSite:async request=>{calls++;assert.equal(request.readOnly,true);assert.equal(request.origin,target);
+      return {status:'unknown',submissionAttempted:false};},record:()=>{throw Error('an inconclusive read must not invent completion');}};
+  assert.deepEqual(ptEvidenceCandidates(view,{sites:[{origin:target}]},{sites:{}},current),[target]);
+  await repairPtEvidence(args);current=new Date(current.getTime()+2*3600000+1000);await repairPtEvidence(args);
+  current=new Date(current.getTime()+2*3600000+1000);await repairPtEvidence(args);assert.equal(calls,2);
+  // A later actual write gets its own first passive confirmation opportunity,
+  // while the independent daily read ceiling still prevents infinite loops.
+  view.ptStatus.sites[0].effective.observedAt=new Date(current.getTime()-60_001).toISOString();save();
+  await repairPtEvidence(args);assert.equal(calls,3);
+  const state=JSON.parse(fs.readFileSync(root+'/data/pt-evidence-repair.json'));
+  assert.equal(state.sites[target].attempts,1);assert.equal(state.sites[target].totalAttempts,3);
+  state.sites[target].totalAttempts=6;assert.deepEqual(ptEvidenceCandidates(view,{sites:[{origin:target}]},state,current),[]);
+  view.ptStatus.sites[0].evidenceState='external_blocked';assert.deepEqual(ptEvidenceCandidates(view,{sites:[{origin:target}]},{sites:{}},current),[]);
+  view.ptStatus.sites[0].evidenceState='verification_pending';view.ptStatus.sites[0].fallbackEnabled=false;
+  assert.deepEqual(ptEvidenceCandidates(view,{sites:[{origin:target}]},{sites:{}},current),[]);
+});
+
 test('evidence rebuild carries forward the previous health source when a fresh probe is unavailable',()=>{
   const health=previousEvidenceHealth({health:{healthy:true,sourceCheckedAt:'2026-09-30T11:55:00.000Z',
     failedCheckCount:2,reason:'ok'}});

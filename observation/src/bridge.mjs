@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   STATUS_VALUES, accountRef, assertUniqueTaskOwners,
   credentialGroup, logicalGroup, logicalSiteKey, planHash, redactText,
-  taskIdentity, normalizeOrigin
+  taskIdentity, normalizeOrigin, projectDeployment
 } from './contracts.mjs';
 import { buildPtStatus } from './pt-status.mjs';
 import { timestampFresh } from './freshness.mjs';
@@ -112,7 +112,8 @@ function healthSnapshot(health, generatedAt, maxAgeHours = 26) {
     sourceCheckedAt: checked && !Number.isNaN(checked.getTime()) ? checked.toISOString() : null,
     freshness: { fresh, ageHours: ageHours === null ? null : Number(ageHours.toFixed(3)), maxAgeHours },
     reason: fresh ? (typeof health?.reason === 'string' ? redactText(health.reason) : null) : 'health source is stale or unavailable',
-    failedCheckCount: Array.isArray(health?.failedChecks) ? health.failedChecks.length : null
+    failedCheckCount: Array.isArray(health?.failedChecks) ? health.failedChecks.length : null,
+    ...(projectDeployment(health?.deployment)?{deployment:projectDeployment(health.deployment)}:{})
   };
 }
 
@@ -236,6 +237,9 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     fallbackReport: ptFallbackReport,
     recoveryReport: ptRecoveryReport,
     fallbackOnlyEnabled: ptFallbackOnlyEnabled,
+    disabledOrigins:[...(identityConfig.disabledCheckinOrigins??[]),...(identityConfig.excludedOrigins??[])],
+    disabledAccountKeys:identityConfig.disabledAccountKeys??[],
+    readPolicies:identityConfig.ptReadOnlyPolicies??{},
     monitorCatalog,
     generatedAt,
     businessDate: businessDateFrom(generatedAt),

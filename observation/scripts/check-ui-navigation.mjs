@@ -102,7 +102,7 @@ try {
       const mobile = viewport.width <= 700;
       assert.equal(await page.locator('#kpi-grid .kpi').count(),4);
       assert.deepEqual(await page.locator('#kpi-grid .kpi-label').allTextContents(),['已核验','待补证','待处理','已排除']);
-      assert.deepEqual(await page.locator('#kpi-grid .kpi-value').allTextContents(),['1','1','0','1']);
+      assert.deepEqual(await page.locator('#kpi-grid .kpi-value').allTextContents(),['2','2','0','1']);
       await page.locator('#kpi-grid .kpi').nth(3).click();
       assert.equal(await page.locator('#task-status').inputValue(),'excluded');
       assert.equal(await page.locator('#tasks-body tr').count(),1);
@@ -118,7 +118,7 @@ try {
       }
       await page.reload();
       await page.waitForFunction(() => document.querySelector('#task-status').value==='excluded'
-        && document.querySelector('#task-result-count').textContent.includes('1 / 3'));
+        && document.querySelector('#task-result-count').textContent.includes('1 / 5'));
       assert.equal(await page.locator('#tasks-body tr').count(),1);
       const statusTrigger=page.locator('.ui-select[data-for="task-status"] .ui-select-trigger');
       assert.equal(await page.locator('#task-status').getAttribute('aria-hidden'),'true');
@@ -139,7 +139,7 @@ try {
       await statusTrigger.click();
       await page.getByRole('listbox').getByRole('option',{name:'成功回执'}).click();
       assert.equal(await page.locator('#task-status').inputValue(),'completed');
-      assert.equal(await page.locator('#tasks-body tr').count(),2);
+      assert.equal(await page.locator('#tasks-body tr').count(),4);
       await statusTrigger.click();
       await page.getByRole('listbox').getByRole('option',{name:'尚未完成'}).click();
       assert.equal(await page.locator('#tasks-body tr').count(),1);
@@ -335,7 +335,7 @@ try {
       await page.waitForFunction(() => location.hash === '#overview');
       // Opening the queue preserves unread state; acknowledgement is explicit.
       assert.equal(await page.locator('#attention-badge').isVisible(), true);
-      assert.equal(await page.locator('#attention-count').textContent(),'1 待补证');
+      assert.equal(await page.locator('#attention-count').textContent(),'2 待补证');
       assert.equal(await page.locator('.attention-tabs button.active').getAttribute('data-queue'),'proof');
       await page.locator('.attention-tabs button[data-queue="external"]').click();
       assert.equal(await page.locator('#attention-count').textContent(),'1 站点待恢复');
