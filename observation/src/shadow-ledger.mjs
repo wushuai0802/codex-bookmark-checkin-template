@@ -188,7 +188,15 @@ export function appendLedgerRecord(file, record, { legacyRoot } = {}) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   if (fs.existsSync(destination)) {
     const existing = readLedger(destination);
-    if (existing.some((candidate) => candidate.recordId === record.recordId)) return destination;
+    const previous=existing.at(-1);
+    if(previous?.recordId===record.recordId||previous?.repeatedRecordId===record.recordId&&previous?.snapshotId===record.snapshotId)return destination;
+    if(existing.some(candidate=>candidate.recordId===record.recordId)){
+      // A -> B -> A is a new recovery event even though A's content digest is
+      // unchanged. Replaying an older observation cannot move history forward.
+      if(Date.parse(record.recordedAt)<=Date.parse(previous?.recordedAt??''))return destination;
+      record={...record,repeatedRecordId:record.recordId,recordId:'ledger_'+crypto.createHash('sha256').update(
+        record.recordId+'|'+previous.recordId+'|'+record.recordedAt).digest('hex').slice(0,24)};
+    }
   }
   fs.appendFileSync(destination, `${JSON.stringify(record)}\n`, 'utf8');
   return destination;

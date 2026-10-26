@@ -6,6 +6,10 @@ import {dailyRecords,dayTotals} from '../public/calendar-model.mjs';
 import {businessDayHistory} from '../public/business-day-history.mjs';
 import {buildSnapshot} from '../src/bridge.mjs';
 import {createLedgerRecord} from '../src/shadow-ledger.mjs';
+import {appendLedgerRecord,readLedger} from '../src/shadow-ledger.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {evaluateShadowHistory} from '../src/shadow-acceptance.mjs';
 
 const row=(day,at,status='signed')=>({schemaVersion:1,mode:'shadow_read_only',recordId:'ledger_'+day.replaceAll('-','')+'a'.repeat(16),
@@ -61,4 +65,18 @@ test('next-day health for an old run does not poison the original daily health w
   const result=evaluateShadowHistory([...records,late],{now:'2026-10-26T05:00:00Z'});
   assert.equal(result.accepted,true);assert.equal(result.eligibleRecentDays,3);
   assert.equal(result.unhealthyRecordCount,1);
+});
+
+test('a repeated healthy state after an unhealthy event appends recovery without rewriting old records or duplicating consecutive state',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'history-recovery-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(root,'ledger.jsonl'),day='2026-10-26';
+  const healthy={...row(day,day+'T05:00:00Z'),snapshotId:'snap_'+'a'.repeat(24)};
+  const unhealthy={...row(day,day+'T06:05:00Z'),snapshotId:'snap_'+'b'.repeat(24),recordId:'ledger_'+'b'.repeat(24)};
+  unhealthy.health.healthy=false;
+  appendLedgerRecord(file,healthy);appendLedgerRecord(file,unhealthy);
+  const before=fs.readFileSync(file,'utf8'),recovery={...healthy,recordedAt:day+'T06:10:00Z',health:{...healthy.health,sourceCheckedAt:day+'T06:10:00Z'}};
+  appendLedgerRecord(file,recovery);appendLedgerRecord(file,{...recovery,recordedAt:day+'T06:15:00Z'});
+  const records=readLedger(file);assert.equal(records.length,3);assert.ok(fs.readFileSync(file,'utf8').startsWith(before));
+  assert.notEqual(records[2].recordId,healthy.recordId);assert.equal(records[2].snapshotId,healthy.snapshotId);
+  assert.equal(evaluateShadowHistory(records,{minConsecutiveDays:1,now:day+'T06:20:00Z'}).accepted,true);
 });
