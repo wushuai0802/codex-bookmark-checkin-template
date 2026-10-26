@@ -7,8 +7,9 @@ const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).f
 export function isBusinessDayRecord(record){
   const day=record?.businessDate,at=Date.parse(record?.recordedAt??'');
   if(!datePattern.test(day??'')||!Number.isFinite(at))return false;
-  if(dayAt(at)!==day)return false;
-  if(record.observationBusinessDate&&record.observationBusinessDate!==day)return false;
+  // New records carry the observation date explicitly: persisting a snapshot
+  // a moment after midnight must not discard a genuine pre-midnight receipt.
+  if((record.observationBusinessDate??dayAt(at))!==day)return false;
   if(record.ptBusinessDate&&record.ptBusinessDate!==day)return false;
   return true;
 }

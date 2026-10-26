@@ -197,6 +197,8 @@ export function calendarHistory(records, {limit=180,now=new Date()}={}) {
   const recent=[...latest.values()].sort((a,b)=>a.businessDate.localeCompare(b.businessDate)).slice(-limit);
   const statuses=['signed','already_signed','not_available','needs_attention','deferred','login_required','failed','not_started'];
   return {days:recent.map(record=>({businessDate:record.businessDate,recordedAt:record.recordedAt,
+    ...(record.observationBusinessDate?{observationBusinessDate:record.observationBusinessDate}:{}),
+    ...(record.ptBusinessDate?{ptBusinessDate:record.ptBusinessDate}:{}),
     counts:{executionUnits:record.counts.executionUnits,status:Object.fromEntries(statuses.map(key=>[
       key,Number.isInteger(record.counts.status?.[key])&&record.counts.status[key]>=0?record.counts.status[key]:0]))},
     taskSummaries:Array.isArray(record.taskSummaries)?record.taskSummaries.slice(0,200).map(task=>publicTask(task,task)):null,

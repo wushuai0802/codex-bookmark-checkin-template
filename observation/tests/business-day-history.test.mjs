@@ -35,6 +35,13 @@ test('a genuine later same-day negative still supersedes an earlier completion',
   assert.equal(businessDayHistory([signed,negative]).get('2026-10-25'),negative);
 });
 
+test('a same-day observation persisted just after midnight retains its explicit date through the calendar API',()=>{
+  const record={...row('2026-10-25','2026-10-25T16:00:01Z'),observationBusinessDate:'2026-10-25',ptBusinessDate:'2026-10-25'};
+  const projected=calendarHistory([record],{now:new Date('2026-10-26T05:00:00Z')});
+  assert.equal(projected.days.length,1);assert.equal(projected.days[0].observationBusinessDate,'2026-10-25');
+  assert.equal(dayTotals(dailyRecords({ledger:projected.days}).get('2026-10-25')).completed,1);
+});
+
 test('a malformed later calendar aggregate cannot displace an otherwise valid daily record',()=>{
   const signed=row('2026-10-25','2026-10-25T07:54:00Z'),broken={...signed,recordedAt:'2026-10-25T08:00:00Z',counts:{executionUnits:-1}};
   assert.equal(calendarHistory([signed,broken],{now:new Date('2026-10-26T05:00:00Z')}).days[0].recordedAt,signed.recordedAt);
