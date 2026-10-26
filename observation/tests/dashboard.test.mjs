@@ -48,8 +48,8 @@ test('calendar keeps the latest valid daily receipt beyond the recent run list',
       evidence:{source:'page_text',summary:'token=abc',authoritative:true}}]});
   const older=row('2026-08-01','2026-08-01T01:00:00Z',1);
   const records=[older,...Array.from({length:35},(_,index)=>row('2026-09-02',
-    `2026-09-02T${String(index%24).padStart(2,'0')}:${String(index).padStart(2,'0')}:00Z`,1)),
-    row('2026-09-02','2026-09-02T23:59:00Z',2),row('2026-02-30','2026-02-30T00:00:00Z',2)];
+    `2026-09-02T${String(index%15).padStart(2,'0')}:${String(index).padStart(2,'0')}:00Z`,1)),
+    row('2026-09-02','2026-09-02T15:59:00Z',2),row('2026-02-30','2026-02-30T00:00:00Z',2)];
   fs.writeFileSync(path.join(root,'shadow-ledger.jsonl'),records.map(record=>JSON.stringify(record)).join('\n')+'\n');
   const projected=calendarHistory(records,{now:new Date('2026-09-03T00:00:00Z')});
   assert.deepEqual(projected.days.map(day=>day.businessDate),['2026-08-01','2026-09-02']);

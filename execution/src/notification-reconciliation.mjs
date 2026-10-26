@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
+import {siteFaultCodes} from './checkin-contract.generated.mjs';
 
 const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -22,12 +23,14 @@ const currentSnapshot=({report,snapshot,now})=>Array.isArray(report?.bookmarkSum
   snapshot?.businessDate===day(now)&&snapshot?.source?.runId===report.runId&&dated(snapshot.generatedAt,day(now),now)&&
   now.getTime()-Date.parse(snapshot.generatedAt)<=60*60_000&&Array.isArray(snapshot.tasks)&&samePlan(report,snapshot)&&
   snapshot.tasks.every(task=>task.businessDate===day(now));
-const validAvailability=(item,businessDate,now)=>item?.condition==='site_maintenance'&&item.businessDate===businessDate&&
+const validAvailability=(item,businessDate,now)=>(item?.condition==='site_maintenance'||
+  item?.condition==='upstream_unavailable'&&siteFaultCodes.includes(item.failureCode))&&item.businessDate===businessDate&&
   dated(item.observedAt,businessDate,now)&&dated(item.verifiedAt,businessDate,now)&&
   Date.parse(item.observedAt)<=Date.parse(item.verifiedAt)+60_000&&now.getTime()-Date.parse(item.verifiedAt)<=60*60_000;
-const projectAvailability=item=>({origin:item.origin,accountKey:item.accountKey??'site-default',condition:'site_maintenance',
+const projectAvailability=item=>({origin:item.origin,accountKey:item.accountKey??'site-default',condition:item.condition,
+  ...(item.condition==='upstream_unavailable'?{failureCode:item.failureCode}:{}),
   businessDate:item.businessDate,observedAt:new Date(item.observedAt).toISOString(),verifiedAt:new Date(item.verifiedAt).toISOString(),
-  summary:'站点维护，恢复后只读核验'});
+  summary:item.condition==='site_maintenance'?'站点维护，恢复后只读核验':'站点服务异常，恢复后只读核验'});
 
 // Site-wide availability changes notification wording only. It is never a
 // completion receipt or permission to retry an uncertain account submission.
@@ -39,10 +42,42 @@ export function notificationAvailability({report,snapshot,now=new Date()}={}){
     const sites=(snapshot.ptStatus.sites??[]).filter(site=>site.origin===task.origin&&(!site.accountRef||site.accountRef===task.accountRef));
     if(sites.length!==1||sites[0].discrepancy===true)return [];
     const current=sites[0].effective;
-    if(current?.fresh!==true||current.siteCondition!=='site_maintenance'||['signed','already_signed','not_available'].includes(current.status))return [];
-    const item={origin:task.origin,accountKey:task.accountKey??'site-default',condition:'site_maintenance',
+    const condition=current?.siteCondition==='site_maintenance'?'site_maintenance':
+      siteFaultCodes.includes(current?.failureCode)?'upstream_unavailable':null;
+    if(current?.fresh!==true||!condition||['signed','already_signed','not_available'].includes(current.status))return [];
+    const item={origin:task.origin,accountKey:task.accountKey??'site-default',condition,
+      ...(condition==='upstream_unavailable'?{failureCode:current.failureCode}:{}),
       businessDate:day(now),observedAt:current.observedAt,verifiedAt:snapshot.generatedAt};
     return validAvailability(item,day(now),now)?[projectAvailability(item)]:[];
+  });
+}
+
+// Add only privately authorized PT-only work. The shared inventory projection
+// owns deduplication; the ordinary report keeps its original account contract.
+export function notificationSupplementalResults({report,snapshot,now=new Date(),projectWorkload}={}){
+  if(!currentSnapshot({report,snapshot,now})||snapshot.ptStatus?.businessDate!==day(now)||typeof projectWorkload!=='function')return [];
+  const ptStatus={...snapshot.ptStatus,sites:(snapshot.ptStatus.sites??[]).map(site=>{
+    const url=new URL(site.origin);
+    if(url.protocol!=='https:'||url.origin!==site.origin||url.username||url.password)throw Error('invalid supplemental notification origin');
+    const effective=site.effective??{},evidence=effective.evidence??{};
+    const fresh=effective.fresh===true&&dated(effective.observedAt,day(now),now)&&
+      (!['signed','already_signed'].includes(effective.status)||evidence.businessDate===day(now)&&
+        dated(evidence.confirmedAt??effective.observedAt,day(now),now));
+    return {...site,effective:{...effective,fresh}};
+  })};
+  const workload=projectWorkload({tasks:snapshot.tasks,ptStatus,businessDate:day(now),counts:snapshot.counts});
+  return workload.tasks.filter(task=>task.ptSupplementOnly===true).map(task=>{
+    const verified=task.evidence?.authoritative===true,status=['signed','already_signed'].includes(task.observedStatus)&&!verified
+      ?'needs_attention':task.observedStatus;
+    const external=task.condition==='site_maintenance'||task.condition==='upstream_unavailable'&&siteFaultCodes.includes(task.failureCode);
+    return {origin:task.origin,accountKey:'site-default',status,
+      ...(status==='not_available'&&task.condition==='task_disabled'?{availabilityKind:'task_disabled',disabledByConfig:true}:{}),
+      ...(task.failureCode?{failureCode:task.failureCode}:{}),
+      ...(typeof task.submissionAttempted==='boolean'?{submissionAttempted:task.submissionAttempted}:{}),
+      ...(external?{notificationAvailabilityObserved:true,availability:{condition:task.condition,
+        ...(task.condition==='upstream_unavailable'?{failureCode:task.failureCode}:{}),businessDate:day(now),observedAt:task.observedAt},retryCause:'upstream_unavailable'}:{}),
+      evidence:{source:task.evidence?.source??'none',authoritative:verified,businessDate:day(now),
+        confirmedAt:task.observedAt,summary:external?'站点服务异常，恢复后只读核验':verified?'当日 PT 证据已确认':'尚无当日权威签到证据'}};
   });
 }
 
@@ -97,16 +132,18 @@ export async function reconcileNotification({root,report,now=new Date(),persist=
       try{if(expected.has(identity(item))&&validAvailability(item,businessDate,now))availability.set(identity(item),projectAvailability(item));}catch{}
     }
   }
-  let valid=false;
+  let valid=false,supplementalResults=[];
   try{
-    const [{readDashboardGeneration},{confirmedPtByTask}]=await Promise.all([
+    const [{readDashboardGeneration},{confirmedPtByTask},{authorizedWorkload}]=await Promise.all([
       import(pathToFileURL(path.join(binding,'src/dashboard-generation.mjs')).href),
       import(pathToFileURL(path.join(binding,'src/daily-reconciliation.mjs')).href),
+      import(pathToFileURL(path.join(binding,'src/workload-view.mjs')).href),
     ]);
     const generation=readDashboardGeneration(path.join(binding,'outputs'));
     if(generation&&!generation.stale){
       const snapshot=generation.current.snapshot;
       valid=currentSnapshot({report,snapshot,now});
+      supplementalResults=notificationSupplementalResults({report,snapshot,now,projectWorkload:authorizedWorkload});
       const fresh=notificationOverrides({report,snapshot,confirmed:confirmedPtByTask(snapshot),now});
       for(const item of fresh)retained.set(identity(item),item);
       if(valid){
@@ -123,7 +160,7 @@ export async function reconcileNotification({root,report,now=new Date(),persist=
           dated(current.observedAt,businessDate,now)&&Date.parse(current.observedAt)>Date.parse(old.evidence.confirmedAt))retained.delete(key);
       }
     }
-  }catch{/* A temporary sidecar outage cannot downgrade a verified daily receipt. */}
+  }catch{valid=false;supplementalResults=[];/* A temporary sidecar outage cannot downgrade a verified daily receipt. */}
   const overrides=[...retained.values()].sort((a,b)=>identity(a).localeCompare(identity(b)));
   const currentAvailability=[...availability.values()].sort((a,b)=>identity(a).localeCompare(identity(b)));
   if(persist&&(valid||overrides.length||currentAvailability.length)){
@@ -132,7 +169,8 @@ export async function reconcileNotification({root,report,now=new Date(),persist=
     try{fs.writeFileSync(temporary,JSON.stringify({schemaVersion:1,businessDate,scope,overrides,availability:currentAvailability}),{mode:0o600});fs.renameSync(temporary,file);}
     finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
   }
-  return {bound:true,ready:valid||overrides.length>0||currentAvailability.length>0,overrides,availability:currentAvailability};
+  return {bound:true,ready:valid||overrides.length>0||currentAvailability.length>0,overrides,availability:currentAvailability,
+    supplementalResults,scope:valid?'authorized_workload':'regular_tasks'};
 }
 
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){

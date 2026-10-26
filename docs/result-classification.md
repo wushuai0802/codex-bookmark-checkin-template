@@ -20,6 +20,23 @@ verification. The panel offers matching external/verification filters and labels
 Business incompleteness remains visible; reclassification never turns an outage,
 expired entitlement, or unknown submission into a successful check-in.
 
+Notifications include the same privately authorized PT-only inventory as the
+dashboard, deduplicate ordinary tasks, and retain the original report and
+unknown-submit history. Current bound maintenance and the shared site-fault
+codes are external context, not completion or permission to submit. A temporary
+observation outage falls back to an explicitly labelled regular-task scope.
+
+Calendar history selects observations made within their own Shanghai business
+day. A post-midnight sync that still references yesterday's run remains in the
+audit ledger but cannot replace yesterday's finalized PT receipts or health.
+Historical evidence gaps remain unconfirmed; they never authorize today's
+retries or acquire success from another day's receipt. Calendar site faults are
+listed separately and excluded from its eligible-task denominator.
+
+Consecutive identical ledger states remain deduplicated. A return to an earlier
+healthy state after a failure is a new append-only recovery event; an older
+replayed observation cannot move the latest history forward.
+
 Native page evidence uses the same success predicate as the result producer and
 retains the matched signal before diagnostic text truncation. A reviewed,
 authenticated daily header may confirm the current day; arbitrary page text,

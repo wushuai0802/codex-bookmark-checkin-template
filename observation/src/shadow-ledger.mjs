@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { planHash, planUnitIdentity, assertUniqueTaskOwners, redactText } from './contracts.mjs';
 import { displayIdentity, shortLabel } from './display-identity.mjs';
 import {ptCalendarSummaries} from './calendar-records.mjs';
+import {shanghaiDate} from './freshness.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -152,12 +153,15 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
     recordedAt: new Date(recordedAt).toISOString(),
     snapshotId: snapshot.snapshotId,
     businessDate: snapshot.businessDate,
+    observationBusinessDate:shanghaiDate(snapshot.generatedAt),
+    ptBusinessDate:snapshot.ptStatus?.businessDate??null,
     planHash: snapshot.planHash,
     sourceRunId: snapshot.source?.runId ?? null,
     mode: 'shadow_read_only',
     counts: snapshot.counts,
     taskSummaries,
-    ptSummaries:ptCalendarSummaries(snapshot.ptStatus),
+    ptSummaries:snapshot.ptStatus?.businessDate===snapshot.businessDate&&shanghaiDate(snapshot.generatedAt)===snapshot.businessDate
+      ?ptCalendarSummaries(snapshot.ptStatus):null,
     changes,
     drift,
     health: snapshot.health
@@ -184,7 +188,15 @@ export function appendLedgerRecord(file, record, { legacyRoot } = {}) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   if (fs.existsSync(destination)) {
     const existing = readLedger(destination);
-    if (existing.some((candidate) => candidate.recordId === record.recordId)) return destination;
+    const previous=existing.at(-1);
+    if(previous?.recordId===record.recordId||previous?.repeatedRecordId===record.recordId&&previous?.snapshotId===record.snapshotId)return destination;
+    if(existing.some(candidate=>candidate.recordId===record.recordId)){
+      // A -> B -> A is a new recovery event even though A's content digest is
+      // unchanged. Replaying an older observation cannot move history forward.
+      if(Date.parse(record.recordedAt)<=Date.parse(previous?.recordedAt??''))return destination;
+      record={...record,repeatedRecordId:record.recordId,recordId:'ledger_'+crypto.createHash('sha256').update(
+        record.recordId+'|'+previous.recordId+'|'+record.recordedAt).digest('hex').slice(0,24)};
+    }
   }
   fs.appendFileSync(destination, `${JSON.stringify(record)}\n`, 'utf8');
   return destination;

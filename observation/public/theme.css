@@ -215,7 +215,7 @@
   .calendar-detail { margin-top:12px; padding-top:12px; }
   .calendar-detail-header .muted { font-size:10px; }
   .calendar-detail-totals { gap:3px 8px; margin-bottom:8px; }
-  .calendar-filters { gap:3px; overflow-x:visible; }
+  .calendar-filters { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; overflow-x:visible; }
   #calendar-detail .calendar-filters button { flex:1 1 0; min-width:0; min-height:36px; padding-inline:2px; font-size:11px; white-space:nowrap; gap:3px; }
   .calendar-receipt-row { padding:9px 0; gap:3px 8px; }
 }

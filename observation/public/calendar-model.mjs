@@ -1,9 +1,19 @@
-import {cancelledTask,ledgerCancelledCount} from './dashboard-model.mjs';
+import {cancelledTask,ledgerCancelledCount,siteSideTask} from './dashboard-model.mjs';
+import {businessDayHistory} from './business-day-history.mjs';
+import {siteFaultCodes} from './checkin-contract.generated.mjs';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 function scopedEntry(entry,scope){
-  const regular=(entry.tasks??[]).filter(task=>task.ptSupplementOnly!==true),pt=entry.ptSummaries;
+  const regular=(entry.tasks??[]).filter(task=>task.ptSupplementOnly!==true),pt=entry.ptSummaries?.map(task=>{
+    // Recover only the exact diagnostics produced by older project versions;
+    // arbitrary page wording is never promoted to success or availability.
+    const summary=task.evidence?.summary;
+    const condition=task.condition??(summary==='站点公告正在维护或恢复数据，等待恢复后核验'?'site_maintenance':
+      summary==='站点服务端返回故障，等待恢复后核验'?'upstream_unavailable':undefined);
+    return {...task,...(condition?{condition}:{}),
+      ...(condition==='upstream_unavailable'&&!task.failureCode?{failureCode:'site_server_error'}:{})};
+  });
   if(scope==='regular'||!Array.isArray(pt)&&scope==='all')return {...entry,ptRecorded:Array.isArray(pt)};
   let selected=scope==='pt'?(Array.isArray(pt)?pt:regular.filter(t=>t.taskKind==='pt')):[...regular];
   if(scope==='all')for(const item of pt??[]){
@@ -11,7 +21,8 @@ function scopedEntry(entry,scope){
       (!item.accountRef||!task.accountRef||task.accountRef===item.accountRef));
     if(matches.length===1){
       const {task,index}=matches[0];selected[index]={...task,taskKind:'pt',observedStatus:item.observedStatus,
-        observedAt:item.observedAt,evidence:item.evidence};
+        observedAt:item.observedAt,evidence:item.evidence,...(item.condition?{condition:item.condition}:{}),
+        ...(item.failureCode?{failureCode:item.failureCode}:{})};
     }else if(!item.inLegacyPlan)selected.push(item);
   }
   const status={};for(const task of selected)status[task.observedStatus]=(status[task.observedStatus]??0)+1;
@@ -21,15 +32,17 @@ function scopedEntry(entry,scope){
 export function calendarPtSummaries(ptStatus){
   if(!Array.isArray(ptStatus?.sites))return null;
   return ptStatus.sites.map(site=>({taskId:site.siteRef,origin:site.origin,accountRef:site.accountRef??null,
-    displayName:site.displayName,taskKind:'pt',inLegacyPlan:site.inLegacyPlan===true,
+    displayName:site.displayName,taskKind:'pt',businessDate:ptStatus.businessDate,inLegacyPlan:site.inLegacyPlan===true,
     observedStatus:site.effective?.fresh?site.effective.status:'unknown',observedAt:site.effective?.observedAt??null,
+    ...(site.effective?.siteCondition==='site_maintenance'?{condition:'site_maintenance'}:
+      siteFaultCodes.includes(site.effective?.failureCode)?{condition:'upstream_unavailable',failureCode:site.effective.failureCode}:{}),
     evidence:site.effective?.evidence?.verification==='task_disabled'
       ?{...site.effective.evidence,rawSource:'configuration'}:site.effective?.evidence??null}));
 }
 
 export function dailyRecords({ledger = [], snapshot = null, tasks = [],ptStatus=snapshot?.ptStatus,scope='all',now=Date.now()} = {}) {
   const days = new Map();
-  for (const record of ledger) {
+  for (const record of businessDayHistory(ledger).values()) {
     if (!DAY.test(record?.businessDate ?? '')) continue;
     const previous = days.get(record.businessDate);
     if (!previous || Date.parse(record.recordedAt) > Date.parse(previous.recordedAt)) {
@@ -91,16 +104,17 @@ export function dayTotals(entry) {
   const completed = (status.signed ?? 0) + (status.already_signed ?? 0);
   const cancelled = ledgerCancelledCount(entry);
   const unavailable = Math.max(0,(status.not_available ?? 0)-cancelled);
-  return {total, completed, unavailable, cancelled, pending:Math.max(0,total-completed-unavailable-cancelled)};
+  const external=Math.min(Math.max(0,total-completed-unavailable-cancelled),(entry?.tasks??[]).filter(siteSideTask).length);
+  return {total, completed, unavailable, cancelled, external,pending:Math.max(0,total-completed-unavailable-cancelled-external)};
 }
 
 export function monthTotals(records,month) {
-  const result={recordDays:0,total:0,completed:0,unavailable:0,cancelled:0,pending:0};
+  const result={recordDays:0,total:0,completed:0,unavailable:0,cancelled:0,external:0,pending:0};
   for(const [date,entry] of records){
     if(!date.startsWith(`${month}-`))continue;
     const totals=dayTotals(entry);
     result.recordDays++;
-    for(const key of ['total','completed','unavailable','cancelled','pending'])result[key]+=totals[key];
+    for(const key of ['total','completed','unavailable','cancelled','external','pending'])result[key]+=totals[key];
   }
   return result;
 }
@@ -110,11 +124,12 @@ export function calendarTaskGroup(value) {
   if(cancelledTask(task))return 'cancelled';
   if(['signed','already_signed'].includes(status))return 'completed';
   if(status==='not_available')return 'unavailable';
+  if(siteSideTask(task))return 'external';
   return 'pending';
 }
 
 export function calendarTasks(entry,filter='all') {
-  const priority={pending:0,completed:1,unavailable:2,cancelled:3};
+  const priority={pending:0,external:1,completed:2,unavailable:3,cancelled:4};
   return [...(entry?.tasks??[])].filter(task=>filter==='all'||calendarTaskGroup(task)===filter)
     .sort((a,b)=>priority[calendarTaskGroup(a)]-priority[calendarTaskGroup(b)]||
       String(a.displayName??a.origin??'').localeCompare(String(b.displayName??b.origin??''),'zh-CN'));

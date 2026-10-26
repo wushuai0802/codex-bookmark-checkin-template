@@ -6,6 +6,7 @@ $CheckinFeatureDisabledEvidence = @{
     'new_api_checkin_action' = @('message_not_enabled')
 }
 $CheckinExternalRetryCauses = @('upstream_unavailable', 'rate_limit', 'harvest_waiting')
+$CheckinSiteFaultCodes = @('tls_certificate_invalid', 'tls_handshake_failed', 'site_server_error', 'dns_validation_failed')
 $CheckinNativePtHeaderOrigins = @('https://audiences.me', 'https://ourbits.club', 'https://piggo.me', 'https://www.hdkyl.in', 'https://ptsbao.club')
 $CheckinNativePtUnsignedLabels = @{
     'https://audiences.me' = @('签到', '每日签到')
