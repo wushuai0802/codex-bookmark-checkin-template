@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLedger } from './shadow-ledger.mjs';
 import { healthIsFresh, shanghaiDate, timestampFresh } from './freshness.mjs';
+import {isBusinessDayRecord} from '../public/business-day-history.mjs';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const RECORD_ID_PATTERN = /^ledger_[a-f0-9]{24}$/;
@@ -96,7 +97,7 @@ export function evaluateShadowHistory(records, { minConsecutiveDays = 3, now = n
     if (record?.health?.healthy !== true) unhealthyRecordCount += 1;
     if (validBusinessDate(record?.businessDate)) dates.add(record.businessDate);
     if (errors.length > 0) invalidRecords.push({ index, recordId: record?.recordId ?? null, errors: [...new Set(errors)] });
-    if (validBusinessDate(record?.businessDate) && validIso(record?.recordedAt)) {
+    if (validBusinessDate(record?.businessDate) && validIso(record?.recordedAt) && isBusinessDayRecord(record)) {
       const existing = latestByDay.get(record.businessDate);
       if (!existing || Date.parse(record.recordedAt) >= Date.parse(existing.record.recordedAt)) {
         latestByDay.set(record.businessDate, { record, errors, fresh });

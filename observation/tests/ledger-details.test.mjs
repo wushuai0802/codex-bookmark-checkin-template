@@ -27,8 +27,8 @@ test('ledger identifies changed task with its status transition', () => {
 
 test('ledger snapshots PT-only history and keeps its evidence independent of future status',()=>{
   const snapshot=buildSnapshot({legacyRoot:fileURLToPath(new URL('./fixtures/legacy/',import.meta.url)),generatedAt:'2026-09-02T14:00:00Z'});
-  snapshot.ptStatus={sites:[{siteRef:'pt_example',origin:'https://pt.example',displayName:'PT',inLegacyPlan:false,
-    effective:{fresh:true,status:'signed',authoritative:true,observedAt:snapshot.generatedAt,evidence:{source:'pt_page',summary:'今日签到成功',token:'<private>'}}}]};
+  snapshot.ptStatus={businessDate:snapshot.businessDate,sites:[{siteRef:'pt_example',origin:'https://pt.example',displayName:'PT',inLegacyPlan:false,
+    effective:{fresh:true,status:'signed',authoritative:true,observedAt:snapshot.generatedAt,evidence:{source:'pt_page',authoritative:true,summary:'今日签到成功',token:'<private>'}}}]};
   const record=createLedgerRecord(snapshot);
   snapshot.ptStatus.sites[0].effective.status='unknown';
   assert.equal(record.ptSummaries.length,1);assert.equal(record.ptSummaries[0].observedStatus,'signed');

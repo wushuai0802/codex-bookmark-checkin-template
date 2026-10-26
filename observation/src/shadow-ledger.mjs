@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { planHash, planUnitIdentity, assertUniqueTaskOwners, redactText } from './contracts.mjs';
 import { displayIdentity, shortLabel } from './display-identity.mjs';
 import {ptCalendarSummaries} from './calendar-records.mjs';
+import {shanghaiDate} from './freshness.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -152,12 +153,15 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
     recordedAt: new Date(recordedAt).toISOString(),
     snapshotId: snapshot.snapshotId,
     businessDate: snapshot.businessDate,
+    observationBusinessDate:shanghaiDate(snapshot.generatedAt),
+    ptBusinessDate:snapshot.ptStatus?.businessDate??null,
     planHash: snapshot.planHash,
     sourceRunId: snapshot.source?.runId ?? null,
     mode: 'shadow_read_only',
     counts: snapshot.counts,
     taskSummaries,
-    ptSummaries:ptCalendarSummaries(snapshot.ptStatus),
+    ptSummaries:snapshot.ptStatus?.businessDate===snapshot.businessDate&&shanghaiDate(snapshot.generatedAt)===snapshot.businessDate
+      ?ptCalendarSummaries(snapshot.ptStatus):null,
     changes,
     drift,
     health: snapshot.health

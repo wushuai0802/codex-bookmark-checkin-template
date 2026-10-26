@@ -36,7 +36,9 @@ function Test-TerminalCheckinResult($Result) {
 
 function Get-CheckinAttentionClass($Result) {
     if (Test-TerminalCheckinResult $Result) { return 'resolved' }
-    if ($Result.notificationAvailabilityObserved -eq $true -and [string]$Result.availability.condition -eq 'site_maintenance') { return 'external' }
+    if ($Result.notificationAvailabilityObserved -eq $true -and (
+        [string]$Result.availability.condition -eq 'site_maintenance' -or
+        ([string]$Result.availability.condition -eq 'upstream_unavailable' -and [string]$Result.availability.failureCode -in $CheckinSiteFaultCodes))) { return 'external' }
     if ([string]$Result.failureCode -eq 'submission_outcome_unknown' -or $Result.submissionAttempted -eq $true) { return 'verification' }
     if ([string]$Result.siteCondition -eq 'site_maintenance' -or [string]$Result.failureCode -eq 'site_maintenance') { return 'external' }
     if ([string]$Result.failureCode -in @('site_migration','bookmark_origin_changed')) { return 'external' }

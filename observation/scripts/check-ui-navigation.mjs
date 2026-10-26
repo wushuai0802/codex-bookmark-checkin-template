@@ -56,7 +56,7 @@ const calendarTasks=Array.from({length:48},(_,index)=>({...baseRecord.taskSummar
   evidence:{source:'page_text',authoritative:index<44,summary:'站点回执需要核验，请查看上次访问结果及后续状态。'}}));
 const historical=Array.from({length:36},(_,index)=>{
   const businessDate=new Date(Date.parse(`${snapshot.businessDate}T00:00:00Z`)-(36-index)*dayMs).toISOString().slice(0,10);
-  return {...baseRecord,businessDate,recordedAt:`${businessDate}T12:00:00Z`,
+  return {...baseRecord,businessDate,observationBusinessDate:businessDate,ptBusinessDate:businessDate,recordedAt:`${businessDate}T12:00:00Z`,
     recordId:`ledger_${(index+1).toString(16).padStart(24,'0')}`,
     counts:{executionUnits:48,status:{signed:40,not_available:4,needs_attention:4}},ptSummaries:[],
     taskSummaries:calendarTasks.map(task=>({...task,businessDate}))};
@@ -225,6 +225,7 @@ try {
       await page.getByRole('button',{name:'前一天',exact:true}).click();
       const yesterday=new Date(Date.parse(snapshot.businessDate+'T12:00:00Z')-86400000).toISOString().slice(0,10);
       assert.equal(await page.locator('.calendar-day.selected').getAttribute('data-date'),yesterday);
+      assert.match(await page.locator('#calendar-detail .calendar-filters').textContent(),/历史未确认/);
       await page.getByRole('button',{name:'后一天',exact:true}).click();
       assert.equal(await page.locator('.calendar-day.selected').getAttribute('data-date'),snapshot.businessDate);
       await page.locator('.ui-select[data-for="calendar-year"] .ui-select-trigger').click();
@@ -250,7 +251,9 @@ try {
       await page.getByRole('button',{name:'回到今天'}).click();
       await page.locator(`.calendar-day[aria-label^="${snapshot.businessDate}"]`).click();
       assert.match(await page.locator('#calendar-detail').textContent(), /项完成/);
-      // The maintained PT site is the same regular task, so it stays one pending row.
+      // Maintenance is excluded from local pending work, while its PT/regular
+      // overlap still appears exactly once in the dedicated external filter.
+      await page.locator('#calendar-detail .calendar-filters').getByRole('button',{name:/^站点异常/}).click();
       assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),1);
       if(mobile)assert.ok(await page.evaluate(()=>{
         const filters=document.querySelector('.calendar-filters'),right=filters.getBoundingClientRect().right;
@@ -280,7 +283,7 @@ try {
       assert.ok(await page.locator('.calendar-day.warn, .calendar-day.success').count()>0);
       await page.getByRole('button', {name:'回到今天'}).click();
       await page.getByRole('button', {name:'前一天',exact:true}).click();
-      assert.equal(await page.locator('.calendar-day.selected .calendar-day-count').textContent(),'40/48');
+      assert.equal(await page.locator('.calendar-day.selected .calendar-day-count').textContent(),'40/44');
       assert.equal(await page.locator('#calendar-detail .calendar-receipt-row').count(),4);
       const calendarLayout=await page.evaluate(()=>{
         const rect=node=>node.getBoundingClientRect();

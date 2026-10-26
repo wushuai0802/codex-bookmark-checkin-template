@@ -135,6 +135,7 @@ if ($null -ne $report -and $ReportPath) {
             }
             [pscustomobject]$copy
         })
+        $effectiveResults += @($notificationView.supplementalResults | Where-Object { $null -ne $_ })
     } catch { $notificationView = [pscustomobject]@{bound=$true;ready=$false}; $effectiveResults = @($results) }
 }
 $reportingResults = @(Merge-LogicalResults $effectiveResults)
@@ -172,6 +173,7 @@ $logicalPlannedTotal = if ($null -ne $report -and $null -ne $report.bookmarkSumm
 }
 elseif ($isCompleteFinalReport) { $reportingResults.Count }
 else { $plannedTotal }
+$logicalPlannedTotal += @($notificationView.supplementalResults | Where-Object { $null -ne $_ }).Count
 $logicalProcessedTotal = $reportingResults.Count
 $done = @($statuses | Where-Object { $_ -in @('signed', 'already_signed') }).Count
 $confirmedUnavailable = @($reportingResults | Where-Object { Test-ConfirmedNotAvailableResult $_ })
@@ -212,7 +214,8 @@ elseif ($RunnerStatus -eq 'skipped') { $status = 'skipped' }
 else { $status = 'unconfirmed' }
 
 $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
-    $counts = @("今日完成 $done 项")
+    $completionScope = if ($notificationView.bound -eq $true -and $notificationView.scope -ne 'authorized_workload') { '主任务完成' } else { '今日完成' }
+    $counts = @("$completionScope $done 项")
     if ($verificationProblems.Count -gt 0) { $counts += "待复核 $($verificationProblems.Count)" }
     $loginCount = @($localProblems | Where-Object { $_.status -eq 'login_required' -or $_.retryCause -eq 'login_required' }).Count
     if ($loginCount -gt 0) { $counts += "登录恢复 $loginCount" }
@@ -266,6 +269,8 @@ if ($externalProblems.Count -gt 0) {
     foreach ($problem in $externalProblems) {
         $reason = if ([string]$problem.availability.condition -eq 'site_maintenance' -or [string]$problem.siteCondition -eq 'site_maintenance' -or [string]$problem.failureCode -eq 'site_maintenance') {
             '站点维护，恢复后只读核验'
+        } elseif ($problem.notificationAvailabilityObserved -eq $true -and [string]$problem.availability.condition -eq 'upstream_unavailable') {
+            '站点服务异常，恢复后只读核验'
         } elseif ([string]$problem.failureCode -in @('site_migration','bookmark_origin_changed')) { '站点地址已变化，请核对并更新书签' }
         elseif ([string]$problem.retryCause -eq 'harvest_waiting') { '待本项目续跑，先复核 Harvest' }
         elseif ([string]$problem.retryCause -in @('upstream_unavailable', 'rate_limit')) {
@@ -363,6 +368,7 @@ $payload = [ordered]@{
     executionComplete = $executionComplete
     businessComplete = $businessComplete
     reconciliationReady = ($null -eq $notificationView -or $notificationView.ready -eq $true)
+    scope = if ($notificationView.scope) { [string]$notificationView.scope } else { 'regular_tasks' }
     eventKey = $eventKey
     mode = $mode
 }

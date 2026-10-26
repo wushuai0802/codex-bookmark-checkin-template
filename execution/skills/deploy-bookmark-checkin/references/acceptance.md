@@ -13,3 +13,8 @@ Deployment is complete only when all applicable checks pass:
 - Notification, if enabled, is tested with a non-secret preview and submitted once after recovery finishes.
 - `npm run --silent health` exits with code `0`, reports `healthy=true`, has an empty `failedChecks` array, and refers to today's final run.
 - Unit tests, dependency audit, and public-safety scan pass.
+- A persisted sync after Shanghai midnight cannot overwrite the prior business
+  day's PT completion or import the next day's evidence into that history.
+- Notifications and the dashboard include the same authorized PT supplement
+  scope; current site faults stay external while raw uncertain submits remain
+  protected. Historical missing evidence is not converted to success.

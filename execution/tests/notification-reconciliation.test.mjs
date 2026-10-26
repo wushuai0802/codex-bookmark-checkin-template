@@ -5,7 +5,8 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import test from 'node:test';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import {notificationOverrides,notificationAvailability,reconcileNotification} from '../src/notification-reconciliation.mjs';
+import {notificationOverrides,notificationAvailability,notificationSupplementalResults,reconcileNotification} from '../src/notification-reconciliation.mjs';
+import {authorizedWorkload} from '../../observation/src/workload-view.mjs';
 import {confirmedPtByTask} from '../../observation/src/daily-reconciliation.mjs';
 import {commitDashboardGeneration} from '../../observation/src/dashboard-generation.mjs';
 import {accountRef,planHash,taskIdentity} from '../../observation/src/contracts.mjs';
@@ -33,9 +34,10 @@ function sandbox(t,now=new Date()){
   for(const dir of [root+'/data',root+'/config',root+'/logs',root+'/src',root+'/scripts',controller+'/config',controller+'/src',controller+'/outputs'])fs.mkdirSync(dir,{recursive:true});
   fs.writeFileSync(path.join(root,'data/v2-integration.json'),JSON.stringify({executionEngine:'v1',v2ProjectRoot:controller}));
   fs.writeFileSync(path.join(controller,'config/runtime.local.json'),JSON.stringify({executionEngine:'v1',legacyRoot:root}));
-  for(const name of ['dashboard-generation.mjs','daily-reconciliation.mjs'])fs.writeFileSync(path.join(controller,'src',name),
+  for(const name of ['dashboard-generation.mjs','daily-reconciliation.mjs','workload-view.mjs'])fs.writeFileSync(path.join(controller,'src',name),
     `export * from ${JSON.stringify(pathToFileURL(path.join(observationRoot,'src',name)).href)};\n`);
   fs.copyFileSync(path.join(sourceRoot,'src/notification-reconciliation.mjs'),path.join(root,'src/notification-reconciliation.mjs'));
+  fs.copyFileSync(path.join(sourceRoot,'src/checkin-contract.generated.mjs'),path.join(root,'src/checkin-contract.generated.mjs'));
   for(const name of ['Submit-UnifiedCheckinReport.ps1','ResultIdentity.ps1','ResultContract.ps1','CheckinContract.generated.ps1','Resolve-Runtime.ps1'])
     fs.copyFileSync(path.join(sourceRoot,'scripts',name),path.join(root,'scripts',name));
   const fixture=model(now),reportFile=path.join(root,'logs/latest.json'),ledgerFile=path.join(controller,'outputs/shadow-ledger.jsonl');
@@ -222,4 +224,68 @@ test('an unbound raw availability field cannot suppress verification or change n
   const after=f.preview();
   assert.equal(after.verificationPendingCount,before.verificationPendingCount);
   assert.equal(after.externalPendingCount,0);assert.equal(after.eventKey,before.eventKey);
+});
+
+test('a current server fault changes the notice to external without clearing the unknown submission',t=>{
+  const f=sandbox(t),site=addMaintenance(f);
+  delete site.effective.siteCondition;site.effective.failureCode='site_server_error';f.publish();
+  fs.writeFileSync(f.reportFile,JSON.stringify(f.report));const before=fs.readFileSync(f.reportFile),preview=f.preview();
+  assert.equal(preview.externalPendingCount,1);assert.equal(preview.verificationPendingCount,0);
+  assert.equal(preview.status,'already_done');assert.match(preview.summary,/站点服务异常/);
+  assert.doesNotMatch(preview.summary,/提交结果未确认|PRIVATE/);assert.deepEqual(fs.readFileSync(f.reportFile),before);
+});
+
+test('an arbitrary local error is never classified as an external server fault',()=>{
+  const f=model(),site=addMaintenance(f);delete site.effective.siteCondition;site.effective.failureCode='browser_launch_failed';
+  assert.deepEqual(notificationAvailability(f),[]);
+});
+
+function addSupplemental(f,overrides={}){
+  const site={origin:'https://fallback.example',displayName:'Fallback',inLegacyPlan:false,fallbackEnabled:true,
+    effective:{status:'signed',fresh:true,authoritative:true,observedAt:f.snapshot.generatedAt,
+      evidence:{source:'pt_page',authoritative:true,businessDate:f.date,confirmedAt:f.snapshot.generatedAt}},...overrides};
+  f.snapshot.ptStatus.sites.push(site);return site;
+}
+
+test('the real notification includes authorized PT-only completion and keeps total, classification and deduplication aligned',t=>{
+  const f=sandbox(t),fault=addMaintenance(f);delete fault.effective.siteCondition;fault.effective.failureCode='site_server_error';
+  const site=addSupplemental(f);f.publish();fs.writeFileSync(f.reportFile,JSON.stringify(f.report));
+  const before=fs.readFileSync(f.reportFile),preview=f.preview();
+  assert.equal(preview.scope,'authorized_workload');assert.equal(preview.siteCount,3);assert.equal(preview.plannedTotal,3);
+  assert.equal(preview.processedTotal,3);assert.match(preview.summary,/今日完成 2 项/);assert.equal(preview.externalPendingCount,1);
+  assert.equal(preview.verificationPendingCount,0);assert.equal(preview.status,'success');
+  assert.deepEqual(fs.readFileSync(f.reportFile),before);assert.equal(fs.existsSync(f.cache),false);
+  site.effective.observedAt=new Date().toISOString();f.publish();assert.equal(f.preview().eventKey,preview.eventKey);
+});
+
+test('monitor-only and overlapping PT sites are not added again to notification totals',()=>{
+  const f=model();addSupplemental(f,{fallbackEnabled:false});
+  addSupplemental(f,{origin:f.report.results[0].origin});
+  assert.deepEqual(notificationSupplementalResults({...f,projectWorkload:authorizedWorkload}),[]);
+});
+
+test('stale, future, conflicting and unverified supplemental success cannot inflate the notification',()=>{
+  for(const kind of ['date','future','stale','conflict','weak']){
+    const f=model(),site=addSupplemental(f);
+    if(kind==='date')site.effective.evidence.businessDate='2000-01-01';
+    if(kind==='future')site.effective.observedAt=new Date(Date.now()+120000).toISOString();
+    if(kind==='stale')site.effective.fresh=false;
+    if(kind==='conflict')site.discrepancy=true;
+    if(kind==='weak')site.effective.evidence.authoritative=false;
+    const results=notificationSupplementalResults({...f,projectWorkload:authorizedWorkload});
+    assert.equal(results.length,1);assert.notEqual(results[0].status,'signed',kind);assert.notEqual(results[0].status,'already_signed',kind);
+  }
+});
+
+test('a true PT-only pending task stays visible beside completed regular tasks',t=>{
+  const f=sandbox(t),site=addSupplemental(f);site.effective.status='not_signed';
+  f.publish();const preview=f.preview();
+  assert.equal(preview.siteCount,3);assert.notEqual(preview.status,'success');assert.match(preview.summary,/fallback\.example/);
+});
+
+test('a corrupt supplemental inventory fails back to an explicit regular scope instead of claiming a complete global report',async t=>{
+  const f=sandbox(t);addSupplemental(f,{origin:'https://user:private@fallback.example'});f.publish();
+  const view=await reconcileNotification({root:f.root,report:f.report});
+  assert.equal(view.scope,'regular_tasks');assert.deepEqual(view.supplementalResults,[]);
+  assert.equal(view.ready,false);assert.doesNotMatch(JSON.stringify(view),/private|user:/);
 });

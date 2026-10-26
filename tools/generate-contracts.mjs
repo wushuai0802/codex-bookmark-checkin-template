@@ -17,6 +17,7 @@ const powershell='# Generated from shared/checkin-contract.json. Run npm run con
   '$CheckinFeatureDisabledEvidence = @{\n'+Object.entries(contract.featureDisabledEvidence).map(([source,outcomes])=>
     `    ${psQuote(source)} = @(${outcomes.map(psQuote).join(', ')})`).join('\n')+'\n}\n'+
   '$CheckinExternalRetryCauses = @('+contract.externalRetryCauses.map(psQuote).join(', ')+')\n'+
+  '$CheckinSiteFaultCodes = @('+contract.siteFaultCodes.map(psQuote).join(', ')+')\n'+
   '$CheckinNativePtHeaderOrigins = @('+contract.nativePtHeaderOrigins.map(psQuote).join(', ')+')\n'+
   '$CheckinNativePtUnsignedLabels = @{\n'+contract.nativePtHeaderOrigins.filter(origin=>contract.ptReadPolicies[origin]?.unsignedTexts)
     .map(origin=>`    ${psQuote(origin)} = @(${contract.ptReadPolicies[origin].unsignedTexts.map(psQuote).join(', ')})`).join('\n')+'\n}\n';

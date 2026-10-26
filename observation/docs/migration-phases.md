@@ -192,3 +192,17 @@ submission, while current successful receipts and reviewed passive completion
 checks stop repeat submissions. Both planner and executor share a generated
 coordination policy. Known aliases are explicit; duplicate origins, incomplete
 inventory and changed ownership never infer a new write permission.
+
+## Historical dates and notification scope: 2026-10-26
+
+Ledger events record both source-run and observation/PT business dates. A sync
+before the next daily run may contain current observations with an older source
+run; its audit event is retained but cannot close the old calendar/health day.
+The read model restores the original same-day record without rewriting the
+ledger. Historical missing evidence remains distinct from today's actionable
+tasks. This presentation change does not grant Canary ownership or execution.
+
+Notifications reuse the authorized workload inventory to include PT-only
+supplements and the shared site-fault classification. Existing bidirectional
+runtime binding, exact account plan, current-day receipt and unknown-submission
+guards remain required. Scope changes never mutate raw engine results.

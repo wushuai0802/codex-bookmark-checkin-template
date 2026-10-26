@@ -906,13 +906,14 @@ function renderCalendar(data) {
   if(monthly.recordDays){
     const stats=el('div','calendar-summary-count');stats.setAttribute('role','group');stats.setAttribute('aria-label','本月回执汇总');
     for(const [name,label,count] of [['days','天有回执',monthly.recordDays],['completed','已签到',monthly.completed],
-      ['unavailable','未开放',monthly.unavailable],['pending','待处理',monthly.pending]]){
+      ['unavailable','未开放',monthly.unavailable],['pending','未确认',monthly.pending]]){
       const item=el('div','calendar-stat'),caption=el('span','calendar-stat-label');
       if(name!=='days'){const swatch=el('i',`calendar-swatch ${name}`);swatch.setAttribute('aria-hidden','true');caption.append(swatch);}
       caption.append(document.createTextNode(label));append(item,el('strong','calendar-stat-value',String(count)),caption);stats.append(item);
     }
     summary.append(stats);
     if(monthly.cancelled)summary.append(el('span','calendar-history-note',`另有 ${monthly.cancelled} 项按配置取消，不计入待处理。`));
+    if(monthly.external)summary.append(el('span','calendar-history-note',`${monthly.external} 项站点异常单列，不计入待处理。`));
   }else summary.append(el('span',null,'此月没有已保存的执行回执'));
   if(state.calendarLoading)summary.append(el('span','calendar-history-note','正在读取历史…'));
   else if(state.calendarError)summary.append(el('span','calendar-history-note error',state.calendarHistory?
@@ -956,7 +957,8 @@ function renderCalendar(data) {
     button.dataset.date=date;
     button.setAttribute('aria-label',`${date} ${entry?`${totals.completed} 项完成，${totals.unavailable} 项未开放，${totals.cancelled} 项已取消，${totals.pending} 项待处理`:'无执行记录'}`);
     button.setAttribute('aria-pressed',String(date===state.calendarDate));
-    append(button,el('span','calendar-day-number',String(day)),el('span','calendar-day-count',entry?(totals.total?`${totals.completed}/${totals.total}`:'无任务'):date===today?'今天':''));
+    const eligible=Math.max(0,totals.total-totals.unavailable-totals.cancelled-totals.external);
+    append(button,el('span','calendar-day-number',String(day)),el('span','calendar-day-count',entry?(totals.total?`${totals.completed}/${eligible}`:'无任务'):date===today?'今天':''));
     if(entry&&totals.total){
       const track=el('span','calendar-day-track');
       for(const [kind,count] of [['completed',totals.completed],['unavailable',totals.unavailable+totals.cancelled],['pending',totals.pending]]){
@@ -977,17 +979,18 @@ function renderCalendar(data) {
     view.append(button);
   }
   const selected=records.get(state.calendarDate),totals=dayTotals(selected);detail.replaceChildren();
+  const pendingLabel=state.calendarDate<today?'历史未确认':'待处理';
   const header=el('div','calendar-detail-header');append(header,el('strong',null,state.calendarDate??'日期明细'),el('span','muted',selected?`更新于 ${formatTime(selected.recordedAt)}`:''));detail.append(header);
   if(!selected){detail.append(el('p','calendar-empty-state',state.calendarDate?'当日暂无执行回执':'本月暂无选定回执'));return;}
   if(state.calendarScope!=='regular'&&selected.ptRecorded===false)
     detail.append(el('p','calendar-history-note','该日期的 PT 历史记录不完整，仅展示已有回执。'));
   const detailTotals=el('p','calendar-detail-totals');
-  for(const text of [`${totals.completed} 项完成`,`${totals.unavailable} 项未开放`,...(totals.cancelled?[`${totals.cancelled} 项已取消`]:[]),`${totals.pending} 项待处理`])detailTotals.append(el('span',null,text));
+  for(const text of [`${totals.completed} 项完成`,`${totals.unavailable} 项未开放`,...(totals.cancelled?[`${totals.cancelled} 项已取消`]:[]),...(totals.external?[`${totals.external} 项站点异常`]:[]),`${totals.pending} 项${pendingLabel}`])detailTotals.append(el('span',null,text));
   detail.append(detailTotals);
   if(!Array.isArray(selected.tasks)||!selected.tasks.length){detail.append(el('p','calendar-empty-state','仅有当日汇总，未保存逐站回执'));return;}
   state.calendarFilter??=totals.pending?'pending':'all';
   const filters=el('div','calendar-filters');filters.setAttribute('role','group');filters.setAttribute('aria-label','筛选当天任务');
-  for(const [filter,label,count] of [['pending','待处理',totals.pending],['all','全部',totals.total],['completed','已签到',totals.completed],['unavailable','未开放',totals.unavailable],...(totals.cancelled?[['cancelled','已取消',totals.cancelled]]:[])]){
+  for(const [filter,label,count] of [['pending',pendingLabel,totals.pending],['all','全部',totals.total],['completed','已签到',totals.completed],['unavailable','未开放',totals.unavailable],...(totals.external?[['external','站点异常',totals.external]]:[]),...(totals.cancelled?[['cancelled','已取消',totals.cancelled]]:[])]){
     const button=el('button',state.calendarFilter===filter?'active':'');button.type='button';button.setAttribute('aria-pressed',String(state.calendarFilter===filter));
     append(button,el('span',null,label),document.createTextNode(' '),el('span','calendar-filter-count',String(count)));
     button.addEventListener('click',()=>{state.calendarFilter=filter;renderCalendar(data);

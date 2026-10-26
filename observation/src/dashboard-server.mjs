@@ -25,6 +25,7 @@ import {matchesTask} from '../public/dashboard-model.mjs';
 import {classifyPtEvidenceState,ptUnknownReconciled} from './pt-status.mjs';
 import {confirmedPtByTask} from './daily-reconciliation.mjs';
 import {authorizedWorkload} from './workload-view.mjs';
+import {businessDayHistory} from '../public/business-day-history.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -183,7 +184,9 @@ function publicTask(task, receipt) {
 
 export function calendarHistory(records, {limit=180,now=new Date()}={}) {
   const latest=new Map(),cutoff=now.getTime()+60_000;
-  for(const record of records??[]){
+  const candidates=(records??[]).filter(record=>Number.isInteger(record?.counts?.executionUnits)&&record.counts.executionUnits>=0&&
+    Number.isFinite(Date.parse(record.recordedAt))&&Date.parse(record.recordedAt)<=cutoff);
+  for(const record of businessDayHistory(candidates).values()){
     const day=record?.businessDate,time=Date.parse(record?.recordedAt);
     if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day)||
       Number.isNaN(Date.parse(`${day}T00:00:00Z`))||new Date(`${day}T00:00:00Z`).toISOString().slice(0,10)!==day||
