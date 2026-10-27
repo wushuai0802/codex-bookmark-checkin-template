@@ -17,6 +17,21 @@ submission; unknown evidence does not qualify as disabled or successful.
 
 Notifications separate external conditions from local recovery and unknown-result
 verification. The panel offers matching external/verification filters and labels.
+
+An authorized PT-only site with verified Harvest ownership and no current-day
+failure may show `waiting` during a freshly observed daily schedule/run window.
+The unique daily cron and timezone are read from Harvest without changing it.
+Waiting expires 30 minutes after the planned start, or 30 minutes after a
+recorded current-day run starts; stale, missing or ambiguous metadata cannot
+suppress attention. Completed/failed tasks and explicit site failures end the
+waiting classification immediately. This never changes execution coordination,
+account bindings, submission guards or write budgets.
+
+Waiting remains in the completion-progress denominator, but has a separate
+filter and count instead of entering local attention, the notice bell or a
+site-fault bucket. Only normal waiting plus external site faults defers TG
+delivery; genuine login failures and uncertain submissions still notify. Raw
+task reports and historical receipts are unchanged.
 Business incompleteness remains visible; reclassification never turns an outage,
 expired entitlement, or unknown submission into a successful check-in.
 

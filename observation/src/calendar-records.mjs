@@ -4,7 +4,7 @@ import {calendarPtSummaries} from '../public/calendar-model.mjs';
 
 export function ptCalendarSummaries(ptStatus){
   if(!Array.isArray(ptStatus?.sites))return null;
-  return calendarPtSummaries(ptStatus).map((task,index)=>({...task,displayName:shortLabel(task.displayName),identity:displayIdentity({label:'本站账号'}),
+  return calendarPtSummaries(ptStatus,Date.parse(ptStatus.generatedAt??new Date().toISOString())).map((task,index)=>({...task,displayName:shortLabel(task.displayName),identity:displayIdentity({label:'本站账号'}),
     evidence:{source:task.evidence?.source??'none',authoritative:task.evidence?.authoritative===true&&
       ptStatus.sites[index]?.effective?.authoritative===true&&ptStatus.sites[index]?.effective?.fresh===true,
       ...(task.evidence?.verification==='task_disabled'?{verification:'task_disabled',rawSource:'configuration'}:{}),

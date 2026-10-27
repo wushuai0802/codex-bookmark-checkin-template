@@ -99,6 +99,7 @@ export const statusLabels = Object.freeze({
   "signed": "已签到",
   "already_signed": "已签到",
   "not_available": "未开放",
+  "waiting": "等待执行",
   "not_signed": "未签到（已确认）",
   "needs_attention": "需关注",
   "deferred": "已延迟",

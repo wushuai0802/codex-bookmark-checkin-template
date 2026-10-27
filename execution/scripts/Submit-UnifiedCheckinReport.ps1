@@ -184,6 +184,13 @@ $problems = @($reportingResults | Where-Object { -not (Test-TerminalCheckinResul
 $externalProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'external' })
 $verificationProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'verification' })
 $localProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'local' })
+$waitingProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'waiting' })
+$externalNeedsReview = @($externalProblems | Where-Object {
+    -not ([string]$_.siteCondition -eq 'site_maintenance' -or [string]$_.failureCode -eq 'site_maintenance' -or
+        [string]$_.failureCode -in $CheckinSiteFaultCodes -or [string]$_.retryCause -eq 'rate_limit' -or
+        ($_.notificationAvailabilityObserved -eq $true -and ([string]$_.availability.condition -eq 'site_maintenance' -or
+            ([string]$_.availability.condition -eq 'upstream_unavailable' -and [string]$_.availability.failureCode -in $CheckinSiteFaultCodes))))
+})
 $automaticRetryStatuses = @('error', 'failed', 'managed_challenge_timeout', 'no_action', 'deferred', 'not_available')
 $automaticRetryProblems = @($localProblems | Where-Object {
     $_.status -in $automaticRetryStatuses `
@@ -194,6 +201,7 @@ $attentionProblems = @($localProblems | Where-Object { $_.status -notin $automat
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
+elseif ($waitingProblems.Count -gt 0 -and $localProblems.Count -eq 0 -and $verificationProblems.Count -eq 0) { $status = 'unconfirmed' }
 elseif ($isCompleteFinalReport -and $localProblems.Count -eq 0 -and $verificationProblems.Count -eq 0 -and
     $externalProblems.Count -gt 0 -and $done -gt 0) {
     # The project report is complete. Keep site-side outages in the summary,
@@ -216,6 +224,7 @@ else { $status = 'unconfirmed' }
 $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $plannedTotal -gt 0)) {
     $completionScope = if ($notificationView.bound -eq $true -and $notificationView.scope -ne 'authorized_workload') { '主任务完成' } else { '今日完成' }
     $counts = @("$completionScope $done 项")
+    if ($waitingProblems.Count -gt 0) { $counts += "等待 Harvest $($waitingProblems.Count)" }
     if ($verificationProblems.Count -gt 0) { $counts += "待复核 $($verificationProblems.Count)" }
     $loginCount = @($localProblems | Where-Object { $_.status -eq 'login_required' -or $_.retryCause -eq 'login_required' }).Count
     if ($loginCount -gt 0) { $counts += "登录恢复 $loginCount" }
@@ -358,7 +367,8 @@ $payload = [ordered]@{
     status = $status
     summary = $summary
     siteCount = $reportingResults.Count
-    problemCount = $problems.Count
+    problemCount = $problems.Count - $waitingProblems.Count
+    waitingPendingCount = $waitingProblems.Count
     externalPendingCount = $externalProblems.Count
     verificationPendingCount = $verificationProblems.Count
     runState = $reportRunState
@@ -371,6 +381,13 @@ $payload = [ordered]@{
     scope = if ($notificationView.scope) { [string]$notificationView.scope } else { 'regular_tasks' }
     eventKey = $eventKey
     mode = $mode
+}
+$waitingOnly=$isCompleteFinalReport -and $waitingProblems.Count -gt 0 -and $localProblems.Count -eq 0 -and
+    $verificationProblems.Count -eq 0 -and $externalNeedsReview.Count -eq 0 -and $RunnerStatus -notin @('timeout','failed') -and $cleanupProblems.Count -eq 0
+if ($waitingOnly) {
+    $payload.accepted=$false; $payload.enqueued=$false; $payload.deferred=$true; $payload.preview=[bool]$Preview
+    $payload | ConvertTo-Json -Compress
+    return
 }
 if ($Preview -or $mode -eq 'none') {
     $payload.accepted = $false

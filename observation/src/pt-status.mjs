@@ -4,7 +4,8 @@ import {siteIdentityIndex} from './site-identity-index.mjs';
 import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {ptStatuses,siteFaultCodes} from './checkin-contract.generated.mjs';
 import {siteDisplayName} from './display-identity.mjs';
-import {canonicalPtOrigin} from './pt-coordination.generated.mjs';
+import {canonicalPtOrigin,harvestSiteAssignment} from './pt-coordination.generated.mjs';
+import {projectHarvestWindow} from '../public/harvest-window.mjs';
 import {ptCapabilities} from './pt-capabilities.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
 export const PT_EVIDENCE_STATES=Object.freeze(['confirmed','guarded_read_needed','not_signed_confirmed',
@@ -439,11 +440,13 @@ export function buildPtStatus({
   }
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;
+  for(const site of sites)if(harvestSiteAssignment(externalReport,site.origin).owner==='harvest')site.harvestManaged=true;
   return {
     schemaVersion: 1,
     generatedAt: new Date(generatedAt).toISOString(),
     businessDate,
     mode: 'status_observe_only',
+    harvestWindow:projectHarvestWindow(externalReport,Date.parse(generatedAt)),
     sources: [...new Set(sites.flatMap((site) => site.sourceStatuses.map((item) => item.source)))].sort(),
     counts: {
       sites: sites.length,

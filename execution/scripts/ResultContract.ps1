@@ -34,8 +34,30 @@ function Test-TerminalCheckinResult($Result) {
     return Test-ConfirmedNotAvailableResult $Result
 }
 
+function Test-NotificationHarvestWait($Result, [datetimeoffset]$Now = [datetimeoffset]::Now) {
+    $window=$Result.waiting
+    if ($Result.notificationWaitingObserved -ne $true -or $Result.submissionAttempted -eq $true -or $Result.failureCode -or
+        [string]$Result.status -ne 'deferred' -or [string]$Result.retryCause -ne 'harvest_waiting' -or
+        [string]$window.source -ne 'harvest' -or [string]$window.origin -cne [string]$Result.origin -or
+        [string]$window.phase -notin @('scheduled','running') -or
+        [string]$window.businessDate -ne $Now.ToOffset([timespan]::FromHours(8)).ToString('yyyy-MM-dd')) { return $false }
+    $observed=[datetimeoffset]::MinValue; $reference=[datetimeoffset]::MinValue; $deadline=[datetimeoffset]::MinValue
+    # PowerShell 7 converts JSON ISO values to DateTime. Preserve its UTC kind
+    # instead of reparsing a culture-formatted value as local time.
+    $observedText=if($window.observedAt -is [datetime]){$window.observedAt.ToString('o')}else{[string]$window.observedAt}
+    $referenceText=if($window.referenceAt -is [datetime]){$window.referenceAt.ToString('o')}else{[string]$window.referenceAt}
+    $deadlineText=if($window.deadlineAt -is [datetime]){$window.deadlineAt.ToString('o')}else{[string]$window.deadlineAt}
+    if (-not [datetimeoffset]::TryParse($observedText,[ref]$observed) -or
+        -not [datetimeoffset]::TryParse($referenceText,[ref]$reference) -or
+        -not [datetimeoffset]::TryParse($deadlineText,[ref]$deadline)) { return $false }
+    return $observed -le $Now.AddMinutes(1) -and ($Now-$observed).TotalMinutes -le 30 -and
+        ($deadline-$reference).TotalMinutes -eq 30 -and $Now -lt $deadline -and
+        ([string]$window.phase -ne 'running' -or $reference -le $Now.AddMinutes(1))
+}
+
 function Get-CheckinAttentionClass($Result) {
     if (Test-TerminalCheckinResult $Result) { return 'resolved' }
+    if (Test-NotificationHarvestWait $Result) { return 'waiting' }
     if ($Result.notificationAvailabilityObserved -eq $true -and (
         [string]$Result.availability.condition -eq 'site_maintenance' -or
         ([string]$Result.availability.condition -eq 'upstream_unavailable' -and [string]$Result.availability.failureCode -in $CheckinSiteFaultCodes))) { return 'external' }

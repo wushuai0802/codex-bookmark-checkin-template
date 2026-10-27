@@ -206,3 +206,13 @@ Notifications reuse the authorized workload inventory to include PT-only
 supplements and the shared site-fault classification. Existing bidirectional
 runtime binding, exact account plan, current-day receipt and unknown-submission
 guards remain required. Scope changes never mutate raw engine results.
+
+## Harvest waiting presentation: 2026-10-27
+
+The observer exports only a verified unique daily schedule, without arguments
+or credentials. Presentation derives a finite scheduled/running waiting window
+for privately authorized PT-only Harvest sites. The overview, task filters,
+PT table, calendar, notice bell and daily notification use that distinction.
+Waiting is incomplete work and never an authoritative completion or a new
+execution permission. Explicit failures, local problems and current uncertain
+submissions retain their normal recovery and notification paths.

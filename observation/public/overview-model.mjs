@@ -18,7 +18,7 @@ function successCounts(status={}) {
   return counts;
 }
 
-export function overviewStatusCounts(data={}) {
+export function overviewStatusCounts(data={},now=Date.now()) {
   const total=data.counts?.executionUnits;
   if(!Array.isArray(data.tasks)||data.tasks.length!==total){
     const status=successCounts(data.status??data.counts?.status??{});
@@ -27,14 +27,14 @@ export function overviewStatusCounts(data={}) {
     return status;
   }
   return successCounts(data.tasks.reduce((counts,task)=>{
-    const status=taskDisplayStatus(task);
+    const status=taskDisplayStatus(task,now);
     counts[status]=(counts[status]??0)+1;return counts;
   },{}));
 }
 
 export function overviewMetrics(data = {}, now = Date.now()) {
   const count = value => Number.isInteger(value) && value >= 0 ? value : 0;
-  const status = overviewStatusCounts(data);
+  const status = overviewStatusCounts(data,now);
   const total = count(data.counts?.executionUnits);
   const success = count(status.signed) + count(status.already_signed);
   const unavailable = count(status.not_available);
@@ -44,6 +44,7 @@ export function overviewMetrics(data = {}, now = Date.now()) {
   const verifiedUnavailable = Math.min(unavailable, count(data.evidenceQuality?.verifiedUnavailable));
   const unverifiedUnavailable = unavailable - verifiedUnavailable;
   const pending = Math.max(0, total - success - unavailable - cancelled);
+  const waiting=count(status.waiting);
   const excludedSiteIssues=Array.isArray(data.tasks)&&data.tasks.length===total
     ?Math.min(pending,data.tasks.filter(siteSideTask).length):0;
   const eligible=Math.max(0,total-verifiedUnavailable-cancelled-excludedSiteIssues);
@@ -57,7 +58,7 @@ export function overviewMetrics(data = {}, now = Date.now()) {
   const healthFresh = data.health?.freshness?.fresh === true && Number.isFinite(healthAge)
     && healthAge >= -60_000 && healthAge <= 26 * 3_600_000;
   return {
-    total, success, unavailable, cancelled, pending, manual, verifiedSuccess, unverifiedSuccess, verifiedUnavailable, unverifiedUnavailable,excludedSiteIssues,
+    total, success, unavailable, cancelled, pending, waiting,manual, verifiedSuccess, unverifiedSuccess, verifiedUnavailable, unverifiedUnavailable,excludedSiteIssues,
     executionRate: total ? Math.round(success / total * 100) : null,
     deferred: count(status.deferred),external:count(status.external),
     eligible,
@@ -72,7 +73,7 @@ export function overviewMetrics(data = {}, now = Date.now()) {
 export function overviewResultCounts(data={},now=Date.now()){
   const m=overviewMetrics(data,now);
   return {verified:m.verifiedSuccess,proof:m.unverifiedSuccess+m.unverifiedUnavailable,
-    actionable:Math.max(0,m.pending-m.excludedSiteIssues),
+    actionable:Math.max(0,m.pending-m.excludedSiteIssues-m.waiting),waiting:m.waiting,
     excluded:m.verifiedUnavailable+m.cancelled+m.excludedSiteIssues};
 }
 
@@ -92,6 +93,8 @@ export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0
   if (previousDay) return '等待今日签到结果';
   if (!metrics.fresh) return '当前数据已过期';
   if (metrics.allResolved) return '今日签到项已全部确认';
+  if(metrics.waiting){const actionable=Math.max(0,metrics.pending-metrics.excludedSiteIssues-metrics.waiting);
+    return `${actionable?`${actionable} 项待处理 · `:''}${metrics.waiting} 项等待 Harvest 执行`;}
   if(metrics.excludedSiteIssues&&metrics.unverifiedSuccess===0&&metrics.unverifiedUnavailable===0){
     const localPending=metrics.pending-metrics.excludedSiteIssues;
     if(localPending===0)return metrics.eligible>0
@@ -105,7 +108,7 @@ export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0
   return '执行回执已收齐，成功证据待补录';
 }
 
-export const statusColors = { signed: '#36c99b', already_signed: '#36c99b', not_available: '#bbc6d4', cancelled:'#91a4b7', needs_attention: '#ffc65c', deferred: '#b69cf6', external:'#b69cf6',verification:'#ffc65c', login_required: '#ffac70', failed: '#ff7f93', unknown: '#91a4b7',not_started:'#91a4b7' };
+export const statusColors = { signed: '#36c99b', already_signed: '#36c99b', not_available: '#bbc6d4', cancelled:'#91a4b7', needs_attention: '#ffc65c', waiting:'#78a9e8', deferred: '#b69cf6', external:'#b69cf6',verification:'#ffc65c', login_required: '#ffac70', failed: '#ff7f93', unknown: '#91a4b7',not_started:'#91a4b7' };
 export function statusGradient(status = {}) {
   const entries = Object.entries(successCounts(status)).filter(([, n]) => Number.isInteger(n) && n > 0);
   const total = entries.reduce((sum, [, n]) => sum + n, 0);

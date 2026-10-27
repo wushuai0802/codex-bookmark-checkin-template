@@ -18,3 +18,6 @@ Deployment is complete only when all applicable checks pass:
 - Notifications and the dashboard include the same authorized PT supplement
   scope; current site faults stay external while raw uncertain submits remain
   protected. Historical missing evidence is not converted to success.
+- Before Harvest's scheduled run and during its recorded active window,
+  ordinary waiting is separate from local attention and fault notifications;
+  overdue, failed, stale and ambiguous cases cannot wait indefinitely.

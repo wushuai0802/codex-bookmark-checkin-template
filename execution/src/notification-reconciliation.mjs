@@ -65,19 +65,21 @@ export function notificationSupplementalResults({report,snapshot,now=new Date(),
         dated(evidence.confirmedAt??effective.observedAt,day(now),now));
     return {...site,effective:{...effective,fresh}};
   })};
-  const workload=projectWorkload({tasks:snapshot.tasks,ptStatus,businessDate:day(now),counts:snapshot.counts});
+  const workload=projectWorkload({tasks:snapshot.tasks,ptStatus,businessDate:day(now),counts:snapshot.counts,now:now.getTime()});
   return workload.tasks.filter(task=>task.ptSupplementOnly===true).map(task=>{
     const verified=task.evidence?.authoritative===true,status=['signed','already_signed'].includes(task.observedStatus)&&!verified
       ?'needs_attention':task.observedStatus;
     const external=task.condition==='site_maintenance'||task.condition==='upstream_unavailable'&&siteFaultCodes.includes(task.failureCode);
-    return {origin:task.origin,accountKey:'site-default',status,
+    return {origin:task.origin,accountKey:'site-default',status:task.waiting?'deferred':status,
+      ...(task.waiting?{waiting:task.waiting,notificationWaitingObserved:true,retryCause:'harvest_waiting',submissionAttempted:false}:{}),
       ...(status==='not_available'&&task.condition==='task_disabled'?{availabilityKind:'task_disabled',disabledByConfig:true}:{}),
       ...(task.failureCode?{failureCode:task.failureCode}:{}),
       ...(typeof task.submissionAttempted==='boolean'?{submissionAttempted:task.submissionAttempted}:{}),
       ...(external?{notificationAvailabilityObserved:true,availability:{condition:task.condition,
         ...(task.condition==='upstream_unavailable'?{failureCode:task.failureCode}:{}),businessDate:day(now),observedAt:task.observedAt},retryCause:'upstream_unavailable'}:{}),
       evidence:{source:task.evidence?.source??'none',authoritative:verified,businessDate:day(now),
-        confirmedAt:task.observedAt,summary:external?'站点服务异常，恢复后只读核验':verified?'当日 PT 证据已确认':'尚无当日权威签到证据'}};
+        confirmedAt:task.observedAt,summary:task.waiting?task.evidence.summary:external?'站点服务异常，恢复后只读核验':verified?'当日 PT 证据已确认':'尚无当日权威签到证据'},
+      reason:task.waiting?task.evidence.summary:'尚无当日权威签到证据'};
   });
 }
 

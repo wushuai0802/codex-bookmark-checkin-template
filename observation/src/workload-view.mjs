@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import {cancelledTask,ptStatusCondition} from '../public/dashboard-model.mjs';
 import {siteFaultCodes} from './checkin-contract.generated.mjs';
+import {siteHarvestWait,harvestWaitSummary} from '../public/harvest-window.mjs';
 
 /** Presentation only: regular account tasks plus authorized, site-only PT work. */
-export function authorizedWorkload({tasks=[],ptStatus,businessDate,counts={}}={}){
+export function authorizedWorkload({tasks=[],ptStatus,businessDate,counts={},now=Date.now()}={}){
   const result=tasks.map(task=>({...task})),regularOrigins=new Set(tasks.map(task=>task.origin));
   const supplemental=new Map();
   if(ptStatus&&/^\d{4}-\d{2}-\d{2}$/.test(businessDate??'')&&ptStatus.businessDate===businessDate)for(const site of ptStatus.sites??[]){
@@ -24,9 +25,11 @@ export function authorizedWorkload({tasks=[],ptStatus,businessDate,counts={}}={}
     const status=disabled?'not_available':notSigned?'needs_attention':rawStatus;
     const condition=disabled?'task_disabled':ambiguous?'identity_conflict':
       fresh?(siteFaultCodes.includes(effective.failureCode)?'upstream_unavailable':notSigned?'not_signed':ptStatusCondition(site)):undefined;
+    const waiting=siteHarvestWait(site,ptStatus.harvestWindow,now);
     const evidence=disabled?{source:'configuration',rawSource:'configuration',verification:'task_disabled',authoritative:true,
       summary:'已按配置暂停签到',redacted:true,businessDate}:
       {...(effective.evidence??{}),authoritative:fresh&&effective.authoritative===true&&effective.evidence?.authoritative===true,
+        ...(waiting?{summary:harvestWaitSummary(waiting)}:{}),
         rawSource:effective.evidence?.source??'none',verification:ambiguous?'identity_conflict':
           fresh&&effective.authoritative===true?'verified':effective.failureCode==='submission_outcome_unknown'?'submission_outcome_unknown':'unverified_source'};
     result.push({taskId:'pt_task_'+crypto.createHash('sha256').update(origin+'|'+businessDate).digest('hex').slice(0,24),
@@ -34,6 +37,7 @@ export function authorizedWorkload({tasks=[],ptStatus,businessDate,counts={}}={}
       accountKey:'site-default',accountRef:null,identity:{label:'本站账号',source:'configuration'},businessDate,
       taskKind:'pt',ptSupplementOnly:true,inLegacyPlan:false,executionOwner:'legacy-checkin',executionMode:'execute',
       observedStatus:status,observedAt:effective.observedAt??null,evidence,
+      ...(waiting?{waiting}:{}),
       ...(condition?{condition}:{}),...(effective.failureCode?{failureCode:effective.failureCode}:{}),
       ...(effective.underlyingFailureCode?{underlyingFailureCode:effective.underlyingFailureCode}:{}),
       ...(typeof effective.submissionAttempted==='boolean'?{submissionAttempted:effective.submissionAttempted}:{})});
