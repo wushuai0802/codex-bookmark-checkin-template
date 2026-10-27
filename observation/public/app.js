@@ -469,7 +469,7 @@ function renderDailySummary(data) {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
   const previousDay = data?.businessDate && data.businessDate !== today;
   const node = $('#daily-summary'); node.replaceChildren();
-  const tone = !m.total ? 'empty' : !m.fresh ? 'stale' : m.allResolved ? 'complete' : 'attention';
+  const tone = !m.total ? 'empty' : !m.fresh ? 'stale' : m.allResolved ? 'complete' : m.waiting&&!counts.actionable&&!counts.proof?'empty':'attention';
   node.classList.remove('attention','complete','stale','empty');
   node.classList.add('daily-summary',tone);
   const copy = el('div', 'daily-copy');
@@ -490,6 +490,7 @@ function renderDailySummary(data) {
   tasksButton.type = 'button';
   tasksButton.addEventListener('click', () => openTasks({status:counts.actionable?'actionable':counts.proof?'proof':''}));
   const footer=el('div','summary-footer');footer.append(tasksButton);
+  if(counts.waiting){const waiting=el('button','link-button summary-waiting',`查看 ${counts.waiting} 项等待执行`);waiting.type='button';waiting.addEventListener('click',()=>openTasks({status:'waiting'}));footer.append(waiting);}
   if(counts.proof){const proof=el('button','link-button summary-proof',`查看 ${counts.proof} 条待补证`);proof.type='button';proof.addEventListener('click',()=>openTasks({status:'proof'}));footer.append(proof);}
   copy.append(footer);
   append(node, copy, progress);
@@ -658,6 +659,7 @@ function renderPtStatus(data) {
     ['权威完成', countCategory('confirmed'), '当日页面、接口或日志确认', 'confirmed'],
     ['执行成功待补证', countCategory('reported'), '已报成功，不等于漏签', 'reported'],
     ['待执行层核验', reviewCount, '只读优先，结果不明不重放', 'review'],
+    ...(counts.harvestWaiting?[['等待 Harvest', counts.harvestWaiting, '计划或任务执行中，暂不需处理', 'waiting']]:[]),
     ['观测未确认', ptSites.filter(site=>ptEvidenceState(site)==='monitor_only_unconfirmed').length, '仅观测，无成功回执不判失败', 'monitor_unconfirmed'],
     ['等待外部条件', ptSites.filter(site=>ptEvidenceState(site)==='external_blocked').length, '站点故障与本地问题分开', 'external']
   ];
@@ -684,7 +686,7 @@ function renderPtStatus(data) {
     if (likelySigned) chip.textContent = '疑似已签到';
     else if(category==='reported')chip.textContent='执行成功';
     if (!effective.fresh) { chip.className = 'status-chip unknown stale'; chip.textContent = effective.observedAt ? `历史：${STATUS_LABELS[effective.status] ?? '未知'}` : '暂无今日记录'; }
-    if(category==='unknown'&&['monitor_only_unconfirmed','verification_pending','guarded_read_needed','external_blocked'].includes(evidenceState))chip.textContent=PT_EVIDENCE_LABELS[evidenceState];
+    if(category==='unknown'&&['monitor_only_unconfirmed','verification_pending','guarded_read_needed','external_blocked','harvest_waiting'].includes(evidenceState))chip.textContent=PT_EVIDENCE_LABELS[evidenceState];
     if(evidenceState==='disabled')chip.textContent=PT_EVIDENCE_LABELS.disabled;
     append(statusCell, chip, site.discrepancy ? el('span', 'subtext discrepancy-text', '来源状态不一致') : null);
     const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', site.reconciledFromUnknown ? '当日只读证据已闭环，原记录保留' : category==='reported' ? '执行回执待补证' : effective.authoritative ? '权威证据' : evidenceState==='monitor_only_unconfirmed' ? '没有回执不代表签到失败' : '状态待核验'));
@@ -696,6 +698,7 @@ function renderPtStatus(data) {
     else if(evidenceState==='monitor_only_unconfirmed')append(actionCell,el('span',null,'保持观测'),el('span','subtext','未授权执行；未知不计为失败'));
     else if (category==='unavailable') append(actionCell,el('span',null,'功能未开放'));
     else if(category==='reported')append(actionCell,el('span',null,'补录当日证据'),el('span','subtext','不重复提交签到'));
+    else if(evidenceState==='harvest_waiting')append(actionCell,el('span',null,'等待 Harvest 执行'),el('span','subtext','执行后自动核验，未完成站点再补签'));
     else if(evidenceState==='verification_pending')append(actionCell,el('span',null,'只读复核提交结果'),el('span','subtext','保留原提交记录，不自动重放'));
     else if(evidenceState==='external_blocked'||ptCondition==='site_maintenance')append(actionCell,el('span',null,'等待外部条件恢复'),el('span','subtext',effective.evidence?.summary));
     else append(actionCell,statusChip('needs_attention'),el('span','subtext',effective.evidence?.summary || site.recovery?.summary || '待执行层核验'));
@@ -914,6 +917,7 @@ function renderCalendar(data) {
     summary.append(stats);
     if(monthly.cancelled)summary.append(el('span','calendar-history-note',`另有 ${monthly.cancelled} 项按配置取消，不计入待处理。`));
     if(monthly.external)summary.append(el('span','calendar-history-note',`${monthly.external} 项站点异常单列，不计入待处理。`));
+    if(monthly.waiting)summary.append(el('span','calendar-history-note',`${monthly.waiting} 项等待 Harvest 执行，仍计入完成进度。`));
   }else summary.append(el('span',null,'此月没有已保存的执行回执'));
   if(state.calendarLoading)summary.append(el('span','calendar-history-note','正在读取历史…'));
   else if(state.calendarError)summary.append(el('span','calendar-history-note error',state.calendarHistory?
@@ -950,7 +954,7 @@ function renderCalendar(data) {
   const dayControls=el('div','calendar-day-controls');append(dayControls,previous,todayButton,next);
   append(buttons,scope,dayControls);append(nav,period,buttons);for(const select of [year,month,scope])enhanceSelect(select);
   view.replaceChildren();for(const label of labels)view.append(el('span','calendar-weekday',label));for(let i=0;i<offset;i++)view.append(el('span','calendar-empty',''));
-  const stateOf=entry=>{if(!entry)return 'none';const totals=dayTotals(entry);if(totals.pending>0)return 'warn';if(totals.completed>0)return 'success';if(totals.unavailable+totals.cancelled>0)return 'done';return 'observe';};
+  const stateOf=entry=>{if(!entry)return 'none';const totals=dayTotals(entry);if(totals.pending>0)return 'warn';if(totals.waiting>0)return 'observe';if(totals.completed>0)return 'success';if(totals.unavailable+totals.cancelled>0)return 'done';return 'observe';};
   for(let day=1;day<=days;day++){
     const date=`${state.calendarMonth}-${String(day).padStart(2,'0')}`,entry=records.get(date),totals=dayTotals(entry);
     const button=el('button',`calendar-day ${stateOf(entry)}${date===today?' today':''}${date===state.calendarDate?' selected':''}`);button.type='button';button.disabled=date>today;
@@ -985,12 +989,12 @@ function renderCalendar(data) {
   if(state.calendarScope!=='regular'&&selected.ptRecorded===false)
     detail.append(el('p','calendar-history-note','该日期的 PT 历史记录不完整，仅展示已有回执。'));
   const detailTotals=el('p','calendar-detail-totals');
-  for(const text of [`${totals.completed} 项完成`,`${totals.unavailable} 项未开放`,...(totals.cancelled?[`${totals.cancelled} 项已取消`]:[]),...(totals.external?[`${totals.external} 项站点异常`]:[]),`${totals.pending} 项${pendingLabel}`])detailTotals.append(el('span',null,text));
+  for(const text of [`${totals.completed} 项完成`,`${totals.unavailable} 项未开放`,...(totals.cancelled?[`${totals.cancelled} 项已取消`]:[]),...(totals.external?[`${totals.external} 项站点异常`]:[]),...(totals.waiting?[`${totals.waiting} 项等待执行`]:[]),`${totals.pending} 项${pendingLabel}`])detailTotals.append(el('span',null,text));
   detail.append(detailTotals);
   if(!Array.isArray(selected.tasks)||!selected.tasks.length){detail.append(el('p','calendar-empty-state','仅有当日汇总，未保存逐站回执'));return;}
   state.calendarFilter??=totals.pending?'pending':'all';
   const filters=el('div','calendar-filters');filters.setAttribute('role','group');filters.setAttribute('aria-label','筛选当天任务');
-  for(const [filter,label,count] of [['pending',pendingLabel,totals.pending],['all','全部',totals.total],['completed','已签到',totals.completed],['unavailable','未开放',totals.unavailable],...(totals.external?[['external','站点异常',totals.external]]:[]),...(totals.cancelled?[['cancelled','已取消',totals.cancelled]]:[])]){
+  for(const [filter,label,count] of [['pending',pendingLabel,totals.pending],['all','全部',totals.total],['completed','已签到',totals.completed],['unavailable','未开放',totals.unavailable],...(totals.waiting?[['waiting','等待执行',totals.waiting]]:[]),...(totals.external?[['external','站点异常',totals.external]]:[]),...(totals.cancelled?[['cancelled','已取消',totals.cancelled]]:[])]){
     const button=el('button',state.calendarFilter===filter?'active':'');button.type='button';button.setAttribute('aria-pressed',String(state.calendarFilter===filter));
     append(button,el('span',null,label),document.createTextNode(' '),el('span','calendar-filter-count',String(count)));
     button.addEventListener('click',()=>{state.calendarFilter=filter;renderCalendar(data);

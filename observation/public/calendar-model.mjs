@@ -1,6 +1,7 @@
 import {cancelledTask,ledgerCancelledCount,siteSideTask} from './dashboard-model.mjs';
 import {businessDayHistory} from './business-day-history.mjs';
 import {siteFaultCodes} from './checkin-contract.generated.mjs';
+import {siteHarvestWait,waitingTask,harvestWaitSummary} from './harvest-window.mjs';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -29,15 +30,16 @@ function scopedEntry(entry,scope){
   return {...entry,tasks:selected,counts:{executionUnits:selected.length,status},ptRecorded:Array.isArray(pt)};
 }
 
-export function calendarPtSummaries(ptStatus){
+export function calendarPtSummaries(ptStatus,now=Date.now()){
   if(!Array.isArray(ptStatus?.sites))return null;
-  return ptStatus.sites.map(site=>({taskId:site.siteRef,origin:site.origin,accountRef:site.accountRef??null,
+  return ptStatus.sites.map(site=>{const waiting=siteHarvestWait(site,ptStatus.harvestWindow,now);return {taskId:site.siteRef,origin:site.origin,accountRef:site.accountRef??null,
     displayName:site.displayName,taskKind:'pt',businessDate:ptStatus.businessDate,inLegacyPlan:site.inLegacyPlan===true,
+    ...(waiting?{waiting,ptSupplementOnly:true}:{}),
     observedStatus:site.effective?.fresh?site.effective.status:'unknown',observedAt:site.effective?.observedAt??null,
     ...(site.effective?.siteCondition==='site_maintenance'?{condition:'site_maintenance'}:
       siteFaultCodes.includes(site.effective?.failureCode)?{condition:'upstream_unavailable',failureCode:site.effective.failureCode}:{}),
     evidence:site.effective?.evidence?.verification==='task_disabled'
-      ?{...site.effective.evidence,rawSource:'configuration'}:site.effective?.evidence??null}));
+      ?{...site.effective.evidence,rawSource:'configuration'}:waiting?{...site.effective?.evidence,summary:harvestWaitSummary(waiting)}:site.effective?.evidence??null};});
 }
 
 export function dailyRecords({ledger = [], snapshot = null, tasks = [],ptStatus=snapshot?.ptStatus,scope='all',now=Date.now()} = {}) {
@@ -98,23 +100,24 @@ export function selectCalendarMonth(date,month,bounds){
   return boundDate(`${month}-${String(day).padStart(2,'0')}`,bounds);
 }
 
-export function dayTotals(entry) {
+export function dayTotals(entry,now=Date.now()) {
   const status = entry?.counts?.status ?? {};
   const total = entry?.counts?.executionUnits ?? 0;
   const completed = (status.signed ?? 0) + (status.already_signed ?? 0);
   const cancelled = ledgerCancelledCount(entry);
   const unavailable = Math.max(0,(status.not_available ?? 0)-cancelled);
   const external=Math.min(Math.max(0,total-completed-unavailable-cancelled),(entry?.tasks??[]).filter(siteSideTask).length);
-  return {total, completed, unavailable, cancelled, external,pending:Math.max(0,total-completed-unavailable-cancelled-external)};
+  const waiting=(entry?.tasks??[]).filter(task=>waitingTask(task,now)).length;
+  return {total, completed, unavailable, cancelled, external,waiting,pending:Math.max(0,total-completed-unavailable-cancelled-external-waiting)};
 }
 
-export function monthTotals(records,month) {
-  const result={recordDays:0,total:0,completed:0,unavailable:0,cancelled:0,external:0,pending:0};
+export function monthTotals(records,month,now=Date.now()) {
+  const result={recordDays:0,total:0,completed:0,unavailable:0,cancelled:0,external:0,waiting:0,pending:0};
   for(const [date,entry] of records){
     if(!date.startsWith(`${month}-`))continue;
-    const totals=dayTotals(entry);
+    const totals=dayTotals(entry,now);
     result.recordDays++;
-    for(const key of ['total','completed','unavailable','cancelled','external','pending'])result[key]+=totals[key];
+    for(const key of ['total','completed','unavailable','cancelled','external','waiting','pending'])result[key]+=totals[key];
   }
   return result;
 }
@@ -124,12 +127,13 @@ export function calendarTaskGroup(value) {
   if(cancelledTask(task))return 'cancelled';
   if(['signed','already_signed'].includes(status))return 'completed';
   if(status==='not_available')return 'unavailable';
+  if(waitingTask(task))return 'waiting';
   if(siteSideTask(task))return 'external';
   return 'pending';
 }
 
 export function calendarTasks(entry,filter='all') {
-  const priority={pending:0,external:1,completed:2,unavailable:3,cancelled:4};
+  const priority={pending:0,waiting:1,external:2,completed:3,unavailable:4,cancelled:5};
   return [...(entry?.tasks??[])].filter(task=>filter==='all'||calendarTaskGroup(task)===filter)
     .sort((a,b)=>priority[calendarTaskGroup(a)]-priority[calendarTaskGroup(b)]||
       String(a.displayName??a.origin??'').localeCompare(String(b.displayName??b.origin??''),'zh-CN'));

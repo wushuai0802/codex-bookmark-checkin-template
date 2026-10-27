@@ -64,6 +64,27 @@ def completed_daily_task(conn, now, day):
         return None
 
 
+def daily_task_schedule(conn, now, day):
+    """Expose a unique verified daily schedule, never its arguments."""
+    try:
+        rows = conn.execute("SELECT cron,timezone FROM harvest_schedule_task WHERE enabled=1 AND task LIKE '%签到%'").fetchall()
+        if len(rows) != 1:
+            return None
+        cron, timezone = rows[0]
+        if not timezone:
+            return None
+        match = re.fullmatch(r'(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*', str(cron or '').strip())
+        if not match or int(match[1]) > 59 or int(match[2]) > 23:
+            return None
+        zone = ZoneInfo(str(timezone))
+        scheduled = now.astimezone(zone).replace(hour=int(match[2]), minute=int(match[1]), second=0, microsecond=0)
+        if scheduled.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat() != day:
+            return None
+        return {'businessDate': day, 'scheduledAt': scheduled.isoformat()}
+    except (sqlite3.OperationalError, ValueError, TypeError, KeyError):
+        return None
+
+
 def export(db_path, now=None):
     now = now or datetime.datetime.now(ZoneInfo('Asia/Shanghai'))
     day = now.date().isoformat()
@@ -74,6 +95,7 @@ def export(db_path, now=None):
     ownership_select = ',available,sign_in' if ownership_columns else ',NULL,NULL'
     rows = conn.execute('SELECT mirror,nickname,user_id,username,sign_info' + ownership_select + ' FROM mysite_mysite').fetchall()
     task_completion = completed_daily_task(conn, now, day)
+    task_schedule = daily_task_schedule(conn, now, day)
     conn.close()
     sites = []
     inventory_complete = ownership_columns
@@ -108,7 +130,7 @@ def export(db_path, now=None):
                          else 'Harvest 暂无可确认的今日签到记录'}
         })
     return {'schemaVersion': 1, 'source': 'harvest', 'businessDate': day,
-            'generatedAt': now.isoformat(), 'taskCompletion': task_completion,
+            'generatedAt': now.isoformat(), 'taskCompletion': task_completion, 'taskSchedule': task_schedule,
             'checkinInventoryComplete': inventory_complete, 'sites': sites}
 
 

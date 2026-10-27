@@ -27,7 +27,7 @@
   "ptStatuses": ["signed", "already_signed", "not_signed", "unknown", "login_required", "unreachable", "needs_attention", "not_available", "failed"],
   "ptResultStatuses": ["signed", "already_signed", "not_signed", "unknown", "login_required", "needs_attention", "not_available"],
   "statusLabels": {
-    "signed": "已签到", "already_signed": "已签到", "not_available": "未开放",
+    "signed": "已签到", "already_signed": "已签到", "not_available": "未开放", "waiting": "等待执行",
     "not_signed": "未签到（已确认）", "needs_attention": "需关注", "deferred": "已延迟",
     "login_required": "需登录", "interactive_challenge": "需完成验证", "unreachable": "不可访问",
     "failed": "失败", "unknown": "未知", "not_started": "未执行（缺少回执）"

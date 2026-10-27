@@ -1,17 +1,19 @@
 import {conditionLabels,statusLabels,externalRetryCauses,ptSiteDisplayNames,siteFaultCodes} from './checkin-contract.generated.mjs';
+import {waitingTask,harvestWindowActive,harvestWaitSummary} from './harvest-window.mjs';
 
 function availabilityCondition(task){
   const value=task?.availability;
   return value?.condition==='site_maintenance'?'site_maintenance':
     value?.condition==='upstream_unavailable'&&siteFaultCodes.includes(value.failureCode)?'upstream_unavailable':null;
 }
-export function taskStatusCondition(task){return availabilityCondition(task)??task?.condition;}
-export function taskStatusSummary(task){return availabilityCondition(task)?task.availability.summary:task?.evidence?.summary;}
+export function taskStatusCondition(task){return waitingTask(task)?'harvest_waiting':availabilityCondition(task)??task?.condition;}
+export function taskStatusSummary(task){return waitingTask(task)?harvestWaitSummary(task.waiting):task?.waiting?
+  '等待窗口已结束，尚无当日确认回执，请先核验':availabilityCondition(task)?task.availability.summary:task?.evidence?.summary;}
 export function cancelledTask(task){return task?.observedStatus==='not_available'&&task?.evidence?.verification==='task_disabled'&&
   task.evidence.authoritative===true&&task.evidence.rawSource==='configuration';}
 export function taskStatusLabel(task){return cancelledTask(task)?conditionLabels.task_disabled:
   (!['signed','already_signed','not_available'].includes(task?.observedStatus)?conditionLabels[taskStatusCondition(task)]:null)??statusLabels[task?.observedStatus]??task?.observedStatus;}
-export function externalTask(task){return !['signed','already_signed','not_available'].includes(task?.observedStatus)&&
+export function externalTask(task){return !waitingTask(task)&&!['signed','already_signed','not_available'].includes(task?.observedStatus)&&
   [...externalRetryCauses,'site_maintenance','entitlement_expired','site_migration','bookmark_origin_changed'].includes(taskStatusCondition(task));}
 
 export function siteSideTask(task){
@@ -24,7 +26,8 @@ export function siteSideTask(task){
 
 // Charts and their drill-down filters share the same presentation buckets.
 // The original execution enum and receipt remain unchanged.
-export function taskDisplayStatus(task){
+export function taskDisplayStatus(task,now=Date.now()){
+  if(waitingTask(task,now))return 'waiting';
   if(cancelledTask(task))return 'cancelled';
   if(['signed','already_signed'].includes(task?.observedStatus))return 'signed';
   if(externalTask(task))return 'external';
@@ -33,7 +36,8 @@ export function taskDisplayStatus(task){
 }
 
 // Presentation only: retain the execution receipt and its original evidence.
-export function taskResultBucket(task){
+export function taskResultBucket(task,now=Date.now()){
+  if(waitingTask(task,now))return 'waiting';
   if(cancelledTask(task)||siteSideTask(task))return 'excluded';
   if(['signed','already_signed'].includes(task?.observedStatus))return task.evidence?.authoritative===true?'verified':'proof';
   if(task?.observedStatus==='not_available')return task.evidence?.authoritative===true?'excluded':'proof';
@@ -63,6 +67,7 @@ export const TASK_FILTERS = [
   ['verified','已核验','核验结果'],
   ['proof','待补证','核验结果'],
   ['actionable','待处理','核验结果'],
+  ['waiting','等待执行','核验结果'],
   ['excluded','已排除','核验结果'],
   ['completed', '成功回执'],
   ['pending', '尚未完成'],
@@ -80,19 +85,19 @@ export const TASK_FILTERS = [
 export const normalizeTaskFilter = value => value === 'not_available' ? 'unavailable'
   : ['success','signed','already_signed'].includes(value) ? 'completed' : value;
 
-export function matchesTask(task, { status = '', query = '' } = {}) {
+export function matchesTask(task, { status = '', query = '',now=Date.now() } = {}) {
   status = normalizeTaskFilter(status);
-  const display=taskDisplayStatus(task);
+  const display=taskDisplayStatus(task,now);
   const statusGroups = {
     completed: ['signed'],
-    pending: ['deferred', 'needs_attention', 'failed', 'unknown', 'not_started', 'login_required','external','verification'],
+    pending: ['deferred', 'needs_attention', 'failed', 'unknown', 'not_started', 'login_required','external','verification','waiting'],
     attention: ['needs_attention', 'failed', 'unknown', 'not_started'],
     login_required: ['login_required'],
     unavailable: ['not_available'],
   };
   const statusGroup=Object.hasOwn(statusGroups,status)?statusGroups[status]:null;
-  const statusMatch = !status || (['verified','proof','actionable','excluded'].includes(status)?taskResultBucket(task)===status:
-    status==='identity_review'?taskResultBucket(task)==='actionable'&&
+  const statusMatch = !status || (['verified','proof','actionable','waiting','excluded'].includes(status)?taskResultBucket(task,now)===status:
+    status==='identity_review'?taskResultBucket(task,now)==='actionable'&&
       ['identity_conflict','account_mismatch','identity_mismatch'].some(code=>[task.condition,task.failureCode,task.evidence?.verification].includes(code)):
     statusGroup ? statusGroup.includes(display) : display === status);
   const haystack = [task.origin, siteTitle(task), task.displayName, task.logicalSiteKey, task.accountRef, task.taskId,
@@ -130,7 +135,8 @@ export function matchesPt(site, scope = '') {
     || (scope === 'confirmed' && category === 'confirmed')
     || (scope === 'reported' && category === 'reported')
     || (scope === 'review' && (site.inLegacyPlan===true||site.fallbackEnabled===true) &&
-      !['monitor_only_unconfirmed','external_blocked'].includes(evidenceState) && category === 'unknown')
+      !['monitor_only_unconfirmed','external_blocked','harvest_waiting'].includes(evidenceState) && category === 'unknown')
+    || (scope === 'waiting' && evidenceState === 'harvest_waiting')
     || (scope === 'monitor_unconfirmed' && evidenceState === 'monitor_only_unconfirmed')
     || (scope === 'verification' && evidenceState === 'verification_pending')
     || (scope === 'external' && evidenceState === 'external_blocked');
@@ -139,6 +145,7 @@ export function matchesPt(site, scope = '') {
 // New snapshots carry this classification explicitly. Old snapshots retain
 // a safe compatible view; bookmark inventory must never imply execution.
 export function ptEvidenceState(site) {
+  if(site?.harvestWaiting&&harvestWindowActive(site.harvestWaiting))return 'harvest_waiting';
   const states=['confirmed','guarded_read_needed','not_signed_confirmed','verification_pending',
     'monitor_only_unconfirmed','external_blocked','unavailable','disabled','unconfirmed'];
   if(states.includes(site?.evidenceState))return site.evidenceState;
@@ -153,12 +160,14 @@ export function ptEvidenceState(site) {
 }
 
 export const PT_EVIDENCE_LABELS = Object.freeze({
+  harvest_waiting:'等待 Harvest',
   confirmed:'已签到',guarded_read_needed:'待只读复核',not_signed_confirmed:'今日未签到',
   verification_pending:'提交待核验',monitor_only_unconfirmed:'观测未确认',
   external_blocked:'等待外部条件',unavailable:'未开放',disabled:'已取消',unconfirmed:'状态未确认'
 });
 
 export function ptStatusCondition(site) {
+  if(site?.harvestWaiting&&harvestWindowActive(site.harvestWaiting))return 'harvest_waiting';
   const effective=site?.effective??{};
   if(effective.fresh!==false&&effective.siteCondition==='site_maintenance')return 'site_maintenance';
   if(effective.fresh!==false&&!['signed','already_signed','not_available'].includes(effective.status)){

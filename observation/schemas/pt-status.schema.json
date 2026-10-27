@@ -30,6 +30,7 @@
     "mode": {
       "const": "status_observe_only"
     },
+    "harvestWindow": { "$ref": "#/$defs/harvestWindow" },
     "sources": {
       "type": "array",
       "items": {
@@ -50,6 +51,20 @@
     }
   },
   "$defs": {
+    "harvestWindow": {
+      "type": ["object", "null"],
+      "required": ["source", "businessDate", "observedAt", "phase", "referenceAt", "deadlineAt"],
+      "properties": {
+        "source": { "const": "harvest" },
+        "businessDate": { "type": "string", "format": "date" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "phase": { "enum": ["scheduled", "running"] },
+        "referenceAt": { "type": "string", "format": "date-time" },
+        "deadlineAt": { "type": "string", "format": "date-time" },
+        "origin": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
     "counts": {
       "type": "object",
       "required": [
@@ -278,7 +293,9 @@
           "maxLength": 80
         },
         "fallbackEnabled": { "type": "boolean" },
-        "evidenceState": { "enum": ["confirmed", "guarded_read_needed", "not_signed_confirmed", "verification_pending", "monitor_only_unconfirmed", "external_blocked", "unavailable", "disabled", "unconfirmed"] },
+        "harvestManaged": { "type": "boolean" },
+        "harvestWaiting": { "$ref": "#/$defs/harvestWindow" },
+        "evidenceState": { "enum": ["confirmed", "guarded_read_needed", "not_signed_confirmed", "verification_pending", "harvest_waiting", "monitor_only_unconfirmed", "external_blocked", "unavailable", "disabled", "unconfirmed"] },
         "reconciledFromUnknown": { "type": "boolean" },
         "recovery": {
           "type": "object",

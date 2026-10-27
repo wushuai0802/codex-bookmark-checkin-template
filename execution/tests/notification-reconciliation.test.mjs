@@ -289,3 +289,45 @@ test('a corrupt supplemental inventory fails back to an explicit regular scope i
   assert.equal(view.scope,'regular_tasks');assert.deepEqual(view.supplementalResults,[]);
   assert.equal(view.ready,false);assert.doesNotMatch(JSON.stringify(view),/private|user:/);
 });
+
+function addWaiting(f){
+  const now=new Date(),site=addSupplemental(f,{harvestManaged:true});
+  site.effective={status:'unknown',fresh:false,authoritative:false,observedAt:null,evidence:{source:'none',authoritative:false}};
+  f.snapshot.ptStatus.harvestWindow={source:'harvest',businessDate:f.date,observedAt:now.toISOString(),phase:'scheduled',
+    referenceAt:now.toISOString(),deadlineAt:new Date(now.getTime()+30*60000).toISOString()};
+  return site;
+}
+
+test('waiting is listed separately and never hides a genuine unknown submission',t=>{
+  const f=sandbox(t);addWaiting(f);f.publish();const before=fs.readFileSync(f.reportFile),preview=f.preview();
+  assert.equal(preview.waitingPendingCount,1);assert.equal(preview.verificationPendingCount,1);
+  assert.match(preview.summary,/等待 Harvest 1/);assert.doesNotMatch(preview.summary,/需处理 1|fallback\.example：/);
+  assert.equal(preview.problemCount,1);assert.deepEqual(fs.readFileSync(f.reportFile),before);
+});
+
+test('only scheduled waiting and external faults defer delivery without creating an outbox or declaring completion',t=>{
+  const f=sandbox(t);addMaintenance(f);addWaiting(f);f.publish();fs.writeFileSync(f.reportFile,JSON.stringify(f.report));
+  const preview=f.preview();assert.equal(preview.waitingPendingCount,1);assert.equal(preview.externalPendingCount,1);
+  assert.equal(preview.verificationPendingCount,0);assert.equal(preview.deferred,true);assert.equal(preview.enqueued,false);
+  assert.notEqual(preview.status,'success');assert.equal(preview.businessComplete,false);
+  const config=JSON.parse(fs.readFileSync(path.join(f.root,'config/config.json')));config.notification.mode='command';
+  fs.writeFileSync(path.join(f.root,'config/config.json'),JSON.stringify(config));
+  const output=JSON.parse(execFileSync('pwsh.exe',['-NoProfile','-NonInteractive','-File',path.join(f.root,'scripts/Submit-UnifiedCheckinReport.ps1'),
+    '-ReportPath',f.reportFile],{encoding:'utf8',windowsHide:true,timeout:30000}).trim());
+  assert.equal(output.deferred,true);assert.equal(fs.existsSync(path.join(f.root,'data/notification-outbox')),false);
+});
+
+test('expired waiting becomes actionable again instead of suppressing recovery indefinitely',t=>{
+  const f=sandbox(t);addMaintenance(f);addWaiting(f);
+  const window=f.snapshot.ptStatus.harvestWindow;window.referenceAt=new Date(Date.now()-31*60000).toISOString();
+  window.deadlineAt=new Date(Date.now()-60000).toISOString();f.publish();fs.writeFileSync(f.reportFile,JSON.stringify(f.report));
+  const preview=f.preview();assert.equal(preview.waitingPendingCount,0);assert.equal(preview.status,'needs_attention');
+  assert.match(preview.summary,/fallback\.example/);assert.match(preview.summary,/尚无当日权威签到证据/);
+});
+
+test('a site migration still reports while unrelated Harvest sites are waiting',t=>{
+  const f=sandbox(t);addWaiting(f);f.report.results[1].failureCode='site_migration';f.publish();
+  fs.writeFileSync(f.reportFile,JSON.stringify(f.report));const preview=f.preview();
+  assert.equal(preview.waitingPendingCount,1);assert.notEqual(preview.deferred,true);
+  assert.match(preview.summary,/站点地址已变化/);
+});

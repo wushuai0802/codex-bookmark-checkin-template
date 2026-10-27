@@ -99,5 +99,24 @@ class HarvestActivityTests(unittest.TestCase):
         self.db.execute("INSERT INTO harvest_schedule_task VALUES ('另一签到',1)")
         self.assertIsNone(self.result())
 
+class HarvestScheduleTests(unittest.TestCase):
+    def test_only_unique_valid_daily_schedule_is_exported(self):
+        zone = datetime.timezone(datetime.timedelta(hours=8))
+        now = datetime.datetime(2026, 10, 27, 8, 40, tzinfo=zone)
+        conn = sqlite3.connect(':memory:')
+        self.addCleanup(conn.close)
+        conn.execute('CREATE TABLE harvest_schedule_task(task TEXT,enabled INTEGER,cron TEXT,timezone TEXT,args TEXT)')
+        conn.execute("INSERT INTO harvest_schedule_task VALUES ('每日签到',1,'5 9 * * *','Asia/Shanghai','PRIVATE_ARGUMENTS')")
+        with patch.object(observer, 'ZoneInfo', return_value=zone):
+            result = observer.daily_task_schedule(conn, now, '2026-10-27')
+            self.assertEqual(result, {'businessDate': '2026-10-27', 'scheduledAt': '2026-10-27T09:05:00+08:00'})
+            self.assertNotIn('PRIVATE', observer.json.dumps(result))
+            for cron in ['*/5 * * * *', '70 9 * * *', '5 25 * * *', '5 9 * * 1']:
+                conn.execute('UPDATE harvest_schedule_task SET cron=?', (cron,))
+                self.assertIsNone(observer.daily_task_schedule(conn, now, '2026-10-27'))
+            conn.execute("UPDATE harvest_schedule_task SET cron='5 9 * * *'")
+            conn.execute("INSERT INTO harvest_schedule_task VALUES ('另一签到',1,'5 9 * * *','Asia/Shanghai','')")
+            self.assertIsNone(observer.daily_task_schedule(conn, now, '2026-10-27'))
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,10 +3,10 @@ import {externalTask,siteSideTask,taskResultBucket,taskStatusCondition,taskStatu
 // Presentation-only acknowledgement. Never changes task status or execution.
 const STORAGE_KEY = 'fabricReadNotices.v1';
 export const noticeKey = task => `${task.businessDate ?? ''}:${task.taskId}:${task.observedStatus}`;
-const unresolved = task => !['signed', 'already_signed', 'not_available'].includes(task.observedStatus);
-export const pausedNotices = (tasks, now = Date.now()) => tasks.filter(task => unresolved(task)
+const unresolved = (task,now) => !['signed', 'already_signed', 'not_available'].includes(task.observedStatus)&&taskResultBucket(task,now)!=='waiting';
+export const pausedNotices = (tasks, now = Date.now()) => tasks.filter(task => unresolved(task,now)
   && Number.isFinite(Date.parse(task.attention?.pausedUntil)) && Date.parse(task.attention.pausedUntil) > now);
-export const pendingNotices = (tasks, now = Date.now()) => tasks.filter(task => unresolved(task)
+export const pendingNotices = (tasks, now = Date.now()) => tasks.filter(task => unresolved(task,now)
   && !(Number.isFinite(Date.parse(task.attention?.pausedUntil)) && Date.parse(task.attention.pausedUntil) > now));
 
 export function attentionReason(task){
@@ -40,7 +40,7 @@ function groupedPreview(all,limit,pausedCount=0){
 
 export function overviewQueuePreview(tasks,filter='actionable',limit=4,now=Date.now()){
   const paused=pausedNotices(tasks,now),pausedSet=new Set(paused);
-  const inQueue=task=>filter==='external'?siteSideTask(task):taskResultBucket(task)===filter;
+  const inQueue=task=>filter==='external'?siteSideTask(task):taskResultBucket(task,now)===filter;
   return groupedPreview(tasks.filter(task=>inQueue(task)&&!pausedSet.has(task)),limit,
     paused.filter(inQueue).length);
 }

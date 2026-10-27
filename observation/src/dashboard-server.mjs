@@ -26,6 +26,7 @@ import {classifyPtEvidenceState,ptUnknownReconciled} from './pt-status.mjs';
 import {confirmedPtByTask} from './daily-reconciliation.mjs';
 import {authorizedWorkload} from './workload-view.mjs';
 import {businessDayHistory} from '../public/business-day-history.mjs';
+import {copyHarvestWindow,siteHarvestWait} from '../public/harvest-window.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.resolve(MODULE_ROOT, '..', 'public');
@@ -170,6 +171,8 @@ function publicTask(task, receipt) {
     ...(typeof task.submissionAttempted==='boolean'?{submissionAttempted:task.submissionAttempted}:{}),
     ...(['pt','service'].includes(task.taskKind)?{taskKind:task.taskKind}:{}),
     ...(typeof task.inLegacyPlan==='boolean'?{inLegacyPlan:task.inLegacyPlan}:{}),
+    ...(task.ptSupplementOnly===true?{ptSupplementOnly:true}:{}),
+    ...(copyHarvestWindow(task.waiting)?{waiting:copyHarvestWindow(task.waiting)}:{}),
     observedAt: receipt?.observedAt ?? null,
     evidence: receipt?.evidence ? {
       source: receipt.evidence.source,
@@ -226,6 +229,7 @@ function publicPtEvidence(evidence) {
 
 export function publicPtStatus(ptStatus) {
   if (!ptStatus || typeof ptStatus !== 'object' || Array.isArray(ptStatus)) return null;
+  const harvestWindow=copyHarvestWindow(ptStatus.harvestWindow);
   const now = new Date().toISOString();
   const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' });
   const freshPt = value => timestampFresh(value, now) && dayFormat.format(new Date(value)) === dayFormat.format(new Date(now));
@@ -252,6 +256,7 @@ export function publicPtStatus(ptStatus) {
         accountRef: typeof site.accountRef === 'string' && /^acct_[a-f0-9]{16}$/.test(site.accountRef) ? site.accountRef : null,
         inLegacyPlan: site.inLegacyPlan === true,
         fallbackEnabled: site.fallbackEnabled === true,
+        ...(site.harvestManaged===true?{harvestManaged:true}:{}),
         ...(site.disabledByConfig===true?{disabledByConfig:true}:{}),
         ...(site.capabilities&&typeof site.capabilities.read==='boolean'&&typeof site.capabilities.guardedSubmit==='boolean'
           ?{capabilities:{read:site.capabilities.read,guardedSubmit:site.capabilities.read&&site.capabilities.guardedSubmit}}:{}),
@@ -281,6 +286,8 @@ export function publicPtStatus(ptStatus) {
     // Reclassify after current-day freshness and diagnostic sanitization so
     // older snapshots work, and a yesterday confirmed category cannot stick.
     site.evidenceState=classifyPtEvidenceState(site);
+    const waiting=siteHarvestWait(site,harvestWindow);
+    if(waiting){site.harvestWaiting=waiting;site.evidenceState='harvest_waiting';}
     if(ptUnknownReconciled(site,ptStatus.businessDate))site.reconciledFromUnknown=true;
   }
   const counts = ptStatus.counts && typeof ptStatus.counts === 'object' ? ptStatus.counts : {};
@@ -291,6 +298,7 @@ export function publicPtStatus(ptStatus) {
     generatedAt: typeof ptStatus.generatedAt === 'string' ? ptStatus.generatedAt.slice(0, 64) : null,
     businessDate: typeof ptStatus.businessDate === 'string' ? ptStatus.businessDate.slice(0, 32) : null,
     mode: 'status_observe_only',
+    ...(harvestWindow?{harvestWindow}:{}),
     sources: (Array.isArray(ptStatus.sources) ? ptStatus.sources : []).filter((source) => typeof source === 'string').map((source) => source.slice(0, 40)).slice(0, 20),
     counts: {
       sites: safeCount(counts.sites, sites.length),
@@ -303,6 +311,7 @@ export function publicPtStatus(ptStatus) {
       monitorOnlyUnconfirmed: sites.filter(site=>site.evidenceState==='monitor_only_unconfirmed').length,
       guardedReadNeeded: sites.filter(site=>site.evidenceState==='guarded_read_needed').length,
       verificationPending: sites.filter(site=>site.evidenceState==='verification_pending').length,
+      harvestWaiting: sites.filter(site=>site.evidenceState==='harvest_waiting').length,
       externalBlocked: sites.filter(site=>site.evidenceState==='external_blocked').length,
       notSignedConfirmed: sites.filter(site=>site.evidenceState==='not_signed_confirmed').length,
       status

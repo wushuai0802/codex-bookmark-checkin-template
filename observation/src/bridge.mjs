@@ -246,6 +246,7 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     maxAgeHours: ptStatusMaxAgeHours
   });
   const ptStatusDigest = { ...ptStatus, generatedAt: null };
+  if(ptStatusDigest.harvestWindow)ptStatusDigest.harvestWindow={...ptStatusDigest.harvestWindow,observedAt:null};
   const observation = receipts.map((receipt) => ({
     taskId: receipt.taskId,
     status: receipt.status,
