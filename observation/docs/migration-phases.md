@@ -1,5 +1,13 @@
 # Production Boundary and Historical Work
 
+## Passive login handoff for uncertain PT-only work: 2026-10-28
+
+A current, bound, reviewed passive login-page result can enable the login-window
+action for an opted-in PT-only account with an older uncertain submit. The
+execution handler reads again before opening the original Profile. This does
+not authorize retry/resume, remove uncertainty or count the site as completed;
+signing still requires a separate fresh verified negative and the normal guards.
+
 ## Ourbits form submission control: 2026-10-28
 
 The native Ourbits action waits for an enabled form button. Its header attendance
