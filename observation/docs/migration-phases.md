@@ -1,5 +1,15 @@
 # Production Boundary and Historical Work
 
+## Resume after a new bound unsigned observation: 2026-10-28
+
+A reviewed, account/Profile/day-bound unsigned observation from the last hour
+can wake one new passive check after ordinary review attempts are exhausted.
+Each observation is consumed once and at most two such renewal reads run per
+account/day. The signal itself grants no submission: the renewed read must
+match its Profile and pass the existing fresh-negative guard, current Harvest
+check, execution locks and unchanged daily write limit. Diagnostics, foreign
+accounts, stale signals and already consumed observations cannot wake a write.
+
 ## Same-day unsigned-to-signed observation transition: 2026-10-28
 
 An older reviewed passive `not_signed` observation is historical after a later

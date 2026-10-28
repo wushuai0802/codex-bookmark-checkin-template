@@ -162,19 +162,25 @@ function Update-SynchronizedCheckinNotification([string]$LegacyRoot) {
     if (-not (Test-Path -LiteralPath $reporter -PathType Leaf) -or
         -not (Test-Path -LiteralPath $outbox -PathType Leaf) -or
         -not (Test-Path -LiteralPath $report -PathType Leaf)) { return }
+    $phase = 'runtime_resolution'
     try {
         $shell = (Get-Command pwsh.exe,pwsh -ErrorAction Stop | Select-Object -First 1).Source
+        $phase = 'report_refresh'
         $refresh = Invoke-BoundedSyncProcess $shell @('-NoProfile','-NonInteractive','-File',$reporter,'-ReportPath',$report) 'daily_report_refresh' '' 45
         if ($refresh.exitCode -ne 0) { throw 'report_refresh_failed' }
+        $phase = 'report_decode'
         $payload = ($refresh.output | Select-Object -Last 1) | ConvertFrom-Json
         if ($payload.deferred -eq $true -or $payload.mode -ne 'command') { return }
+        $phase = 'outbox_delivery'
         $delivery = Invoke-BoundedSyncProcess $shell @('-NoProfile','-NonInteractive','-File',$outbox) 'daily_report_delivery' '' 75
         if ($delivery.exitCode -ne 0) { throw 'report_delivery_deferred' }
         Write-SchedulerLog 'Published daily receipt reconciled with synchronized observations.'
     } catch {
         # The independent execution scheduler retries the same deduplicated
         # outbox. A notifier failure cannot turn a successful sync into failure.
-        Write-SchedulerLog 'Daily receipt refresh deferred; check-in and sync outcomes remain unchanged.'
+        $code = [string]$_.FullyQualifiedErrorId -replace '[^A-Za-z0-9_.,-]',''
+        if ($code.Length -gt 80) { $code = $code.Substring(0,80) }
+        Write-SchedulerLog "Daily receipt refresh deferred (phase=$phase; code=$code); check-in and sync outcomes remain unchanged."
     }
 }
 

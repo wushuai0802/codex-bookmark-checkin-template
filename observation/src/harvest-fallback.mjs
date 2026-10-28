@@ -244,6 +244,21 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
           status==='unknown'?'harvest_task_done_status_unknown':'harvest_explicit_failure')});
     assessments.push({origin,state:'executor_recheck_queued'});
   }
+  for(const candidate of eligible){
+    const values=(fallbackReport?.sites??[]).filter(item=>originOf(item.origin)===candidate.origin&&
+      (item.accountKey??'site-default')===candidate.accountKey);
+    if(candidate.guardedSubmit!==true||values.length!==1)continue;
+    const value=values[0],proof=value.evidence,at=Date.parse(proof?.confirmedAt??''),observed=Date.parse(value.observedAt??'');
+    // A recent bound negative is a signal to renew the passive check, never
+    // permission to submit from an old proof. The executor still reads again.
+    if(fallbackReport.source==='execution-supplement'&&fallbackReport.businessDate===businessDate&&
+       value.status==='not_signed'&&value.submissionAttempted===false&&value.operationMode==='safe_history_page'&&
+       value.readSafety==='reviewed_passive'&&value.businessDate===businessDate&&proof?.authoritative===true&&
+       proof.businessDate===businessDate&&proof.evidenceScope==='site_account_day'&&
+       /^[a-f0-9]{64}$/.test(value.profileBinding??'')&&Number.isFinite(at)&&Number.isFinite(observed)&&
+       Math.abs(at-observed)<=60_000&&at<=now.getTime()&&now.getTime()-at<=60*60_000&&dayAt(new Date(at))===businessDate)
+      candidate.unsignedWakeup={confirmedAt:new Date(at).toISOString(),profileBinding:value.profileBinding};
+  }
   return {schemaVersion:1,businessDate,source:'harvest',observedSuccess,registeredCount:registered.length,
     fallbackOnlyCount:[...catalogOrigins].filter(origin=>!registered.some(target=>originOf(target.origin)===origin)).length,
     assessments,eligible,blocked};
@@ -303,10 +318,20 @@ function unresolvedEarlierAttempt(root,candidate){
   return false;
 }
 
+function unsignedWakeupDue(state,candidate,now){
+  const signal=candidate.unsignedWakeup,at=Date.parse(signal?.confirmedAt??'');
+  if(candidate.guardedSubmit!==true||!/^[a-f0-9]{64}$/.test(signal?.profileBinding??'')||
+     !Number.isFinite(at)||at>now.getTime()||now.getTime()-at>60*60_000||dayAt(new Date(at))!==candidate.businessDate)return false;
+  const probes=(state.verifications??[]).filter(item=>item.origin===candidate.origin&&(item.accountKey??'site-default')===candidate.accountKey);
+  return probes.filter(item=>item.unsignedWakeup).length<2&&!probes.some(item=>item.state==='in_progress'||
+    item.unsignedWakeup?.confirmedAt===signal.confirmedAt||item.outcome?.evidence?.confirmedAt===signal.confirmedAt);
+}
+
 function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
   const reviewOnly=candidate.readOnlyReview===true||candidate.guardedSubmit===true||
     (candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin));
   if(!reviewOnly)return false;
+  if(unsignedWakeupDue(state,candidate,now))return true;
   const probes=(state.verifications??[]).filter(v=>v.origin===candidate.origin&&(v.accountKey??'site-default')===candidate.accountKey);
   const deferred=probe=>['deferred_busy','deferred_preflight'].includes(probe.state);
   // A previous Harvest gate may have recorded a no-submission wait after the
@@ -422,11 +447,13 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     let recoveryEvidence=null,authenticationRecovery=false;
     if(canVerify){
       const verification={origin:candidate.origin,accountKey:candidate.accountKey,startedAt:clock().toISOString(),state:'in_progress'};
+      if(unsignedWakeupDue(state,candidate,clock()))verification.unsignedWakeup=candidate.unsignedWakeup;
       if(manualRecovery)verification.manualRecoveryId=manualRecoveryId;
       state.verifications??=[];state.verifications.push(verification);writeAtomic(stateFile,state);
       try{
         let checked=currentPassivePtResult(await runSite({root,origin:candidate.origin,catalogFile,catalogHash,readOnly:true}),clock());
         if(checked.accountKey!==candidate.accountKey)throw Error('passive account mismatch');
+        if(verification.unsignedWakeup&&checked.profileBinding!==verification.unsignedWakeup.profileBinding)throw Error('passive wakeup profile mismatch');
         const loginOpt=config.siteTwoFactorRecovery?.[candidate.origin];
         authenticationRecovery=candidate.kind==='fallback_only'&&candidate.origin==='https://www.uhddolby.com'&&
           checked.status==='login_required'&&checked.submissionAttempted===false&&loginOpt?.enabled===true&&loginOpt.reviewed===true&&
