@@ -6,7 +6,9 @@ import path from 'node:path';
 import {ptEvidenceCandidates,repairPtEvidence,refreshEvidenceCatalog,previousEvidenceHealth} from '../src/pt-evidence-repair.mjs';
 import {boundMonitorCatalog,validateCurrentPtCatalog} from '../src/monitor-catalog.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from '../src/execution-lock.mjs';
-import {rebuildDashboardAfterEvidence} from '../src/pt-evidence-repair.mjs';
+import {rebuildDashboardAfterEvidence,retainHarvestPresentation} from '../src/pt-evidence-repair.mjs';
+import {authorizedWorkload} from '../src/workload-view.mjs';
+import {harvestNotificationSyncPending} from '../public/harvest-window.mjs';
 
 const now=new Date('2026-09-30T12:00:00Z'),origin='https://pt.example';
 function snapshot(){return {businessDate:'2026-09-30',tasks:[{taskId:'t',origin,observedStatus:'signed',submissionAttempted:true}],
@@ -45,6 +47,28 @@ test('evidence rebuild carries forward the previous health source when a fresh p
     failedCheckCount:2,reason:'ok'}});
   assert.equal(health.healthy,true);assert.equal(health.checkedAt,'2026-09-30T11:55:00.000Z');
   assert.equal(health.failedChecks.length,2);assert.equal(health.reason,'ok');
+});
+
+test('a passive rebuild retains Harvest waiting and its original freshness without overwriting new positive evidence',()=>{
+  const at='2026-09-30T01:10:00Z',pending={origin,inLegacyPlan:false,fallbackEnabled:true,
+    effective:{status:'unknown',authoritative:false,fresh:false,observedAt:null}};
+  const previous={businessDate:'2026-09-30',ptStatus:{sites:[{...pending,harvestManaged:true}],harvestWindow:{
+    source:'harvest',businessDate:'2026-09-30',phase:'scheduled',observedAt:at,
+    referenceAt:'2026-09-30T01:05:00Z',deadlineAt:'2026-09-30T01:35:00Z'}}};
+  const rebuilt={businessDate:previous.businessDate,ptStatus:{businessDate:previous.businessDate,sites:[structuredClone(pending)]}};
+  retainHarvestPresentation(rebuilt,previous);
+  const workload=at=>authorizedWorkload({tasks:[],ptStatus:rebuilt.ptStatus,businessDate:rebuilt.businessDate,now:Date.parse(at)});
+  assert.equal(workload('2026-09-30T01:15:00Z').tasks[0].waiting.source,'harvest');
+  assert.equal(rebuilt.ptStatus.harvestWindow.observedAt,at);
+  assert.equal(workload('2026-09-30T01:36:00Z').tasks[0].waiting,undefined);
+  assert.deepEqual(harvestNotificationSyncPending(rebuilt.ptStatus,Date.parse('2026-09-30T01:36:00Z')).origins,[origin]);
+  rebuilt.ptStatus.sites[0].effective={status:'signed',authoritative:true,fresh:true,observedAt:'2026-09-30T01:15:00Z',
+    evidence:{authoritative:true,businessDate:rebuilt.businessDate}};
+  retainHarvestPresentation(rebuilt,previous);
+  assert.equal(workload('2026-09-30T01:16:00Z').tasks[0].observedStatus,'signed');
+  assert.equal(harvestNotificationSyncPending(rebuilt.ptStatus,Date.parse('2026-09-30T01:36:00Z')),null);
+  const foreign={businessDate:'2026-10-01',ptStatus:{sites:[]}};retainHarvestPresentation(foreign,previous);
+  assert.equal(foreign.ptStatus.harvestWindow,undefined);
 });
 
 test('refreshing a catalog keeps its exact folder while rebinding harmless bookmark changes',async t=>{

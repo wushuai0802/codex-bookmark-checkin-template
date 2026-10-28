@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {projectHarvestWindow,siteHarvestWait,waitingTask} from '../public/harvest-window.mjs';
+import {projectHarvestWindow,siteHarvestWait,waitingTask,harvestNotificationSyncPending} from '../public/harvest-window.mjs';
 import {buildPtStatus} from '../src/pt-status.mjs';
 import {authorizedWorkload} from '../src/workload-view.mjs';
 import {overviewMetrics,overviewResultCounts,dailySummaryTitle} from '../public/overview-model.mjs';
@@ -83,4 +83,22 @@ test('calendar waiting is separate from pending and expires as a historical unco
   const totals=dayTotals(entry,now);assert.equal(totals.waiting,1);assert.equal(totals.pending,2);assert.equal(totals.completed,0);
   const later=dayTotals(entry,Date.parse('2026-10-28T00:01:00Z'));
   assert.equal(later.waiting,0);assert.equal(later.pending,3);
+});
+
+test('deadline crossing requires a newer observation, with a bounded publication handoff rather than new site failures',()=>{
+  const r=report();r.generatedAt=day+'T01:10:00Z';
+  const pt=fixture(r),deadline=Date.parse(day+'T01:35:00Z');
+  assert.equal(harvestNotificationSyncPending(pt,deadline-1),null);
+  const pending=harvestNotificationSyncPending(pt,deadline);
+  assert.deepEqual(pending.origins,['https://waiting.example']);assert.equal(pending.overdue,false);
+  assert.equal(harvestNotificationSyncPending(pt,deadline+5*60000).overdue,true);
+  // Display/execution waiting has still expired; a notification handoff does
+  // not extend the Harvest deadline or erase independent/failed tasks.
+  assert.equal(siteHarvestWait(pt.sites[0],pt.harvestWindow,deadline),null);
+  r.generatedAt=day+'T01:36:00Z';assert.equal(harvestNotificationSyncPending(fixture(r),deadline+60000),null);
+  assert.equal(harvestNotificationSyncPending(pt,Date.parse('2026-10-28T01:35:00Z')),null);
+  const broken=structuredClone(pt);broken.harvestWindow.deadlineAt=day+'T02:35:00Z';
+  assert.equal(harvestNotificationSyncPending(broken,deadline+60000),null);
+  const running=structuredClone(pt);running.harvestWindow.phase='running';
+  assert.equal(harvestNotificationSyncPending(running,deadline).origins.length,1);
 });

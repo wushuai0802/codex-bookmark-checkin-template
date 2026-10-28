@@ -47,6 +47,21 @@ export function waitingTask(task,now=Date.now()){
     !['signed','already_signed','not_available','failed','login_required'].includes(task.observedStatus)&&!task.failureCode&&task.submissionAttempted!==true;
 }
 
+// An observation made before the deadline cannot tell us what happened after
+// it. Allow a short publication handoff, then report a sync delay rather than
+// accusing every previously waiting site of failing. This grants no extra
+// Harvest execution time and never changes the dashboard's progress or guards.
+export function harvestNotificationSyncPending(ptStatus,now=Date.now()){
+  const window=copyHarvestWindow(ptStatus?.harvestWindow);
+  if(!window||window.businessDate!==day(now)||ptStatus.businessDate!==day(now)||
+     now<Date.parse(window.deadlineAt))return null;
+  const observed=Date.parse(window.observedAt);
+  if(!harvestWindowActive(window,observed))return null;
+  const origins=[...new Set((ptStatus.sites??[]).filter(site=>siteHarvestWait(site,window,observed)).map(site=>site.origin))].sort();
+  return origins.length?{businessDate:window.businessDate,observedAt:window.observedAt,deadlineAt:window.deadlineAt,
+    overdue:now>=Date.parse(window.deadlineAt)+5*minute,origins}:null;
+}
+
 export function harvestWaitSummary(window){
   if(window?.phase==='running')return 'Harvest 正在执行，完成后自动核验';
   const at=Date.parse(window?.referenceAt??'');

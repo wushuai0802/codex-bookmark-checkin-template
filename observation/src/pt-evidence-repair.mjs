@@ -13,6 +13,7 @@ import {createLedgerRecord,appendLedgerRecord} from './shadow-ledger.mjs';
 import {commitDashboardGeneration} from './dashboard-generation.mjs';
 import {loadPtRecoveryDiagnostics} from './pt-reconciliation.mjs';
 import {sitePtCapabilities} from './pt-capabilities.mjs';
+import {copyHarvestWindow} from '../public/harvest-window.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
 const readOptional=file=>fs.existsSync(file)?read(file):null;
@@ -96,6 +97,17 @@ function extractHarvestReport(snapshot,businessDate){
   return sites.length?{schemaVersion:1,source:'harvest',businessDate,generatedAt:snapshot.generatedAt,sites}:undefined;
 }
 
+export function retainHarvestPresentation(snapshot,previous){
+  if(snapshot.businessDate!==previous?.businessDate||!snapshot.ptStatus)return;
+  const window=copyHarvestWindow(previous.ptStatus?.harvestWindow);
+  if(!window||window.businessDate!==snapshot.businessDate)return;
+  // Passive verification does not query Harvest. Keep the original observation
+  // timestamp and ownership instead of erasing (or refreshing) its window.
+  snapshot.ptStatus.harvestWindow=window;
+  const managed=new Set((previous.ptStatus?.sites??[]).filter(site=>site.harvestManaged===true).map(site=>site.origin));
+  for(const site of snapshot.ptStatus.sites??[])if(managed.has(site.origin))site.harvestManaged=true;
+}
+
 /**
  * Rebuild the redacted observation generation after a passive evidence worker
  * finishes. This only reads the existing V1 report and same-day passive
@@ -137,6 +149,7 @@ export function rebuildDashboardAfterEvidence({root,catalogFile,now=new Date()}=
     ptRecoveryReport:loadPtRecoveryDiagnostics(root,day)});
   if(snapshot.businessDate!==day)
     return {rebuilt:false,reason:'legacy_report_not_same_day',businessDate:snapshot.businessDate};
+  retainHarvestPresentation(snapshot,previous);
   const record=createLedgerRecord(snapshot,{previousSnapshot:previous,recordedAt:now.toISOString()});
   appendLedgerRecord(ledgerFile,record,{legacyRoot});
   writeSnapshot(snapshot,snapshotFile,legacyRoot);

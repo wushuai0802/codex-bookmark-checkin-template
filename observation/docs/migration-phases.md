@@ -1,5 +1,16 @@
 # Production Boundary and Historical Work
 
+## Harvest notification publication ordering: 2026-10-28
+
+Notifications distinguish an expired pre-deadline observation from a newer
+unresolved Harvest result. The former has a bounded publication handoff and
+then an explicit synchronization-delay notice; the latter remains actionable.
+The Windows observation scheduler reconciles and flushes the established daily
+outbox after its final committed generation. Passive evidence rebuilds preserve
+the original Harvest presentation metadata without extending freshness. These
+changes do not alter signing ownership, account/Profile bindings, submissions,
+retry budgets, historical results or the dashboard design.
+
 ## Native PT recovery contract: 2026-10-25
 
 Bounded PT child execution now keeps a durable lifecycle barrier through process

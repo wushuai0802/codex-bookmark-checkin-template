@@ -183,7 +183,9 @@ $notAvailable = @($confirmedUnavailable | Where-Object { $_.availabilityKind -eq
 $problems = @($reportingResults | Where-Object { -not (Test-TerminalCheckinResult $_) })
 $externalProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'external' })
 $verificationProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'verification' })
-$localProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'local' })
+$syncPendingOrigins = if ($notificationView.scope -eq 'authorized_workload') { @($notificationView.syncPending.origins) } else { @() }
+$synchronizationProblems = @($problems | Where-Object { $syncPendingOrigins -ccontains [string]$_.origin -and [string]$_.accountKey -eq 'site-default' })
+$localProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'local' -and $_ -notin $synchronizationProblems })
 $waitingProblems = @($problems | Where-Object { (Get-CheckinAttentionClass $_) -eq 'waiting' })
 $externalNeedsReview = @($externalProblems | Where-Object {
     -not ([string]$_.siteCondition -eq 'site_maintenance' -or [string]$_.failureCode -eq 'site_maintenance' -or
@@ -201,7 +203,7 @@ $attentionProblems = @($localProblems | Where-Object { $_.status -notin $automat
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
-elseif ($waitingProblems.Count -gt 0 -and $localProblems.Count -eq 0 -and $verificationProblems.Count -eq 0) { $status = 'unconfirmed' }
+elseif (($waitingProblems.Count -gt 0 -or $synchronizationProblems.Count -gt 0) -and $localProblems.Count -eq 0 -and $verificationProblems.Count -eq 0) { $status = 'unconfirmed' }
 elseif ($isCompleteFinalReport -and $localProblems.Count -eq 0 -and $verificationProblems.Count -eq 0 -and
     $externalProblems.Count -gt 0 -and $done -gt 0) {
     # The project report is complete. Keep site-side outages in the summary,
@@ -225,6 +227,7 @@ $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $planne
     $completionScope = if ($notificationView.bound -eq $true -and $notificationView.scope -ne 'authorized_workload') { '主任务完成' } else { '今日完成' }
     $counts = @("$completionScope $done 项")
     if ($waitingProblems.Count -gt 0) { $counts += "等待 Harvest $($waitingProblems.Count)" }
+    if ($synchronizationProblems.Count -gt 0) { $counts += "等待状态同步 $($synchronizationProblems.Count)" }
     if ($verificationProblems.Count -gt 0) { $counts += "待复核 $($verificationProblems.Count)" }
     $loginCount = @($localProblems | Where-Object { $_.status -eq 'login_required' -or $_.retryCause -eq 'login_required' }).Count
     if ($loginCount -gt 0) { $counts += "登录恢复 $loginCount" }
@@ -258,6 +261,9 @@ if ($attentionProblems.Count -gt 0) {
         "• $hostName：$reason"
     }) -join "`n"
     $summary += "`n$brief"
+}
+if ($synchronizationProblems.Count -gt 0) {
+    $summary += "`n`nHarvest 状态更新延迟，后台将自动同步；尚不能据此判断站点签到失败。"
 }
 if ($verificationProblems.Count -gt 0) {
     $summary += "`n`n待核验 $($verificationProblems.Count)（不重复提交）"
@@ -367,8 +373,9 @@ $payload = [ordered]@{
     status = $status
     summary = $summary
     siteCount = $reportingResults.Count
-    problemCount = $problems.Count - $waitingProblems.Count
+    problemCount = $problems.Count - $waitingProblems.Count - $synchronizationProblems.Count
     waitingPendingCount = $waitingProblems.Count
+    synchronizationPendingCount = $synchronizationProblems.Count
     externalPendingCount = $externalProblems.Count
     verificationPendingCount = $verificationProblems.Count
     runState = $reportRunState
@@ -384,7 +391,9 @@ $payload = [ordered]@{
 }
 $waitingOnly=$isCompleteFinalReport -and $waitingProblems.Count -gt 0 -and $localProblems.Count -eq 0 -and
     $verificationProblems.Count -eq 0 -and $externalNeedsReview.Count -eq 0 -and $RunnerStatus -notin @('timeout','failed') -and $cleanupProblems.Count -eq 0
-if ($waitingOnly) {
+$publicationHandoff = $synchronizationProblems.Count -gt 0 -and $notificationView.syncPending.overdue -ne $true -and
+    $isCompleteFinalReport -and $RunnerStatus -notin @('timeout','failed') -and $cleanupProblems.Count -eq 0
+if ($waitingOnly -or $publicationHandoff) {
     $payload.accepted=$false; $payload.enqueued=$false; $payload.deferred=$true; $payload.preview=[bool]$Preview
     $payload | ConvertTo-Json -Compress
     return

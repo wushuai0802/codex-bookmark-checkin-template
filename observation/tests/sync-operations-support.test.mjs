@@ -14,6 +14,9 @@ for(const shell of ['powershell.exe','pwsh.exe'])test(`sync recovery, acknowledg
     t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     fs.mkdirSync(path.join(root,'config'));
     fs.mkdirSync(path.join(root,'scripts'));
+    fs.mkdirSync(path.join(root,'logs'));
+    for(const relative of ['scripts/Submit-UnifiedCheckinReport.ps1','scripts/Invoke-CheckinNotificationOutbox.ps1','logs/latest.json'])
+      fs.writeFileSync(path.join(root,relative),'fixture');
     fs.copyFileSync(fileURLToPath(new URL('../../execution/scripts/Invoke-BoundedCommand.ps1',import.meta.url)),path.join(root,'scripts/Invoke-BoundedCommand.ps1'));
     const seen=path.join(root,'seen.json'),notifier=path.join(root,'notifier.cjs');
     fs.writeFileSync(notifier,`require('fs').writeFileSync(${JSON.stringify(seen)},JSON.stringify(process.argv.slice(2))); console.log(JSON.stringify({accepted:true},null,2));`);
@@ -87,6 +90,26 @@ Assert-Sync ($missing.exitCode -eq -1 -and $missing.failure -match 'executable_m
   Set-SyncAttemptOutcome $syncState $previous 0 $now.AddMinutes(45) '15:30' 'published' 'fingerprint'
   Assert-Sync ($syncState.failureCount -eq 0 -and $null -eq $syncState.nextRetryAt -and $syncState.pendingNotification.status -eq 'success') 'recovery did not clear backoff or enqueue success'
   Assert-Sync (-not $syncState.syncFailureNotificationSent) 'recovery did not clear alert latch'
+$script:publicationCalls=@();$script:refreshDeferred=$false;$script:refreshFailed=$false
+function Invoke-BoundedSyncProcess([string]$Executable,[string[]]$Arguments,[string]$Phase,[string]$InputFile,[int]$Timeout) {
+    $script:publicationCalls+=@($Phase)
+    if($Phase -eq 'daily_report_refresh') {
+        if($script:refreshFailed){return [pscustomobject]@{exitCode=124;output=@()}}
+        return [pscustomobject]@{exitCode=0;output=@((@{mode='command';deferred=$script:refreshDeferred}|ConvertTo-Json -Compress))}
+    }
+    Assert-Sync ($Phase -eq 'daily_report_delivery' -and $Timeout -eq 75) 'unexpected publication command'
+    return [pscustomobject]@{exitCode=0;output=@('{}')}
+}
+$before=$syncState|ConvertTo-Json -Compress -Depth 6
+Update-SynchronizedCheckinNotification ${quote(root)}
+Assert-Sync (($script:publicationCalls -join ',') -eq 'daily_report_refresh,daily_report_delivery') 'delivery did not use refreshed observations'
+$script:publicationCalls=@();$script:refreshDeferred=$true
+Update-SynchronizedCheckinNotification ${quote(root)}
+Assert-Sync (($script:publicationCalls -join ',') -eq 'daily_report_refresh') 'deferred publication flushed an old outbox'
+$script:publicationCalls=@();$script:refreshFailed=$true
+Update-SynchronizedCheckinNotification ${quote(root)}
+Assert-Sync (($script:publicationCalls -join ',') -eq 'daily_report_refresh') 'failed refresh delivered stale payload'
+Assert-Sync (($syncState|ConvertTo-Json -Compress -Depth 6) -eq $before) 'notification changed successful sync state'
 'verified'
 `;
     const scriptFile=path.join(root,'verify.ps1');fs.writeFileSync(scriptFile,'\uFEFF'+script);
