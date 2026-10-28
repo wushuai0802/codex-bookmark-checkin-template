@@ -34,12 +34,22 @@ export function operationTargets(snapshot){
     const terminal=['signed','already_signed','not_available'].includes(target.status);
     const bookmarkReview=[target.failureCode,target.underlyingFailureCode,ptStatusCondition(target.pt)]
       .some(code=>['site_migration','bookmark_origin_changed'].includes(code));
-    const login=!disabled&&!terminal&&!uncertain&&!bookmarkReview&&(target.status==='login_required'||['login_required','upstream_login_required','two_factor_required','managed_challenge'].includes(target.failureCode));
     const capability=sitePtCapabilities(target.pt??{origin:target.origin});
+    const current=target.pt?.effective,proof=current?.evidence,observed=Date.parse(current?.observedAt??''),published=Date.parse(snapshot.generatedAt??'');
+    // A fresh passive login-page observation can authorize opening the bound
+    // login window without authorizing another uncertain check-in submission.
+    const passiveLogin=target.kind==='pt'&&target.pt?.fallbackEnabled===true&&!target.pt.discrepancy&&capability.read&&
+      (!target.accountKey||target.accountKey==='site-default')&&current?.source==='execution-supplement'&&
+      current.status==='login_required'&&current.fresh===true&&current.submissionAttempted===false&&
+      proof?.readSafety==='reviewed_passive'&&proof.evidenceScope==='site_account_day'&&
+      proof.businessDate===snapshot.businessDate&&/^[a-f0-9]{64}$/.test(proof.profileBinding??'')&&
+      Number.isFinite(observed)&&Number.isFinite(published)&&observed<=published+60_000&&published-observed<=30*60_000&&
+      dayAt(new Date(observed))===snapshot.businessDate;
+    const login=!disabled&&!terminal&&(!uncertain||passiveLogin)&&!bookmarkReview&&(target.status==='login_required'||['login_required','upstream_login_required','two_factor_required','managed_challenge'].includes(target.failureCode));
     const actions={verify:Boolean(!disabled&&target.pt&&capability.read),retry:Boolean(!disabled&&!bookmarkReview&&!target.pt?.discrepancy&&capability.guardedSubmit&&target.pt?.fallbackEnabled&&
       (!target.accountKey||target.accountKey==='site-default')&&
       target.pt.effective?.status==='not_signed'&&target.pt.effective?.authoritative&&target.pt.effective?.fresh),
-      login,resume:login&&target.kind==='regular'};
+      login,resume:login&&!uncertain&&target.kind==='regular'};
     return {...target,actions};
   });
 }

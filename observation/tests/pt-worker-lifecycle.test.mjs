@@ -13,7 +13,9 @@ import {spawnPtSiteChild} from '../src/pt-site-execution.mjs';
 import {beginPtWorker,reconcilePtWorker,cleanupPtWorker} from '../src/pt-worker-lifecycle.mjs';
 
 function fixture(t){
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-worker-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true,maxRetries:50,retryDelay:100}));
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-worker-'));
+  // Yield while deleting so libuv can release exited Windows process handles.
+  t.after(()=>fs.promises.rm(root,{recursive:true,force:true,maxRetries:50,retryDelay:100}));
   fs.mkdirSync(path.join(root,'scripts'));fs.writeFileSync(path.join(root,'scripts/Run-PtSupplement.mjs'),'fixture');
   return {root,legacyRoot:root,origin:'https://fixture.example',catalogFile:path.join(root,'catalog.json'),catalogHash:'a'.repeat(64),
     lease:{owner:{nonce:'fixture'}},resolveScope:async()=>({profileBinding:'a'.repeat(64),privateProfile:null,shell:'pwsh.exe'})};
@@ -78,7 +80,7 @@ test('a failed PID publication still cleans the spawned worker and keeps its dur
 
 test('Windows cleanup terminates only the owned project process tree and preserves another child application',
   {skip:process.platform!=='win32',timeout:20_000},async t=>{
-    const args=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pt-unrelated-'));t.after(()=>fs.rmSync(outside,{recursive:true,force:true,maxRetries:50,retryDelay:100}));
+    const args=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pt-unrelated-'));t.after(()=>fs.promises.rm(outside,{recursive:true,force:true,maxRetries:50,retryDelay:100}));
     fs.copyFileSync(fileURLToPath(new URL('../../execution/scripts/Cleanup-PtWorker.ps1',import.meta.url)),path.join(args.root,'scripts/Cleanup-PtWorker.ps1'));
     const ownedFile=path.join(args.root,'scripts/owned.mjs'),otherFile=path.join(outside,'other.mjs'),browserFile=path.join(args.root,'scripts/chrome.exe');
     const privateProfile=path.join(args.root,'data/private'),sharedProfile=path.join(outside,'shared');

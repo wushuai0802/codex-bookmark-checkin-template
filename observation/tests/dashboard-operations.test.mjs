@@ -52,6 +52,30 @@ test('a PT address change disables stale login and retry actions while retaining
     assert.deepEqual(actions,{verify:true,retry:false,login:false,resume:false});
   }
 });
+
+test('a fresh bound passive login result opens only login while retaining an earlier uncertain submit',()=>{
+  const create=()=>{const s=fixture(),site=s.ptStatus.sites[0];site.recovery={code:'submission_outcome_unknown'};
+    site.effective={source:'execution-supplement',status:'login_required',fresh:true,submissionAttempted:false,observedAt:now.toISOString(),
+      evidence:{businessDate:s.businessDate,readSafety:'reviewed_passive',evidenceScope:'site_account_day',profileBinding:'b'.repeat(64)}};return s;};
+  const snapshot=create(),before=JSON.stringify(snapshot);
+  assert.deepEqual(operationTargets(snapshot)[0].actions,{verify:true,retry:false,login:true,resume:false});
+  assert.equal(JSON.stringify(snapshot),before);
+  for(const variant of ['source','stale','future','old','date','unbound','unsafe','submitted','disabled','not_opted_in','conflict']){
+    const s=create(),site=s.ptStatus.sites[0],e=site.effective;
+    if(variant==='source')e.source='harvest';
+    if(variant==='stale')e.fresh=false;
+    if(variant==='future')e.observedAt=new Date(now.getTime()+120000).toISOString();
+    if(variant==='old')e.observedAt=new Date(now.getTime()-31*60000).toISOString();
+    if(variant==='date')e.evidence.businessDate='2026-09-29';
+    if(variant==='unbound')delete e.evidence.profileBinding;
+    if(variant==='unsafe')delete e.evidence.readSafety;
+    if(variant==='submitted')e.submissionAttempted=true;
+    if(variant==='disabled')site.disabledByConfig=true;
+    if(variant==='not_opted_in')site.fallbackEnabled=false;
+    if(variant==='conflict')site.discrepancy=true;
+    assert.equal(operationTargets(s)[0].actions.login,false,variant);
+  }
+});
 test('expired requests and changed account plans never reach execution',t=>{
   const root=workspace(t),snapshot=fixture();enqueueOperation(root,{origin,action:'retry'},snapshot,now);
   assert.equal(claimOperation(root,new Date('2026-09-30T09:00:00Z')),null);

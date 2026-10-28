@@ -1,5 +1,24 @@
 # Production Boundary and Historical Work
 
+## Passive login handoff for uncertain PT-only work: 2026-10-28
+
+A current, bound, reviewed passive login-page result can enable the login-window
+action for an opted-in PT-only account with an older uncertain submit. The
+execution handler reads again before opening the original Profile. This does
+not authorize retry/resume, remove uncertainty or count the site as completed;
+signing still requires a separate fresh verified negative and the normal guards.
+
+## Ourbits form submission control: 2026-10-28
+
+The native Ourbits action waits for an enabled form button. Its header attendance
+link is navigation and cannot consume the single submit-click intent, including
+while the form is still appearing in the accessibility tree. Other sites retain
+their existing control selection. Intent persistence, unknown-outcome protection,
+account/Profile binding, off-screen operation and success evidence are unchanged.
+Regression fixtures run the production action in PowerShell 5.1/7 across a
+header-only observation followed by a header plus the real form button. Today's
+manual success and passive confirmation do not certify a new automatic submit.
+
 ## Resume after a new bound unsigned observation: 2026-10-28
 
 A reviewed, account/Profile/day-bound unsigned observation from the last hour
