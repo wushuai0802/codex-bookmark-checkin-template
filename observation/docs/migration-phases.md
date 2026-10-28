@@ -9,6 +9,10 @@ account/day. The signal itself grants no submission: the renewed read must
 match its Profile and pass the existing fresh-negative guard, current Harvest
 check, execution locks and unchanged daily write limit. Diagnostics, foreign
 accounts, stale signals and already consumed observations cannot wake a write.
+Busy and scope-preflight deferrals retain a bounded cooldown without consuming
+an actual renewal read. Each production passive dispatch refreshes an immutable
+catalog in the existing exact scope before using it. Native report transport
+explicitly decodes UTF-8, independent of a parent Windows console's encoding.
 
 ## Same-day unsigned-to-signed observation transition: 2026-10-28
 

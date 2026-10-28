@@ -10,6 +10,7 @@ import {ptAttemptReconciled} from './pt-reconciliation.mjs';
 import {currentPassivePtResult,recordPtVerification} from './pt-verification.mjs';
 import {ptCapabilities} from './pt-capabilities.mjs';
 import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted,harvestTaskFailed} from './pt-coordination.generated.mjs';
+import {withCurrentPtCatalog} from './pt-catalog.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
 const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?canonicalPtOrigin(u.origin):null;}catch{return null;}};
@@ -323,8 +324,13 @@ function unsignedWakeupDue(state,candidate,now){
   if(candidate.guardedSubmit!==true||!/^[a-f0-9]{64}$/.test(signal?.profileBinding??'')||
      !Number.isFinite(at)||at>now.getTime()||now.getTime()-at>60*60_000||dayAt(new Date(at))!==candidate.businessDate)return false;
   const probes=(state.verifications??[]).filter(item=>item.origin===candidate.origin&&(item.accountKey??'site-default')===candidate.accountKey);
-  return probes.filter(item=>item.unsignedWakeup).length<2&&!probes.some(item=>item.state==='in_progress'||
-    item.unsignedWakeup?.confirmedAt===signal.confirmedAt||item.outcome?.evidence?.confirmedAt===signal.confirmedAt);
+  const deferred=item=>['deferred_busy','deferred_preflight'].includes(item.state);
+  const reads=probes.filter(item=>!deferred(item));
+  return reads.filter(item=>item.unsignedWakeup).length<2&&probes.filter(deferred).length<24&&
+    !reads.some(item=>item.state==='in_progress'||item.unsignedWakeup?.confirmedAt===signal.confirmedAt||
+      item.outcome?.evidence?.confirmedAt===signal.confirmedAt)&&
+    probes.filter(item=>deferred(item)&&item.unsignedWakeup?.confirmedAt===signal.confirmedAt).every(item=>
+      Number.isFinite(Date.parse(item.nextEligibleAt))&&Date.parse(item.nextEligibleAt)<=now.getTime());
 }
 
 function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
@@ -384,6 +390,11 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   if(!preview.eligible.length)return {...preview,mode:'executed',outcomes:[]};
   const workerLock=claimWorker(root);
   try{
+  if(runSite===runPtSite){
+    const scopedRunSite=runSite;
+    runSite=request=>withCurrentPtCatalog({root,catalogFile:request.catalogFile,origin:request.origin,now:clock()},
+      current=>scopedRunSite({...request,catalogFile:current.catalogFile,catalogHash:current.catalogHash}));
+  }
   const {file:stateFile,state}=readAttemptState(root,preview.businessDate);
   const outcomes=[];
   const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
@@ -497,6 +508,8 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         }
       }catch(error){
         const at=clock();
+        if(['catalog_stale','catalog_hash_changed','registration_invalid','execution_plan_missing','execution_plan_changed',
+          'bookmark_source_changed','site_scope_changed','scope_unavailable'].includes(error.preflightReason))verification.preflightReason=error.preflightReason;
         verification.state=error.code==='PT_PREFLIGHT'?'deferred_preflight':
           error.message==='V2 runner is already active'?'deferred_busy':'unverified';
         verification.finishedAt=at.toISOString();

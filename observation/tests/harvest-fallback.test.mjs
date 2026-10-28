@@ -982,6 +982,21 @@ test('passive work keeps separate finite limits for actual reads and deferred wa
     {now:new Date('2026-09-21T01:00:00Z'),readOnlyOrigins:[origin]}).length,1);
 });
 
+test('unsigned wakeups retain bounded busy/preflight cooldowns without consuming an actual renewal read',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-unsigned-deferral-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');const origin='https://ourbits.club',at='2026-09-20T01:45:00Z';
+  const candidate={origin,accountKey:'site-default',businessDate:'2026-09-20',kind:'registered_review',readOnlyReview:true,guardedSubmit:true,
+    unsignedWakeup:{confirmedAt:at,profileBinding:'b'.repeat(64)}};
+  const file=root+'/outputs/harvest-fallback-attempts-2026-09-20.json';
+  const probes=Array.from({length:3},()=>({origin,state:'completed',startedAt:'2026-09-20T00:00:00Z'}));
+  const pending=()=>pendingHarvestFallbackAttempts(root,{businessDate:'2026-09-20',eligible:[candidate]},{now}).length;
+  const save=()=>fs.writeFileSync(file,JSON.stringify({businessDate:'2026-09-20',attempts:[],verifications:probes}));
+  probes.push({origin,state:'deferred_preflight',unsignedWakeup:candidate.unsignedWakeup,nextEligibleAt:'2026-09-20T02:05:00Z'});
+  save();assert.equal(pending(),0);
+  probes.at(-1).nextEligibleAt='2026-09-20T01:59:00Z';save();assert.equal(pending(),1);
+  probes.at(-1).state='completed';save();assert.equal(pending(),0);
+});
+
 function configureUnifiedFixture(root){
   const legacyRoot=path.join(root,'legacy');fs.mkdirSync(path.join(root,'config'),{recursive:true});
   fs.mkdirSync(path.join(legacyRoot,'data'),{recursive:true});

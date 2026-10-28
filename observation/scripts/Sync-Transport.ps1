@@ -80,6 +80,8 @@ function Invoke-BoundedSyncProcess {
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $Executable; $startInfo.UseShellExecute = $false; $startInfo.CreateNoWindow = $true
         $startInfo.RedirectStandardInput = $true; $startInfo.RedirectStandardOutput = $true; $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+        $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
         if ($null -ne $startInfo.PSObject.Properties['ArgumentList']) {
             foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add([string]$argument) }
         } else {

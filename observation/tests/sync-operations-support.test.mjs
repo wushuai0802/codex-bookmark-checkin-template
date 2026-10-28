@@ -72,6 +72,13 @@ $failure=Invoke-SyncRemoteCommand $child @('-e',${quote(stderrCode('Connection t
 Assert-Sync ($failure.exitCode -eq 255 -and $failure.failure -match 'cause=connection_timeout' -and $failure.failure -notmatch 'private-example') ('SSH diagnostic classification or redaction failed: '+($failure|ConvertTo-Json -Compress))
 $success=Invoke-SyncRemoteCommand $child @('-e',${quote(stderrCode('warning only')+';process.exit(0)')}) 'nas_commit'
 Assert-Sync ($success.exitCode -eq 0 -and $null -eq $success.failure) 'successful remote command misclassified'
+$consoleEncoding=[Console]::OutputEncoding
+try {
+    [Console]::OutputEncoding=[Text.Encoding]::Unicode
+    $utf8=Invoke-BoundedSyncProcess $child @('-e','console.log(JSON.stringify({summary:String.fromCharCode(20170,26085,23436,25104)}))') 'utf8_receipt' '' 10
+    $utf8Payload=$utf8.output|ConvertFrom-Json
+} finally { [Console]::OutputEncoding=$consoleEncoding }
+Assert-Sync ($utf8Payload.summary -ceq ([string]::new([char[]]@(20170,26085,23436,25104)))) 'parent console encoding corrupted a UTF-8 JSON receipt'
 $missing=Invoke-SyncRemoteCommand ${quote(path.join(root,'missing.exe'))} @() 'nas_commit'
 Assert-Sync ($missing.exitCode -eq -1 -and $missing.failure -match 'executable_missing') 'missing executable treated as success'
   $previous=[pscustomobject]@{failureCount=0;lastSuccessAt='previous-success';lastSourceFingerprint='previous-source';syncFailureNotificationSent=$false}
