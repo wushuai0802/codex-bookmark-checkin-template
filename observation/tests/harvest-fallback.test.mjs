@@ -16,6 +16,50 @@ const fixture=()=>({
   plan:{targets:[{origin:'https://ourbits.club',folderNames:['PT白名单']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
 });
 
+test('a new bound unsigned observation renews exhausted passive work once and still needs a fresh executor check',async t=>{
+  for(const variant of ['unsigned','already-signed','wrong-profile','stale-read','write-limit','stale-signal','unbound','wrong-account']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-unsigned-wakeup-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);fs.mkdirSync(root+'/outputs');
+    const f=fixture(),origin='https://ourbits.club',binding='b'.repeat(64),date='2026-09-20';
+    f.harvest.sites=f.harvest.sites.slice(0,1);f.catalog.sites=f.catalog.sites.slice(0,1);
+    f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+    const proofAt=new Date(now.getTime()-(variant==='stale-signal'?61:15)*60000).toISOString();
+    const unsigned={origin,accountKey:'site-default',businessDate:date,profileBinding:binding,status:'not_signed',
+      operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,observedAt:proofAt,
+      evidence:{source:'pt_page',authoritative:true,businessDate:date,confirmedAt:proofAt,evidenceScope:'site_account_day',statusSignal:'nexus_daily_header_unsigned'}};
+    if(variant==='unbound')delete unsigned.profileBinding;
+    if(variant==='wrong-account')unsigned.accountKey='other';
+    f.fallbackReport={source:'execution-supplement',businessDate:date,sites:[unsigned]};
+    const oldProbes=Array.from({length:3},()=>({origin,accountKey:'site-default',state:'completed',startedAt:'2026-09-20T00:00:00Z'}));
+    const attempts=variant==='write-limit'?Array.from({length:3},()=>({origin,accountKey:'site-default',businessDate:date,
+      state:'completed',outcome:{submissionAttempted:true,failureCode:'submission_outcome_unknown',profileBinding:binding}})):[];
+    const file=root+'/outputs/harvest-fallback-attempts-'+date+'.json';
+    fs.writeFileSync(file,JSON.stringify({schemaVersion:1,businessDate:date,attempts,verifications:oldProbes}));
+    const signalValid=!['stale-signal','unbound','wrong-account'].includes(variant);
+    assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now}).length,signalValid?1:0,variant);
+    const calls=[],args={...f,root,execute:true,config:{ptReadOnlyPolicies:{[origin]:{reviewed:true,mode:'safe_history_page',url:origin+'/index.php',nativeMainChrome:true}}},
+      runSite:async options=>{assert.equal(options.readOnly,true);calls.push('read');return {...unsigned,
+        profileBinding:variant==='wrong-profile'?'c'.repeat(64):binding,status:variant==='already-signed'?'already_signed':'not_signed',
+        observedAt:now.toISOString(),evidence:{...unsigned.evidence,
+          confirmedAt:variant==='stale-read'?proofAt:now.toISOString(),statusSignal:variant==='already-signed'?'nexus_daily_header_signed':'nexus_daily_header_unsigned'}};},
+      runEngine:async options=>{calls.push('engine');assert.deepEqual(options.origins,[origin]);assert.equal(options.fallbackRecheck,true);
+        return {businessDate:date,observedAt:now.toISOString(),results:[{...unsigned,status:'signed',submissionAttempted:true,
+          observedAt:now.toISOString(),evidence:{...unsigned.evidence,confirmedAt:now.toISOString()}}]};}};
+    await runHarvestFallback(args);
+    assert.deepEqual(calls,!signalValid?[]:variant==='unsigned'?['read','engine']:['read'],variant);
+    const state=JSON.parse(fs.readFileSync(file));assert.deepEqual(state.verifications.slice(0,3),oldProbes);
+    if(signalValid){assert.equal(state.verifications.at(-1).unsignedWakeup.confirmedAt,proofAt);
+      assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now}).length,0,'same signal cannot wake again');}
+    assert.equal(state.attempts.length,variant==='unsigned'?1:attempts.length);
+    if(variant==='unsigned'){
+      state.verifications.push({origin,accountKey:'site-default',state:'completed',unsignedWakeup:{confirmedAt:'2026-09-20T01:44:00Z'}});
+      fs.writeFileSync(file,JSON.stringify(state));
+      unsigned.observedAt=unsigned.evidence.confirmedAt='2026-09-20T01:55:00Z';
+      assert.equal(pendingHarvestFallbackAttempts(root,planHarvestFallback(f),{now}).length,0,'renewal reads have their own daily ceiling');
+    }
+  }
+});
+
 test('one explicit manual request can recover after automatic budgets only from fresh matching unsigned evidence, without replaying its id',async t=>{
   for(const variant of ['manual','automatic','wrong-profile','unconfirmed']){
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-manual-budget-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -936,6 +980,21 @@ test('passive work keeps separate finite limits for actual reads and deferred wa
   write([{origin,state:'deferred_busy',startedAt:'2026-09-20T01:00:00Z'}]);assert.equal(pending(),0);
   assert.equal(pendingHarvestFallbackAttempts(root,{businessDate:'2026-09-21',eligible:preview.eligible},
     {now:new Date('2026-09-21T01:00:00Z'),readOnlyOrigins:[origin]}).length,1);
+});
+
+test('unsigned wakeups retain bounded busy/preflight cooldowns without consuming an actual renewal read',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-unsigned-deferral-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(root+'/outputs');const origin='https://ourbits.club',at='2026-09-20T01:45:00Z';
+  const candidate={origin,accountKey:'site-default',businessDate:'2026-09-20',kind:'registered_review',readOnlyReview:true,guardedSubmit:true,
+    unsignedWakeup:{confirmedAt:at,profileBinding:'b'.repeat(64)}};
+  const file=root+'/outputs/harvest-fallback-attempts-2026-09-20.json';
+  const probes=Array.from({length:3},()=>({origin,state:'completed',startedAt:'2026-09-20T00:00:00Z'}));
+  const pending=()=>pendingHarvestFallbackAttempts(root,{businessDate:'2026-09-20',eligible:[candidate]},{now}).length;
+  const save=()=>fs.writeFileSync(file,JSON.stringify({businessDate:'2026-09-20',attempts:[],verifications:probes}));
+  probes.push({origin,state:'deferred_preflight',unsignedWakeup:candidate.unsignedWakeup,nextEligibleAt:'2026-09-20T02:05:00Z'});
+  save();assert.equal(pending(),0);
+  probes.at(-1).nextEligibleAt='2026-09-20T01:59:00Z';save();assert.equal(pending(),1);
+  probes.at(-1).state='completed';save();assert.equal(pending(),0);
 });
 
 function configureUnifiedFixture(root){

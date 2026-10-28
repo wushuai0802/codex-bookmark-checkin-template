@@ -253,6 +253,25 @@ export function ptUnknownReconciled(site,businessDate){
       item.submissionAttempted===true&&(!['signed','already_signed'].includes(item.status)||item.authoritative!==true)));
 }
 
+function unsignedBeforeBoundCompletion(item,completion){
+  const old=item.evidence??{},proof=completion?.evidence??{};
+  const before=Date.parse(old.confirmedAt??''),after=Date.parse(proof.confirmedAt??'');
+  const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
+  // The same account/Profile can normally move from unsigned to signed. Keep
+  // its old passive observation in history without treating it as a current
+  // conflict. Missing bindings and a newer negative still require review.
+  return item.status==='not_signed'&&item.submissionAttempted===false&&item.freshness.fresh&&old.authoritative===true&&
+    old.evidenceScope==='site_account_day'&&old.readSafety==='reviewed_passive'&&
+    ['signed','already_signed'].includes(completion?.status)&&completion.freshness.fresh&&proof.authoritative===true&&
+    proof.statusVerified===true&&['legacy-checkin','execution-supplement'].includes(completion.source)&&
+    item.origin===completion.origin&&Boolean(item.accountRef)&&item.accountRef===completion.accountRef&&
+    /^[a-f0-9]{64}$/.test(old.profileBinding??'')&&old.profileBinding===proof.profileBinding&&
+    /^\d{4}-\d{2}-\d{2}$/.test(old.businessDate??'')&&old.businessDate===proof.businessDate&&
+    Number.isFinite(before)&&Number.isFinite(after)&&before<after&&Date.parse(item.observedAt)<after&&
+    day(before)===old.businessDate&&day(after)===proof.businessDate&&
+    before<=Date.parse(item.observedAt)+60_000&&after<=Date.parse(completion.observedAt)+60_000;
+}
+
 function mergeSiteObservations(observations, target) {
   const ordered = [...observations].sort((a, b) => new Date(b.observedAt) - new Date(a.observedAt));
   const effective = ordered.filter(item=>item.freshness.fresh)
@@ -266,7 +285,8 @@ function mergeSiteObservations(observations, target) {
     source: item.source, status: item.status, observedAt: item.observedAt,
     fresh: item.freshness.fresh, authoritative: item.evidence.authoritative
   }));
-  const distinctStatuses = new Set(sourceStatuses.filter((item) => item.authoritative&&item.fresh)
+  const distinctStatuses = new Set([...bySource.values()].filter((item) => item.evidence.authoritative&&item.freshness.fresh&&
+      !unsignedBeforeBoundCompletion(item,effective))
     .map((item) => item.status==='already_signed'?'signed':item.status));
   const supplementCandidate = distinctStatuses.size <= 1 && effective?.supplementCandidate === true;
   return {

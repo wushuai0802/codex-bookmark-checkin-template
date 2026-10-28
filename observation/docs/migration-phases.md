@@ -1,5 +1,28 @@
 # Production Boundary and Historical Work
 
+## Resume after a new bound unsigned observation: 2026-10-28
+
+A reviewed, account/Profile/day-bound unsigned observation from the last hour
+can wake one new passive check after ordinary review attempts are exhausted.
+Each observation is consumed once and at most two such renewal reads run per
+account/day. The signal itself grants no submission: the renewed read must
+match its Profile and pass the existing fresh-negative guard, current Harvest
+check, execution locks and unchanged daily write limit. Diagnostics, foreign
+accounts, stale signals and already consumed observations cannot wake a write.
+Busy and scope-preflight deferrals retain a bounded cooldown without consuming
+an actual renewal read. Each production passive dispatch refreshes an immutable
+catalog in the existing exact scope before using it. Native report transport
+explicitly decodes UTF-8, independent of a parent Windows console's encoding.
+
+## Same-day unsigned-to-signed observation transition: 2026-10-28
+
+An older reviewed passive `not_signed` observation is historical after a later
+authoritative completion for the same origin, nonempty account reference,
+Profile binding and business day. Both timestamps must belong to that day and
+agree with their observation times. Raw observations stay in the audit. Missing
+or different bindings, simultaneous signals and a newer negative still retain
+their conflict; no new submission or success evidence is created.
+
 ## Harvest notification publication ordering: 2026-10-28
 
 Notifications distinguish an expired pre-deadline observation from a newer
