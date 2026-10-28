@@ -1,5 +1,14 @@
 # Production Boundary and Historical Work
 
+## Same-day unsigned-to-signed observation transition: 2026-10-28
+
+An older reviewed passive `not_signed` observation is historical after a later
+authoritative completion for the same origin, nonempty account reference,
+Profile binding and business day. Both timestamps must belong to that day and
+agree with their observation times. Raw observations stay in the audit. Missing
+or different bindings, simultaneous signals and a newer negative still retain
+their conflict; no new submission or success evidence is created.
+
 ## Harvest notification publication ordering: 2026-10-28
 
 Notifications distinguish an expired pre-deadline observation from a newer

@@ -5,6 +5,36 @@ import { buildPtStatus, normalizePtStatusReport } from '../src/pt-status.mjs';
 const accountRef = 'acct_0123456789abcdef';
 const taskId = 'task_0123456789abcdef01234567';
 
+test('an earlier bound passive unsigned read becomes history after same-account daily completion',()=>{
+  const origin='https://pt.example',businessDate='2026-10-28',binding='a'.repeat(64);
+  const input=()=>({generatedAt:'2026-10-28T02:00:00Z',businessDate,planTargets:[{origin,folderNames:['PT白名单']}],
+    monitorCatalog:{sites:[{origin}]},
+    tasks:[{taskId,origin,accountRef,observedStatus:'signed',submissionAttempted:false}],
+    receipts:[{taskId,observedAt:'2026-10-28T00:13:02Z',evidence:{source:'page_text',authoritative:true,businessDate,
+      confirmedAt:'2026-10-28T00:13:02Z',profileBinding:binding,statusSignal:'same_day_page_text'}}],
+    fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,status:'not_signed',submissionAttempted:false,
+      observedAt:'2026-10-28T00:12:12Z',evidence:{source:'page_text',authoritative:true,businessDate,
+        confirmedAt:'2026-10-28T00:12:11Z',evidenceScope:'site_account_day',readSafety:'reviewed_passive',
+        profileBinding:binding,statusSignal:'nexus_daily_header_unsigned'}}]}});
+  const value=buildPtStatus(input()).sites[0];
+  assert.equal(value.effective.status,'signed');assert.equal(value.discrepancy,false);assert.equal(value.evidenceState,'confirmed');
+  assert.ok(value.observations.some(item=>item.status==='not_signed'),'original negative must remain in audit');
+  for(const kind of ['profile','unbound','account','missing_account','scope','unsafe','newer','simultaneous','submitted']){
+    const f=input(),negative=f.fallbackReport.sites[0];
+    if(kind==='profile')negative.evidence.profileBinding='b'.repeat(64);
+    if(kind==='unbound')delete negative.evidence.profileBinding;
+    if(kind==='account')negative.accountRef='acct_fedcba9876543210';
+    if(kind==='missing_account')delete f.tasks[0].accountRef;
+    if(kind==='scope')delete negative.evidence.evidenceScope;
+    if(kind==='unsafe')delete negative.evidence.readSafety;
+    if(kind==='newer')negative.observedAt=negative.evidence.confirmedAt='2026-10-28T00:14:00Z';
+    if(kind==='simultaneous')negative.observedAt=negative.evidence.confirmedAt=f.receipts[0].observedAt;
+    if(kind==='submitted')negative.submissionAttempted=true;
+    const sites=buildPtStatus(f).sites;
+    assert.ok(sites.length>1||sites[0].discrepancy,kind);
+  }
+});
+
 test('PT capability metadata reflects reviewed private readers and a configured pause without exposing private policy',()=>{
   const origin='https://private-reader.example',base={generatedAt:'2026-10-25T04:00:00Z',businessDate:'2026-10-25',fallbackOnlyEnabled:true,
     monitorCatalog:{sites:[{origin}]},readPolicies:{[origin]:{reviewed:true,mode:'safe_history_page',url:origin+'/index.php',selector:'.private-selector',dailyHeader:true}}};
