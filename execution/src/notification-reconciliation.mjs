@@ -134,18 +134,27 @@ export async function reconcileNotification({root,report,now=new Date(),persist=
       try{if(expected.has(identity(item))&&validAvailability(item,businessDate,now))availability.set(identity(item),projectAvailability(item));}catch{}
     }
   }
-  let valid=false,supplementalResults=[];
+  let valid=false,supplementalResults=[],syncPending=null;
   try{
-    const [{readDashboardGeneration},{confirmedPtByTask},{authorizedWorkload}]=await Promise.all([
+    const [{readDashboardGeneration},{confirmedPtByTask},{authorizedWorkload},{harvestNotificationSyncPending}]=await Promise.all([
       import(pathToFileURL(path.join(binding,'src/dashboard-generation.mjs')).href),
       import(pathToFileURL(path.join(binding,'src/daily-reconciliation.mjs')).href),
       import(pathToFileURL(path.join(binding,'src/workload-view.mjs')).href),
+      import(pathToFileURL(path.join(binding,'public/harvest-window.mjs')).href),
     ]);
     const generation=readDashboardGeneration(path.join(binding,'outputs'));
     if(generation&&!generation.stale){
       const snapshot=generation.current.snapshot;
       valid=currentSnapshot({report,snapshot,now});
       supplementalResults=notificationSupplementalResults({report,snapshot,now,projectWorkload:authorizedWorkload});
+      if(valid){
+        syncPending=harvestNotificationSyncPending(snapshot.ptStatus,now.getTime());
+        if(syncPending){
+          const included=new Set(supplementalResults.map(item=>item.origin));
+          syncPending.origins=syncPending.origins.filter(origin=>included.has(origin));
+          if(!syncPending.origins.length)syncPending=null;
+        }
+      }
       const fresh=notificationOverrides({report,snapshot,confirmed:confirmedPtByTask(snapshot),now});
       for(const item of fresh)retained.set(identity(item),item);
       if(valid){
@@ -162,7 +171,7 @@ export async function reconcileNotification({root,report,now=new Date(),persist=
           dated(current.observedAt,businessDate,now)&&Date.parse(current.observedAt)>Date.parse(old.evidence.confirmedAt))retained.delete(key);
       }
     }
-  }catch{valid=false;supplementalResults=[];/* A temporary sidecar outage cannot downgrade a verified daily receipt. */}
+  }catch{valid=false;supplementalResults=[];syncPending=null;/* A temporary sidecar outage cannot downgrade a verified daily receipt. */}
   const overrides=[...retained.values()].sort((a,b)=>identity(a).localeCompare(identity(b)));
   const currentAvailability=[...availability.values()].sort((a,b)=>identity(a).localeCompare(identity(b)));
   if(persist&&(valid||overrides.length||currentAvailability.length)){
@@ -172,7 +181,7 @@ export async function reconcileNotification({root,report,now=new Date(),persist=
     finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
   }
   return {bound:true,ready:valid||overrides.length>0||currentAvailability.length>0,overrides,availability:currentAvailability,
-    supplementalResults,scope:valid?'authorized_workload':'regular_tasks'};
+    supplementalResults,syncPending,scope:valid?'authorized_workload':'regular_tasks'};
 }
 
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){

@@ -78,3 +78,18 @@ Deploy the shared library before updating a private wrapper to import it. Keep
 the wrapper backup and source hashes alongside the normal runtime release
 manifest. The regression test exercises PowerShell 5.1 and 7 with isolated
 notification executables; it never sends a real message or contacts a PT site.
+
+Daily notification reconciliation also runs after the scheduler commits its
+final synchronized generation, including a post-evidence publication. It uses
+the existing report outbox and deduplication; no browser execution is triggered.
+Delivery failures do not change the successful sync state.
+
+When a pre-deadline Harvest observation crosses its waiting deadline, the
+notification waits up to five minutes for the next publication. If publication
+still has not arrived, the message identifies a Harvest status synchronization
+delay and keeps genuine login/verification issues visible; it does not list the
+previously waiting sites as individual failures. A newer observation after the
+deadline restores ordinary classification immediately, including unresolved
+sites. This handoff never extends execution waiting or provides success evidence.
+Passive rebuilds retain the original Harvest window and ownership without
+refreshing its timestamp; the normal read-only sync replaces that metadata.

@@ -92,6 +92,7 @@ try {
             $stateChanged = $false
             $normalSyncAttempted = $false
             $normalSyncSucceeded = $false
+            $evidenceSyncSucceeded = $false
             $retryAt = try { [datetime]$state.nextRetryAt } catch { $null }
             $sourceFingerprint = Get-CurrentFinalResultFingerprint ([string]$config.legacyRoot)
             $sourceChanged = $sourceFingerprint -and [string]$state.lastSourceFingerprint -ne $sourceFingerprint
@@ -195,6 +196,7 @@ try {
                     $afterRepairSync = Invoke-BoundedSyncProcess $shell $syncArguments 'evidence_dashboard_sync' '' 180
                     $previousSyncState = [pscustomobject]$newState
                     if ($afterRepairSync.exitCode -eq 0) {
+                        $evidenceSyncSucceeded = $true
                         # Remove every dated marker only after this publication
                         # completes. A prior-day marker must not disappear at
                         # midnight before its ledger is uploaded.
@@ -212,6 +214,12 @@ try {
                     Set-SyncAttemptOutcome $newState $previousSyncState 1 $failedAt ([string]$config.dailyTime) $sourceFingerprint $afterEvidence 'evidence_dashboard_sync_failed'
                     $stateChanged = $true
                 }
+            }
+            # Reconcile only after the final committed generation in this turn,
+            # so a simultaneous execution scheduler cannot leave an earlier
+            # waiting/unknown receipt visible until its next half-hour wakeup.
+            if ($normalSyncSucceeded -or $evidenceSyncSucceeded) {
+                Update-SynchronizedCheckinNotification ([string]$config.legacyRoot)
             }
             if (Test-Path -LiteralPath $dryWorkerDispatch) {
                 try { & $dryWorkerDispatch -OpsRoot $opsRoot | Out-Null }

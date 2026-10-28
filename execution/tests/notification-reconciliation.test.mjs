@@ -31,11 +31,13 @@ function model(now=new Date()){
 function sandbox(t,now=new Date()){
   const base=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'notification-reconciliation-'))),root=path.join(base,'execution'),controller=path.join(base,'observation');
   t.after(()=>fs.rmSync(base,{recursive:true,force:true}));
-  for(const dir of [root+'/data',root+'/config',root+'/logs',root+'/src',root+'/scripts',controller+'/config',controller+'/src',controller+'/outputs'])fs.mkdirSync(dir,{recursive:true});
+  for(const dir of [root+'/data',root+'/config',root+'/logs',root+'/src',root+'/scripts',controller+'/config',controller+'/src',controller+'/public',controller+'/outputs'])fs.mkdirSync(dir,{recursive:true});
   fs.writeFileSync(path.join(root,'data/v2-integration.json'),JSON.stringify({executionEngine:'v1',v2ProjectRoot:controller}));
   fs.writeFileSync(path.join(controller,'config/runtime.local.json'),JSON.stringify({executionEngine:'v1',legacyRoot:root}));
   for(const name of ['dashboard-generation.mjs','daily-reconciliation.mjs','workload-view.mjs'])fs.writeFileSync(path.join(controller,'src',name),
     `export * from ${JSON.stringify(pathToFileURL(path.join(observationRoot,'src',name)).href)};\n`);
+  fs.writeFileSync(path.join(controller,'public/harvest-window.mjs'),
+    `export * from ${JSON.stringify(pathToFileURL(path.join(observationRoot,'public/harvest-window.mjs')).href)};\n`);
   fs.copyFileSync(path.join(sourceRoot,'src/notification-reconciliation.mjs'),path.join(root,'src/notification-reconciliation.mjs'));
   fs.copyFileSync(path.join(sourceRoot,'src/checkin-contract.generated.mjs'),path.join(root,'src/checkin-contract.generated.mjs'));
   for(const name of ['Submit-UnifiedCheckinReport.ps1','ResultIdentity.ps1','ResultContract.ps1','CheckinContract.generated.ps1','Resolve-Runtime.ps1'])
@@ -323,6 +325,45 @@ test('expired waiting becomes actionable again instead of suppressing recovery i
   window.deadlineAt=new Date(Date.now()-60000).toISOString();f.publish();fs.writeFileSync(f.reportFile,JSON.stringify(f.report));
   const preview=f.preview();assert.equal(preview.waitingPendingCount,0);assert.equal(preview.status,'needs_attention');
   assert.match(preview.summary,/fallback\.example/);assert.match(preview.summary,/尚无当日权威签到证据/);
+});
+
+function expireBeforePublication(f,minutesAgo=1){
+  const site=addWaiting(f),window=f.snapshot.ptStatus.harvestWindow;
+  const deadline=Date.now()-minutesAgo*60000;
+  window.referenceAt=new Date(deadline-30*60000).toISOString();
+  window.deadlineAt=new Date(deadline).toISOString();
+  window.observedAt=new Date(deadline-25*60000).toISOString();
+  return site;
+}
+
+test('a notification racing the Harvest publication defers, then uses the new receipt without another signing run',async t=>{
+  const f=sandbox(t);addMaintenance(f);const site=expireBeforePublication(f);
+  f.publish();fs.writeFileSync(f.reportFile,JSON.stringify(f.report));const before=fs.readFileSync(f.reportFile);
+  const preview=f.preview();assert.equal(preview.synchronizationPendingCount,1);assert.equal(preview.deferred,true);
+  assert.equal(preview.enqueued,false);assert.equal(preview.problemCount,1);assert.equal(preview.businessComplete,false);
+  assert.doesNotMatch(preview.summary,/需处理|fallback\.example：/);
+  const config=JSON.parse(fs.readFileSync(path.join(f.root,'config/config.json')));config.notification.mode='command';
+  fs.writeFileSync(path.join(f.root,'config/config.json'),JSON.stringify(config));
+  const run=()=>JSON.parse(execFileSync('pwsh.exe',['-NoProfile','-NonInteractive','-File',path.join(f.root,'scripts/Submit-UnifiedCheckinReport.ps1'),
+    '-ReportPath',f.reportFile],{encoding:'utf8',windowsHide:true,timeout:30000}).trim());
+  assert.equal(run().deferred,true);assert.equal(fs.existsSync(path.join(f.root,'data/notification-outbox')),false);
+  site.effective={status:'signed',fresh:true,authoritative:true,observedAt:new Date().toISOString(),
+    evidence:{source:'harvest',authoritative:true,businessDate:f.date,confirmedAt:new Date().toISOString()}};
+  f.snapshot.ptStatus.harvestWindow=null;f.snapshot.generatedAt=new Date().toISOString();f.publish();
+  const synchronized=run();assert.equal(synchronized.synchronizationPendingCount,0);assert.equal(synchronized.enqueued,true);
+  assert.equal(synchronized.status,'success');assert.match(synchronized.summary,/今日完成 2 项/);
+  assert.deepEqual(fs.readFileSync(f.reportFile),before);assert.equal((await reconcileNotification({root:f.root,report:f.report})).syncPending,null);
+});
+
+test('a lost publication reports a bounded sync delay, retaining actual login failures and unknown submissions',t=>{
+  const f=sandbox(t);expireBeforePublication(f,6);f.snapshot.ptStatus.sites.shift();
+  f.report.results[0]={...f.report.results[0],status:'login_required',failureCode:'login_required',submissionAttempted:false};
+  f.publish();fs.writeFileSync(f.reportFile,JSON.stringify(f.report));const preview=f.preview();
+  assert.equal(preview.synchronizationPendingCount,1);assert.notEqual(preview.deferred,true);
+  assert.equal(preview.verificationPendingCount,1);assert.match(preview.summary,/登录恢复 1/);
+  assert.match(preview.summary,/等待状态同步 1/);assert.match(preview.summary,/状态更新延迟/);
+  assert.doesNotMatch(preview.summary,/fallback\.example：/);assert.equal(preview.problemCount,2);
+  assert.equal(preview.businessComplete,false);
 });
 
 test('a site migration still reports while unrelated Harvest sites are waiting',t=>{

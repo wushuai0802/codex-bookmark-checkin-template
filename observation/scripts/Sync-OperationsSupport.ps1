@@ -155,6 +155,29 @@ function Invoke-PendingNotification([System.Collections.IDictionary]$State, [str
     return $true
 }
 
+function Update-SynchronizedCheckinNotification([string]$LegacyRoot) {
+    $reporter = Join-Path $LegacyRoot 'scripts/Submit-UnifiedCheckinReport.ps1'
+    $outbox = Join-Path $LegacyRoot 'scripts/Invoke-CheckinNotificationOutbox.ps1'
+    $report = Join-Path $LegacyRoot 'logs/latest.json'
+    if (-not (Test-Path -LiteralPath $reporter -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $outbox -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $report -PathType Leaf)) { return }
+    try {
+        $shell = (Get-Command pwsh.exe,pwsh -ErrorAction Stop | Select-Object -First 1).Source
+        $refresh = Invoke-BoundedSyncProcess $shell @('-NoProfile','-NonInteractive','-File',$reporter,'-ReportPath',$report) 'daily_report_refresh' '' 45
+        if ($refresh.exitCode -ne 0) { throw 'report_refresh_failed' }
+        $payload = ($refresh.output | Select-Object -Last 1) | ConvertFrom-Json
+        if ($payload.deferred -eq $true -or $payload.mode -ne 'command') { return }
+        $delivery = Invoke-BoundedSyncProcess $shell @('-NoProfile','-NonInteractive','-File',$outbox) 'daily_report_delivery' '' 75
+        if ($delivery.exitCode -ne 0) { throw 'report_delivery_deferred' }
+        Write-SchedulerLog 'Published daily receipt reconciled with synchronized observations.'
+    } catch {
+        # The independent execution scheduler retries the same deduplicated
+        # outbox. A notifier failure cannot turn a successful sync into failure.
+        Write-SchedulerLog 'Daily receipt refresh deferred; check-in and sync outcomes remain unchanged.'
+    }
+}
+
 function Get-SyncTransportFailure([string]$Phase, [int]$ExitCode, [object[]]$Output) {
     $text = ($Output | ForEach-Object { [string]$_ }) -join "`n"
     $cause = if ($text -match '(?i)timed out|timeout') { 'connection_timeout' }
