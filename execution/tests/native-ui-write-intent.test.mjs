@@ -128,6 +128,31 @@ ConvertTo-Json -InputObject $rows -Depth 8 -Compress`;
   }
 });
 
+test("Ourbits waits for its form button instead of spending the submit intent on a header link", async () => {
+  const command=harness+`
+$originValue='https://ourbits.club';$script:ReadOnly=$false
+$script:events=[Collections.Generic.List[string]]::new()
+$script:NativePtGuard=@{managed=$false;attempted=$false;readOnly=$false}
+$script:checkinClickAttempted=$false;$script:nativeLocalSubmissionAttempted=$false
+$script:supportsInvoke=$true;$script:gateClosed=$false;$script:actionThrows=$false;$script:actionReturnsFalse=$false
+$header=[pscustomobject]@{Current=[pscustomobject]@{Name='签到得魔力';IsEnabled=$true;ControlType=[CheckinFixture.Automation.ControlType]::Hyperlink}}
+$header|Add-Member ScriptMethod GetCurrentPattern { throw 'Header navigation was selected as a submit' }
+$script:controls=@($header)
+function Get-WindowPageElements { $script:controls }
+$early=Invoke-UniqueCheckinButton $null
+$earlyEvents=@($script:events.ToArray());$earlyClaim=$script:checkinClickAttempted
+$script:controls=@($header,$script:control)
+$submitted=Invoke-UniqueCheckinButton $null
+$again=Invoke-UniqueCheckinButton $null
+[pscustomobject]@{early=$early;earlyEvents=$earlyEvents;earlyClaim=$earlyClaim;submitted=$submitted;again=$again;events=@($script:events.ToArray())}|ConvertTo-Json -Compress
+`;
+  for(const shell of shells){
+    const value=await runFixture(shell,command);
+    assert.equal(value.early,false);assert.deepEqual(value.earlyEvents,[]);assert.equal(value.earlyClaim,false);
+    assert.equal(value.submitted,true);assert.equal(value.again,false);assert.deepEqual(value.events,['guard:click','invoke']);
+  }
+});
+
 test("both native readers initialize before UI setup and guard navigation before browser startup", async () => {
   for (const file of ["Invoke-MainChromeCheckinAccessibility.ps1", "Invoke-PlainWafAccessibility.ps1"]) {
     const source = await fs.readFile(scripts + file, "utf8");

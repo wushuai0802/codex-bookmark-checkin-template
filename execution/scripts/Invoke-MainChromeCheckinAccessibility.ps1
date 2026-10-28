@@ -511,6 +511,11 @@ function Invoke-UniqueCheckinButton([System.Windows.Automation.AutomationElement
                 [System.Windows.Automation.ControlType]::Button,
                 [System.Windows.Automation.ControlType]::Hyperlink
             )) { continue }
+            # Ourbits' header link only navigates to the attendance form. It
+            # must not consume the one permitted submit click while the real
+            # form button is still loading in the accessibility tree.
+            if ($originValue -ceq 'https://ourbits.club' -and
+                $element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
             if (-not $element.Current.IsEnabled) { continue }
             if (-not $priorities.ContainsKey($name)) { continue }
             $matches += [pscustomobject]@{ element = $element; priority = [int]$priorities[$name] }
