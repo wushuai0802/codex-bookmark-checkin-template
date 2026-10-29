@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -196,6 +198,28 @@ $rows=@(foreach($variant in @('fresh','missing','stale','future','foreign','logi
 ConvertTo-Json -InputObject $rows -Compress
 `;
   for(const shell of shells)for(const value of await runFixture(shell,command))assert.equal(value.allowed,value.variant==='fresh',shell+'/'+value.variant);
+});
+
+test("native gate JSON proof timestamps preserve UTC through the real PowerShell initializer",async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'native-proof-time-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  await fs.mkdir(path.join(root,'scripts'));await fs.mkdir(path.join(root,'config'));
+  await fs.copyFile(scripts+'Resolve-Runtime.ps1',path.join(root,'scripts','Resolve-Runtime.ps1'));
+  await fs.writeFile(path.join(root,'config','config.json'),JSON.stringify({nodeExecutable:process.execPath}));
+  const command=harness+`
+$script:proofUtc=[datetimeoffset]::UtcNow.AddSeconds(-5).ToString('o')
+function Invoke-NativePtGate {
+ $raw='{"allow":true,"managed":true,"accountKey":"site-default","profileBinding":"'+('a'*64)+'","unsignedConfirmedAt":"'+$script:proofUtc+'"}'
+ return ($raw|ConvertFrom-Json)
+}
+$decision=Initialize-NativePtGuard -Root '${quoted(root)}' -Origin 'https://ourbits.club' -Url 'https://ourbits.club/attendance.php' -ProfilePath '${quoted(root)}'
+$snapshot=[pscustomobject]@{success=$true;sameOrigin=$true;pageContentAvailable=$true;siteBodyLoaded=$true;waf=$false;securityVerification=$false;loginRoute=$false;signedControlCount=0;currentUrl='https://ourbits.club/attendance.php'}
+[pscustomobject]@{allowed=(Test-NativeUnverifiedTextAllowsForm $snapshot);at=$script:NativePtGuard.unsignedConfirmedAt;expected=$script:proofUtc}|ConvertTo-Json -Compress
+`;
+  for(const shell of shells){
+    const value=await runFixture(shell,command);
+    assert.equal(value.allowed,true,shell);assert.equal(Date.parse(value.at),Date.parse(value.expected),shell);
+  }
 });
 
 test("both native readers initialize before UI setup and guard navigation before browser startup", async () => {

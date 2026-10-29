@@ -29,7 +29,7 @@ function Initialize-NativePtGuard {
     $gate = Invoke-NativePtGate $(if ($ReadOnly) { 'bind' } else { 'inspect' })
     $script:NativePtGuard.managed = [bool]$gate.managed
     $script:NativePtGuard.navigationRisk = [bool]$gate.navigationRisk
-    $script:NativePtGuard.unsignedConfirmedAt = [string]$gate.unsignedConfirmedAt
+    $script:NativePtGuard.unsignedConfirmedAt = Convert-NativeReceiptTimestamp $gate.unsignedConfirmedAt
     if ([string]$gate.profileBinding -cmatch '^[a-f0-9]{64}$') { $script:NativePtGuard.profileBinding = [string]$gate.profileBinding }
     if ([string]$gate.accountKey -cmatch '^[A-Za-z0-9._-]{1,80}$') { $script:NativePtGuard.accountKey = [string]$gate.accountKey }
     if (-not $gate.allow) { return $gate.decision }
