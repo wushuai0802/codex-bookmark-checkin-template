@@ -65,6 +65,14 @@ authoritative result before any submission. `unknown` never proves a failure or
 authorizes blind submission. Stale data, sites outside the selected PT bookmark
 folder and ambiguous daily-plan accounts never create tasks.
 
+A Harvest gate response that explicitly says no request was submitted remains
+a preflight deferral across the native-engine import. It is not an unknown
+write. Live Harvest queries allow 25 seconds, including SSH setup. If a killed
+observer left no outcome, a new reviewed unsigned observation may renew bounded
+recovery only when the former worker has exited and its pre-dispatch proof
+matches the exact origin, account, Profile and business day. Existing audit
+entries stay intact; current locks and the daily recovery limit still apply.
+
 The monitoring-only path does not alter the daily plan or overwrite its daily
 result. It records a prepared attempt before invoking the original site flow,
 uses a single URL and has no automatic retry. Uncertain outcomes are not

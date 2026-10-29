@@ -60,6 +60,37 @@ test('Depth Studio button pending control is an account-bound passive not-signed
   }finally{await browser.close();}
 });
 
+test('an unsigned homepage calendar legend cannot suppress the real bookmarked attendance flow',async t=>{
+  const previous=process.env.CHECKIN_PT_FALLBACK_RECHECK;
+  process.env.CHECKIN_PT_FALLBACK_RECHECK='1';
+  t.after(()=>{if(previous===undefined)delete process.env.CHECKIN_PT_FALLBACK_RECHECK;else process.env.CHECKIN_PT_FALLBACK_RECHECK=previous;});
+  const origin='https://p.t-baozi.cc',browser=await chromium.launch({headless:true,channel:'chrome'}),visited=[];
+  let signed=false;
+  try{
+    const context=await browser.newContext({javaScriptEnabled:false,serviceWorkers:'block'});
+    await context.route('**/*',async route=>{
+      const request=route.request(),url=new URL(request.url());
+      assert.equal(url.origin,origin);assert.equal(request.method(),'GET');visited.push(url.pathname);
+      if(url.pathname==='/attendance.php')signed=true;
+      const header='<a href="/logout.php">退出</a><a href="/usercp.php">设置</a><a href="/userdetails.php?id=7">本人</a>'+
+        '<div id="info_block"><a href="/attendance.php">'+(signed?'已签到':'签到')+'</a></div>';
+      await route.fulfill({status:200,contentType:'text/html; charset=utf-8',body:header+
+        (url.pathname==='/attendance.php'?'<p>今日签到成功</p>':'<p>橙色日期代表已签到；签到成功后可查看记录。</p>')});
+    });
+    const target={origin,allowedOrigins:[origin],folderNames:['PT白名单'],candidates:[origin+'/attendance.php']};
+    const config={retryCount:0,navigationTimeoutMs:5000,cloudflareWaitMs:2000,actionWaitMs:0,
+      failureScreenshots:false,capturePtEvidence:true,ptFallbackRecheck:true};
+    const first=await processTarget(context,target,config,[],'unused');
+    assert.ok(['signed','already_signed'].includes(first.status),JSON.stringify(first));
+    assert.equal(first.evidence.authoritative,true);assert.equal(first.submissionAttempted,true);
+    assert.deepEqual(visited,['/index.php','/attendance.php']);
+    const second=await processTarget(context,target,config,[],'unused');
+    assert.equal(second.status,'already_signed');assert.equal(second.submissionAttempted,false);
+    assert.deepEqual(visited,['/index.php','/attendance.php','/index.php']);
+    await context.close();
+  }finally{await browser.close();}
+});
+
 test('V1 fallback marker carries a fresh passive not-signed proof into the action path',async t=>{
   const origin='https://dstudio.me',policy=ptReadPolicy(origin),old=process.env.CHECKIN_PT_FALLBACK_RECHECK;
   t.after(()=>{if(old===undefined)delete process.env.CHECKIN_PT_FALLBACK_RECHECK;else process.env.CHECKIN_PT_FALLBACK_RECHECK=old;});

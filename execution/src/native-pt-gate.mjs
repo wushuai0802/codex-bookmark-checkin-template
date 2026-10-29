@@ -314,6 +314,7 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
         writeJournal(file,journal);
       }
       return {managed:true,allow:true,...identity,navigationRisk:nativePtNavigationRisk(url),
+        ...(unsigned?{unsignedConfirmedAt:unsigned.confirmedAt}:{}),
         ...(inactiveHistoricalIntentCount?{inactiveHistoricalIntentCount}: {})};
     }
     if(!/^[a-f0-9-]{36}$/.test(attemptId??'')||!['navigation','click'].includes(action))throw Error('invalid native attempt action');

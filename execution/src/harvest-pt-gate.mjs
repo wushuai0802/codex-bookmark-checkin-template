@@ -90,8 +90,10 @@ export function checkHarvestPtBeforeWrite(target,{root,now=new Date(),probe}={})
   try{
     const report=probe?probe():(()=>{
       const source=fs.readFileSync(path.join(integration.v2ProjectRoot,'scripts/harvest-observe.py'),'utf8');
-      const child=spawnSync('ssh',['-o','BatchMode=yes','-o','ConnectTimeout=5',gate.sshTarget,
-        'sudo -n python3 - '+gate.database],{input:source,encoding:'utf8',timeout:8_000,maxBuffer:2_000_000,windowsHide:true});
+      // Match the fallback probe's bounded budget. A normal NAS SSH handshake
+      // can exceed eight seconds before the read-only SQLite query even starts.
+      const child=spawnSync('ssh',['-T','-o','BatchMode=yes','-o','ConnectTimeout=15',gate.sshTarget,
+        'sudo -n python3 - '+gate.database],{input:source,encoding:'utf8',timeout:25_000,maxBuffer:2_000_000,windowsHide:true});
       if(child.error||child.status!==0||!child.stdout)throw Error('Harvest read unavailable');
       return JSON.parse(child.stdout);
     })();

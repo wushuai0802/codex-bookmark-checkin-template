@@ -23,13 +23,17 @@ const safety=new Set(['reviewed_passive','attendance_page_risk','unknown']);
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 
 export function projectPtSiteResult(value,origin){
-  if(value?.origin!==origin||!statuses.has(value.status)||!Number.isFinite(Date.parse(value.observedAt)))throw Error('invalid PT site result');
+  // The mature engine can stop before submission at the Harvest gate. Keep
+  // that explicit no-write receipt instead of throwing it into uncertainty.
+  const harvestWait=value?.status==='deferred'&&value.retryCause==='harvest_waiting'&&
+    value.submissionAttempted===false&&value.submissionOutcomeUnknown!==true;
+  if(value?.origin!==origin||!statuses.has(value.status)&&!harvestWait||!Number.isFinite(Date.parse(value.observedAt)))throw Error('invalid PT site result');
   const evidence=value.evidence??{};
   const observed=Date.parse(value.observedAt),confirmed=Date.parse(evidence.confirmedAt??'');
   const dated=(!evidence.confirmedAt||(Number.isFinite(confirmed)&&confirmed<=observed+60_000&&
     dayAt(confirmed)===dayAt(observed)))&&(!evidence.businessDate||evidence.businessDate===dayAt(observed));
-  const authoritative=evidence.authoritative===true&&dated&&sources.has(evidence.source)&&evidence.source!=='none'&&value.submissionOutcomeUnknown!==true;
-  const status=value.submissionOutcomeUnknown===true?'needs_attention':
+  const authoritative=!harvestWait&&evidence.authoritative===true&&dated&&sources.has(evidence.source)&&evidence.source!=='none'&&value.submissionOutcomeUnknown!==true;
+  const status=harvestWait?'unknown':value.submissionOutcomeUnknown===true?'needs_attention':
     ['signed','already_signed','not_signed','not_available'].includes(value.status)&&!authoritative?'unknown':value.status;
   return {origin,status,observedAt:new Date(value.observedAt).toISOString(),
     ...projectPtDiagnostic(value),

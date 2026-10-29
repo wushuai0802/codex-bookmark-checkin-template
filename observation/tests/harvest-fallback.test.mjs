@@ -856,6 +856,53 @@ test('an explicit unsubmitted generic-profile guard can recover once through the
   assert.equal((await runHarvestFallback(args)).outcomes[0].state,'already_confirmed');assert.deepEqual(calls,['read','native']);
 });
 
+test('a native-engine Harvest wait is preserved as preflight deferral instead of an unknown write',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-native-harvest-wait-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  configureUnifiedFixture(root);
+  const {f,origin,businessDate,proof,audit}=nativeProfileRecoveryFixture(root),current=proof(now.toISOString());
+  const nextEligibleAt=new Date(now.getTime()+30*60_000).toISOString();
+  const result=await runHarvestFallback({...f,root,execute:true,readOnlyOrigins:[origin],
+    runSite:async()=>current,runEngine:async()=>({runId:'20260920-harvest-wait',businessDate,observedAt:now.toISOString(),
+      results:[{...current,status:'deferred',retryCause:'harvest_waiting',nextEligibleAt,submissionAttempted:false,
+        evidence:{source:'none',authoritative:false}}]})});
+  assert.equal(result.outcomes[0].state,'deferred_preflight');
+  const attempt=JSON.parse(fs.readFileSync(audit)).attempts.at(-1);
+  assert.equal(attempt.submissionState,'not_submitted');assert.equal(attempt.outcome.submissionAttempted,false);
+  assert.equal(attempt.outcome.retryCause,'harvest_waiting');assert.equal(attempt.nextEligibleAt,nextEligibleAt);
+  assert.equal(attempt.outcome.profileBinding,current.profileBinding);
+});
+
+test('an interrupted observer needs a gone worker and matching new unsigned proof before bounded recovery',async t=>{
+  for(const variant of ['recover','active-worker','wrong-profile','unbound-old-read','present-outcome','future-attempt','manual-new-reader','automatic-new-reader']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-interrupted-bound-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    configureUnifiedFixture(root);
+    const {f,origin,businessDate,proof,audit,attempt}=nativeProfileRecoveryFixture(root);
+    delete attempt.outcome;
+    Object.assign(attempt,{nativeRegisteredEngine:true,state:'outcome_unknown',workerPid:variant==='active-worker'?process.pid:2147483647});
+    if(variant==='unbound-old-read')delete attempt.recoveryEvidence.profileBinding;
+    if(variant.endsWith('new-reader'))delete attempt.recoveryEvidence;
+    if(variant==='present-outcome')attempt.outcome={submissionAttempted:true,failureCode:'submission_outcome_unknown'};
+    if(variant==='future-attempt')attempt.finishedAt='2026-09-20T03:00:00Z';
+    fs.writeFileSync(audit,JSON.stringify({businessDate,attempts:[attempt]}));
+    const current={...proof(now.toISOString()),...(variant==='wrong-profile'?{profileBinding:'c'.repeat(64)}:{})},calls=[];
+    const recover=variant==='recover'||variant==='manual-new-reader';
+    const args={...f,root,execute:true,readOnlyOrigins:[origin],
+      ...(variant==='manual-new-reader'?{manualRecoveryId:crypto.randomUUID(),onlyOrigins:[origin]}:{}),
+      runSite:async()=>{calls.push('read');return current;},
+      runEngine:async()=>{calls.push('engine');return {businessDate,observedAt:now.toISOString(),results:[{
+        ...current,status:'signed',submissionAttempted:true,evidence:{...current.evidence,statusSignal:'nexus_daily_header_signed'}}]};}};
+    const result=await runHarvestFallback(args);
+    assert.deepEqual(calls,recover?['read','engine']:['read'],variant);
+    const saved=JSON.parse(fs.readFileSync(audit));assert.deepEqual(saved.attempts[0],attempt);
+    assert.equal(saved.attempts.length,recover?2:1,variant);
+    if(recover){
+      assert.equal(result.outcomes[0].v1Status,'signed');
+      assert.equal((await runHarvestFallback(args)).outcomes[0].state,'already_confirmed');
+      assert.deepEqual(calls,['read','engine']);
+    }
+  }
+});
+
 test('unknown writes, mismatched accounts, stale proof and unreviewed routing retain the daily submit limit',async t=>{
   const variants=[
     {resultChanges:{submissionAttempted:true}},

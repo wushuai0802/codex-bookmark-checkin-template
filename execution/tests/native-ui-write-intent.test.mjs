@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -150,6 +152,73 @@ $again=Invoke-UniqueCheckinButton $null
     const value=await runFixture(shell,command);
     assert.equal(value.early,false);assert.deepEqual(value.earlyEvents,[]);assert.equal(value.earlyClaim,false);
     assert.equal(value.submitted,true);assert.equal(value.again,false);assert.deepEqual(value.events,['guard:click','invoke']);
+  }
+});
+
+test("Audiences native readers wait for the form button and ignore an early header link", async () => {
+  const command=harness+`
+$originValue='https://audiences.me';$script:ReadOnly=$false
+$header=[pscustomobject]@{Current=[pscustomobject]@{Name='签到';IsEnabled=$true;ControlType=[CheckinFixture.Automation.ControlType]::Hyperlink}}
+$header|Add-Member ScriptMethod GetCurrentPattern { return $script:pattern }
+function Get-WindowPageElements { $script:controls }
+function Get-AllAutomationElements { $script:controls }
+$rows=@(foreach($reader in @('main','plain')){
+ $script:events=[Collections.Generic.List[string]]::new()
+ $script:NativePtGuard=@{managed=$false;attempted=$false;readOnly=$false}
+ $script:checkinClickAttempted=$false;$script:nativeLocalSubmissionAttempted=$false
+ $script:supportsInvoke=$true;$script:gateClosed=$false;$script:actionThrows=$false;$script:actionReturnsFalse=$false
+ $script:controls=@($header)
+ $early=Invoke-FixtureAction $reader
+ $earlyEvents=@($script:events.ToArray());$earlyClaim=$script:checkinClickAttempted
+ $script:controls=@($header,$script:control)
+ $submitted=Invoke-FixtureAction $reader
+ $again=Invoke-FixtureAction $reader
+ [pscustomobject]@{reader=$reader;early=$early;earlyEvents=$earlyEvents;earlyClaim=$earlyClaim;submitted=$submitted;again=$again;events=@($script:events.ToArray())}
+})
+ConvertTo-Json -InputObject $rows -Depth 5 -Compress
+`;
+  for(const shell of shells)for(const value of await runFixture(shell,command)){
+    assert.equal(value.early,false);assert.deepEqual(value.earlyEvents,[]);assert.equal(value.earlyClaim,false);
+    assert.equal(value.submitted,true);assert.equal(value.again,false);assert.deepEqual(value.events,['guard:click','invoke']);
+  }
+});
+
+test("historical success words cannot suppress a reviewed form after fresh bound unsigned proof",async()=>{
+  const command=harness+`
+$rows=@(foreach($variant in @('fresh','missing','stale','future','foreign','login','signed-control','unmanaged','read-only','home')){
+ $script:NativePtGuard=@{managed=($variant -ne 'unmanaged');readOnly=($variant -eq 'read-only');origin='https://ourbits.club';unsignedConfirmedAt=[datetimeoffset]::UtcNow.AddSeconds(-10).ToString('o')}
+ if($variant -eq 'missing'){$script:NativePtGuard.unsignedConfirmedAt=''}
+ if($variant -eq 'stale'){$script:NativePtGuard.unsignedConfirmedAt=[datetimeoffset]::UtcNow.AddMinutes(-6).ToString('o')}
+ if($variant -eq 'future'){$script:NativePtGuard.unsignedConfirmedAt=[datetimeoffset]::UtcNow.AddMinutes(1).ToString('o')}
+ $snapshot=[pscustomobject]@{success=$true;sameOrigin=$true;pageContentAvailable=$true;siteBodyLoaded=$true;waf=$false;securityVerification=$false;loginRoute=($variant -eq 'login');signedControlCount=$(if($variant -eq 'signed-control'){1}else{0});currentUrl='https://ourbits.club/attendance.php'}
+ if($variant -eq 'foreign'){$snapshot.currentUrl='https://foreign.example/attendance.php'}
+ if($variant -eq 'home'){$snapshot.currentUrl='https://ourbits.club/index.php'}
+ [pscustomobject]@{variant=$variant;allowed=(Test-NativeUnverifiedTextAllowsForm $snapshot)}
+})
+ConvertTo-Json -InputObject $rows -Compress
+`;
+  for(const shell of shells)for(const value of await runFixture(shell,command))assert.equal(value.allowed,value.variant==='fresh',shell+'/'+value.variant);
+});
+
+test("native gate JSON proof timestamps preserve UTC through the real PowerShell initializer",async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'native-proof-time-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  await fs.mkdir(path.join(root,'scripts'));await fs.mkdir(path.join(root,'config'));
+  await fs.copyFile(scripts+'Resolve-Runtime.ps1',path.join(root,'scripts','Resolve-Runtime.ps1'));
+  await fs.writeFile(path.join(root,'config','config.json'),JSON.stringify({nodeExecutable:process.execPath}));
+  const command=harness+`
+$script:proofUtc=[datetimeoffset]::UtcNow.AddSeconds(-5).ToString('o')
+function Invoke-NativePtGate {
+ $raw='{"allow":true,"managed":true,"accountKey":"site-default","profileBinding":"'+('a'*64)+'","unsignedConfirmedAt":"'+$script:proofUtc+'"}'
+ return ($raw|ConvertFrom-Json)
+}
+$decision=Initialize-NativePtGuard -Root '${quoted(root)}' -Origin 'https://ourbits.club' -Url 'https://ourbits.club/attendance.php' -ProfilePath '${quoted(root)}'
+$snapshot=[pscustomobject]@{success=$true;sameOrigin=$true;pageContentAvailable=$true;siteBodyLoaded=$true;waf=$false;securityVerification=$false;loginRoute=$false;signedControlCount=0;currentUrl='https://ourbits.club/attendance.php'}
+[pscustomobject]@{allowed=(Test-NativeUnverifiedTextAllowsForm $snapshot);at=$script:NativePtGuard.unsignedConfirmedAt;expected=$script:proofUtc}|ConvertTo-Json -Compress
+`;
+  for(const shell of shells){
+    const value=await runFixture(shell,command);
+    assert.equal(value.allowed,true,shell);assert.equal(Date.parse(value.at),Date.parse(value.expected),shell);
   }
 });
 

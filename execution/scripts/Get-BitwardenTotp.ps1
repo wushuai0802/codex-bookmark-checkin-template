@@ -174,7 +174,7 @@ function Invoke-ProviderCli([string[]]$Arguments, [int]$TimeoutSeconds, [string]
 }
 
 function Confirm-ProviderStatus {
-    $statusText = Invoke-ProviderCli @('status','--nointeraction') 15 'cli_status_failed'
+    $statusText = Invoke-ProviderCli @('status','--nointeraction') 25 'cli_status_failed'
     try { $status = $statusText | ConvertFrom-Json } catch { Stop-Provider 'cli_status_invalid' }
     finally { $statusText = $null }
     if (-not $status -or $status -is [array] -or -not $status.PSObject.Properties['status']) { Stop-Provider 'cli_status_invalid' }

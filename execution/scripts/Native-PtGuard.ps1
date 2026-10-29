@@ -29,10 +29,31 @@ function Initialize-NativePtGuard {
     $gate = Invoke-NativePtGate $(if ($ReadOnly) { 'bind' } else { 'inspect' })
     $script:NativePtGuard.managed = [bool]$gate.managed
     $script:NativePtGuard.navigationRisk = [bool]$gate.navigationRisk
+    $script:NativePtGuard.unsignedConfirmedAt = Convert-NativeReceiptTimestamp $gate.unsignedConfirmedAt
     if ([string]$gate.profileBinding -cmatch '^[a-f0-9]{64}$') { $script:NativePtGuard.profileBinding = [string]$gate.profileBinding }
     if ([string]$gate.accountKey -cmatch '^[A-Za-z0-9._-]{1,80}$') { $script:NativePtGuard.accountKey = [string]$gate.accountKey }
     if (-not $gate.allow) { return $gate.decision }
     return $null
+}
+
+function Test-NativeUnverifiedTextAllowsForm($Snapshot) {
+    # Generic success words can belong to instructions or a historical table.
+    # Only a current bound unsigned proof may keep the reviewed form runnable;
+    # authoritative completion is checked before this branch by both readers.
+    $state=$script:NativePtGuard
+    if (-not $state -or -not $state.managed -or $state.readOnly -or
+        $state.origin -cnotin @('https://ourbits.club','https://audiences.me') -or
+        -not $Snapshot.sameOrigin -or -not $Snapshot.pageContentAvailable -or -not $Snapshot.siteBodyLoaded -or
+        $Snapshot.waf -or $Snapshot.securityVerification -or $Snapshot.loginRoute -or $Snapshot.signedControlCount -gt 0) { return $false }
+    $at=[datetimeoffset]::MinValue
+    if (-not [datetimeoffset]::TryParse([string]$state.unsignedConfirmedAt,[ref]$at)) { return $false }
+    $age=([datetimeoffset]::UtcNow-$at).TotalSeconds
+    if ($age -lt 0 -or $age -gt 300) { return $false }
+    try {
+        $url=[uri][string]$Snapshot.currentUrl
+        return $url.Scheme -ceq 'https' -and -not $url.UserInfo -and -not $url.Query -and -not $url.Fragment -and
+            $url.GetLeftPart([System.UriPartial]::Authority) -ceq $state.origin -and $url.AbsolutePath -ceq '/attendance.php'
+    } catch { return $false }
 }
 
 function Register-NativePtReadback($Result) {

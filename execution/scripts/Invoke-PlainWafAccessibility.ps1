@@ -336,6 +336,10 @@ function Invoke-NativeCheckinAction {
                 [System.Windows.Automation.ControlType]::Hyperlink,
                 [System.Windows.Automation.ControlType]::CheckBox
             )) { continue }
+            # The Audiences header link opens the form; only the form button
+            # submits attendance. Do not consume the single write click early.
+            if ($originValue -ceq 'https://audiences.me' -and
+                $element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
             $name = ([string]$element.Current.Name).Trim()
             if ($labels -contains $name) { $matches += $element }
         }
@@ -509,8 +513,8 @@ try {
                 continue
             }
         }
-        if (-not $ReadOnly -and $PerformCheckin -and -not $last.success -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and
-            -not $last.success -and -not $checkinClickAttempted) {
+        if (-not $ReadOnly -and $PerformCheckin -and $last.siteBodyLoaded -and $last.attendanceEndpoint -and
+            (-not $last.success -or (Test-NativeUnverifiedTextAllowsForm $last)) -and -not $checkinClickAttempted) {
             $checkinClicked = Invoke-NativeCheckinAction
             if ($checkinClicked) {
                 Start-Sleep -Seconds 2
