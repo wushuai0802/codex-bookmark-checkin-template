@@ -1410,6 +1410,13 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
   if(migrated)return migrated;
   if(passiveVisit){
     const observed=await initialPtObservation(page,passivePolicy,target.origin,navigationResponse);
+    // A reviewed unsigned header is the result of this passive candidate.
+    // Advance to the bookmarked action instead of interpreting a calendar's
+    // generic "已签到" legend as this account's completion on the homepage.
+    if(observed?.status==='not_signed'&&config.ptFallbackRecheck===true&&passivePolicy.dailyHeader&&
+       target.candidates.some(value=>{try{const next=new URL(value);
+         return next.origin===target.origin&&next.pathname===passivePolicy.actionPath&&next.href!==passivePolicy.url;
+       }catch{return false;}}))return observed;
     if(observed&&!(observed.status==='not_signed'&&config.ptFallbackRecheck===true))return observed;
     if(passivePolicy.dailyHeader&&!(observed?.status==='not_signed'&&config.ptFallbackRecheck===true))return {status:'visited',reason:'账户首页尚未确认今日完成，继续原有签到流程',submissionAttempted:false,url:passivePolicy.url};
   }

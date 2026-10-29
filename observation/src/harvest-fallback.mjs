@@ -97,10 +97,16 @@ function interruptedBoundAttemptBeforeProof(attempt,candidate,checked,now,option
   try{process.kill(attempt.workerPid,0);return false;}catch(error){if(error.code!=='ESRCH')return false;}
   const started=Date.parse(attempt.startedAt),finished=Date.parse(attempt.finishedAt??attempt.startedAt);
   const proofAt=Date.parse(checked.evidence?.confirmedAt??'');
+  const previous=attempt.recoveryEvidence;
+  const boundPrevious=previous&&checked.profileBinding===previous.profileBinding&&
+    verifiedGuardedRecovery(previous,candidate,new Date(started),options);
+  // An explicit one-site operator request may introduce a newly reviewed
+  // reader after an old observer died before obtaining its first proof. This
+  // authorizes the current bound account only; it does not close the old audit.
+  const newManualReader=options.manualRecovery===true&&previous===undefined;
   return Number.isFinite(started)&&Number.isFinite(finished)&&finished>=started&&
     dayAt(new Date(started))===candidate.businessDate&&dayAt(new Date(finished))===candidate.businessDate&&
-    proofAt>finished&&checked.profileBinding===attempt.recoveryEvidence?.profileBinding&&
-    verifiedGuardedRecovery(attempt.recoveryEvidence,candidate,new Date(started),options)&&
+    proofAt>finished&&(boundPrevious||newManualReader)&&
     verifiedGuardedRecovery(checked,candidate,now,options);
 }
 
@@ -514,7 +520,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         recoveryEvidence=checked;
         const dailyAttempts=state.attempts.filter(a=>a.origin===candidate.origin&&
           (a.accountKey??'site-default')===candidate.accountKey&&!['deferred_busy','deferred_preflight'].includes(a.state));
-        const options={readOnlyOrigins:normalizedReadOnlyOrigins,config};
+        const options={readOnlyOrigins:normalizedReadOnlyOrigins,config,manualRecovery};
         if(dailyAttempts.length>=3&&!manualRecovery){
           outcomes.push({origin:candidate.origin,state:'daily_guard_recovery_limit'});continue;
         }

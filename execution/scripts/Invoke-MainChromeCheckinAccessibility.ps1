@@ -511,10 +511,10 @@ function Invoke-UniqueCheckinButton([System.Windows.Automation.AutomationElement
                 [System.Windows.Automation.ControlType]::Button,
                 [System.Windows.Automation.ControlType]::Hyperlink
             )) { continue }
-            # Ourbits' header link only navigates to the attendance form. It
+            # These Nexus header links only navigate to the attendance form.
             # must not consume the one permitted submit click while the real
             # form button is still loading in the accessibility tree.
-            if ($originValue -ceq 'https://ourbits.club' -and
+            if ($originValue -cin @('https://ourbits.club','https://audiences.me') -and
                 $element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
             if (-not $element.Current.IsEnabled) { continue }
             if (-not $priorities.ContainsKey($name)) { continue }
@@ -786,7 +786,8 @@ try {
                 }
                 break
             }
-            if (-not $ReadOnly -and -not $last.success -and -not $script:checkinClickAttempted -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
+            if (-not $ReadOnly -and (-not $last.success -or (Test-NativeUnverifiedTextAllowsForm $last)) -and
+                -not $script:checkinClickAttempted -and -not $last.waf -and $last.siteBodyLoaded -and -not $last.loginRoute) {
                 $clicked = Invoke-UniqueCheckinButton $taskWindow
                 [CheckinWindowNative]::RestoreForegroundIfTask($taskHandle, $previousForegroundWindow)
                 if ($clicked) { Start-Sleep -Seconds 2; continue }

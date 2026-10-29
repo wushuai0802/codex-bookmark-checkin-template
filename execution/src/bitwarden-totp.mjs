@@ -121,7 +121,7 @@ async function helper(policy,mode,execute) {
     output=await execute(policy.shell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
       path.join(policy.root,'scripts','Get-BitwardenTotp.ps1'),'-Root',policy.root,'-Origin',policy.origin,
       '-ProfileBinding',policy.profileBinding,'-AccountKey',policy.accountKey,'-AdapterId',policy.adapterId,'-Mode',mode],{encoding:'utf8',windowsHide:true,
-      env:childEnvironment(),timeout:mode === 'Prepare' ? 90_000 : 45_000,maxBuffer:65_536});
+      env:childEnvironment(),timeout:mode === 'Prepare' ? 120_000 : 60_000,maxBuffer:65_536});
     if (typeof output?.stdout !== 'string' || output.stdout.length > (mode==='Login'?16_384:4_096)) return fail('helper_output_invalid');
     value=JSON.parse(output.stdout.trim().replace(/^\uFEFF/,''));
     if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.ready !== 'boolean'

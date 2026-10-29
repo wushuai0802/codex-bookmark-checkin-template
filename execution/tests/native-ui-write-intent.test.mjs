@@ -153,6 +153,51 @@ $again=Invoke-UniqueCheckinButton $null
   }
 });
 
+test("Audiences native readers wait for the form button and ignore an early header link", async () => {
+  const command=harness+`
+$originValue='https://audiences.me';$script:ReadOnly=$false
+$header=[pscustomobject]@{Current=[pscustomobject]@{Name='签到';IsEnabled=$true;ControlType=[CheckinFixture.Automation.ControlType]::Hyperlink}}
+$header|Add-Member ScriptMethod GetCurrentPattern { return $script:pattern }
+function Get-WindowPageElements { $script:controls }
+function Get-AllAutomationElements { $script:controls }
+$rows=@(foreach($reader in @('main','plain')){
+ $script:events=[Collections.Generic.List[string]]::new()
+ $script:NativePtGuard=@{managed=$false;attempted=$false;readOnly=$false}
+ $script:checkinClickAttempted=$false;$script:nativeLocalSubmissionAttempted=$false
+ $script:supportsInvoke=$true;$script:gateClosed=$false;$script:actionThrows=$false;$script:actionReturnsFalse=$false
+ $script:controls=@($header)
+ $early=Invoke-FixtureAction $reader
+ $earlyEvents=@($script:events.ToArray());$earlyClaim=$script:checkinClickAttempted
+ $script:controls=@($header,$script:control)
+ $submitted=Invoke-FixtureAction $reader
+ $again=Invoke-FixtureAction $reader
+ [pscustomobject]@{reader=$reader;early=$early;earlyEvents=$earlyEvents;earlyClaim=$earlyClaim;submitted=$submitted;again=$again;events=@($script:events.ToArray())}
+})
+ConvertTo-Json -InputObject $rows -Depth 5 -Compress
+`;
+  for(const shell of shells)for(const value of await runFixture(shell,command)){
+    assert.equal(value.early,false);assert.deepEqual(value.earlyEvents,[]);assert.equal(value.earlyClaim,false);
+    assert.equal(value.submitted,true);assert.equal(value.again,false);assert.deepEqual(value.events,['guard:click','invoke']);
+  }
+});
+
+test("historical success words cannot suppress a reviewed form after fresh bound unsigned proof",async()=>{
+  const command=harness+`
+$rows=@(foreach($variant in @('fresh','missing','stale','future','foreign','login','signed-control','unmanaged','read-only','home')){
+ $script:NativePtGuard=@{managed=($variant -ne 'unmanaged');readOnly=($variant -eq 'read-only');origin='https://ourbits.club';unsignedConfirmedAt=[datetimeoffset]::UtcNow.AddSeconds(-10).ToString('o')}
+ if($variant -eq 'missing'){$script:NativePtGuard.unsignedConfirmedAt=''}
+ if($variant -eq 'stale'){$script:NativePtGuard.unsignedConfirmedAt=[datetimeoffset]::UtcNow.AddMinutes(-6).ToString('o')}
+ if($variant -eq 'future'){$script:NativePtGuard.unsignedConfirmedAt=[datetimeoffset]::UtcNow.AddMinutes(1).ToString('o')}
+ $snapshot=[pscustomobject]@{success=$true;sameOrigin=$true;pageContentAvailable=$true;siteBodyLoaded=$true;waf=$false;securityVerification=$false;loginRoute=($variant -eq 'login');signedControlCount=$(if($variant -eq 'signed-control'){1}else{0});currentUrl='https://ourbits.club/attendance.php'}
+ if($variant -eq 'foreign'){$snapshot.currentUrl='https://foreign.example/attendance.php'}
+ if($variant -eq 'home'){$snapshot.currentUrl='https://ourbits.club/index.php'}
+ [pscustomobject]@{variant=$variant;allowed=(Test-NativeUnverifiedTextAllowsForm $snapshot)}
+})
+ConvertTo-Json -InputObject $rows -Compress
+`;
+  for(const shell of shells)for(const value of await runFixture(shell,command))assert.equal(value.allowed,value.variant==='fresh',shell+'/'+value.variant);
+});
+
 test("both native readers initialize before UI setup and guard navigation before browser startup", async () => {
   for (const file of ["Invoke-MainChromeCheckinAccessibility.ps1", "Invoke-PlainWafAccessibility.ps1"]) {
     const source = await fs.readFile(scripts + file, "utf8");

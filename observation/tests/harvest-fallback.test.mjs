@@ -873,25 +873,29 @@ test('a native-engine Harvest wait is preserved as preflight deferral instead of
 });
 
 test('an interrupted observer needs a gone worker and matching new unsigned proof before bounded recovery',async t=>{
-  for(const variant of ['recover','active-worker','wrong-profile','unbound-old-read','present-outcome','future-attempt']){
+  for(const variant of ['recover','active-worker','wrong-profile','unbound-old-read','present-outcome','future-attempt','manual-new-reader','automatic-new-reader']){
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-interrupted-bound-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     configureUnifiedFixture(root);
     const {f,origin,businessDate,proof,audit,attempt}=nativeProfileRecoveryFixture(root);
     delete attempt.outcome;
     Object.assign(attempt,{nativeRegisteredEngine:true,state:'outcome_unknown',workerPid:variant==='active-worker'?process.pid:2147483647});
     if(variant==='unbound-old-read')delete attempt.recoveryEvidence.profileBinding;
+    if(variant.endsWith('new-reader'))delete attempt.recoveryEvidence;
     if(variant==='present-outcome')attempt.outcome={submissionAttempted:true,failureCode:'submission_outcome_unknown'};
     if(variant==='future-attempt')attempt.finishedAt='2026-09-20T03:00:00Z';
     fs.writeFileSync(audit,JSON.stringify({businessDate,attempts:[attempt]}));
     const current={...proof(now.toISOString()),...(variant==='wrong-profile'?{profileBinding:'c'.repeat(64)}:{})},calls=[];
-    const args={...f,root,execute:true,readOnlyOrigins:[origin],runSite:async()=>{calls.push('read');return current;},
+    const recover=variant==='recover'||variant==='manual-new-reader';
+    const args={...f,root,execute:true,readOnlyOrigins:[origin],
+      ...(variant==='manual-new-reader'?{manualRecoveryId:crypto.randomUUID(),onlyOrigins:[origin]}:{}),
+      runSite:async()=>{calls.push('read');return current;},
       runEngine:async()=>{calls.push('engine');return {businessDate,observedAt:now.toISOString(),results:[{
         ...current,status:'signed',submissionAttempted:true,evidence:{...current.evidence,statusSignal:'nexus_daily_header_signed'}}]};}};
     const result=await runHarvestFallback(args);
-    assert.deepEqual(calls,variant==='recover'?['read','engine']:['read'],variant);
+    assert.deepEqual(calls,recover?['read','engine']:['read'],variant);
     const saved=JSON.parse(fs.readFileSync(audit));assert.deepEqual(saved.attempts[0],attempt);
-    assert.equal(saved.attempts.length,variant==='recover'?2:1,variant);
-    if(variant==='recover'){
+    assert.equal(saved.attempts.length,recover?2:1,variant);
+    if(recover){
       assert.equal(result.outcomes[0].v1Status,'signed');
       assert.equal((await runHarvestFallback(args)).outcomes[0].state,'already_confirmed');
       assert.deepEqual(calls,['read','engine']);
