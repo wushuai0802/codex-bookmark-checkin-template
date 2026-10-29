@@ -44,8 +44,8 @@ export async function executeDashboardOperation(root,request,{now=new Date(),run
       return {status:result.status==='login_required'?'waiting_login':'completed',message:result.evidence.summary||'只读核验已完成',resultStatus:result.status};
     }
     if(!/^[A-Za-z0-9._@-]+$/.test(gate.sshTarget??'')||!/^\/volume3\/docker\/[A-Za-z0-9._/-]+$/.test(gate.database??'')||gate.database.split('/').includes('..'))throw Error('Harvest probe unavailable');
-    const refreshHarvest=()=>JSON.parse(execFileSync('ssh',['-o','BatchMode=yes','-o','ConnectTimeout=5',gate.sshTarget,'sudo -n python3 - '+gate.database],
-      {input:fs.readFileSync(path.join(root,'scripts/harvest-observe.py'),'utf8'),encoding:'utf8',timeout:15000,windowsHide:true,maxBuffer:2000000}));
+    const refreshHarvest=()=>JSON.parse(execFileSync('ssh',['-T','-o','BatchMode=yes','-o','ConnectTimeout=15',gate.sshTarget,'sudo -n python3 - '+gate.database],
+      {input:fs.readFileSync(path.join(root,'scripts/harvest-observe.py'),'utf8'),encoding:'utf8',timeout:25_000,windowsHide:true,maxBuffer:2000000}));
     const day=dayAt(now),fallbackFile=path.join(root,'outputs','pt-fallback-results-'+day+'.json');
     const result=await runFallback({root,now,execute:true,harvest:refreshHarvest(),refreshHarvest,catalog,catalogFile,catalogHash,
       plan:read(path.join(legacy,'data/last-valid-bookmark-plan.json')),latest:read(path.join(legacy,'logs/latest.json')),config,

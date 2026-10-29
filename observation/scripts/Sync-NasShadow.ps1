@@ -302,7 +302,8 @@ try {
         $sshOptions = @('-T','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=10','-o','ServerAliveCountMax=2',$SshTarget)
         $preflight = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.preflight)) 'nas_snapshot_preflight' '' 20 1
         if ($preflight.exitCode -ne 0) { throw $preflight.failure }
-        $upload = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.upload)) 'nas_snapshot_upload' $archivePath 45 2
+        $uploadTimeout = Get-ShadowUploadTimeoutSeconds (Get-Item -LiteralPath $archivePath).Length
+        $upload = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.upload)) 'nas_snapshot_upload' $archivePath $uploadTimeout 2
         if ($upload.exitCode -ne 0) { throw $upload.failure }
         $extract = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.extract)) 'nas_snapshot_extract' '' 30 2
         if ($extract.exitCode -ne 0) { throw $extract.failure }

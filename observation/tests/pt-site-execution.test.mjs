@@ -8,6 +8,18 @@ import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {runPtSite,projectPtSiteResult,spawnPtSiteChild} from '../src/pt-site-execution.mjs';
 
+test('an explicit Harvest pre-submit wait keeps its no-write fact across the PT transport',()=>{
+  const origin='https://pt.example',value={origin,status:'deferred',retryCause:'harvest_waiting',
+    observedAt:'2026-10-29T01:00:00Z',nextEligibleAt:'2026-10-29T01:30:00Z',submissionAttempted:false,
+    profileBinding:'a'.repeat(64),accountKey:'site-default',evidence:{source:'none',authoritative:false}};
+  const result=projectPtSiteResult(value,origin);
+  assert.equal(result.status,'unknown');assert.equal(result.submissionAttempted,false);
+  assert.equal(result.retryCause,'harvest_waiting');assert.equal(Date.parse(result.nextEligibleAt),Date.parse(value.nextEligibleAt));
+  assert.equal(result.evidence.authoritative,false);assert.equal(result.profileBinding,value.profileBinding);
+  for(const change of [{submissionAttempted:true},{submissionAttempted:undefined},{submissionOutcomeUnknown:true},{retryCause:'private-value'}])
+    assert.throws(()=>projectPtSiteResult({...value,...change},origin),/invalid PT site result/);
+});
+
 test('U2 pre-submit diagnoses cross the PT transport without becoming an authentication failure',()=>{
   const origin='https://u2.dmhy.org';
   for(const failureCode of ['u2_reference_unavailable','u2_reference_timeout','u2_visual_ambiguous','u2_image_unavailable',

@@ -30,6 +30,13 @@ function New-ShadowPublicationPlan([string]$NasStagingDir, [string]$NasDataDir, 
     }
 }
 
+function Get-ShadowUploadTimeoutSeconds([long]$Bytes) {
+    if ($Bytes -lt 0) { throw 'invalid shadow archive size' }
+    # Include SSH setup and allow a slow overlay-network upload. The archive
+    # grows with the audit ledger; keep an explicit upper bound for stalls.
+    return [int][Math]::Min(180, [Math]::Max(90, 30 + [Math]::Ceiling($Bytes / 16384.0)))
+}
+
 function Invoke-ShadowPublicationCommand([string]$Executable, [string[]]$Arguments, [string]$Phase,
     [string]$InputFile = '', [int]$TimeoutSeconds = 45, [int]$MaxAttempts = 2, [scriptblock]$Invoke) {
     for ($attempt = 1; $attempt -le [Math]::Max(1, [Math]::Min(2, $MaxAttempts)); $attempt++) {
