@@ -394,8 +394,9 @@ function claimWorker(root) {
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
   clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[],onlyOrigins=null,manualRecoveryId=null,
-  deadline=null,minimumSiteBudgetMs=60_000,signal}={}) {
-  if(deadline!==null&&!Number.isFinite(deadline)||!Number.isFinite(minimumSiteBudgetMs)||minimumSiteBudgetMs<=0)
+  deadline=null,minimumSiteBudgetMs=70_000,siteDeadline=deadline,signal}={}) {
+  if(deadline!==null&&!Number.isFinite(deadline)||siteDeadline!==null&&!Number.isFinite(siteDeadline)||
+     !Number.isFinite(minimumSiteBudgetMs)||minimumSiteBudgetMs<=0)
     throw Error('Invalid PT batch budget');
   const normalizedReadOnlyOrigins=[...new Set(readOnlyOrigins.map(originOf).filter(Boolean))];
   if(manualRecoveryId!==null&&(!execute||!Array.isArray(onlyOrigins)||onlyOrigins.length!==1||
@@ -426,7 +427,12 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   const outcomes=[];
   const originalRunSite=runSite;
   if(signal)runSite=request=>originalRunSite({...request,signal});
-  const budgetAvailable=()=>!signal?.aborted&&(deadline===null||deadline-clock().getTime()>=minimumSiteBudgetMs);
+  const budgetAvailable=()=>{
+    if(signal?.aborted)return false;
+    if(deadline===null&&siteDeadline===null)return true;
+    const at=clock().getTime();
+    return (deadline===null||at<deadline)&&(siteDeadline===null||siteDeadline-at>=minimumSiteBudgetMs);
+  };
   const deferBudget=candidate=>{
     const entry={origin:candidate.origin,accountKey:candidate.accountKey,state:'deferred_budget',
       recordedAt:clock().toISOString(),submissionAttempted:false};

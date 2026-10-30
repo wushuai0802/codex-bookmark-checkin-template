@@ -244,8 +244,13 @@ try {
                             $fallbackLog = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.log"
                             $fallbackError = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.err.log"
                             $arguments = @($fallbackScript, '--apply', '--report-file', $pendingFile, '--catalog-file', $pendingCatalog, '--report-sha256', $reportHash, '--catalog-sha256', $catalogHash, '--harvest-ssh-target', $SshTarget, '--harvest-db-path', $monitorConfig.harvestDatabase)
-                            $arguments += @('--budget-ms', '180000', '--cooperative-stop')
-                            $fallbackResult = Invoke-BoundedSyncProcess $NodePath $arguments 'harvest_fallback' '' 180 -CooperativeStop -CleanupGraceSeconds 35
+                            $fallbackTimeoutSeconds = 180
+                            $fallbackCleanupGraceSeconds = 35
+                            $fallbackMinimumSiteBudgetMs = 70000
+                            $fallbackBudgetMs = $fallbackTimeoutSeconds * 1000 - $fallbackCleanupGraceSeconds * 1000 - $fallbackMinimumSiteBudgetMs
+                            $arguments += @('--budget-ms', [string]$fallbackBudgetMs,
+                                '--minimum-site-budget-ms', [string]$fallbackMinimumSiteBudgetMs, '--cooperative-stop')
+                            $fallbackResult = Invoke-BoundedSyncProcess $NodePath $arguments 'harvest_fallback' '' $fallbackTimeoutSeconds -CooperativeStop -CleanupGraceSeconds $fallbackCleanupGraceSeconds
                             if ($fallbackResult.exitCode -eq 0) {
                                 Write-Log "Execution-layer fallback completed for $([int]$preview.newAttempts) unattempted PT site(s)."
                             } else {

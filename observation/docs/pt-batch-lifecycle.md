@@ -1,9 +1,20 @@
 # PT batch budgets and cancellation
 
-The scheduled Harvest fallback has a 180-second work budget. Before starting
-a site, and again before creating its write attempt, it requires at least
-60 seconds of remaining budget. This is a minimum dispatch allowance, not a
-guarantee that a site will finish. A budget deferral is stored separately in
+The scheduled Harvest fallback retains its 180-second outer timeout and
+35-second cooperative cleanup grace. Its inner admission budget is
+`180 - 35 - 70 = 75` seconds. The 70-second minimum site allowance rounds up
+the observed p95 of 66.884 seconds (177 normally completed, timed attempts
+from 2026-09-20 through 2026-10-30; median 14.692 seconds).
+
+The inner deadline stops admission of new sites; it does not cancel an
+already-started site. The CLI reserves a further 70 seconds for that site,
+leaving 35 seconds before the outer timeout. Both admission time and the
+remaining site allowance are checked before browsing and before creating a
+write attempt, including time spent refreshing Harvest. Direct library calls
+without a separate site deadline retain their existing deadline semantics.
+The allowance is based on p95, not a guarantee for every outlier; the existing
+cooperative cleanup still protects a longer-running site.
+A budget deferral is stored separately in
 the daily audit's `deferrals` list as `deferred_budget`, with
 `submissionAttempted=false`; it consumes no submission attempt.
 

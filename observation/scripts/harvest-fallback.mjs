@@ -25,6 +25,8 @@ function liveHarvestProbe(target,database){
 try{
   const budget=value('--budget-ms')===null?null:Number(value('--budget-ms'));
   if(budget!==null&&(!Number.isSafeInteger(budget)||budget<1||budget>180_000))throw Error('invalid batch budget');
+  const minimumSiteBudgetMs=value('--minimum-site-budget-ms')===null?70_000:Number(value('--minimum-site-budget-ms'));
+  if(!Number.isSafeInteger(minimumSiteBudgetMs)||minimumSiteBudgetMs<=0||minimumSiteBudgetMs>180_000)throw Error('invalid site budget');
   if(args.includes('--cooperative-stop')){
     control=createInterface({input:process.stdin,terminal:false});
     control.on('line',line=>{if(line.length>256)return;try{if(JSON.parse(line).type==='pt_batch_cancel')cancel.abort();}catch{}});
@@ -66,7 +68,9 @@ try{
   inputs.config=resolvedFallbackReadConfig(inputs.catalog,inputs.config,origin=>ptReadPolicy(origin,inputs.config));
   const readOnlyOrigins=reviewedFallbackReadOrigins(inputs.catalog,origin=>inputs.config.ptReadOnlyPolicies[origin]);
   const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount,readOnlyOrigins,
-    deadline:budget===null?null:batchStartedAt+budget,signal:cancel.signal,
+    deadline:budget===null?null:batchStartedAt+budget,
+    siteDeadline:budget===null?null:batchStartedAt+budget+minimumSiteBudgetMs,
+    minimumSiteBudgetMs,signal:cancel.signal,
     ...(onlyOrigin?{onlyOrigins:[onlyOrigin]}:{}),
     ...(manualRecoveryId?{manualRecoveryId}:{}),
     refreshHarvest:liveHarvestProbe(value('--harvest-ssh-target'),value('--harvest-db-path'))}):planHarvestFallback({...inputs,fallbackOnlyEnabled,readOnlyOrigins});

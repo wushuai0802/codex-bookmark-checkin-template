@@ -48,6 +48,22 @@ test('time spent refreshing Harvest cannot start a site with an insufficient rem
   const state=JSON.parse(fs.readFileSync(f.file));assert.equal(probes,0);assert.equal(state.attempts.length,0);
   assert.equal(state.deferrals.length,2);assert.ok(state.deferrals.every(v=>v.state==='deferred_budget'&&v.submissionAttempted===false));
 });
+test('a final site admitted just before the inner cutoff has its full site budget before outer cancellation',async t=>{
+  const f=fixture(t),cancel=new AbortController(),started=f.now.getTime();let at=started,lastStartedAt;
+  const minimumSiteBudgetMs=70_000,cleanupGraceMs=35_000,outerDeadline=started+180_000;
+  const innerBudgetMs=180_000-cleanupGraceMs-minimumSiteBudgetMs,deadline=started+innerBudgetMs;
+  const result=await runHarvestFallback({...f.args,clock:()=>new Date(at),signal:cancel.signal,deadline,
+    siteDeadline:deadline+minimumSiteBudgetMs,minimumSiteBudgetMs,runSite:async options=>{
+      if(options.readOnly)return receipt(options.origin,at);
+      if(options.origin===f.origins[0])at=deadline-1;
+      else {lastStartedAt=at;at+=minimumSiteBudgetMs;if(at>=outerDeadline)cancel.abort();}
+      return receipt(options.origin,at,'signed');
+    }});
+  assert.equal(innerBudgetMs,75_000);assert.equal(lastStartedAt,deadline-1);
+  assert.equal(cancel.signal.aborted,false);assert.ok(at<outerDeadline-cleanupGraceMs);
+  assert.ok(result.outcomes.every(value=>value.state==='completed'));
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).attempts.length,2);
+});
 for(const cleanupCompletes of [true,false])test(`second-site cancellation uses cleanup and preserves unknown submission (${cleanupCompletes})`,async t=>{
   const f=fixture(t),cancel=new AbortController(),marker=f.root+'/data/pt-worker-lifecycle.json';let calls=0,cleaned=false;
   const execute=async()=>{
