@@ -8,6 +8,14 @@ import {fileURLToPath} from 'node:url';
 
 const transport=fileURLToPath(new URL('../scripts/Sync-Transport.ps1',import.meta.url));
 const quote=value=>"'"+value.replaceAll("'","''")+"'";
+test('outer timeout delivers cooperative cancellation before its force-kill grace expires',{skip:process.platform!=='win32'},t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'sync-cooperative-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const child=path.join(root,'observer.cjs'),proof=path.join(root,'cleanup.json');
+  fs.writeFileSync(child,"const fs=require('node:fs');let data='';process.stdin.on('data',v=>{data+=v; if(data.includes('pt_batch_cancel')){fs.writeFileSync(process.argv[2],JSON.stringify({cleanup:true}));process.exit(0);}});setTimeout(()=>{},20000);");
+  const code=`. ${quote(transport)}; $result=Invoke-BoundedSyncProcess -Executable ${quote(process.execPath)} -Arguments @(${quote(child)},${quote(proof)}) -Phase 'batch' -TimeoutSeconds 1 -CooperativeStop -CleanupGraceSeconds 3; $result|ConvertTo-Json -Compress`;
+  const result=JSON.parse(execFileSync('pwsh.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')],{encoding:'utf8',timeout:15000}));
+  assert.equal(result.timedOut,true);assert.equal(result.exitCode,124);assert.equal(JSON.parse(fs.readFileSync(proof)).cleanup,true);
+});
 for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pwsh'])test(`bounded transport closes stdin and kills a stalled writer (${shell})`,{skip:process.platform!=='win32'},t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-sync-transport-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

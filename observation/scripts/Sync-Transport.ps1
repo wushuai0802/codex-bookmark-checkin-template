@@ -63,7 +63,9 @@ function Invoke-BoundedSyncProcess {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$Phase,
         [string]$InputFile = '',
-        [ValidateRange(1, 180)][int]$TimeoutSeconds = 30
+        [ValidateRange(1, 180)][int]$TimeoutSeconds = 30,
+        [switch]$CooperativeStop,
+        [ValidateRange(1, 120)][int]$CleanupGraceSeconds = 35
     )
 
     $process = $null; $inputStream = $null; $copyCancellation = $null
@@ -99,8 +101,21 @@ function Invoke-BoundedSyncProcess {
         }
         # EOF is required for `cat > file` and must also be sent for commands
         # that do not consume stdin, otherwise ssh can wait indefinitely.
-        try { $process.StandardInput.Close() } catch { }
-        if (-not $process.WaitForExit((Get-SyncRemainingMilliseconds $deadline))) { $timedOut=$true; throw 'native process timed out' }
+        if (-not $CooperativeStop) { try { $process.StandardInput.Close() } catch { } }
+        if (-not $process.WaitForExit((Get-SyncRemainingMilliseconds $deadline))) {
+            $timedOut=$true
+            if ($CooperativeStop) {
+                # Windows SIGTERM is an immediate kill. Use the observer's
+                # private stdin channel so it can call its owned cleanup().
+                try {
+                    $process.StandardInput.WriteLine('{"type":"pt_batch_cancel"}')
+                    $process.StandardInput.Flush()
+                    $process.StandardInput.Close()
+                    [void]$process.WaitForExit($CleanupGraceSeconds * 1000)
+                } catch { }
+            }
+            throw 'native process timed out'
+        }
         $exitCode = $process.ExitCode
         $stdout = if ($stdoutTask.Wait(2000)) { $stdoutTask.GetAwaiter().GetResult() } else { '' }
         $errorText = if ($stderrTask.Wait(2000)) { $stderrTask.GetAwaiter().GetResult() } else { '' }
