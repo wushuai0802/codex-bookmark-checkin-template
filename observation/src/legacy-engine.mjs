@@ -142,6 +142,7 @@ export async function runLegacyEngine({root=path.resolve('.'),mode='dry-run',acc
   try{
     try{await reconcilePtWorker(root,{legacyRoot});}
     catch(error){error.gatewayStage='pt_cleanup';throw error;}
+    let previousRunId=null;try{previousRunId=read(path.join(legacyRoot,'logs/latest.json')).runId??null;}catch{}
     fs.mkdirSync(path.join(root,'logs'),{recursive:true});
     const logFile=path.join(root,'logs',`v1-engine-${Date.now()}.log`);output=fs.openSync(logFile,'a',0o600);
     const exitCode=await new Promise((resolve,reject)=>{
@@ -157,6 +158,8 @@ export async function runLegacyEngine({root=path.resolve('.'),mode='dry-run',acc
       }
     }
     const report=publishEngineReport({root,legacyRoot,exitCode,requireFreshSince:mode==='execute'?startedAt:null});
-    return {...report,logFile};
+    const freshFinalReport=report.executionComplete===true&&report.runId!==previousRunId&&
+      Date.parse(report.sourceFinishedAt)>=Date.parse(startedAt)-2000;
+    return {...report,logFile,freshFinalReport};
   }finally{if(output!==undefined)fs.closeSync(output);releaseExecutionLock(lease);}
 }

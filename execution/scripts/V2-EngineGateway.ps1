@@ -46,26 +46,33 @@ function Invoke-V2EngineGateway {
     $PSNativeCommandUseErrorActionPreference = $false
     $gatewayOutput = @(& $engineNode @forward 2>&1)
     $script:V2EngineExitCode = $LASTEXITCODE
-    if ($script:V2EngineExitCode -ne 0) {
-        foreach ($line in $gatewayOutput) {
-            try {
-                $diagnostic = ([string]$line) | ConvertFrom-Json
-                if ($diagnostic.gatewayError) {
-                    $code = Get-CheckinGatewayCode ([string]$diagnostic.gatewayError.code)
-                    $stage = Get-CheckinGatewayStage ([string]$diagnostic.gatewayError.stage)
-                }
-            } catch { }
-        }
+    $gatewayOutput | Out-Host
+    $hasGatewayError = $false; $freshFinalReport = $false; $busy = $false
+    foreach ($line in $gatewayOutput) {
+        try {
+            $diagnostic = ([string]$line) | ConvertFrom-Json
+            if ($diagnostic.gatewayError) {
+                $hasGatewayError = $true
+                $code = Get-CheckinGatewayCode ([string]$diagnostic.gatewayError.code)
+                $stage = Get-CheckinGatewayStage ([string]$diagnostic.gatewayError.stage)
+            }
+            if ($diagnostic.mode -eq 'v2_v1_engine' -and $diagnostic.freshFinalReport -is [bool] -and
+                $diagnostic.freshFinalReport -eq $true -and $diagnostic.executionComplete -eq $true -and $diagnostic.runId) {
+                $freshFinalReport = $true
+            }
+            if ($diagnostic.reason -eq 'executor_busy') { $busy = $true }
+        } catch { }
+    }
+    # A completed report with unresolved business results retains exit code 2,
+    # but it proves that the gateway ran successfully. Only infrastructure
+    # errors and unsuccessful exits without a fresh final report are outages.
+    $gatewayFailed = $hasGatewayError -or ($script:V2EngineExitCode -ne 0 -and -not $freshFinalReport)
+    if ($gatewayFailed) {
         try { Write-CheckinGatewayEvent -Root $root -Stage $stage -Code $code -ExitCode $script:V2EngineExitCode }
         catch { Write-Warning 'Gateway audit could not be persisted' }
         Write-Host "V2 V1-engine gateway failed: $code"
         if ($scheduledProbe) { Register-CheckinGatewayOutcome $root $false $code }
     } else {
-        $gatewayOutput | Out-Host
-        $busy = $false
-        foreach ($line in $gatewayOutput) {
-            try { if ((([string]$line) | ConvertFrom-Json).reason -eq 'executor_busy') { $busy=$true } } catch { }
-        }
         if ($scheduledProbe -and -not $busy) { Register-CheckinGatewayOutcome $root $true '' }
     }
     return $true

@@ -18,5 +18,5 @@ try{
   }
   if(validate){validateEngineLease({root,legacyRoot});console.log('lease-valid');}
   else if(refresh){const r=publishEngineReport({root,legacyRoot:loadRuntimeConfig(root).legacyRoot});console.log(JSON.stringify({mode:r.mode,counts:r.counts}));}
-  else{const r=await runLegacyEngine({root,mode,...values});console.log(JSON.stringify({mode:r.mode,skipped:r.skipped===true,reason:r.reason,runId:r.runId,counts:r.counts,exitCode:r.exitCode,executionComplete:r.executionComplete,businessComplete:r.businessComplete,logFile:r.logFile}));if(r.exitCode!==0)process.exitCode=r.exitCode??1;}
+  else{const r=await runLegacyEngine({root,mode,...values});console.log(JSON.stringify({mode:r.mode,skipped:r.skipped===true,reason:r.reason,runId:r.runId,counts:r.counts,exitCode:r.exitCode,executionComplete:r.executionComplete,businessComplete:r.businessComplete,freshFinalReport:r.freshFinalReport===true,logFile:r.logFile}));if(r.exitCode!==0)process.exitCode=r.exitCode??1;}
 }catch(error){console.error(JSON.stringify({gatewayError:gatewayError(error)}));process.exitCode=1;}

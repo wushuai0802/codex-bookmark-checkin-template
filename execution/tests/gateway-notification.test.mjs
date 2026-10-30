@@ -69,3 +69,28 @@ test('only outer scheduled failures count; manual calls, lease re-entry and busy
   success(true);assert.equal(invoke(),0);assert.equal(items(root).length,1);
   success(false);assert.equal(invoke(),0);assert.equal(items(root).length,2);
 });
+
+test('exit 2 with a new final report resets an infrastructure streak, preserves host output and never raises an outage',{skip:process.platform!=='win32'},t=>{
+  const root=fixture(t);fs.mkdirSync(root+'/data');fs.mkdirSync(root+'/scripts');
+  fs.writeFileSync(root+'/data/v2-integration.json',JSON.stringify({executionEngine:'v1',v2ProjectRoot:root,nodeExecutable:process.execPath}));
+  const cli=root+'/scripts/run-v1-engine.mjs';let serial=0;
+  const run=(kind)=>{
+    const payload=kind==='infra'?{gatewayError:{code:'PT_CLEANUP_PENDING',stage:'pt_cleanup'}}:
+      {mode:'v2_v1_engine',runId:'business-'+(++serial),executionComplete:true,businessComplete:false,
+        freshFinalReport:kind==='business',counts:{unresolved:1},summary:'BUSINESS_SUMMARY'};
+    fs.writeFileSync(cli,`console.log(${JSON.stringify(JSON.stringify(payload))});process.exitCode=${kind==='infra'?1:2};`);
+    const command=`$ErrorActionPreference='Stop';$root=${q(root)};. ${q(path.join(scripts,'V2-EngineGateway.ps1'))};Invoke-V2EngineGateway -Mode scheduled|Out-Null;exit $script:V2EngineExitCode`;
+    return spawnSync('pwsh.exe',['-NoProfile','-NonInteractive','-Command',command],{encoding:'utf8',timeout:15000});
+  };
+  const state=()=>JSON.parse(fs.readFileSync(root+'/data/gateway-health.json'));
+  const events=()=>fs.existsSync(root+'/data/gateway-events.jsonl')?fs.readFileSync(root+'/data/gateway-events.jsonl','utf8').trim().split('\n').length:0;
+  for(let i=0;i<2;i++){const result=run('business');assert.equal(result.status,2);assert.match(result.stdout,/BUSINESS_SUMMARY/);}
+  assert.equal(events(),0);assert.equal(items(root).length,0);assert.equal(fs.existsSync(root+'/data/gateway-health.json'),false);
+  run('infra');assert.equal(state().streakCount,1);run('business');assert.equal(state().streakCount,0);assert.equal(events(),1);
+  run('infra');assert.equal(state().streakCount,1);assert.equal(items(root).length,0);
+  run('infra');assert.equal(state().streakCount,2);assert.equal(items(root).filter(i=>i.status==='failed').length,1);
+  run('business');assert.equal(state().streakCount,0);assert.equal(items(root).filter(i=>i.status==='success').length,1);assert.equal(events(),3);
+  run('business');assert.equal(items(root).length,2);assert.equal(events(),3);
+  run('infra');assert.equal(state().streakCount,1);assert.equal(items(root).length,2);
+  run('missing-report');assert.equal(state().streakCode,'GATEWAY_CHILD_FAILED');assert.equal(state().streakCount,1);
+});

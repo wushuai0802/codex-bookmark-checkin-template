@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {EventEmitter} from 'node:events';
+import {fileURLToPath} from 'node:url';
 import {engineCommand,validateEngineLease,runLegacyEngine,readLegacyHealth} from '../src/legacy-engine.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from '../src/execution-lock.mjs';
 import {runCanary} from '../src/canary-runner.mjs';
@@ -59,6 +60,33 @@ test('scheduled invocation skips an active V2 run without a failed task result',
    assert.equal(r.skipped,true);assert.equal(r.reason,'executor_busy');assert.equal(r.exitCode,0);
    await assert.rejects(()=>runLegacyEngine({...f,mode:'execute'}),/already active/);
  }finally{releaseExecutionLock(lease);}
+});
+
+test('exit 2 preserves a new final business report and distinguishes it from a reused report',async t=>{
+ const f=fixture(t);
+ fs.cpSync(fileURLToPath(new URL('./fixtures/legacy/',import.meta.url)),f.legacyRoot,{recursive:true});
+ const template=JSON.parse(fs.readFileSync(path.join(f.legacyRoot,'logs/fixture-run-20260902/result.json')));
+ const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date()).replaceAll('-','');
+ const report={...template,runId:stamp+'-business-pending',runState:'final',isComplete:true,finishedAt:new Date().toISOString()};
+ report.results[0]={...report.results[0],status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true};
+ const result=await runLegacyEngine({...f,mode:'scheduled',spawnChild:()=>{
+   fs.writeFileSync(path.join(f.legacyRoot,'logs/latest.json'),JSON.stringify(report));
+   const child=new EventEmitter();queueMicrotask(()=>child.emit('exit',2));return child;
+ }});
+ assert.equal(result.exitCode,2);assert.equal(result.executionComplete,true);assert.equal(result.businessComplete,false);
+ assert.equal(result.freshFinalReport,true);
+ report.finishedAt=new Date().toISOString();fs.writeFileSync(path.join(f.legacyRoot,'logs/latest.json'),JSON.stringify(report));
+ const reused=await runLegacyEngine({...f,mode:'scheduled',spawnChild:()=>{
+   const child=new EventEmitter();queueMicrotask(()=>child.emit('exit',2));return child;
+ }});
+ assert.equal(reused.freshFinalReport,false);
+});
+
+test('an unsuccessful scheduled child without any new report remains an infrastructure failure',async t=>{
+ const f=fixture(t);
+ await assert.rejects(runLegacyEngine({...f,mode:'scheduled',spawnChild:()=>{
+   const child=new EventEmitter();queueMicrotask(()=>child.emit('exit',2));return child;
+ }}),/failed without a fresh final report/);
 });
 test('fresh V1 health is consumed only from a valid read-only check',t=>{
  const f=fixture(t),file=path.join(f.legacyRoot,'scripts/Test-CheckinHealth.ps1');

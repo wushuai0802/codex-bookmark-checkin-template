@@ -17,7 +17,7 @@ test('a failure before controller log creation records only structured diagnosti
   assert.equal(child.status,1);const raw=fs.readFileSync(root+'/data/gateway-events.jsonl','utf8');
   const record=JSON.parse(raw.trim());assert.equal(record.errorCode,'PT_CLEANUP_PENDING');assert.equal(record.stage,'pt_cleanup');assert.equal(record.exitCode,1);
   assert.ok(Number.isFinite(Date.parse(record.time)));assert.doesNotMatch(raw,/PRIVATE_FIXTURE_DETAIL|v2-integration|run-v1-engine/);
-  assert.doesNotMatch(child.stdout+child.stderr,/PRIVATE_FIXTURE_DETAIL/);
+  assert.match(child.stdout+child.stderr,/PRIVATE_FIXTURE_DETAIL/,'raw executor output still reaches the host');
 });
 test('local gateway exceptions are recorded and audit history rotates with bounded entries',{skip:process.platform!=='win32'},t=>{
   const root=fixture(t);fs.mkdirSync(root+'/data');fs.writeFileSync(root+'/data/v2-integration.json','invalid fixture');
