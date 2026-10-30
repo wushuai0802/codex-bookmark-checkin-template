@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBookmarkPlanWithBackup } from "./bookmarks.mjs";
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
+import { selectPowerShell } from './powershell-runtime.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -22,15 +23,6 @@ async function readJson(filePath, fallback = null) {
 
 async function exists(filePath) {
   return fs.access(filePath).then(() => true).catch(() => false);
-}
-
-async function findOnPath(executableName) {
-  const pathValue = process.env.Path ?? process.env.PATH ?? "";
-  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
-    const candidate = path.join(directory, executableName);
-    if (await exists(candidate)) return path.resolve(candidate);
-  }
-  return null;
 }
 
 async function findChrome() {
@@ -183,9 +175,7 @@ if (edgeProfileAnswer && edgeProfileAnswer.toLowerCase() !== "none") {
   Object.assign(selectedEdge, edgeScopeSelectors);
 }
 
-const windowsPowerShell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-const preferredPowerShell = await findOnPath("pwsh.exe")
-  ?? (await exists(windowsPowerShell) ? windowsPowerShell : "pwsh.exe");
+const preferredPowerShell = await selectPowerShell({configured:answers.powershellExecutable});
 config = deepMerge(config, {
   bookmarksPath: selected.bookmarksPath,
   bookmarkSourceName: "Chrome",
@@ -203,7 +193,7 @@ config = deepMerge(config, {
   chromeExecutable: await findChrome(),
   nodeExecutable: process.execPath,
   pythonExecutable: answers.pythonExecutable ?? "",
-  powershellExecutable: answers.powershellExecutable || preferredPowerShell,
+  powershellExecutable: preferredPowerShell,
   schedulerTaskName: "CodexBookmarkDailyCheckin",
   schedulerRunKeyName: "CodexBookmarkDailyCheckin",
 });

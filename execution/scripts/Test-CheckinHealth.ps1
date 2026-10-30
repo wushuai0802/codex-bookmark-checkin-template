@@ -483,8 +483,15 @@ if ((Test-Path -LiteralPath (Join-Path $root 'release.json')) -and (Test-Path -L
         $deploymentIntegrity = (& $integrityNode (Join-Path $root 'src/deployment-integrity.mjs') $root) | ConvertFrom-Json
     } catch { $deploymentIntegrity = [pscustomobject]@{ managed = $true; consistent = $false; busy = $false; issues = @('integrity_check_failed') } }
 }
+$powerShellRuntime = [pscustomobject]@{ present = $false; stable = $false }
+try {
+    . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
+    $healthNode = Resolve-CheckinNode $config
+    $powerShellRuntime = (& $healthNode (Join-Path $root 'src/powershell-runtime.mjs') $configPath) | ConvertFrom-Json
+} catch { }
 $checks = [ordered]@{
     deploymentIntegrity = [bool]($deploymentIntegrity.busy -or $deploymentIntegrity.consistent)
+    powershellExecutableStable = [bool]($powerShellRuntime.present -and $powerShellRuntime.stable)
     configPresent = $true
     bookmarksReadable = Test-Path -LiteralPath ([string]$config.bookmarksPath)
     chromeExecutablePresent = Test-Path -LiteralPath ([string]$config.chromeExecutable)
