@@ -140,7 +140,8 @@ export async function runLegacyEngine({root=path.resolve('.'),mode='dry-run',acc
   }
   const startedAt=new Date().toISOString();let output;
   try{
-    await reconcilePtWorker(root,{legacyRoot});
+    try{await reconcilePtWorker(root,{legacyRoot});}
+    catch(error){error.gatewayStage='pt_cleanup';throw error;}
     fs.mkdirSync(path.join(root,'logs'),{recursive:true});
     const logFile=path.join(root,'logs',`v1-engine-${Date.now()}.log`);output=fs.openSync(logFile,'a',0o600);
     const exitCode=await new Promise((resolve,reject)=>{

@@ -3,6 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runLegacyEngine,validateEngineLease,publishEngineReport} from '../src/legacy-engine.mjs';
 import {loadRuntimeConfig} from '../src/runtime-config.mjs';
+import {gatewayError} from '../src/gateway-error.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 try{
   const args=process.argv.slice(2),values={accountKeys:[],origins:[]};let mode='dry-run',validate=false,legacyRoot=null,refresh=false;
@@ -18,4 +19,4 @@ try{
   if(validate){validateEngineLease({root,legacyRoot});console.log('lease-valid');}
   else if(refresh){const r=publishEngineReport({root,legacyRoot:loadRuntimeConfig(root).legacyRoot});console.log(JSON.stringify({mode:r.mode,counts:r.counts}));}
   else{const r=await runLegacyEngine({root,mode,...values});console.log(JSON.stringify({mode:r.mode,skipped:r.skipped===true,reason:r.reason,runId:r.runId,counts:r.counts,exitCode:r.exitCode,executionComplete:r.executionComplete,businessComplete:r.businessComplete,logFile:r.logFile}));if(r.exitCode!==0)process.exitCode=r.exitCode??1;}
-}catch(error){console.error('V2 V1-engine: '+error.message);process.exitCode=1;}
+}catch(error){console.error(JSON.stringify({gatewayError:gatewayError(error)}));process.exitCode=1;}
