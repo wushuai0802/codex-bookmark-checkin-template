@@ -4,6 +4,7 @@ function Invoke-V2EngineGateway {
     param([string]$Mode, [hashtable]$Parameters = @{})
     . (Join-Path $PSScriptRoot 'Gateway-Audit.ps1')
     $stage = 'integration'; $code = 'GATEWAY_CONFIG_INVALID'
+    $scheduledProbe = $Mode -eq 'scheduled' -and -not $env:CHECKIN_V2_ENGINE_LEASE
     try {
     $integrationFile = Join-Path $root 'data\v2-integration.json'
     if (-not (Test-Path -LiteralPath $integrationFile)) { return $false }
@@ -58,11 +59,20 @@ function Invoke-V2EngineGateway {
         try { Write-CheckinGatewayEvent -Root $root -Stage $stage -Code $code -ExitCode $script:V2EngineExitCode }
         catch { Write-Warning 'Gateway audit could not be persisted' }
         Write-Host "V2 V1-engine gateway failed: $code"
-    } else { $gatewayOutput | Out-Host }
+        if ($scheduledProbe) { Register-CheckinGatewayOutcome $root $false $code }
+    } else {
+        $gatewayOutput | Out-Host
+        $busy = $false
+        foreach ($line in $gatewayOutput) {
+            try { if ((([string]$line) | ConvertFrom-Json).reason -eq 'executor_busy') { $busy=$true } } catch { }
+        }
+        if ($scheduledProbe -and -not $busy) { Register-CheckinGatewayOutcome $root $true '' }
+    }
     return $true
     } catch {
         try { Write-CheckinGatewayEvent -Root $root -Stage $stage -Code $code -ExitCode 1 }
         catch { Write-Warning 'Gateway audit could not be persisted' }
+        if ($scheduledProbe) { Register-CheckinGatewayOutcome $root $false $code }
         throw
     }
 }
