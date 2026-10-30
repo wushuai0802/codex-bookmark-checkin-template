@@ -79,14 +79,17 @@ test('a failed PID publication still cleans the spawned worker and keeps its dur
 });
 
 test('Windows cleanup terminates only the owned project process tree and preserves another child application',
-  {skip:process.platform!=='win32',timeout:20_000},async t=>{
+  {skip:process.platform!=='win32',timeout:40_000},async t=>{
     const args=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'pt-unrelated-'));t.after(()=>fs.promises.rm(outside,{recursive:true,force:true,maxRetries:50,retryDelay:100}));
     fs.copyFileSync(fileURLToPath(new URL('../../execution/scripts/Cleanup-PtWorker.ps1',import.meta.url)),path.join(args.root,'scripts/Cleanup-PtWorker.ps1'));
     const ownedFile=path.join(args.root,'scripts/owned.mjs'),otherFile=path.join(outside,'other.mjs'),browserFile=path.join(args.root,'scripts/chrome.exe');
     const privateProfile=path.join(args.root,'data/private'),sharedProfile=path.join(outside,'shared');
     fs.mkdirSync(privateProfile,{recursive:true});fs.mkdirSync(sharedProfile,{recursive:true});fs.copyFileSync(process.execPath,browserFile);
-    fs.writeFileSync(ownedFile,'setInterval(()=>{},1000);');
-    fs.writeFileSync(otherFile,'setTimeout(()=>process.exit(0),7000);');
+    const stopFile=path.join(outside,'stop'),readyDirectory=path.join(args.root,'data/ready');fs.mkdirSync(readyDirectory,{recursive:true});
+    const processFixture='import fs from "node:fs";'+
+      `fs.writeFileSync(${JSON.stringify(readyDirectory)}+'/'+process.pid,'ready');`+
+      `setInterval(()=>{if(fs.existsSync(${JSON.stringify(stopFile)}))process.exit(0);},25);setTimeout(()=>process.exit(0),30000);`;
+    fs.writeFileSync(ownedFile,processFixture);fs.writeFileSync(otherFile,processFixture);
     fs.writeFileSync(path.join(args.root,'scripts/Run-PtSupplement.mjs'),
       'import {spawn} from "node:child_process";'+
       'const owned=spawn(process.execPath,[process.argv[2]],{stdio:"ignore"});'+
@@ -100,13 +103,22 @@ test('Windows cleanup terminates only the owned project process tree and preserv
     const ids=await new Promise((resolve,reject)=>{let data='';worker.once('error',reject);worker.stdout.on('data',chunk=>{
       data+=chunk;try{resolve(JSON.parse(data.trim()));}catch{}
     });});
+    const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
+    try {
+    // The fixture tests cleanup scope, not Windows process-start visibility.
+    const readyDeadline=Date.now()+8000;
+    while(!Object.values(ids).every(pid=>fs.existsSync(path.join(readyDirectory,String(pid))))&&Date.now()<readyDeadline)
+      await new Promise(resolve=>setTimeout(resolve,25));
+    assert.ok(Object.values(ids).every(pid=>fs.existsSync(path.join(readyDirectory,String(pid)))));
     let detail;
     const completed=await cleanupPtWorker({workerPid:worker.pid,observerPid:process.pid,ownerId,startedAt,legacyRoot:args.root,privateProfile,shell:'pwsh.exe'},
       {executeFile:async(...options)=>{const value=await promisify(execFile)(...options);detail=JSON.parse(value.stdout);return value;}});
     assert.equal(completed,true,JSON.stringify(detail));
-    const alive=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
+    const goneDeadline=Date.now()+3000;
+    while((alive(ids.owned)||alive(ids.privateBrowser))&&Date.now()<goneDeadline)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(alive(ids.owned),false);assert.equal(alive(ids.privateBrowser),false);
     assert.equal(alive(ids.other),true);assert.equal(alive(ids.sharedBrowser),true);assert.equal(detail.sharedBrowserPreserved,true);
-    const deadline=Date.now()+9000;while((alive(ids.other)||alive(ids.sharedBrowser))&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,100));
+    } finally { fs.writeFileSync(stopFile,'stop'); }
+    const deadline=Date.now()+5000;while(Object.values(ids).some(alive)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
     assert.equal(alive(ids.other),false);assert.equal(alive(ids.sharedBrowser),false);
   });

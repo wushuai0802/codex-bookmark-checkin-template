@@ -419,8 +419,8 @@ test("Git 安全扫描覆盖尚未跟踪的公开候选文件", async () => {
 test("安装配置优先使用 PowerShell 7，5.1 仅作为可用回退", async () => {
   const setup = await fs.readFile(new URL("../src/setup-config.mjs", import.meta.url), "utf8");
   const preflight = await fs.readFile(new URL("../scripts/Test-Environment.ps1", import.meta.url), "utf8");
-  assert.match(setup, /findOnPath\("pwsh\.exe"\)/);
-  assert.match(setup, /answers\.powershellExecutable \|\| preferredPowerShell/);
+  assert.match(setup, /selectPowerShell\(\{configured:answers\.powershellExecutable\}\)/);
+  assert.match(setup, /powershellExecutable: preferredPowerShell/);
   assert.match(preflight, /--scope-json-base64/);
 });
 

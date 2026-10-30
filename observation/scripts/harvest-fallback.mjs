@@ -4,10 +4,12 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
+import {createInterface} from 'node:readline';
 import {planHarvestFallback,runHarvestFallback,loadHarvestFallbackInputs,pendingHarvestFallbackAttempts,reviewedFallbackReadOrigins,resolvedFallbackReadConfig} from '../src/harvest-fallback.mjs';
 import {loadRuntimeConfig} from '../src/runtime-config.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url)),args=process.argv.slice(2);
 const value=name=>{const index=args.indexOf(name);return index<0?null:args[index+1];};
+const batchStartedAt=Date.now(),cancel=new AbortController();let control;
 function liveHarvestProbe(target,database){
   if(!/^[A-Za-z0-9._@-]{1,120}$/.test(target??'')||
      !/^[/]volume3[/]docker[/][A-Za-z0-9._/-]{1,200}$/.test(database??'')||
@@ -21,6 +23,14 @@ function liveHarvestProbe(target,database){
   };
 }
 try{
+  const budget=value('--budget-ms')===null?null:Number(value('--budget-ms'));
+  if(budget!==null&&(!Number.isSafeInteger(budget)||budget<1||budget>180_000))throw Error('invalid batch budget');
+  const minimumSiteBudgetMs=value('--minimum-site-budget-ms')===null?70_000:Number(value('--minimum-site-budget-ms'));
+  if(!Number.isSafeInteger(minimumSiteBudgetMs)||minimumSiteBudgetMs<=0||minimumSiteBudgetMs>180_000)throw Error('invalid site budget');
+  if(args.includes('--cooperative-stop')){
+    control=createInterface({input:process.stdin,terminal:false});
+    control.on('line',line=>{if(line.length>256)return;try{if(JSON.parse(line).type==='pt_batch_cancel')cancel.abort();}catch{}});
+  }
   const reportFile=value('--report-file'),catalogFile=value('--catalog-file'),execute=args.includes('--apply');
   if(!reportFile||!catalogFile)throw Error('provide --report-file and --catalog-file');
   const recoveredOrigin=value('--login-recovered-origin');
@@ -58,6 +68,9 @@ try{
   inputs.config=resolvedFallbackReadConfig(inputs.catalog,inputs.config,origin=>ptReadPolicy(origin,inputs.config));
   const readOnlyOrigins=reviewedFallbackReadOrigins(inputs.catalog,origin=>inputs.config.ptReadOnlyPolicies[origin]);
   const result=execute?await runHarvestFallback({root,...inputs,execute:true,catalogFile,catalogHash:value('--catalog-sha256'),fallbackOnlyEnabled,recoveredAtByAccount,readOnlyOrigins,
+    deadline:budget===null?null:batchStartedAt+budget,
+    siteDeadline:budget===null?null:batchStartedAt+budget+minimumSiteBudgetMs,
+    minimumSiteBudgetMs,signal:cancel.signal,
     ...(onlyOrigin?{onlyOrigins:[onlyOrigin]}:{}),
     ...(manualRecoveryId?{manualRecoveryId}:{}),
     refreshHarvest:liveHarvestProbe(value('--harvest-ssh-target'),value('--harvest-db-path'))}):planHarvestFallback({...inputs,fallbackOnlyEnabled,readOnlyOrigins});
@@ -67,3 +80,4 @@ try{
   console.log(JSON.stringify({businessDate:result.businessDate,mode:execute?'executed':'preview',registeredCount:result.registeredCount,fallbackOnlyCount:result.fallbackOnlyCount,
     observedSuccess:result.observedSuccess,eligibleCount:result.eligible.length,newAttempts,blockedCount:result.blocked.length,assessmentStates,blockedReasons,outcomes:result.outcomes??[]}));
 }catch(error){console.error(`Harvest fallback: ${error.message}`);process.exitCode=1;}
+finally{control?.close();if(control)process.stdin.pause();}

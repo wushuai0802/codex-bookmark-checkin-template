@@ -58,7 +58,9 @@ export function projectPtSiteResult(value,origin){
 }
 
 export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,spawnChild=spawn,timeoutMs=600_000,
-  resolveScope=ptWorkerScope,cleanup=cleanupPtWorker,cleanupWaitMs=5000,cleanupTimeoutMs=25_000}){
+  resolveScope=ptWorkerScope,cleanup=cleanupPtWorker,cleanupWaitMs=5000,cleanupTimeoutMs=25_000,signal}){
+  const cancelled=()=>Object.assign(Error('PT batch cancellation requested'),{code:'PT_BATCH_CANCELLED'});
+  if(signal?.aborted)throw cancelled();
   const script=path.join(legacyRoot,'scripts/Run-PtSupplement.mjs');
   if(!fs.existsSync(script))throw Error('PT site execution helper is missing');
   const ownerId=crypto.randomUUID(),scope=await resolveScope({legacyRoot,origin,readOnly});
@@ -73,10 +75,12 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
     ...(verifyBeforeSubmit?{CHECKIN_PT_FALLBACK_RECHECK:'1'}:{})};
   delete childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
   if(!readOnly&&fallbackAttemptId!==undefined)childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID=fallbackAttemptId;
+  if(signal?.aborted)throw cancelled();
   const lifecycle=beginPtWorker(root,{ownerId,origin,legacyRoot,...scope,startedAt:new Date().toISOString(),state:'running'});
   const output=await new Promise((resolve,reject)=>{
     let child,stdout='',stderr='',settled=false,terminating=false,closed=false,timer;
-    const finish=async(error,value,cleared=true)=>{if(settled)return;settled=true;clearTimeout(timer);
+    const onAbort=()=>void terminate(cancelled());
+    const finish=async(error,value,cleared=true)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',onAbort);
       if(cleared)try{await lifecycle.finish();}catch{error=ptCleanupPendingError();}error?reject(error):resolve(value);};
     try{child=spawnChild(process.execPath,command,{cwd:legacyRoot,windowsHide:true,shell:false,
       stdio:['ignore','pipe','pipe'],env:childEnv});}
@@ -112,13 +116,15 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
       finish(e);return;
     }if(signal||code!==0){void terminate(Error('PT site execution failed'));return;}void finish(null,stdout);});
     try{lifecycle.started(child.pid);}catch(error){void terminate(error);}
+    signal?.addEventListener('abort',onAbort,{once:true});
+    if(signal?.aborted)onAbort();
   });
   const line=output.trim().split(/\r?\n/).at(-1);
   return projectPtSiteResult(JSON.parse(line),origin);
 }
 
 export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catalogHash,
-  readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,signal,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
   if(loginRecoveryOnly&&(readOnly||origin!=='https://www.uhddolby.com'))throw Error('Invalid login-only recovery target');
   if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId)){
     const error=Error('PT fallback attempt is invalid');error.code='PT_PREFLIGHT';throw error;
@@ -138,7 +144,7 @@ export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catal
     await reconcilePtWorker(root,{legacyRoot:runtime.legacyRoot});
     const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit:verifyBeforeSubmit||loginRecoveryOnly,
       ...(loginRecoveryOnly?{loginRecoveryOnly:true}:{}),
-      ...(fallbackAttemptId!==undefined?{fallbackAttemptId}:{})});
+      ...(fallbackAttemptId!==undefined?{fallbackAttemptId}:{}),...(signal?{signal}:{})});
     return projectPtSiteResult(value,origin);
   } finally {release(lease);}
 }

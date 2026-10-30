@@ -393,7 +393,11 @@ function claimWorker(root) {
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
-  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[],onlyOrigins=null,manualRecoveryId=null}={}) {
+  clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[],onlyOrigins=null,manualRecoveryId=null,
+  deadline=null,minimumSiteBudgetMs=70_000,siteDeadline=deadline,signal}={}) {
+  if(deadline!==null&&!Number.isFinite(deadline)||siteDeadline!==null&&!Number.isFinite(siteDeadline)||
+     !Number.isFinite(minimumSiteBudgetMs)||minimumSiteBudgetMs<=0)
+    throw Error('Invalid PT batch budget');
   const normalizedReadOnlyOrigins=[...new Set(readOnlyOrigins.map(originOf).filter(Boolean))];
   if(manualRecoveryId!==null&&(!execute||!Array.isArray(onlyOrigins)||onlyOrigins.length!==1||
     !/^(?:op_[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(manualRecoveryId)))
@@ -421,6 +425,20 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   }
   const {file:stateFile,state}=readAttemptState(root,preview.businessDate);
   const outcomes=[];
+  const originalRunSite=runSite;
+  if(signal)runSite=request=>originalRunSite({...request,signal});
+  const budgetAvailable=()=>{
+    if(signal?.aborted)return false;
+    if(deadline===null&&siteDeadline===null)return true;
+    const at=clock().getTime();
+    return (deadline===null||at<deadline)&&(siteDeadline===null||siteDeadline-at>=minimumSiteBudgetMs);
+  };
+  const deferBudget=candidate=>{
+    const entry={origin:candidate.origin,accountKey:candidate.accountKey,state:'deferred_budget',
+      recordedAt:clock().toISOString(),submissionAttempted:false};
+    state.deferrals=(state.deferrals??[]).filter(item=>item.origin!==candidate.origin||item.accountKey!==candidate.accountKey);
+    state.deferrals.push(entry);writeAtomic(stateFile,state);outcomes.push(entry);
+  };
   const statusFile=path.join(root,'outputs',`pt-fallback-results-${preview.businessDate}.json`);
   for(const candidate of preview.eligible){
     const candidateNow=clock();
@@ -453,6 +471,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     }
     if(attempted&&!canVerify){outcomes.push({origin:candidate.origin,state:'already_attempted'});continue;}
     if(historicalUnknown&&!canVerify){outcomes.push({origin:candidate.origin,state:'prior_outcome_unknown'});continue;}
+    if(!budgetAvailable()){deferBudget(candidate);continue;}
     if(refreshHarvest){
       let live;
       try{
@@ -479,6 +498,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         break;
       }
     }
+    if(!budgetAvailable()){deferBudget(candidate);continue;}
     let recoveryEvidence=null,authenticationRecovery=false;
     if(canVerify){
       const verification={origin:candidate.origin,accountKey:candidate.accountKey,startedAt:clock().toISOString(),state:'in_progress'};
@@ -547,6 +567,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
       }
     }
     if(canVerify&&dayAt(clock())!==preview.businessDate){outcomes.push({origin:candidate.origin,state:'business_day_changed'});break;}
+    if(!budgetAvailable()){deferBudget(candidate);continue;}
     // Persist before executing. No uncertain attempt is retried without a new
     // authoritative read, followed by another read inside the executor lock.
     const harvestWaitingAttempt=state.attempts.find(item=>item.origin===candidate.origin&&
@@ -568,6 +589,15 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     if(Number.isFinite(Date.parse(recoveredAtByAccount[recoveryIdentity(candidate)])))
       attempt.recoveredAt=recoveredAtByAccount[recoveryIdentity(candidate)];
     state.attempts.push(attempt);writeAtomic(stateFile,state);
+    // Persist uncertainty before waiting for cooperative cleanup. Even a hard
+    // kill after the grace period must never leave a replayable "not submitted".
+    const onCancel=()=>{
+      attempt.state='outcome_unknown';attempt.finishedAt=clock().toISOString();
+      attempt.reason='PT batch cancellation requested';
+      try{writeAtomic(stateFile,state);}catch{/* The durable in_progress record still prohibits blind replay. */}
+    };
+    signal?.addEventListener('abort',onCancel,{once:true});
+    if(signal?.aborted)onCancel();
     try{
       if(candidate.guardedSubmit===true||candidate.kind==='fallback_only'){
         let rawResult;
@@ -662,8 +692,10 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
       if(attempt.state==='in_progress')attempt.state='completed';
     }catch(error){
       attempt.finishedAt??=clock().toISOString();
-      attempt.state=error.code==='PT_PREFLIGHT'?'deferred_preflight':error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
+      attempt.state=signal?.aborted?'outcome_unknown':error.code==='PT_PREFLIGHT'?'deferred_preflight':error.message==='V2 runner is already active'?'deferred_busy':'outcome_unknown';
       attempt.reason=String(error.message).slice(0,120);
+    }finally{
+      signal?.removeEventListener('abort',onCancel);
     }
     writeAtomic(stateFile,state);
     outcomes.push({origin:candidate.origin,state:attempt.state,v1Status:attempt.v1Status??null});
