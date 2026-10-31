@@ -43,17 +43,22 @@ const marker=root=>path.join(root,'release.json');
 function atomic(file,bytes){fs.mkdirSync(path.dirname(file),{recursive:true});const temp=file+'.'+crypto.randomUUID()+'.tmp';
   try{fs.writeFileSync(temp,bytes,{mode:0o600});fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}}
 
-export function assertNoManualHandoff(root){
+export function assertManualHandoffState(state,isPidActive){
   const pending=new Set(['pending','pending_verification','waiting_for_user','awaiting_user','awaiting_manual_handoff','waiting_login','awaiting_login']);
+  if(pending.has(state.state))throw Error('resolve pending manual handoff before changing code');
+  if(isPidActive(state.pid))throw Error('close the active manual session before changing code');
+}
+
+export function assertNoManualHandoff(root){
   for(const relative of ['tmp/manual-handoff.json','tmp/manual-verification.json','tmp/manual-session.json']){
     const file=safeFile(root,relative);
     if(!fs.existsSync(file))continue;
     const state=JSON.parse(fs.readFileSync(file,'utf8'));
-    if(pending.has(state.state))throw Error('resolve pending manual handoff before changing code');
-    if(Number.isSafeInteger(state.pid)&&state.pid>0){
-      try{process.kill(state.pid,0);throw Object.assign(Error('manual window is active'),{code:'MANUAL_ACTIVE'});}
-      catch(error){if(error.code!=='ESRCH')throw Error('close the active manual session before changing code');}
-    }
+    assertManualHandoffState(state,pid=>{
+      if(!Number.isSafeInteger(pid)||pid<=0)return false;
+      try{process.kill(pid,0);return true;}
+      catch(error){return error.code!=='ESRCH';}
+    });
   }
 }
 
@@ -101,11 +106,13 @@ export async function withRuntimeLocks(plan,run){
   }finally{if(runner)await releaseRunLock(runner);if(engine)releaseExecutionLock(engine);if(worker)releaseExecutionLock(worker);}
 }
 
-export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
+export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks,beforeLock,beforeApply,afterApply}={}){
   if(plan.schemaVersion!==1||!Array.isArray(plan.files)||!plan.files.length)throw Error('invalid release manifest');
+  const preflight=await beforeLock?.(plan);
   const backup=path.join(path.resolve(backupRoot),new Date().toISOString().replaceAll(':','-')+'-'+plan.revision.slice(0,12));
   if(fs.existsSync(backup))throw Error('release backup already exists');
   return lock(plan,async()=>{
+    const baseline=await beforeApply?.(plan,preflight);
     assertNoManualHandoff(plan.roots.execution);
     const prepared=plan.files.map(entry=>{
       const from=safeFile(plan.source,sourceFile(entry.file)),to=destination(plan.roots,entry.file);
@@ -125,6 +132,10 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
       packageHash:plan.files.find(entry=>entry.file===layer+'/package.json')?.afterHash??null,
       lockHash:plan.files.find(entry=>entry.file===layer+'/package-lock.json')?.afterHash??null})]));
     atomic(path.join(backup,'manifest.json'),JSON.stringify(release,null,2));
+    const record={schemaVersion:1,revision:plan.revision,appliedAt:release.appliedAt,status:'applying',
+      preflight:preflight??null,baseline:baseline??null,rollback:null};
+    const saveRecord=()=>atomic(path.join(backup,'release-record.json'),JSON.stringify(record,null,2));
+    saveRecord();
     const modified=[];
     try{
       for(const root of Object.values(plan.roots))atomic(path.join(root,'tmp/release-in-progress.json'),JSON.stringify({kind:'managed-release',pid:process.pid,startedAt:release.appliedAt}));
@@ -141,6 +152,9 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
         if(markers[layer]!=null)atomic(marker(root),markers[layer]);
         else fs.renameSync(marker(root),path.join(backup,layer+'-failed-release.json'));
       }
+      record.status='apply_failed';
+      record.rollback={ok:prepared.every(entry=>fileHash(entry.to)===entry.beforeHash),kind:'partial_apply_restore'};
+      saveRecord();
       throw error;
     }finally{
       for(const root of Object.values(plan.roots)){
@@ -148,7 +162,20 @@ export async function applyRelease(plan,{backupRoot,lock=withRuntimeLocks}={}){
         if(fs.existsSync(file))try{if(JSON.parse(fs.readFileSync(file,'utf8')).pid===process.pid)fs.unlinkSync(file);}catch{}
       }
     }
-    return {backup,files:prepared.length,changed:prepared.filter(e=>e.beforeHash!==e.afterHash).length,revision:plan.revision,version:plan.version};
+    const result={backup,files:prepared.length,changed:prepared.filter(e=>e.beforeHash!==e.afterHash).length,revision:plan.revision,version:plan.version};
+    try{
+      record.validation=await afterApply?.(plan,{...result,preflight,baseline})??null;
+      record.status='applied';saveRecord();return result;
+    }catch(error){
+      record.status='validation_failed';record.validation=error.validation??{ok:false,code:'POST_APPLY_CHECK_FAILED'};
+      try{
+        const restored=await rollbackRelease(backup,{lock:async(_plan,restore)=>restore()});
+        record.rollback={ok:true,...restored};
+      }catch{record.rollback={ok:false,code:'AUTOMATIC_ROLLBACK_REFUSED'};}
+      saveRecord();
+      throw Object.assign(Error(record.rollback.ok?'post-apply validation failed; automatically rolled back':'post-apply validation failed; automatic rollback refused'),
+        {code:'POST_APPLY_CHECK_FAILED',backup,validation:record.validation,rollback:record.rollback});
+    }
   });
 }
 
