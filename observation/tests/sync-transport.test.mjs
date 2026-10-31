@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
@@ -39,11 +40,48 @@ try { Invoke-BoundedSyncProcess -Executable ${quote(process.execPath)} -Argument
   const result=JSON.parse(output.trim());
   assert.equal(result.okExit,0);
   assert.equal(result.okFailure,null);
-  assert.match(result.okOutput,/^drained:83886\d+$/);
-  assert.ok(Number(result.okOutput.slice('drained:'.length))>=8*1024*1024);
+  assert.equal(result.okOutput,`drained:${8*1024*1024}`);
   assert.equal(result.okError,'diagnostic');
   assert.equal(result.stalledExit,124);
   assert.equal(result.stalledTimedOut,true);
   assert.match(result.stalledFailure,/cause=connection_timeout/);
   assert.equal(result.extendedExit,0);assert.equal(result.rangeRejected,true);
 });
+
+for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pwsh'])
+  test(`binary stdin is exact with either console UTF-8 preamble (${shell})`,{skip:process.platform!=='win32'},t=>{
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'sync-binary-'));
+    t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    const input=path.join(root,'input.bin'),sink=path.join(root,'sink.cjs');
+    const payload=Buffer.from(Array.from({length:65539},(_,index)=>index%256));
+    fs.writeFileSync(input,payload);
+    fs.writeFileSync(sink,"const {createHash}=require('node:crypto');const chunks=[];process.stdin.on('data',v=>chunks.push(v));process.stdin.on('end',()=>{const data=Buffer.concat(chunks);console.log(JSON.stringify({bytes:data.length,sha256:createHash('sha256').update(data).digest('hex'),first:data.subarray(0,8).toString('hex')}));});");
+    const code=`
+$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+. ${quote(transport)}
+$originalEncoding=[Console]::InputEncoding
+try {
+  $results=@(foreach($bom in @($false,$true)) {
+    [Console]::InputEncoding=[Text.UTF8Encoding]::new($bom)
+    foreach($file in @(${quote(input)},'')) {
+      $result=Invoke-BoundedSyncProcess ${quote(process.execPath)} @(${quote(sink)}) 'binary' $file 10
+      if($result.exitCode -ne 0){throw $result.failure}
+      if([Console]::InputEncoding.CodePage -ne 65001 -or [Console]::InputEncoding.GetPreamble().Length -ne $(if($bom){3}else{0})) {
+        throw 'transport changed the caller console encoding'
+      }
+      [pscustomobject]@{bom=$bom;input=($file -ne '');received=($result.output|ConvertFrom-Json)}
+    }
+  })
+  ConvertTo-Json -InputObject $results -Compress -Depth 5
+} finally { [Console]::InputEncoding=$originalEncoding }
+`;
+    const results=JSON.parse(execFileSync(shell,['-NoProfile','-NonInteractive','-EncodedCommand',
+      Buffer.from(code,'utf16le').toString('base64')],{encoding:'utf8',timeout:30000}));
+    assert.equal(results.length,4);
+    for(const result of results){
+      const expected=result.input?payload:Buffer.alloc(0);
+      assert.deepEqual(result.received,{bytes:expected.length,sha256:createHash('sha256').update(expected).digest('hex'),
+        first:expected.subarray(0,8).toString('hex')},JSON.stringify(result));
+    }
+  });

@@ -127,6 +127,28 @@ const nativeAvailable=spawnSync(bash,['--noprofile','--norc','-c',
 {encoding:'utf8',timeout:10000}).status===0;
 const unix=value=>value.replaceAll('\\','/').replace(/^([A-Za-z]):\//,(_,drive)=>`/${drive.toLowerCase()}/`);
 
+test('both runtimes preserve identical publication commands through native argv',t=>{
+  const root=fixture(t),sink=path.join(root,'argv sink.cjs'),results=[];
+  fs.writeFileSync(sink,'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+  const edgeCases=['space value','"quoted"',String.raw`one\"quote`,String.raw`two\\"quote`,'trailing space\\','\\\\server\\share\\'];
+  for(const shell of shells){
+    const result=runPowerShell(shell,`
+. ${quote(transport)}
+$full=New-ShadowPublicationPlan '${project}/.shadow-sync-stage' '${data}' '${transaction}' 'full' '${hash(ledger)}'
+$delta=New-ShadowPublicationPlan '${project}/.shadow-sync-stage' '${data}' '${transaction}' 'delta' '${hash(ledger)}'
+$commands=@(foreach($plan in @($full,$delta)){foreach($phase in @('preflight','upload','extract','commit','cleanup')){$plan.$phase}})
+$result=Invoke-BoundedSyncProcess ${quote(process.execPath)} (@(${quote(sink)})+$commands+@(${edgeCases.map(quote).join(',')})) 'argv' '' 10
+if($result.exitCode -ne 0){throw $result.failure}
+$received=ConvertFrom-Json -InputObject $result.output
+[ordered]@{full=$full;delta=$delta;received=@(foreach($value in $received){[string]$value})}|ConvertTo-Json -Compress -Depth 5
+`);
+    const commands=[result.full,result.delta].flatMap(plan=>['preflight','upload','extract','commit','cleanup'].map(phase=>plan[phase]));
+    assert.deepEqual(result.received,[...commands,...edgeCases],shell);
+    results.push(result);
+  }
+  for(const result of results)assert.deepEqual(result,results[0]);
+});
+
 for(const shell of shells)for(const scenario of ['delta','zero','full-missing','read-failed','corrupt-delta','corrupt-both','full-corrupt','interrupted'])
   test(`local preflight/extract/commit simulation: ${scenario} (${shell})`,{skip:!nativeAvailable},t=>{
     const root=fixture(t),sync=path.join(root,'sync'),remote=path.join(root,'remote'),remoteData=path.join(remote,'nas-data');
@@ -141,6 +163,8 @@ for(const shell of shells)for(const scenario of ['delta','zero','full-missing','
     fs.writeFileSync(path.join(remoteData,'dashboard-generation.previous.json'),'older generation');
     const result=runPowerShell(shell,String.raw`
 . ${quote(transport)}
+# Reproduce the UTF-8 console that exposes .NET Framework's stdin BOM.
+[Console]::InputEncoding=[Text.UTF8Encoding]::new($true)
 $script:logs=@();$script:uploads=@();$script:extractCodes=@();$script:errors=@();$script:commitRuns=0;$script:untouched=$true
 $script:original=@{}
 foreach($name in @('shadow-ledger.jsonl','shadow-beta-snapshot.json','dashboard-generation.json','dashboard-generation.previous.json')) {
@@ -157,7 +181,8 @@ function Test-InstalledUnchanged {
 function Write-Log([string]$Message){$script:logs+=@($Message)}
 function Invoke-FixtureShell([string]$Command,[string]$InputFile=''){
   # A script file keeps this shell stub independent of Windows SSH/argv parsing.
-  [IO.File]::WriteAllText(${quote(path.join(root,'remote-command.sh'))},(${quote(shellSetup)}+$Command.Replace('${project}',${quote(unix(remote))})+[char]10),[Text.UTF8Encoding]::new($false))
+  $text=(${quote(shellSetup)}+$Command.Replace('${project}',${quote(unix(remote))})+[char]10).Replace(([string][char]13+[char]10),[string][char]10).Replace([char]13,[char]10)
+  [IO.File]::WriteAllText(${quote(path.join(root,'remote-command.sh'))},$text,[Text.UTF8Encoding]::new($false))
   return Invoke-BoundedSyncProcess ${quote(bash)} @('--noprofile','--norc',${quote(unix(path.join(root,'remote-command.sh')))}) 'fixture_shell' $InputFile 15
 }
 $script:tar=(Get-Command tar.exe,tar -ErrorAction SilentlyContinue|Select-Object -First 1).Source
