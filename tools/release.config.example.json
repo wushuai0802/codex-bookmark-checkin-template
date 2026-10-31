@@ -1,0 +1,10 @@
+{
+  "executionRoot": "<execution-root>",
+  "observationRoot": "<observation-root>",
+  "opsRoot": "<operations-root>",
+  "backupRoot": "<backup-root>",
+  "taskNames": {
+    "main": "<main-task-name>",
+    "sync": "<sync-task-name>"
+  }
+}
