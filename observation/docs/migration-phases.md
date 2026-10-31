@@ -1,3 +1,6 @@
+这是按时间记录的历史决定，保留各阶段当时的背景与结论。
+现行架构请看 [docs/architecture.md](../../docs/architecture.md)，核对当前入口和职责时以该文档及代码为准。
+
 # Production Boundary and Historical Work
 
 ## Passive login handoff for uncertain PT-only work: 2026-10-28

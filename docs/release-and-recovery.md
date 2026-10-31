@@ -8,13 +8,17 @@ PT 子任务的生命周期记录位于观测运行副本 data/pt-worker-lifecyc
 
 ## Windows 代码
 
+三个独立运行根目录分别是：`<execution-root>`（执行器、私有配置与 Profile）、`<observation-root>`（观测控制、账本与面板运行副本）、`<operations-root>`（Windows 同步调度、运维配置与暂存）。发布工具将受管 `execution/*`、`observation/*` 分别映射到前两个根，并把兼容运维入口和观测层受管代码副本映射到 ops 根；私有配置与数据仍保留。
+
 先生成并检查差异清单，再应用：
 
 ```powershell
-node tools/release.mjs plan --execution-root D:/Checkin/execution --observation-root D:/Checkin/observation --out observation/outputs/release-plan.json
-node tools/release.mjs apply --manifest observation/outputs/release-plan.json --backup-root E:/CheckinBackups
-node tools/release.mjs audit --manifest observation/outputs/release-plan.json
+node tools/release.mjs plan --execution-root "<execution-root>" --observation-root "<observation-root>" --ops-root "<operations-root>" --out "<observation-root>/outputs/release-plan.json"
+node tools/release.mjs apply --manifest "<observation-root>/outputs/release-plan.json" --backup-root "<backup-root>"
+node tools/release.mjs audit --manifest "<observation-root>/outputs/release-plan.json"
 ```
+
+占位符须替换为实际路径；`<backup-root>` 是运行根目录之外的备份位置。当前 `plan` 漏传 `--ops-root` 不会报错，会生成只覆盖执行根和观测根的清单；有独立运维根的安装应显式传入，后续 apply/audit 从清单读取这三个根。
 
 清单覆盖明确的源码、脚本、公开资源和包元数据，也包括执行层的 `config/defaults.json`、`config/qa-rules.json`、`config/site-rules.public.json`、`requirements-ocr.txt`，以及观测层的 `Dockerfile`、`compose.nas.yaml`、`compose.worker.yaml`、`.dockerignore`。这些是公开运行输入，不会把整个 `config` 目录加入发布范围。
 
@@ -22,10 +26,12 @@ node tools/release.mjs audit --manifest observation/outputs/release-plan.json
 
 运行副本中尚未进入源码的有效修复要先审阅并收敛。依赖变化需要在维护窗口完成对应 `npm ci`，工具不自动安装或升级依赖。
 
+发布前的空闲窗口检查（包含当日主运行、Harvest 及后续证据复核、通知和待执行步骤是否结束）与发布后的自然运行核验，目前还不在工具内，将由后续工作收进来；现有租约、生命周期和漂移检查不等于这两项核验已完成。
+
 应用返回备份目录，回滚前确认没有后续代码改动：
 
 ```powershell
-node tools/release.mjs rollback --backup E:/CheckinBackups/<本次备份目录>
+node tools/release.mjs rollback --backup "<backup-root>/<本次备份目录>"
 ```
 
 只恢复代码和版本标记。新增文件移入 retired，保留恢复能力；实际签到记录不回滚。恢复后运行健康检查并只读核对面板。
@@ -51,10 +57,10 @@ sudo sh /volume3/docker/checkin-fabric-v2/backups/code-<唯一编号>.tree/recov
 先预览早于指定月份的已结束日报：
 
 ```powershell
-node observation/scripts/archive-history.mjs --data-dir D:/Checkin/observation/outputs --before 2026-09
-node observation/scripts/archive-history.mjs --data-dir D:/Checkin/observation/outputs --before 2026-09 --archive-root E:/CheckinBackups/history --apply
-node observation/scripts/archive-history.mjs --verify E:/CheckinBackups/history/<归档目录>
-node observation/scripts/archive-history.mjs --restore E:/CheckinBackups/history/<归档目录> --data-dir D:/Checkin/observation/outputs
+node observation/scripts/archive-history.mjs --data-dir "<observation-root>/outputs" --before 2026-09
+node observation/scripts/archive-history.mjs --data-dir "<observation-root>/outputs" --before 2026-09 --archive-root "<backup-root>/history" --apply
+node observation/scripts/archive-history.mjs --verify "<backup-root>/history/<归档目录>"
+node observation/scripts/archive-history.mjs --restore "<backup-root>/history/<归档目录>" --data-dir "<observation-root>/outputs"
 ```
 
 保留未结案和结果不明的尝试；移动已结束旧日报，生成不可变的月度账本副本及 SHA-256 清单。恢复不覆盖已有不同记录。活跃账本、当前和上一代 manifest 保持不变。归档也按私有数据保护。

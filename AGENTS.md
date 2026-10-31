@@ -1,5 +1,7 @@
 # Check-in Fabric
 
+文档索引：[架构](docs/architecture.md) · [术语](docs/glossary.md) · [发布与恢复](docs/release-and-recovery.md) · [排障与可靠性](docs/reliability-hardening.md)。改代码前先读 `docs/architecture.md`。
+
 This repository contains one check-in system with two packages:
 
 - `execution/` holds site rules, browser profiles and authoritative check-in execution.
