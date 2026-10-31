@@ -11,19 +11,22 @@ $ErrorActionPreference='Stop'
 $small=Get-ShadowUploadTimeoutSeconds 784773
 $large=Get-ShadowUploadTimeoutSeconds 2097152
 $maximum=Get-ShadowUploadTimeoutSeconds 1073741824
+$deltaMaximum=Get-ShadowUploadTimeoutSeconds 1073741824 'delta'
 $script:calls=0
 $script:budgets=@()
+$script:uploadLogs=0
 $result=Invoke-ShadowPublicationCommand 'fixture' @() 'nas_snapshot_upload' 'fixture.bin' $small 2 -Invoke {
  param($executable,$arguments,$phase,$inputFile,$timeout)
  $script:calls++;$script:budgets+=@($timeout)
  if($script:calls -eq 1){return [pscustomobject]@{exitCode=124;failure='nas_snapshot_upload failed (exit=124; cause=connection_timeout)'}}
  return [pscustomobject]@{exitCode=0;failure=$null}
-}
-[ordered]@{small=$small;large=$large;maximum=$maximum;calls=$script:calls;budgets=$script:budgets;exitCode=$result.exitCode}|ConvertTo-Json -Compress
+} -BeforeAttempt { $script:uploadLogs++ }
+[ordered]@{small=$small;large=$large;maximum=$maximum;deltaMaximum=$deltaMaximum;calls=$script:calls;uploadLogs=$script:uploadLogs;budgets=$script:budgets;exitCode=$result.exitCode}|ConvertTo-Json -Compress
 `;
   const value=JSON.parse(execFileSync(shell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')],{encoding:'utf8',timeout:15000}).trim());
-  assert.ok(value.small>=90);assert.ok(value.large>value.small);assert.equal(value.maximum,180);
+  assert.ok(value.small>=90);assert.ok(value.large>value.small);assert.equal(value.maximum,300);assert.equal(value.deltaMaximum,180);
   assert.equal(value.calls,2);assert.deepEqual(value.budgets,[value.small,value.small]);assert.equal(value.exitCode,0);
+  assert.equal(value.uploadLogs,value.calls);
 });
 
 for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pwsh'])test(`upload retries only transient transport failures and stops after recovery (${shell})`,()=>{
