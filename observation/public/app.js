@@ -330,6 +330,7 @@ function renderKpis(data) {
     ['待补证', counts.proof, [metrics.unverifiedSuccess?`${metrics.unverifiedSuccess} 成功回执待核验`:'',
       metrics.unverifiedUnavailable?`${metrics.unverifiedUnavailable} 未开放待核验`:''].filter(Boolean).join(' · ')||'当前没有待补证回执', 'proof'],
     ['待处理', counts.actionable, [...reasons].map(([reason,count])=>`${reason} ${count}`).join(' · ')||'当前没有可处理事项', 'actionable'],
+    ...(counts.waiting?[['等待 Harvest', counts.waiting, 'Harvest 执行完成后自动核验', 'waiting']]:[]),
     [metrics.cancelled||metrics.excludedSiteIssues?'已排除':'未开放', counts.excluded, excluded||'确认不参与核验的任务', 'excluded']
   ];
   const grid = $('#kpi-grid'); grid.replaceChildren();
@@ -476,6 +477,7 @@ function renderDailySummary(data) {
   const title = dailySummaryTitle(m, { previousDay, pausedCount });
   const note=previousDay?'尚未收到今日业务回执，以下显示最近业务日的结果。':
     !m.fresh?'当前快照已过期，保留上次完整结果；执行来源状态单独显示。':
+    m.verdict?`有效 ${m.eligible}：已完成 ${m.verifiedSuccess}，核验中 ${m.verdict.counts.verifying}，需处理 ${m.verdict.counts.actionNeeded}。外部阻断 ${m.verdict.counts.external} · 已暂停 ${m.verdict.counts.paused} 个 · 无此功能 ${m.verdict.counts.noFeature}。`:
     m.total?`${m.verifiedSuccess} 项已核验${counts.proof?`，${counts.proof} 条回执待补证`:''}。${data.supplementTaskCount?`覆盖日常计划及 ${data.supplementTaskCount} 个 PT 补签站点。`:'同站多账号分别核验。'}`:'当前还没有可展示的今日回执。';
   append(copy, el('p', 'eyebrow', `业务日期 ${data?.businessDate??'—'} · ${freshness.businessLabel}`),el('h2',null,title),el('p','daily-note',note));
   const progress=el('button','daily-progress');progress.type='button';

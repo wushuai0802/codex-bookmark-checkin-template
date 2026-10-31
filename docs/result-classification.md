@@ -15,8 +15,13 @@ submission; unknown evidence does not qualify as disabled or successful.
 | Login, identity or local execution problem | Keep the specific attention/error result and the appropriate recovery path. |
 | Reported completion missing evidence | Perform a bounded passive recheck; do not submit again or invent a receipt. |
 
-Notifications separate external conditions from local recovery and unknown-result
-verification. The panel offers matching external/verification filters and labels.
+The read-only `public/day-verdict.mjs` projection supplies the same daily counts
+to the dashboard, notifications and doctor. Its input inventory comes from
+`authorizedWorkload`; same-day, account-bound authoritative receipts come from
+the existing reconciliation. Paused tasks, unavailable features and external
+faults stay outside its denominator. Unknown outcomes and automatic retries
+remain verifying; exhausted local recovery or explicit manual verification
+requires action. This projection never changes raw reports or execution gates.
 
 An authorized PT-only site with verified Harvest ownership and no current-day
 failure may show `waiting` during a freshly observed daily schedule/run window.
@@ -27,11 +32,16 @@ suppress attention. Completed/failed tasks and explicit site failures end the
 waiting classification immediately. This never changes execution coordination,
 account bindings, submission guards or write budgets.
 
-Waiting remains in the completion-progress denominator, but has a separate
-filter and count instead of entering local attention, the notice bell or a
-site-fault bucket. Only normal waiting plus external site faults defers TG
-delivery; genuine login failures and uncertain submissions still notify. Raw
-task reports and historical receipts are unchanged.
+Waiting remains in the completion-progress denominator as verifying. The raw
+detail view retains its waiting filter. `notification.policy=daily_digest` is
+the default: after `dailyDigestAt` (11:00 Shanghai time), the next notification
+refresh queues one immutable daily event. Only new action-needed sites, a
+finished failed run without another automatic retry, a missing final report
+after `runMissingAfter` (12:00), and current identity conflicts create extra
+events. Verification, external faults, waiting and cleanup warnings are quiet.
+`per_change` retains the prior state-change notification behavior. The outbox
+still retries delivery independently of check-in execution. Raw task reports,
+historical receipts and `businessComplete` are unchanged.
 Business incompleteness remains visible; reclassification never turns an outage,
 expired entitlement, or unknown submission into a successful check-in.
 

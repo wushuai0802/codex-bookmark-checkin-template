@@ -184,12 +184,78 @@ export async function reconcileNotification({root,report,now=new Date(),persist=
     supplementalResults,syncPending,scope:valid?'authorized_workload':'regular_tasks'};
 }
 
+// Read-only daily projection. Reconciliation above keeps its original persistence
+// and receipt rules; a presentation failure must never change those rules.
+export async function notificationVerdict({root,report,now=new Date(),reconciliation={}}={}){
+  let controller=path.resolve(root,'../observation'),bound=false;
+  try{
+    const integration=read(path.join(root,'data/v2-integration.json'));
+    if(integration.executionEngine!=='v1'||!path.isAbsolute(integration.v2ProjectRoot??''))throw Error('invalid binding');
+    controller=path.resolve(integration.v2ProjectRoot);
+    const runtime=read(path.join(controller,'config/runtime.local.json'));
+    if(runtime.executionEngine!=='v1'||canonical(runtime.legacyRoot??'.')!==canonical(root))throw Error('invalid binding');
+    bound=true;
+  }catch(error){if(fs.existsSync(path.join(root,'data/v2-integration.json')))return {};}
+  try{
+    const [{dayVerdict},{verdictSnapshot},{readDashboardGeneration}]=await Promise.all([
+      import(pathToFileURL(path.join(controller,'public/day-verdict.mjs')).href),
+      import(pathToFileURL(path.join(controller,'src/daily-reconciliation.mjs')).href),
+      import(pathToFileURL(path.join(controller,'src/dashboard-generation.mjs')).href)
+    ]);
+    let snapshot,scope='regular_tasks';
+    const generation=bound?readDashboardGeneration(path.join(controller,'outputs')):null;
+    if(generation&&!generation.stale&&currentSnapshot({report,snapshot:generation.current.snapshot,now})){
+      snapshot=generation.current.snapshot;scope='authorized_workload';
+      // Raw fields are diagnostic only. The published row's observation date,
+      // identity and receipt remain authoritative for classification.
+      snapshot={...snapshot,tasks:snapshot.tasks.map(task=>{
+        const matches=report.results.filter(result=>identity(result)===identity(task));
+        const result=matches.length===1?matches[0]:{};
+        return {...task,...(result.status==='interactive_challenge'?{manualVerificationRequired:true}:{}),
+          ...Object.fromEntries(['retryable','retryExhaustedForDay','loginRecoveryExhausted','retryableLoginRecovery','retryCause',
+          'nextEligibleAt','availabilityKind','disabledByConfig','underlyingFailureCode'].filter(key=>Object.hasOwn(result,key)).map(key=>[key,result[key]]))};
+      })};
+    }else{
+      const targets=report?.bookmarkSummary?.targets??[],results=report?.results??[];
+      snapshot={businessDate:day(now),generatedAt:now.toISOString(),tasks:targets.map((target,index)=>{
+        const matches=results.filter(result=>identity(result)===identity(target)),result=matches.length===1?matches[0]:{};
+        return {...result,...target,taskId:'notification_task_'+index,observedStatus:result.status,
+          observedAt:result.observedAt??result.evidence?.confirmedAt??result.evidence?.createdAt};
+      })};
+    }
+    // Reuse retained, verified daily receipts during an observation outage.
+    // Only the display copy changes; the raw report and reconciliation cache do not.
+    snapshot={...snapshot,tasks:snapshot.tasks.map(task=>{
+      const override=(reconciliation.overrides??[]).find(item=>identity(item)===identity(task));
+      return scope==='regular_tasks'&&override?{...task,observedStatus:override.status,
+        observedAt:override.evidence.confirmedAt,evidence:override.evidence}:task;
+    }),receipts:(snapshot.receipts??[]).map(receipt=>{
+      const task=snapshot.tasks.find(task=>task.taskId===receipt.taskId);
+      const override=task&&(reconciliation.overrides??[]).find(item=>identity(item)===identity(task));
+      return override?{...receipt,status:override.status,observedAt:override.evidence.confirmedAt,evidence:override.evidence}:receipt;
+    })};
+    const projected=verdictSnapshot(snapshot,{now}),verdict=dayVerdict(projected,{now});
+    const ids=new Set(verdict.items.filter(item=>!['done','paused','noFeature'].includes(item.class)).map(item=>item.taskId));
+    return {dayVerdict:verdict,verdictScope:scope,
+      verdictTasks:projected.tasks.map(task=>({taskId:task.taskId,origin:task.origin,
+        failureCode:task.failureCode,observedStatus:task.observedStatus})),
+      identityConflict:snapshot.businessDate===day(now)&&[...(snapshot.receipts??[]),...projected.tasks].some(item=>
+        dated(item.observedAt??item.evidence?.confirmedAt,day(now),now)&&(item.evidence?.verification==='identity_conflict'||item.condition==='identity_conflict')),
+      longUnsettled:projected.tasks.filter(task=>ids.has(task.taskId)&&(snapshot.ptStatus?.sites??[]).some(site=>
+        site.origin===task.origin&&site.recovery?.blockedSince<day(now))).length};
+  }catch{return {};}
+}
+
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{
     const args=process.argv.slice(2),root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-    if(!['--report'].includes(args[0])||!args[1]||args.slice(2).some(value=>value!=='--persist'))throw Error('invalid notification request');
+    const nowIndex=args.indexOf('--now'),now=nowIndex<0?new Date():new Date(args[nowIndex+1]);
+    if(!Number.isFinite(now.getTime()))throw Error('invalid notification time');
+    if(nowIndex>=0)args.splice(nowIndex,2);
+    if(!['--report'].includes(args[0])||!args[1]||args.slice(2).some(value=>!['--persist','--verdict'].includes(value)))throw Error('invalid notification request');
     const reportFile=path.resolve(args[1]),relative=path.relative(path.join(root,'logs'),reportFile);
     if(relative.startsWith('..')||path.isAbsolute(relative))throw Error('notification report outside logs');
-    console.log(JSON.stringify(await reconcileNotification({root,report:read(reportFile),persist:args.includes('--persist')})));
+    const report=read(reportFile),view=await reconcileNotification({root,report,now,persist:args.includes('--persist')});
+    console.log(JSON.stringify({...view,...(args.includes('--verdict')&&!view.superseded?await notificationVerdict({root,report,now,reconciliation:view}):{})}));
   }catch{console.log(JSON.stringify({bound:false,ready:false,overrides:[]}));}
 }

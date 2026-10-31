@@ -160,17 +160,18 @@ function Update-SynchronizedCheckinNotification([string]$LegacyRoot) {
     $outbox = Join-Path $LegacyRoot 'scripts/Invoke-CheckinNotificationOutbox.ps1'
     $report = Join-Path $LegacyRoot 'logs/latest.json'
     if (-not (Test-Path -LiteralPath $reporter -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $outbox -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $report -PathType Leaf)) { return }
+        -not (Test-Path -LiteralPath $outbox -PathType Leaf)) { return }
     $phase = 'runtime_resolution'
     try {
         $shell = (Get-Command pwsh.exe,pwsh -ErrorAction Stop | Select-Object -First 1).Source
         $phase = 'report_refresh'
-        $refresh = Invoke-BoundedSyncProcess $shell @('-NoProfile','-NonInteractive','-File',$reporter,'-ReportPath',$report) 'daily_report_refresh' '' 45
+        $refreshArguments = @('-NoProfile','-NonInteractive','-File',$reporter,'-CheckRunMissing')
+        if (Test-Path -LiteralPath $report -PathType Leaf) { $refreshArguments += @('-ReportPath',$report) }
+        $refresh = Invoke-BoundedSyncProcess $shell $refreshArguments 'daily_report_refresh' '' 45
         if ($refresh.exitCode -ne 0) { throw 'report_refresh_failed' }
         $phase = 'report_decode'
         $payload = ($refresh.output | Select-Object -Last 1) | ConvertFrom-Json
-        if ($payload.deferred -eq $true -or $payload.mode -ne 'command') { return }
+        if ($payload.mode -ne 'command' -or $payload.deferred -eq $true -and $payload.policy -ne 'daily_digest') { return }
         $phase = 'outbox_delivery'
         $delivery = Invoke-BoundedSyncProcess $shell @('-NoProfile','-NonInteractive','-File',$outbox) 'daily_report_delivery' '' 75
         if ($delivery.exitCode -ne 0) { throw 'report_delivery_deferred' }

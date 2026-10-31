@@ -6,8 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
 import { createDashboardServer,calendarHistory } from '../src/dashboard-server.mjs';
-import {projectOverviewSnapshot,overviewMetrics} from '../public/overview-model.mjs';
+import {projectOverviewSnapshot,overviewMetrics,overviewResultCounts} from '../public/overview-model.mjs';
 import {taskStatusLabel} from '../public/dashboard-model.mjs';
+import {taskIdentity,planHash} from '../src/contracts.mjs';
 
 const legacyRoot = fileURLToPath(new URL('./fixtures/legacy/', import.meta.url));
 
@@ -32,13 +33,50 @@ test('overview and task API expose the same authorized PT-only pending work and 
   const view=await (await fetch(base+'/api/overview')).json();
   assert.equal(view.tasks.length,count+1);assert.equal(view.snapshot.counts.executionUnits,count+1);assert.equal(view.snapshot.planCounts.executionUnits,count);
   assert.equal(view.operationTargets.find(target=>target.origin===origin).actions.retry,true);
-  const filtered=await (await fetch(base+'/api/tasks?status=actionable&q=uhddolby')).json();assert.equal(filtered.total,1);
+  const filtered=await (await fetch(base+'/api/tasks?status=proof&q=uhddolby')).json();assert.equal(filtered.total,1);
+  assert.equal(view.dayVerdict.counts.verifying,count+1);
   assert.equal(filtered.tasks[0].origin,origin);assert.equal(filtered.tasks[0].accountRef,null);
+  const counts=overviewResultCounts(projectOverviewSnapshot(view));
+  for(const status of ['verified','proof','actionable','excluded']){
+    const response=await (await fetch(base+'/api/tasks?status='+status)).json();
+    assert.equal(response.total,counts[status],status+' metric must match its drill-down');
+  }
 });
 
 function close(instance) {
   return new Promise((resolve) => instance.server.close(resolve));
 }
+
+test('external, paused and no-feature tasks stay excluded and every daily metric matches its task filter',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-digest-counts-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current);
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:current.toISOString()}),template=snapshot.tasks[0];
+  snapshot.businessDate=day;snapshot.ptStatus={businessDate:day,sites:[]};
+  const variants=[{observedStatus:'signed'},{observedStatus:'deferred'},
+    {observedStatus:'login_required',retryable:false},{observedStatus:'deferred',failureCode:'site_maintenance'},
+    {observedStatus:'not_available',condition:'task_disabled'},{observedStatus:'not_available',condition:'feature_disabled'}];
+  snapshot.tasks=variants.map((patch,index)=>{
+    const origin=`https://digest-${index}.example`;
+    return {...template,...taskIdentity({businessDate:day,logicalSiteKey:origin,accountKey:template.accountKey}),
+      origin,logicalSiteKey:origin,businessDate:day,observedAt:current.toISOString(),...patch};
+  });
+  snapshot.planHash=planHash(snapshot.tasks);
+  snapshot.receipts=snapshot.tasks.map(task=>({taskId:task.taskId,status:task.observedStatus,observedAt:current.toISOString(),
+    evidence:{source:'page_text',authoritative:true,verification:'verified',businessDate:day,confirmedAt:current.toISOString()}}));
+  fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+  const {instance,base}=await start({dataDir:root});t.after(()=>close(instance));
+  const response=await(await fetch(base+'/api/overview')).json(),data=projectOverviewSnapshot(response);
+  assert.deepEqual(response.dayVerdict.counts,{done:1,verifying:1,actionNeeded:1,external:1,paused:1,noFeature:1});
+  const metrics=overviewMetrics(data),counts=overviewResultCounts(data);
+  assert.equal(metrics.pending,2);assert.equal(metrics.eligible,3);assert.equal(metrics.excludedSiteIssues,1);
+  assert.equal(counts.excluded,3);
+  for(const status of ['verified','proof','actionable','excluded']){
+    const filtered=await(await fetch(base+'/api/tasks?status='+status)).json();
+    assert.equal(filtered.total,counts[status],status+' card must match its filter');
+    if(status==='excluded')assert.equal(filtered.tasks.length,3);
+  }
+});
 
 test('calendar keeps the latest valid daily receipt beyond the recent run list',async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-calendar-history-'));
@@ -163,11 +201,12 @@ test('dashboard never combines a new snapshot with a stale ledger generation',as
 test('dashboard separates a policy cancellation from success and unavailable evidence',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'fabric-cancelled-task-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const snapshot=buildSnapshot({legacyRoot,generatedAt:'2026-09-02T14:00:00Z'});
+  const current=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(current);
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:current.toISOString()});snapshot.businessDate=day;
   for(const task of snapshot.tasks){
-    task.observedStatus='signed';
+    task.observedStatus='signed';task.businessDate=day;
     const receipt=snapshot.receipts.find(item=>item.taskId===task.taskId);
-    receipt.status='signed';receipt.evidence={source:'page_text',authoritative:true,verification:'verified',summary:'已签到',redacted:true};
+    receipt.status='signed';receipt.observedAt=current.toISOString();receipt.evidence={source:'page_text',authoritative:true,verification:'verified',summary:'已签到',redacted:true};
   }
   const task=snapshot.tasks[0],receipt=snapshot.receipts.find(item=>item.taskId===task.taskId);
   task.observedStatus='not_available';task.condition='task_disabled';receipt.status='not_available';

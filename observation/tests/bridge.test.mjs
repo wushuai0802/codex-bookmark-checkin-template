@@ -46,6 +46,19 @@ test('task identity is stable and includes account to prevent collisions', () =>
   assert.equal(planHash([a, b]), planHash([b, a]));
 });
 
+test('bridge preserves bounded retry and manual-verification diagnostics without copying private recovery data',t=>{
+  const root=fixtureRoot();t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(root,'logs/run-1/result.json'),report=JSON.parse(fs.readFileSync(file,'utf8'));
+  Object.assign(report.results[0],{status:'interactive_challenge',retryable:false,retryExhaustedForDay:true,
+    retryableLoginRecovery:false,nextEligibleAt:'2026-09-03T01:00:00Z',
+    recovery:{privateValue:'synthetic-private-recovery'}});
+  fs.writeFileSync(file,JSON.stringify(report));
+  const snapshot=buildSnapshot({legacyRoot:root,generatedAt:'2026-09-02T02:00:00Z'}),task=snapshot.tasks.find(task=>task.accountKey==='agentrouter-700001');
+  assert.equal(task.retryable,false);assert.equal(task.retryExhaustedForDay,true);assert.equal(task.retryableLoginRecovery,false);
+  assert.equal(task.manualVerificationRequired,true);assert.equal(task.nextEligibleAt,'2026-09-03T01:00:00.000Z');
+  assert.doesNotMatch(JSON.stringify(snapshot),/synthetic-private-recovery/);
+});
+
 test('logical groups and shared OAuth group are metadata only', () => {
   assert.equal(logicalSiteKey('https://checkin.new-api.abrdns.com/checkin'), 'https://checkin.new-api.abrdns.com');
   assert.equal(logicalGroup('https://new-api.abrdns.com'), 'abrdns-welfare');

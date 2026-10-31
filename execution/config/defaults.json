@@ -119,6 +119,9 @@
   "logRetentionDays": 14,
   "notification": {
     "mode": "none",
+    "policy": "daily_digest",
+    "dailyDigestAt": "11:00",
+    "runMissingAfter": "12:00",
     "executable": "",
     "arguments": [],
     "taskId": "bookmark_daily",

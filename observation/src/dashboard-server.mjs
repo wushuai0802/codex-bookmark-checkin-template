@@ -25,6 +25,8 @@ import {matchesTask} from '../public/dashboard-model.mjs';
 import {classifyPtEvidenceState,ptUnknownReconciled} from './pt-status.mjs';
 import {confirmedPtByTask} from './daily-reconciliation.mjs';
 import {authorizedWorkload} from './workload-view.mjs';
+import {verdictSnapshot} from './daily-reconciliation.mjs';
+import {dayVerdict} from '../public/day-verdict.mjs';
 import {businessDayHistory} from '../public/business-day-history.mjs';
 import {copyHarvestWindow,siteHarvestWait} from '../public/harvest-window.mjs';
 
@@ -169,6 +171,9 @@ function publicTask(task, receipt) {
     ...(Object.hasOwn(conditionLabels,task.condition??'')?{condition:task.condition}:{}),
     ...projectPtDiagnostic(task),
     ...(typeof task.submissionAttempted==='boolean'?{submissionAttempted:task.submissionAttempted}:{}),
+    ...Object.fromEntries(['retryable','retryExhaustedForDay','loginRecoveryExhausted','retryableLoginRecovery','manualVerificationRequired','disabledByConfig'].filter(name=>typeof task[name]==='boolean').map(name=>[name,task[name]])),
+    ...(Number.isFinite(Date.parse(task.nextEligibleAt))?{nextEligibleAt:new Date(task.nextEligibleAt).toISOString()}:{}),
+    ...(['task_disabled','feature_disabled','temporary_unavailable'].includes(task.availabilityKind)?{availabilityKind:task.availabilityKind}:{}),
     ...(['pt','service'].includes(task.taskKind)?{taskKind:task.taskKind}:{}),
     ...(typeof task.inLegacyPlan==='boolean'?{inLegacyPlan:task.inLegacyPlan}:{}),
     ...(task.ptSupplementOnly===true?{ptSupplementOnly:true}:{}),
@@ -439,18 +444,20 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   });
   const projectedSnapshot=publicSnapshot(snapshot);
   const workload=authorizedWorkload({tasks,ptStatus,businessDate:snapshot?.businessDate,counts:projectedSnapshot?.counts});
+  const verdict=dayVerdict(verdictSnapshot(snapshot??{})),classes=new Map(verdict.items.map(item=>[item.taskId,item.class]));
   const {status,evidenceQuality}=workload;
   const execution={webExecutionEnabled:false,owners:workload.tasks.reduce((counts,task)=>{counts[task.executionOwner]=(counts[task.executionOwner]??0)+1;return counts;},{}),syncedAt:runtime?.generatedAt??null};
   if(projectedSnapshot){projectedSnapshot.counts=workload.counts;projectedSnapshot.planCounts=workload.planCounts;
     projectedSnapshot.supplementTaskCount=workload.supplementTaskCount;projectedSnapshot.evidenceQuality=evidenceQuality;}
   return {
     snapshot: projectedSnapshot,
+    dayVerdict:verdict,
     evidenceQuality,
     execution,
     readiness: evaluateShadowHistory(ledger),
     ptStatus,
     status,
-    tasks:workload.tasks,
+    tasks:workload.tasks.map(task=>({...task,dayClass:classes.get(task.taskId)??'verifying'})),
     sites:workload.sites,
     accounts:workload.accounts,
     ledger: ledger.slice(-30).map((record) => ({

@@ -184,7 +184,14 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
       observedStatus: status
     };
     if(typeof entry.submissionAttempted==='boolean')task.submissionAttempted=entry.submissionAttempted;
+    for(const name of ['retryable','retryExhaustedForDay','loginRecoveryExhausted','retryableLoginRecovery','disabledByConfig'])
+      if(typeof entry[name]==='boolean')task[name]=entry[name];
+    if(entry.status==='interactive_challenge')task.manualVerificationRequired=true;
+    if([...externalRetryCauses,'login_required'].includes(entry.retryCause))task.retryCause=entry.retryCause;
+    if(Number.isFinite(Date.parse(entry.nextEligibleAt)))task.nextEligibleAt=new Date(entry.nextEligibleAt).toISOString();
+    if(['task_disabled','feature_disabled','temporary_unavailable'].includes(entry.availabilityKind))task.availabilityKind=entry.availabilityKind;
     if(/^[a-z_]{1,80}$/.test(entry.failureCode??''))task.failureCode=entry.failureCode;
+    if(/^[a-z_]{1,80}$/.test(entry.underlyingFailureCode??''))task.underlyingFailureCode=entry.underlyingFailureCode;
     // Non-secret binding metadata is needed to reconcile a passive receipt
     // with its original execution. Never import a browser directory here.
     if(/^[a-f0-9]{64}$/.test(entry.profileBinding??entry.evidence?.profileBinding??''))
