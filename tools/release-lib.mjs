@@ -22,7 +22,7 @@ const operationsSources=new Map([
   ['operations/scripts/Sync-Transport.ps1','observation/scripts/Sync-Transport.ps1']
 ]);
 const operationsCodeFile=/^operations\/(?:src|public|schemas|scripts)\/[A-Za-z0-9_.\/-]+$|^operations\/(?:Dockerfile|compose\.(?:nas|worker)\.yaml|\.dockerignore|package(?:-lock)?\.json)$/;
-const managed={test:file=>operationsSources.has(file)||operationsCodeFile.test(file)||publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
+export const managed={test:file=>operationsSources.has(file)||operationsCodeFile.test(file)||publicRuntimeFiles.has(file)||/^(execution\/(?:src|scripts|skills)\/|observation\/(?:src|scripts|public|schemas)\/|(?:execution|observation)\/package(?:-lock)?\.json$)/.test(file)};
 const sourceFile=file=>operationsSources.get(file)??(file.startsWith('operations/')?`observation/${file.slice('operations/'.length)}`:file);
 export const fileHash=file=>fs.existsSync(file)?crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'):null;
 function safeFile(root,relative){
