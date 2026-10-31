@@ -31,6 +31,31 @@ test('a scheduled Harvest-only unknown is waiting while independent and explicit
   assert.equal(JSON.stringify(ptStatus),before);
 });
 
+test('daily verdict keeps Harvest waiting inside verifying with matching cards and task filters',()=>{
+  const view=authorizedWorkload({tasks:[],ptStatus:fixture(),businessDate:day,now});
+  const tasks=view.tasks.filter(task=>task.origin!=='https://failed.example').map(task=>({...task,dayClass:'verifying'}));
+  const data={counts:{executionUnits:2},tasks,businessDate:day,generatedAt:at,
+    dayVerdict:{total:2,settled:false,counts:{done:0,verifying:2,actionNeeded:0,external:0,paused:0,noFeature:0}}};
+  const original=JSON.stringify(data),metrics=overviewMetrics(data,now),counts=overviewResultCounts(data,now);
+  assert.equal(metrics.waiting,1);assert.equal(metrics.pending,2);assert.equal(metrics.eligible,2);
+  assert.deepEqual(counts,{verified:0,proof:1,actionable:0,waiting:1,excluded:0});
+  assert.equal(counts.proof+counts.waiting,data.dayVerdict.counts.verifying);
+  assert.equal(dailySummaryTitle(metrics),'1 项等待 Harvest · 1 项核验中');
+  assert.equal(dailySummaryTitle({...metrics,verdict:{...data.dayVerdict,counts:{...data.dayVerdict.counts,actionNeeded:1}}}),
+    '1 项需要处理 · 1 项等待 Harvest · 1 项核验中');
+  for(const kind of ['proof','waiting','actionable']){
+    assert.equal(tasks.filter(task=>matchesTask(task,{status:kind,now})).length,counts[kind]);
+  }
+  const later=Date.parse(day+'T01:35:00Z');
+  assert.deepEqual(overviewResultCounts(data,later),{verified:0,proof:2,actionable:0,waiting:0,excluded:0});
+  assert.equal(tasks.filter(task=>matchesTask(task,{status:'waiting',now:later})).length,0);
+  assert.equal(tasks.filter(task=>matchesTask(task,{status:'proof',now:later})).length,2);
+  for(const dayClass of ['done','actionNeeded','external','paused','noFeature']){
+    assert.equal(matchesTask({...tasks.find(task=>task.waiting),dayClass},{status:'waiting',now}),false);
+  }
+  assert.equal(JSON.stringify(data),original);
+});
+
 test('the waiting window ends after the scheduled start grace period and never becomes a success or a write permission',()=>{
   const pt=fixture(),site=pt.sites.find(s=>s.origin==='https://waiting.example'),window=pt.harvestWindow;
   const later={...window,observedAt:day+'T01:30:00Z'};

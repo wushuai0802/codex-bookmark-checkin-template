@@ -36,7 +36,10 @@ try{
       await page.waitForFunction(()=>document.querySelector('.summary-waiting'));
       const view=await fetch(base+'/api/overview').then(r=>r.json());
       assert.equal(view.tasks.filter(task=>task.waiting).length,1);
-      assert.equal(await page.locator('#kpi-grid [data-kind="actionable"] .kpi-value').textContent(),'1');
+      // The independent site has no receipt: today's verdict is verifying, not actionNeeded.
+      assert.equal(await page.locator('#kpi-grid [data-kind="actionable"] .kpi-value').textContent(),'0');
+      assert.equal(await page.locator('#kpi-grid [data-kind="proof"] .kpi-value').textContent(),'1');
+      assert.equal(await page.locator('#kpi-grid [data-kind="waiting"] .kpi-value').textContent(),'1');
       assert.match(await page.locator('#daily-summary h2').textContent(),/1 项等待 Harvest/);
       await page.locator('.summary-waiting').click();
       await page.waitForFunction(()=>document.querySelector('#task-status')?.value==='waiting');

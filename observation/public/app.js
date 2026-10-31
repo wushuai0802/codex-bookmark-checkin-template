@@ -330,6 +330,7 @@ function renderKpis(data) {
     ['待补证', counts.proof, [metrics.unverifiedSuccess?`${metrics.unverifiedSuccess} 成功回执待核验`:'',
       metrics.unverifiedUnavailable?`${metrics.unverifiedUnavailable} 未开放待核验`:''].filter(Boolean).join(' · ')||'当前没有待补证回执', 'proof'],
     ['待处理', counts.actionable, [...reasons].map(([reason,count])=>`${reason} ${count}`).join(' · ')||'当前没有可处理事项', 'actionable'],
+    ...(counts.waiting?[['等待 Harvest', counts.waiting, 'Harvest 执行完成后自动核验', 'waiting']]:[]),
     [metrics.cancelled||metrics.excludedSiteIssues?'已排除':'未开放', counts.excluded, excluded||'确认不参与核验的任务', 'excluded']
   ];
   const grid = $('#kpi-grid'); grid.replaceChildren();
