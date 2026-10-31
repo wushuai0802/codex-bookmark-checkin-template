@@ -30,7 +30,10 @@ $ErrorActionPreference='Stop'
 . ${quote(transport)}
 $ok=Invoke-BoundedSyncProcess -Executable ${quote(process.execPath)} -Arguments @(${quote(drain)}) -Phase 'drain' -InputFile ${quote(input)} -TimeoutSeconds 10
 $stalled=Invoke-BoundedSyncProcess -Executable ${quote(process.execPath)} -Arguments @(${quote(stall)}) -Phase 'stall' -InputFile ${quote(input)} -TimeoutSeconds 1
-[ordered]@{okExit=$ok.exitCode;okFailure=$ok.failure;okOutput=$ok.output;okError=$ok.error;stalledExit=$stalled.exitCode;stalledFailure=$stalled.failure;stalledTimedOut=$stalled.timedOut}|ConvertTo-Json -Compress
+$extended=Invoke-BoundedSyncProcess -Executable ${quote(process.execPath)} -Arguments @(${quote(drain)}) -Phase 'extended' -TimeoutSeconds 300
+$rangeRejected=$false
+try { Invoke-BoundedSyncProcess -Executable ${quote(process.execPath)} -Arguments @() -Phase 'invalid' -TimeoutSeconds 301 | Out-Null } catch { $rangeRejected=$true }
+[ordered]@{okExit=$ok.exitCode;okFailure=$ok.failure;okOutput=$ok.output;okError=$ok.error;stalledExit=$stalled.exitCode;stalledFailure=$stalled.failure;stalledTimedOut=$stalled.timedOut;extendedExit=$extended.exitCode;rangeRejected=$rangeRejected}|ConvertTo-Json -Compress
 `;
   const output=execFileSync(shell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')],{encoding:'utf8',timeout:30000});
   const result=JSON.parse(output.trim());
@@ -42,4 +45,5 @@ $stalled=Invoke-BoundedSyncProcess -Executable ${quote(process.execPath)} -Argum
   assert.equal(result.stalledExit,124);
   assert.equal(result.stalledTimedOut,true);
   assert.match(result.stalledFailure,/cause=connection_timeout/);
+  assert.equal(result.extendedExit,0);assert.equal(result.rangeRejected,true);
 });

@@ -63,7 +63,7 @@ function Invoke-BoundedSyncProcess {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$Phase,
         [string]$InputFile = '',
-        [ValidateRange(1, 180)][int]$TimeoutSeconds = 30,
+        [ValidateRange(1, 300)][int]$TimeoutSeconds = 30,
         [switch]$CooperativeStop,
         [ValidateRange(1, 120)][int]$CleanupGraceSeconds = 35
     )
