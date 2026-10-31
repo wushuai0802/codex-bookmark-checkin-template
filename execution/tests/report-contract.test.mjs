@@ -22,15 +22,17 @@ async function previewReport(report, runnerStatus = "completed", configOverride 
       ? { ...report, bookmarkSummary: { targets: report.results.map(({ origin, accountKey }) => ({ origin, accountKey })) } }
       : report;
     await fs.writeFile(reportPath, JSON.stringify(reportWithContract), "utf8");
-    if (configOverride) await fs.writeFile(configPath, JSON.stringify(configOverride), "utf8");
+    // These contract tests exercise the legacy per-change report, not the daily digest.
+    const config = { ...configOverride, notification: { ...configOverride?.notification, policy: 'per_change' } };
+    await fs.writeFile(configPath, JSON.stringify(config), "utf8");
     const reporterArguments = [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-File", reporter,
       "-RunnerStatus", runnerStatus,
       "-ReportPath", reportPath,
+      "-ConfigPath", configPath,
       "-Preview",
     ];
-    if (configOverride) reporterArguments.push("-ConfigPath", configPath);
     const { stdout } = await execFileAsync(powershell, [
       ...reporterArguments,
     ], { cwd: root, encoding: "utf8" });
