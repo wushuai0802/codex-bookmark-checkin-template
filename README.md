@@ -1,5 +1,7 @@
 # Check-in Fabric
 
+文档索引：[架构](docs/architecture.md) · [术语](docs/glossary.md) · [发布与恢复](docs/release-and-recovery.md) · [排障与可靠性](docs/reliability-hardening.md)。
+
 One check-in project, organized by responsibility rather than version:
 
 Unified release series: **1.1**. Start with [中文快速开始](docs/quickstart.md)
