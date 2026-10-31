@@ -423,8 +423,9 @@ $wideWriteRules = @($rootAcl.Access | Where-Object {
     return $sid -notin $allowedSids -and ($isFullControl -or (($rights -band $writeCapabilityMask) -ne 0))
 })
 $runtimeAclPrivate = $rootAcl.AreAccessRulesProtected -and $wideWriteRules.Count -eq 0
+# 清理保留 48 小时且每天主运行才执行；超过 72 小时才说明清理没有在工作。
 $staleTempCount = @(Get-ChildItem -LiteralPath (Join-Path $root 'tmp') -Force -ErrorAction SilentlyContinue | Where-Object {
-    $_.Name -ne '.gitkeep' -and $_.LastWriteTimeUtc -lt (Get-Date).ToUniversalTime().AddHours(-48)
+    $_.Name -ne '.gitkeep' -and $_.LastWriteTimeUtc -lt (Get-Date).ToUniversalTime().AddHours(-72)
 }).Count
 $scheduledTaskActionValid = if ($scheduledTask) {
     @($scheduledTask.Actions | Where-Object {

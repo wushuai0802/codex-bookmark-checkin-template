@@ -84,3 +84,27 @@ test("跨日仍按昨日原始回执核对内部业务完成标记", async () =>
   const setup = "$latestRunToday=$false; $plannedTotal=1; $processedTotal=1; $minimumTargets=1; $problemCount=0; $latest=[pscustomobject]@{runState='final';isComplete=$true;executionComplete=$true;businessComplete=$true;results=@([pscustomobject]@{status='signed'})}; ";
   assert.equal(runExpression(setup + source.slice(start, end) + "; $serializedBusinessCompleteMatches"), "True");
 });
+
+for (const [hours, clean] of [[60, "True"], [80, "False"]]) {
+  test("私有临时文件 " + hours + " 小时的健康判定为 " + clean, async () => {
+    const source = await fs.readFile(path.join(root, "scripts/Test-CheckinHealth.ps1"), "utf8");
+    const start = source.indexOf("$staleTempCount =");
+    const end = source.indexOf("$scheduledTaskActionValid =", start);
+    assert.ok(start >= 0 && end > start);
+    // Run the actual check against an isolated file, without invoking the
+    // health script's configuration/profile/process readers or the cleaner.
+    const expression = [
+      "$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))",
+      "try {",
+      "$null = New-Item -ItemType Directory -Path (Join-Path $tempRoot 'tmp')",
+      "$file = Join-Path $tempRoot 'tmp/sample.json'",
+      "[IO.File]::WriteAllText($file, '{}')",
+      "[IO.File]::SetLastWriteTimeUtc($file, [datetime]::UtcNow.AddHours(-" + hours + "))",
+      "$root = $tempRoot",
+      source.slice(start, end),
+      "$staleTempCount -eq 0",
+      "} finally { if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force } }",
+    ].join("\n");
+    assert.equal(runExpression(expression), clean);
+  });
+}
