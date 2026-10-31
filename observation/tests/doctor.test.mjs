@@ -47,7 +47,11 @@ function fixture(t){
   save(dailyFile,{businessDate:today,counts:{completed:4,unavailable:2,cancelled:0,unresolved:1,
     [privateValues[0]]:999},results:[privateFields],...privateFields});
   const ptFile=path.join(roots.observation,'outputs/shadow-beta-snapshot.json');
-  save(ptFile,{businessDate:today,ptStatus:{counts:{sites:3,inLegacyPlan:1,verificationPending:1,
+  save(ptFile,{businessDate:today,generatedAt:now.toISOString(),tasks:Array.from({length:7},(_,i)=>({taskId:'synthetic_'+i,
+    origin:`https://task-${i}.example`,businessDate:today,observedAt:finishedAt,
+    observedStatus:i<4?'signed':i<6?'not_available':'needs_attention',
+    ...(i>=4&&i<6?{availabilityKind:'feature_disabled'}:{}),
+    evidence:{source:'pt_page',authoritative:i<6,businessDate:today,confirmedAt:finishedAt}})),ptStatus:{counts:{sites:3,inLegacyPlan:1,verificationPending:1,
     status:{signed:2,unknown:1,[privateValues[0]]:999},[privateValues[0]]:999},sites:[privateFields]},...privateFields});
   const runId=today.replaceAll('-','')+'-080500-001-abcdef';
   const snapshot={schemaVersion:1,capturedAt:now.toISOString(),
@@ -120,13 +124,27 @@ test('all healthy evidence produces a concise Chinese summary and exit 0',async 
   assert.equal(result.exitCode,0);assert.deepEqual(result.attention,[]);
   assert.equal(result.sections.gate.ok,true);assert.equal(result.sections.gate.phase,'settled');
   assert.equal(result.sections.verify.result,'pass');assert.equal(result.sections.audit.fileDrift,0);
-  assert.deepEqual(result.sections.daily.counts,{completed:4,unavailable:2,cancelled:0,unresolved:1});
+  assert.deepEqual(result.sections.daily.counts,{done:4,verifying:1,actionNeeded:0,external:0,paused:0,noFeature:2});
   assert.deepEqual(result.sections.pt.counts.status,{signed:2,unknown:1});
   assert.equal(f.calls.probe,1);assert.equal(f.calls.health,1);
   const summary=formatDoctor(result);
   assert.match(summary,/只读体检：正常/);assert.match(summary,/调度：主任务 Ready/);
   assert.match(summary,/版本：.*1\.2\.3 \/ a{12}/);
   assert.ok(summary.split('\n').length<=15);
+});
+
+test('only actionNeeded from the daily verdict adds daily attention, independent of sync state',async t=>{
+  const f=fixture(t);
+  let result=await run(f);assert.equal(result.sections.daily.counts.verifying,1);
+  assert.equal(result.attention.some(item=>item.section==='daily'),false);
+  edit(f.ptFile,v=>Object.assign(v.tasks[6],{observedStatus:'login_required',retryable:false,retryExhaustedForDay:true}));
+  result=await run(f);assert.equal(result.sections.daily.counts.actionNeeded,1);
+  assert.ok(result.attention.some(item=>item.section==='daily'&&item.code==='action_needed'));
+  fs.writeFileSync(f.stateFile,'{');result=await run(f);
+  assert.equal(result.sections.daily.counts.actionNeeded,1);
+  edit(f.ptFile,v=>Object.assign(v.tasks[6],{retryable:true,retryExhaustedForDay:false,nextEligibleAt:'2026-10-31T05:00:00Z'}));
+  result=await run(f);assert.equal(result.sections.daily.counts.actionNeeded,0);
+  assert.equal(result.attention.some(item=>item.section==='daily'),false);
 });
 
 const attentionCases=[
@@ -469,7 +487,7 @@ const unavailableCases=[
   ['tasks',f=>{f.snapshot.tasks={ok:false,error:'read_failed',private:f.privateFields};}],
   ['sync',f=>fs.writeFileSync(f.stateFile,'{')],
   ['health',f=>{f.dependencies.health=()=>{throw Error(f.privateValues.join(' '));};}],
-  ['daily',f=>fs.unlinkSync(f.dailyFile)],
+  ['daily',f=>edit(f.ptFile,v=>{v.tasks='invalid';})],
   ['pt',f=>edit(f.ptFile,v=>{v.businessDate='2026-10-30';})]
 ];
 for(const [section,mutate] of unavailableCases)test(section+' read failure preserves independent sections',async t=>{
@@ -479,14 +497,14 @@ for(const [section,mutate] of unavailableCases)test(section+' read failure prese
   assert.ok(result.attention.some(item=>item.section===section));
   assert.ok(result.sections.nas.summary.length>0);
   if(section!=='health')assert.equal(result.sections.health.healthy,true);
-  if(section!=='daily')assert.equal(result.sections.daily.counts.completed,4);
+  if(!['daily','pt'].includes(section))assert.equal(result.sections.daily.counts.done,4);
 });
 
 test('missing local tool returns 2 while keeping available evidence',async t=>{
   const f=fixture(t);f.dependencies.gitExec=()=>{throw Object.assign(Error('unavailable'),{code:'ENOENT',syscall:'spawnSync git'});};
   const result=await run(f);assert.equal(result.exitCode,2);
   assert.ok(result.errors.some(item=>item.code==='tool_unavailable'));
-  assert.equal(result.sections.daily.counts.completed,4);assert.equal(result.sections.health.healthy,true);
+  assert.equal(result.sections.daily.counts.done,4);assert.equal(result.sections.health.healthy,true);
 });
 
 test('missing or incomplete configuration and invalid arguments return 2 without invoking probes',async t=>{

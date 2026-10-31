@@ -26,13 +26,15 @@ snapshot.receipts.find(receipt=>receipt.taskId===uncertainTask.taskId).evidence.
 // UI test covers both the verified and the proof-pending buckets.
 const verifiedTask=snapshot.tasks.find(task=>task.observedStatus==='signed');
 Object.assign(snapshot.receipts.find(receipt=>receipt.taskId===verifiedTask.taskId).evidence,
-  {authoritative:true,verification:'verified'});
+  {authoritative:true,verification:'verified',businessDate:today,confirmedAt:snapshot.generatedAt});
+snapshot.receipts.find(receipt=>receipt.taskId===verifiedTask.taskId).observedAt=snapshot.generatedAt;
 snapshot.ptStatus.businessDate=today;
 const ptSite = (host, status, authoritative) => ({
   origin: `https://${host}.example`, displayName: host, fallbackEnabled: true,
   effective: { source: authoritative ? 'harvest' : 'execution-supplement', status,
     observedAt: snapshot.generatedAt, fresh: true, authoritative,
     evidence: { source: authoritative ? 'harvest' : 'page_text', authoritative,
+      businessDate:today,confirmedAt:snapshot.generatedAt,
       summary: authoritative ? '今日已完成' : '执行回执待补证' } },
   sourceStatuses: [], observations: []
 });

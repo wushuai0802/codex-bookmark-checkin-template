@@ -6,6 +6,8 @@ param(
     [string]$ReportPath,
     [string]$OutboxPath,
     [string]$ConfigPath,
+    [datetimeoffset]$NowUtc = [datetimeoffset]::UtcNow,
+    [switch]$CheckRunMissing,
     [switch]$Preview
 )
 
@@ -19,6 +21,13 @@ $localConfigPath = Join-Path $root 'config\config.json'
 $defaultsPath = Join-Path $root 'config\defaults.json'
 $effectiveConfigPath = if ($ConfigPath) { $ConfigPath } elseif (Test-Path -LiteralPath $localConfigPath) { $localConfigPath } else { $defaultsPath }
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $effectiveConfigPath | ConvertFrom-Json
+# Existing scripts select the complete private config. Inherit only these new
+# policy fields in memory; no private configuration is rewritten.
+$notificationDefaults = if (Test-Path -LiteralPath $defaultsPath) { (Get-Content -Raw -Encoding UTF8 -LiteralPath $defaultsPath | ConvertFrom-Json).notification } else { $null }
+$policy = if ($config.notification.policy) { [string]$config.notification.policy } elseif ($notificationDefaults.policy) { [string]$notificationDefaults.policy } else { 'daily_digest' }
+if ($policy -notin @('daily_digest','per_change')) { throw '不支持的通知策略。' }
+$shanghaiNow = $NowUtc.ToOffset([timespan]::FromHours(8))
+$businessDate = $shanghaiNow.ToString('yyyy-MM-dd')
 $report = $null
 $results = @()
 
@@ -104,8 +113,13 @@ if ($ReportPath) {
     $logsRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'logs'))
     $logsPrefix = $logsRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
     if (-not $resolvedReport.StartsWith($logsPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw '报告必须位于本项目 logs 目录。' }
-    $report = Get-Content -Raw -Encoding UTF8 -LiteralPath $resolvedReport | ConvertFrom-Json
-    $results = @($report.results)
+    try {
+        $report = Get-Content -Raw -Encoding UTF8 -LiteralPath $resolvedReport | ConvertFrom-Json
+        $results = @($report.results)
+    } catch {
+        if ($policy -ne 'daily_digest' -or -not $CheckRunMissing) { throw }
+        $report = $null; $results = @()
+    }
 }
 
 $effectiveResults = @($results)
@@ -115,6 +129,7 @@ if ($null -ne $report -and $ReportPath) {
         . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
         $node = Resolve-CheckinNode $config
         $viewArguments = @((Join-Path $root 'src/notification-reconciliation.mjs'), '--report', $resolvedReport)
+        if ($policy -eq 'daily_digest') { $viewArguments += @('--verdict','--now',$NowUtc.ToString('o')) }
         if (-not $Preview -and [string]$config.notification.mode -eq 'command') { $viewArguments += '--persist' }
         $notificationView = (& $node @viewArguments 2>$null) | ConvertFrom-Json
         $effectiveResults = @($results | ForEach-Object {
@@ -388,6 +403,11 @@ $payload = [ordered]@{
     scope = if ($notificationView.scope) { [string]$notificationView.scope } else { 'regular_tasks' }
     eventKey = $eventKey
     mode = $mode
+}
+if ($policy -eq 'daily_digest') {
+    . (Join-Path $PSScriptRoot 'Notification-Digest.ps1')
+    Invoke-DailyDigest | ConvertTo-Json -Depth 8 -Compress
+    return
 }
 $waitingOnly=$isCompleteFinalReport -and $waitingProblems.Count -gt 0 -and $localProblems.Count -eq 0 -and
     $verificationProblems.Count -eq 0 -and $externalNeedsReview.Count -eq 0 -and $RunnerStatus -notin @('timeout','failed') -and $cleanupProblems.Count -eq 0

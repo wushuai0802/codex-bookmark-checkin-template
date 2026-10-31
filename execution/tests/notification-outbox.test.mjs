@@ -30,7 +30,7 @@ function completeReport(result) {
 }
 
 async function writeConfig(filePath, notification) {
-  await fs.writeFile(filePath, JSON.stringify({ notification }), "utf8");
+  await fs.writeFile(filePath, JSON.stringify({ notification: {policy:"per_change",...notification} }), "utf8");
 }
 
 async function enqueue(outboxPath, configPath, report) {

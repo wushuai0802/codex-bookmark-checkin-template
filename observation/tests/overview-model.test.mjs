@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { overviewMetrics, overviewStatusCounts, projectOverviewSnapshot, dailySummaryTitle, statusGradient } from '../public/overview-model.mjs';
+import { overviewMetrics, overviewResultCounts, overviewStatusCounts, projectOverviewSnapshot, dailySummaryTitle, statusGradient } from '../public/overview-model.mjs';
+
+test('daily pending excludes external blockers while excluded cards retain all excluded classes',()=>{
+  const data={counts:{executionUnits:9},dayVerdict:{businessDate:'2026-10-31',total:6,settled:false,
+    counts:{done:3,verifying:2,actionNeeded:1,external:1,paused:1,noFeature:1}}};
+  const original=JSON.stringify(data),metrics=overviewMetrics(data);
+  assert.equal(metrics.pending,3);assert.equal(metrics.excludedSiteIssues,1);assert.equal(metrics.eligible,6);
+  assert.equal(metrics.success+metrics.pending,metrics.eligible);
+  assert.deepEqual(overviewResultCounts(data),{verified:3,proof:2,actionable:1,waiting:0,excluded:3});
+  assert.equal(dailySummaryTitle({...metrics,fresh:true}),'1 项需要处理 · 2 项核验中');
+  assert.equal(JSON.stringify(data),original);
+});
 
 test('both successful outcomes share one chart category for live and historical counts without altering records or evidence quality',()=>{
   const data={counts:{executionUnits:4},status:{signed:1,already_signed:2,login_required:1},

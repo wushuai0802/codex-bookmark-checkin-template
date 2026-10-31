@@ -24,7 +24,7 @@
 
 主运行时间**由私有配置决定**（`execution/scripts/Start-UserScheduler.ps1:537`）。Harvest 的运行时间**由它自身的配置决定**，代码读取其日程和运行结果（`observation/scripts/harvest-observe.py:30,67`）。
 
-同步由报告/观测变化、启用 PT 监控后的 20 分钟刷新或日定时触发；日定时**由私有配置决定**（`observation/scripts/Start-NasShadowScheduler.ps1:87,97`）。每轮还异步派发面板请求 worker，并经 `Invoke-PtEvidenceRepair.ps1` → `reconcile-pt-evidence.mjs` → `repairPtEvidence` 做有界只读复核；新证据触发跳过 fallback 的再次同步，最终刷新每日通知（`observation/scripts/Invoke-PtEvidenceRepair.ps1:10`、`observation/scripts/reconcile-pt-evidence.mjs:8`、`observation/src/pt-evidence-repair.mjs:266`、`observation/scripts/Start-NasShadowScheduler.ps1:168,193,221`）。主运行结束也会排通知，开关和命令**由私有配置决定**，当前代码不保证固定时刻或严格每日一次（`execution/scripts/Run-Checkin.ps1:345`、`execution/scripts/Submit-UnifiedCheckinReport.ps1:371`）；各步骤会交错、重试。
+同步由报告/观测变化、启用 PT 监控后的 20 分钟刷新或日定时触发；日定时**由私有配置决定**（`observation/scripts/Start-NasShadowScheduler.ps1:87,97`）。每轮还异步派发面板请求 worker，并经 `Invoke-PtEvidenceRepair.ps1` → `reconcile-pt-evidence.mjs` → `repairPtEvidence` 做有界只读复核；新证据触发跳过 fallback 的再次同步，最终刷新每日通知（`observation/scripts/Invoke-PtEvidenceRepair.ps1:10`、`observation/scripts/reconcile-pt-evidence.mjs:8`、`observation/src/pt-evidence-repair.mjs:266`、`observation/scripts/Start-NasShadowScheduler.ps1:168,193,221`）。主运行结束也会排通知，开关和命令**由私有配置决定**；默认 `daily_digest` 在上海时间 11:00 后的首次通知刷新时入队，同日仅一条汇总，需人工处理等例外另行去重提醒；`per_change` 保留旧行为（`execution/scripts/Run-Checkin.ps1:345`、`execution/scripts/Submit-UnifiedCheckinReport.ps1`、`execution/scripts/Notification-Digest.ps1`）。各步骤仍会交错、重试。
 
 ## 谁写、谁读
 

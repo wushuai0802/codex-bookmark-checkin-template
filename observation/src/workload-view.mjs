@@ -37,6 +37,10 @@ export function authorizedWorkload({tasks=[],ptStatus,businessDate,counts={},now
       accountKey:'site-default',accountRef:null,identity:{label:'本站账号',source:'configuration'},businessDate,
       taskKind:'pt',ptSupplementOnly:true,inLegacyPlan:false,executionOwner:'legacy-checkin',executionMode:'execute',
       observedStatus:status,observedAt:effective.observedAt??null,evidence,
+      ...Object.fromEntries(['retryable','retryExhaustedForDay','loginRecoveryExhausted','retryableLoginRecovery'].filter(name=>typeof effective[name]==='boolean').map(name=>[name,effective[name]])),
+      ...(Number.isFinite(Date.parse(effective.nextEligibleAt))?{nextEligibleAt:new Date(effective.nextEligibleAt).toISOString()}:{}),
+      ...(disabled?{disabledByConfig:true,availabilityKind:'task_disabled'}:
+        ['task_disabled','feature_disabled','temporary_unavailable'].includes(effective.availabilityKind)?{availabilityKind:effective.availabilityKind}:{}),
       ...(waiting?{waiting}:{}),
       ...(condition?{condition}:{}),...(effective.failureCode?{failureCode:effective.failureCode}:{}),
       ...(effective.underlyingFailureCode?{underlyingFailureCode:effective.underlyingFailureCode}:{}),

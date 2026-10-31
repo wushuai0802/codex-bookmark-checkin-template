@@ -5,11 +5,229 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import test from 'node:test';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import {notificationOverrides,notificationAvailability,notificationSupplementalResults,reconcileNotification} from '../src/notification-reconciliation.mjs';
+import {notificationOverrides,notificationAvailability,notificationSupplementalResults,reconcileNotification,notificationVerdict} from '../src/notification-reconciliation.mjs';
 import {authorizedWorkload} from '../../observation/src/workload-view.mjs';
 import {confirmedPtByTask} from '../../observation/src/daily-reconciliation.mjs';
 import {commitDashboardGeneration} from '../../observation/src/dashboard-generation.mjs';
 import {accountRef,planHash,taskIdentity} from '../../observation/src/contracts.mjs';
+
+function digestSandbox(t){
+  const now=new Date('2026-10-31T02:50:00Z'),f=sandbox(t,now);
+  const configFile=path.join(f.root,'config/config.json'),outbox=path.join(f.root,'data/notification-outbox');
+  fs.copyFileSync(path.join(sourceRoot,'config/defaults.json'),path.join(f.root,'config/defaults.json'));
+  const notification={mode:'command',executable:process.execPath,arguments:[],taskId:'synthetic-daily',name:'合成日报',source:'test-suite'};
+  fs.writeFileSync(configFile,JSON.stringify({nodeExecutable:process.execPath,notification}));
+  f.save=()=>{
+    fs.writeFileSync(f.reportFile,JSON.stringify(f.report));f.snapshot.planHash=planHash(f.snapshot.tasks);
+    const ledgerFile=path.join(f.controller,'outputs/shadow-ledger.jsonl');
+    fs.writeFileSync(ledgerFile,JSON.stringify({schemaVersion:1,snapshotId:f.snapshot.snapshotId,businessDate:f.snapshot.businessDate,
+      planHash:f.snapshot.planHash,recordedAt:f.snapshot.generatedAt})+'\n');
+    commitDashboardGeneration({snapshot:f.snapshot,snapshotFile:path.join(f.controller,'outputs/shadow-beta-snapshot.json'),ledgerFile});
+  };
+  f.run=(at='2026-10-31T03:00:00Z',args=[])=>JSON.parse(execFileSync('pwsh.exe',[
+    '-NoProfile','-NonInteractive','-File',path.join(f.root,'scripts/Submit-UnifiedCheckinReport.ps1'),
+    '-ReportPath',f.reportFile,'-NowUtc',at,...args],{encoding:'utf8',windowsHide:true,timeout:30_000,stdio:['ignore','pipe','pipe']}).trim());
+  f.items=()=>fs.existsSync(outbox)?fs.readdirSync(outbox).filter(file=>file.endsWith('.json')).map(file=>
+    JSON.parse(fs.readFileSync(path.join(outbox,file),'utf8'))):[];
+  f.mark=(index,patch)=>{
+    Object.assign(f.report.results[index],patch,{observedAt:now.toISOString()});
+    Object.assign(f.snapshot.tasks[index],patch,{observedStatus:patch.status,observedAt:now.toISOString()});
+    Object.assign(f.snapshot.receipts[index],{status:patch.status,observedAt:now.toISOString(),evidence:patch.evidence??{authoritative:false,verification:'unverified'}});
+    f.save();
+  };
+  f.notification=notification;f.configFile=configFile;f.outbox=outbox;
+  return f;
+}
+
+test('daily digest inherits defaults, defers before 11, freezes one daily event and resets next day',t=>{
+  const f=digestSandbox(t),before=fs.readFileSync(f.configFile,'utf8');
+  const early=f.run('2026-10-31T02:59:59Z');assert.equal(early.deferred,true);assert.equal(f.items().length,0);
+  const first=f.run();assert.equal(first.enqueued,true);assert.equal(first.events.length,1);
+  assert.equal(first.events[0].category,'daily_digest');assert.equal(first.status,'unconfirmed');
+  const saved=f.items()[0];assert.match(saved.eventKey,/:2026-10-31$/);
+  assert.equal(f.run().deferred,true);assert.deepEqual(f.items(),[saved]);
+  f.mark(1,{status:'signed',evidence:{source:'pt_page',authoritative:true,businessDate:f.date,confirmedAt:'2026-10-31T02:50:00Z'}});
+  const changed=f.run();assert.equal(changed.status,'success');assert.equal(changed.events.length,0);assert.deepEqual(f.items(),[saved]);
+  const next='2026-11-01',nextAt=next+'T03:00:00Z';
+  f.report.runId=next.replaceAll('-','')+'-fixture';f.report.finishedAt=nextAt;
+  f.snapshot.businessDate=next;f.snapshot.generatedAt=nextAt;f.snapshot.source.runId=f.report.runId;
+  f.snapshot.tasks.forEach(task=>{task.businessDate=next;});f.snapshot.ptStatus.businessDate=next;
+  f.save();assert.equal(f.run(nextAt).events.filter(event=>event.category==='daily_digest').length,1);
+  assert.equal(f.items().length,2);assert.equal(fs.readFileSync(f.configFile,'utf8'),before);
+});
+
+test('only new action-needed sites alert, shrinking or repeated sets and verification/external changes stay silent',t=>{
+  const f=digestSandbox(t),early='2026-10-31T02:59:00Z';
+  f.mark(1,{status:'login_required',retryable:false,reason:'synthetic-account-marker user@example.com https://secret.example'});
+  let output=f.run(early);assert.deepEqual(output.events.map(event=>event.category),['action_needed']);
+  assert.equal(output.status,'needs_attention');assert.equal(f.run(early).events.length,0);
+  const extra=structuredClone(f.snapshot.tasks[1]);extra.taskId='extra_task';extra.origin='https://new-action.example';
+  f.snapshot.tasks.push(extra);f.snapshot.receipts.push({...f.snapshot.receipts[1],taskId:extra.taskId});
+  f.report.bookmarkSummary.targets.push({origin:extra.origin,accountKey:'site-default'});
+  f.report.results.push({...f.report.results[1],origin:extra.origin});
+  f.report.plannedTotal=3;f.report.processedTotal=3;f.save();
+  output=f.run(early);assert.deepEqual(output.events.map(event=>event.category),['action_needed']);
+  f.mark(1,{status:'needs_attention',retryable:true,failureCode:'submission_outcome_unknown',submissionAttempted:true});
+  assert.equal(f.run(early).events.length,0);
+  f.snapshot.tasks[2].failureCode='site_maintenance';f.snapshot.tasks[2].retryable=true;f.save();
+  assert.equal(f.run(early).events.length,0);assert.equal(f.items().length,2);
+  for(const item of f.items())assert.doesNotMatch(item.summary,/synthetic-account-marker|@|https?:\/\//);
+});
+
+test('yesterday final report defers digest and actions, then today final report supplies the one immutable digest',t=>{
+  const f=digestSandbox(t);
+  f.mark(1,{status:'login_required',retryable:false});
+  const todayReport=structuredClone(f.report),todaySnapshot=structuredClone(f.snapshot);
+  f.report.runId='20261030-fixture';f.report.finishedAt='2026-10-30T02:50:00Z';
+  f.snapshot.businessDate='2026-10-30';f.snapshot.generatedAt=f.report.finishedAt;
+  f.snapshot.source.runId=f.report.runId;f.snapshot.ptStatus.businessDate='2026-10-30';
+  for(const task of f.snapshot.tasks){task.businessDate='2026-10-30';task.observedAt=f.report.finishedAt;}
+  for(const receipt of f.snapshot.receipts)receipt.observedAt=f.report.finishedAt;
+  f.save();
+  const before=f.run('2026-10-31T03:30:00Z');
+  assert.equal(before.deferred,true);assert.deepEqual(before.events,[]);assert.equal(f.items().length,0);
+  // A current action view alone must not turn yesterday's final report into today's alert.
+  Object.assign(f.snapshot,todaySnapshot);f.save();
+  assert.deepEqual(f.run('2026-10-31T03:30:00Z').events,[]);
+  Object.assign(f.report,todayReport);f.save();
+  f.mark(0,{status:'signed',evidence:{source:'pt_page',authoritative:true,businessDate:f.date,confirmedAt:'2026-10-31T02:50:00Z'}});
+  const ready=f.run('2026-10-31T05:00:00Z');
+  assert.deepEqual(ready.events.map(event=>event.category),['action_needed','daily_digest']);
+  assert.deepEqual(ready.dayVerdict.counts,{done:1,verifying:0,actionNeeded:1,external:0,paused:0,noFeature:0});
+  assert.match(ready.events.find(event=>event.category==='daily_digest').summary,/有效 2：已完成 1，核验中 0，需处理 1/);
+  const saved=f.items();assert.equal(f.run('2026-10-31T06:00:00Z').deferred,true);assert.deepEqual(f.items(),saved);
+});
+
+test('regular-task digest waits for noon while authorized workload can publish at 11:05',t=>{
+  const authorized=digestSandbox(t);
+  const full=authorized.run('2026-10-31T03:05:00Z');
+  assert.equal(full.scope,'authorized_workload');assert.deepEqual(full.events.map(event=>event.category),['daily_digest']);
+  const regular=digestSandbox(t);
+  for(const name of ['dashboard-generation.json','dashboard-generation.previous.json','shadow-beta-snapshot.json'])
+    fs.rmSync(path.join(regular.controller,'outputs',name),{force:true});
+  const early=regular.run('2026-10-31T03:05:00Z');
+  assert.equal(early.scope,'regular_tasks');assert.equal(early.deferred,true);assert.equal(regular.items().length,0);
+  const later=regular.run('2026-10-31T04:05:00Z');
+  assert.deepEqual(later.events.map(event=>event.category),['daily_digest']);assert.match(later.summary,/仅主任务口径/);
+  assert.equal(regular.run('2026-10-31T05:00:00Z').events.length,0);
+});
+
+for(const [exitCode,runnerStatus,expected] of [[0,'completed',[]],[2,'completed',[]],[1,'completed',['run_failed']],[0,'timeout',['run_failed']]]){
+  test(`finished scheduler exit ${exitCode}, runner ${runnerStatus}: failure alert follows execution semantics`,t=>{
+    const f=digestSandbox(t);
+    fs.writeFileSync(path.join(f.root,'data/scheduler-state.json'),JSON.stringify({lastAttemptDate:f.date,
+      lastFinishedAt:f.report.finishedAt,phase:'finished',automaticRetryCount:0,nextEligibleAt:null,lastExitCode:exitCode}));
+    const output=f.run('2026-10-31T02:59:00Z',['-RunnerStatus',runnerStatus]);
+    assert.deepEqual(output.events.map(event=>event.category),expected);
+    assert.equal(f.items().length,expected.length);
+    assert.equal(f.run('2026-10-31T02:59:00Z',['-RunnerStatus',runnerStatus]).events.length,0);
+  });
+}
+
+test('retryable login, waiting, external and cleanup warnings alone never create exception alerts',t=>{
+  const f=digestSandbox(t);
+  for(const patch of [{status:'login_required',retryable:true,nextEligibleAt:'2026-10-31T04:00:00Z'},
+    {status:'needs_attention',failureCode:'site_maintenance'},
+    {status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,cleanupFailureCode:'window_cleanup_failed'},
+    {status:'deferred',retryCause:'harvest_waiting'}]){
+    f.mark(1,patch);assert.equal(f.run('2026-10-31T02:59:00Z').events.length,0);
+  }
+  assert.equal(f.items().length,0);
+});
+
+test('run failure requires confirmed absence of another automatic retry; failure and identity conflict each alert once',t=>{
+  const f=digestSandbox(t),early='2026-10-31T02:59:00Z',file=path.join(f.root,'data/scheduler-state.json');
+  assert.equal(f.run(early,['-RunnerStatus','failed']).events.length,0);
+  const state={lastAttemptDate:f.date,lastFinishedAt:f.report.finishedAt,phase:'finished',automaticRetryCount:1,nextEligibleAt:'2026-10-31T04:00:00Z',lastExitCode:1};
+  fs.writeFileSync(file,JSON.stringify(state));assert.equal(f.run(early,['-RunnerStatus','timeout']).events.length,0);
+  Object.assign(state,{automaticRetryCount:0,nextEligibleAt:null});fs.writeFileSync(file,JSON.stringify(state));
+  assert.deepEqual(f.run(early,['-RunnerStatus','failed']).events.map(event=>event.category),['run_failed']);
+  assert.equal(f.run(early,['-RunnerStatus','timeout']).events.length,0);
+  f.snapshot.receipts[0].evidence={verification:'identity_conflict',authoritative:false};
+  f.snapshot.receipts[0].observedAt=f.report.finishedAt;f.save();
+  assert.deepEqual(f.run(early).events.map(event=>event.category),['identity_conflict']);
+  assert.equal(f.run(early).events.length,0);assert.equal(f.items().length,2);
+});
+
+test('sync-path missing-run check waits until noon, requires no final report and alerts once',t=>{
+  const f=digestSandbox(t);
+  f.run();f.report.runState='partial';f.report.isComplete=false;f.save();
+  assert.equal(f.run('2026-10-31T03:59:59Z',['-CheckRunMissing']).events.length,0);
+  assert.deepEqual(f.run('2026-10-31T04:00:00Z',['-CheckRunMissing']).events.map(event=>event.category),['run_missing']);
+  assert.equal(f.run('2026-10-31T04:01:00Z',['-CheckRunMissing']).events.length,0);
+  f.report.runState='final';f.report.isComplete=true;f.save();
+  assert.equal(f.run('2026-10-31T04:02:00Z',['-CheckRunMissing']).events.length,0);
+});
+
+test('sync missing-run check also covers an absent or corrupt final report without running the engine',t=>{
+  for(const corrupt of [false,true]){
+    const f=digestSandbox(t);
+    if(corrupt)fs.writeFileSync(f.reportFile,'{');else fs.rmSync(f.reportFile);
+    const output=JSON.parse(execFileSync('pwsh.exe',['-NoProfile','-NonInteractive','-File',
+      path.join(f.root,'scripts/Submit-UnifiedCheckinReport.ps1'),'-CheckRunMissing','-NowUtc','2026-10-31T04:00:00Z',
+      ...(corrupt?['-ReportPath',f.reportFile]:[])],{encoding:'utf8',windowsHide:true,timeout:30_000,stdio:['ignore','pipe','pipe']}).trim());
+    assert.deepEqual(output.events.map(event=>event.category),['run_missing']);assert.equal(f.items().length,1);
+  }
+});
+
+test('digest omits paused sites from work/actions, removes account details, limits text, Preview and none do not write',t=>{
+  const f=digestSandbox(t);
+  f.mark(1,{status:'not_available',availabilityKind:'task_disabled',disabledByConfig:true,accountLabel:'synthetic-account-marker',
+    reason:'synthetic-account-marker user@example.com https://secret.example'});
+  const preview=f.run(undefined,['-Preview']);assert.equal(preview.dayVerdict.counts.paused,1);
+  assert.equal(preview.dayVerdict.total,1);assert.equal(preview.dayVerdict.counts.actionNeeded,0);
+  assert.match(preview.summary,/已暂停 1/);assert.doesNotMatch(preview.summary,/synthetic-account-marker|@|https?:\/\//);
+  assert.ok(preview.summary.length<=950);assert.equal(f.items().length,0);
+  f.notification.mode='none';fs.writeFileSync(f.configFile,JSON.stringify({notification:f.notification,nodeExecutable:process.execPath}));
+  assert.equal(f.run().enqueued,false);assert.equal(f.items().length,0);
+});
+
+test('daily and exception events use the unchanged outbox, survive delivery independently and never refresh a delivered body',t=>{
+  const f=digestSandbox(t);f.mark(1,{status:'login_required',retryable:false});
+  fs.writeFileSync(path.join(f.root,'data/scheduler-state.json'),JSON.stringify({lastAttemptDate:f.date,
+    lastFinishedAt:f.report.finishedAt,phase:'finished',automaticRetryCount:0,nextEligibleAt:null,lastExitCode:1}));
+  const output=f.run();assert.deepEqual(output.events.map(event=>event.category),['action_needed','daily_digest','run_failed']);
+  f.snapshot.receipts[0].evidence={verification:'identity_conflict',authoritative:false};
+  f.snapshot.receipts[0].observedAt=f.report.finishedAt;f.save();
+  assert.deepEqual(f.run('2026-10-31T03:01:00Z').events.map(event=>event.category),['identity_conflict']);
+  f.report.runState='partial';f.report.isComplete=false;f.save();
+  assert.deepEqual(f.run('2026-10-31T04:00:00Z',['-CheckRunMissing']).events.map(event=>event.category),['run_missing']);
+  assert.equal(f.items().length,5);
+  f.notification.arguments=['-e','console.log(JSON.stringify({accepted:true,duplicate:false}))'];
+  fs.writeFileSync(f.configFile,JSON.stringify({notification:f.notification}));
+  const delivered=JSON.parse(execFileSync('pwsh.exe',['-NoProfile','-NonInteractive','-File',
+    path.join(sourceRoot,'scripts/Invoke-CheckinNotificationOutbox.ps1'),'-OutboxPath',f.outbox,
+    '-ConfigPath',f.configFile,'-ForceDue','-MutexName',`Local\\SyntheticDigest${process.pid}`],
+    {encoding:'utf8',windowsHide:true,timeout:30_000,stdio:['ignore','pipe','pipe']}).trim());
+  assert.equal(delivered.delivered,5);assert.equal(delivered.superseded,0);
+  const before=f.items();assert.ok(before.every(item=>item.delivered));
+  assert.equal(f.run().enqueued,false);assert.deepEqual(f.items(),before);
+});
+
+test('daily verdict reuses retained authoritative completion when the observation sidecar is temporarily missing',async t=>{
+  const f=sandbox(t),view=await reconcileNotification({root:f.root,report:f.report,persist:true});
+  for(const name of ['dashboard-generation.json','dashboard-generation.previous.json','shadow-beta-snapshot.json'])
+    fs.rmSync(path.join(f.controller,'outputs',name),{force:true});
+  const retained=await reconcileNotification({root:f.root,report:f.report});assert.equal(retained.overrides.length,1);
+  const projected=await notificationVerdict({root:f.root,report:f.report,reconciliation:retained});
+  assert.equal(view.overrides.length,1);assert.equal(projected.dayVerdict.counts.done,1);
+  assert.equal(projected.verdictScope,'regular_tasks');
+});
+
+test('large digest and new-action exception bodies both fit the 950-character limit without account information',t=>{
+  const f=digestSandbox(t);f.mark(1,{status:'login_required',retryable:false});
+  for(let i=0;i<45;i++){
+    const origin=`https://long-action-${i}.example`,taskId='synthetic_long_'+i;
+    f.report.bookmarkSummary.targets.push({origin,accountKey:'site-default'});
+    f.report.results.push({...f.report.results[1],origin,accountLabel:'synthetic-private-label'});
+    f.snapshot.tasks.push({...f.snapshot.tasks[1],origin,taskId});
+    f.snapshot.receipts.push({...f.snapshot.receipts[1],taskId});
+  }
+  f.report.plannedTotal=f.report.processedTotal=f.report.results.length;f.save();
+  const output=f.run();assert.equal(output.events.length,2);
+  for(const event of output.events){assert.ok(event.summary.length<=950);assert.doesNotMatch(event.summary,/synthetic-private-label|@|https?:\/\//);}
+  assert.equal(f.run().events.length,0);
+});
 
 const sourceRoot=fileURLToPath(new URL('../',import.meta.url)),observationRoot=fileURLToPath(new URL('../../observation/',import.meta.url));
 const today=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
@@ -38,9 +256,11 @@ function sandbox(t,now=new Date()){
     `export * from ${JSON.stringify(pathToFileURL(path.join(observationRoot,'src',name)).href)};\n`);
   fs.writeFileSync(path.join(controller,'public/harvest-window.mjs'),
     `export * from ${JSON.stringify(pathToFileURL(path.join(observationRoot,'public/harvest-window.mjs')).href)};\n`);
+  fs.writeFileSync(path.join(controller,'public/day-verdict.mjs'),
+    `export * from ${JSON.stringify(pathToFileURL(path.join(observationRoot,'public/day-verdict.mjs')).href)};\n`);
   fs.copyFileSync(path.join(sourceRoot,'src/notification-reconciliation.mjs'),path.join(root,'src/notification-reconciliation.mjs'));
   fs.copyFileSync(path.join(sourceRoot,'src/checkin-contract.generated.mjs'),path.join(root,'src/checkin-contract.generated.mjs'));
-  for(const name of ['Submit-UnifiedCheckinReport.ps1','ResultIdentity.ps1','ResultContract.ps1','CheckinContract.generated.ps1','Resolve-Runtime.ps1'])
+  for(const name of ['Submit-UnifiedCheckinReport.ps1','Notification-Digest.ps1','ResultIdentity.ps1','ResultContract.ps1','CheckinContract.generated.ps1','Resolve-Runtime.ps1'])
     fs.copyFileSync(path.join(sourceRoot,'scripts',name),path.join(root,'scripts',name));
   const fixture=model(now),reportFile=path.join(root,'logs/latest.json'),ledgerFile=path.join(controller,'outputs/shadow-ledger.jsonl');
   fs.writeFileSync(reportFile,JSON.stringify(fixture.report));
@@ -49,7 +269,7 @@ function sandbox(t,now=new Date()){
       planHash:fixture.snapshot.planHash,recordedAt:fixture.snapshot.generatedAt})+'\n');
     commitDashboardGeneration({snapshot:fixture.snapshot,snapshotFile:path.join(controller,'outputs/shadow-beta-snapshot.json'),ledgerFile});
   };publish();
-  fs.writeFileSync(path.join(root,'config/config.json'),JSON.stringify({nodeExecutable:process.execPath,notification:{mode:'none'}}));
+  fs.writeFileSync(path.join(root,'config/config.json'),JSON.stringify({nodeExecutable:process.execPath,notification:{mode:'none',policy:'per_change'}}));
   const preview=()=>JSON.parse(execFileSync('pwsh.exe',['-NoProfile','-NonInteractive','-File',path.join(root,'scripts/Submit-UnifiedCheckinReport.ps1'),
     '-ReportPath',reportFile,'-Preview'],{encoding:'utf8',windowsHide:true,timeout:30_000,stdio:['ignore','pipe','pipe']}).trim());
   return {...fixture,root,controller,reportFile,publish,preview,cache:path.join(root,'data/notification-reconciliation',fixture.date+'.json')};

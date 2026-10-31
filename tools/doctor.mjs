@@ -9,6 +9,8 @@ import {evaluateReleaseGate,releaseTasks,shanghaiDay} from './release-gate.mjs';
 import {parseReleaseOptions} from './release.mjs';
 import {collectNasRuntime,nasRuntimeFile,nasPackageEqual} from './nas-runtime.mjs';
 import {ptStatuses} from '../observation/src/checkin-contract.generated.mjs';
+import {dayVerdict} from '../observation/public/day-verdict.mjs';
+import {verdictSnapshot} from '../observation/src/daily-reconciliation.mjs';
 
 const source=fileURLToPath(new URL('../',import.meta.url));
 const roles=['execution','observation','operations'];
@@ -31,7 +33,6 @@ const phases={settled:'当日步骤已结束',before_run:'主运行前',settling
 const failureCauses=new Set(['connection_timeout','connection_interrupted','authentication_failed',
   'host_key_verification_failed','name_resolution_failed','remote_storage_full','ssh_transport_failed',
   'remote_command_failed','transport_helper_missing','input_missing','sync_command_failed']);
-const dailyCountNames=['completed','unavailable','cancelled','unresolved'];
 const ptCountNames=['sites','inLegacyPlan','externalOnly','fallbackOnly','fresh','discrepancies',
   'supplementCandidates','monitorOnlyUnconfirmed','guardedReadNeeded','verificationPending','externalBlocked','notSignedConfirmed'];
 
@@ -288,12 +289,14 @@ export async function runDoctor(options,{projectSource=source,clock=()=>new Date
       recordError(name,error);return null;
     }
   };
-  await section('daily','今日主运行结果',()=>{
-    const report=readToday(path.join(roots.observation,'outputs/engine-daily-'+today+'.json'),'daily');
-    if(report===null)return {status:'info',summary:'今日主运行尚无计数'};
-    requireValue(report?.businessDate===today);
-    const projected=counts(report.counts,dailyCountNames);
-    return {summary:Object.entries(projected).map(([name,value])=>name+'='+value).join('，'),counts:projected};
+  await section('daily','今日结果',warn=>{
+    const snapshot=readToday(path.join(roots.observation,'outputs/shadow-beta-snapshot.json'),'daily');
+    if(snapshot===null||snapshot.businessDate!==today)return {status:'info',summary:'今日结论尚未生成'};
+    requireValue(Array.isArray(snapshot.tasks));
+    const verdict=dayVerdict(verdictSnapshot(snapshot,{now}),{now}),c=verdict.counts;
+    if(c.actionNeeded)warn('action_needed',`${c.actionNeeded} 个签到项需要人工处理`);
+    return {summary:`有效 ${verdict.total}：已完成 ${c.done}，核验中 ${c.verifying}，需处理 ${c.actionNeeded}；外部阻断 ${c.external}，已暂停 ${c.paused} 个，无此功能 ${c.noFeature}`,
+      businessDate:verdict.businessDate,total:verdict.total,counts:c,settled:verdict.settled};
   });
   await section('pt','今日 PT 结果',()=>{
     const report=readToday(path.join(roots.observation,'outputs/shadow-beta-snapshot.json'),'pt');
@@ -313,7 +316,7 @@ export async function runDoctor(options,{projectSource=source,clock=()=>new Date
 
 export function formatDoctor(result){
   const labels={versions:'版本',audit:'文件与依赖',pending:'待发布',nas:'NAS',tasks:'调度',sync:'同步',
-    health:'健康',gate:'发布门槛',verify:'发布后核验',daily:'今日主运行',pt:'今日 PT'};
+    health:'健康',gate:'发布门槛',verify:'发布后核验',daily:'今日结果',pt:'今日 PT'};
   const lines=['只读体检：'+({0:'正常',1:'需要关注',2:'体检失败'})[result.exitCode]+'（退出码 '+result.exitCode+'）'];
   if(result.exitCode===2&&result.sections.versions===undefined)lines.push('配置缺失、不可读或不完整，或体检工具不可用。');
   for(const [name,label] of Object.entries(labels)){

@@ -2,7 +2,7 @@ import {taskDisplayStatus,siteSideTask} from './dashboard-model.mjs';
 
 export function projectOverviewSnapshot(data={}) {
   return {...(data.snapshot??{}),tasks:data.tasks??[],ptStatus:data.ptStatus,readiness:data.readiness,
-    snapshotMeta:data.snapshotMeta??data.snapshot?.snapshotMeta,
+    snapshotMeta:data.snapshotMeta??data.snapshot?.snapshotMeta,dayVerdict:data.dayVerdict,
     evidenceQuality:data.evidenceQuality??data.snapshot?.evidenceQuality,
     status:data.status??data.snapshot?.counts?.status??{},
     counts:{...(data.snapshot?.counts??{}),status:data.status??data.snapshot?.counts?.status??{}}};
@@ -57,6 +57,12 @@ export function overviewMetrics(data = {}, now = Date.now()) {
     && data.snapshotMeta?.generationStale!==true&&data.snapshotMeta?.fresh!==false;
   const healthFresh = data.health?.freshness?.fresh === true && Number.isFinite(healthAge)
     && healthAge >= -60_000 && healthAge <= 26 * 3_600_000;
+  const verdict=data.dayVerdict,c=verdict?.counts;
+  const daily=c?{success:c.done,verifiedSuccess:c.done,unverifiedSuccess:0,
+    unavailable:c.noFeature,verifiedUnavailable:c.noFeature,unverifiedUnavailable:0,cancelled:c.paused,
+    excludedSiteIssues:c.external,pending:c.verifying+c.actionNeeded,waiting:0,manual:c.actionNeeded,
+    eligible:verdict.total,rate:verdict.total?Math.round(c.done/verdict.total*100):null,
+    allResolved:verdict.settled,verdict}:{};
   return {
     total, success, unavailable, cancelled, pending, waiting,manual, verifiedSuccess, unverifiedSuccess, verifiedUnavailable, unverifiedUnavailable,excludedSiteIssues,
     executionRate: total ? Math.round(success / total * 100) : null,
@@ -67,10 +73,13 @@ export function overviewMetrics(data = {}, now = Date.now()) {
     healthy: data.health?.healthy === true && healthFresh,
     allResolved: total > 0 && pending === 0 && unverifiedSuccess === 0 && unverifiedUnavailable === 0,
     ageMinutes: Number.isFinite(age) ? Math.max(0, Math.floor(age / 60_000)) : null,
+    ...daily,
   };
 }
 
 export function overviewResultCounts(data={},now=Date.now()){
+  if(data.dayVerdict){const c=data.dayVerdict.counts;return {verified:c.done,proof:c.verifying,actionable:c.actionNeeded,
+    waiting:0,excluded:c.external+c.paused+c.noFeature};}
   const m=overviewMetrics(data,now);
   return {verified:m.verifiedSuccess,proof:m.unverifiedSuccess+m.unverifiedUnavailable,
     actionable:Math.max(0,m.pending-m.excludedSiteIssues-m.waiting),waiting:m.waiting,
@@ -92,6 +101,8 @@ export function dailySummaryTitle(metrics, {previousDay = false, pausedCount = 0
   if (!metrics.total) return '等待今日签到数据';
   if (previousDay) return '等待今日签到结果';
   if (!metrics.fresh) return '当前数据已过期';
+  if(metrics.verdict){const c=metrics.verdict.counts;return c.actionNeeded?`${c.actionNeeded} 项需要处理 · ${c.verifying} 项核验中`:
+    c.verifying?`${c.verifying} 项核验中`:'今日有效签到项已全部确认';}
   if (metrics.allResolved) return '今日签到项已全部确认';
   if(metrics.waiting){const actionable=Math.max(0,metrics.pending-metrics.excludedSiteIssues-metrics.waiting);
     return `${actionable?`${actionable} 项待处理 · `:''}${metrics.waiting} 项等待 Harvest 执行`;}

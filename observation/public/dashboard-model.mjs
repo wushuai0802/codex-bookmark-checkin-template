@@ -37,6 +37,7 @@ export function taskDisplayStatus(task,now=Date.now()){
 
 // Presentation only: retain the execution receipt and its original evidence.
 export function taskResultBucket(task,now=Date.now()){
+  if(task?.dayClass)return ({done:'verified',verifying:'proof',actionNeeded:'actionable',external:'excluded',paused:'excluded',noFeature:'excluded'})[task.dayClass]??'proof';
   if(waitingTask(task,now))return 'waiting';
   if(cancelledTask(task)||siteSideTask(task))return 'excluded';
   if(['signed','already_signed'].includes(task?.observedStatus))return task.evidence?.authoritative===true?'verified':'proof';
