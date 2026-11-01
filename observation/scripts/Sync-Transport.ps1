@@ -12,16 +12,16 @@ function ConvertTo-SyncWindowsCommandLineArgument([string]$Value) {
     foreach ($character in $Value.ToCharArray()) {
         if ($character -eq $slash) { $backslashes++; continue }
         if ($character -eq $quote) {
-            [void]$builder.Append((('\\' * ($backslashes * 2 + 1)) -join ''))
+            [void]$builder.Append((('\' * ($backslashes * 2 + 1)) -join ''))
             [void]$builder.Append($quote)
             $backslashes = 0
             continue
         }
-        if ($backslashes -gt 0) { [void]$builder.Append((('\\' * $backslashes) -join '')) }
+        if ($backslashes -gt 0) { [void]$builder.Append((('\' * $backslashes) -join '')) }
         [void]$builder.Append($character)
         $backslashes = 0
     }
-    if ($backslashes -gt 0) { [void]$builder.Append((('\\' * ($backslashes * 2)) -join '')) }
+    if ($backslashes -gt 0) { [void]$builder.Append((('\' * ($backslashes * 2)) -join '')) }
     [void]$builder.Append($quote)
     return $builder.ToString()
 }
@@ -63,7 +63,7 @@ function Invoke-BoundedSyncProcess {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$Phase,
         [string]$InputFile = '',
-        [ValidateRange(1, 180)][int]$TimeoutSeconds = 30,
+        [ValidateRange(1, 300)][int]$TimeoutSeconds = 30,
         [switch]$CooperativeStop,
         [ValidateRange(1, 120)][int]$CleanupGraceSeconds = 35
     )
@@ -84,13 +84,30 @@ function Invoke-BoundedSyncProcess {
         $startInfo.RedirectStandardInput = $true; $startInfo.RedirectStandardOutput = $true; $startInfo.RedirectStandardError = $true
         $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
         $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+        if ($null -ne $startInfo.PSObject.Properties['StandardInputEncoding']) {
+            $startInfo.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
+        }
         if ($null -ne $startInfo.PSObject.Properties['ArgumentList']) {
             foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add([string]$argument) }
         } else {
             $startInfo.Arguments = (@($Arguments | ForEach-Object { ConvertTo-SyncWindowsCommandLineArgument ([string]$_) }) -join ' ')
         }
         $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $startInfo
-        if (-not $process.Start()) { throw 'native process could not start' }
+        if ($null -ne $startInfo.PSObject.Properties['StandardInputEncoding']) {
+            $started = $process.Start()
+        } else {
+            # .NET Framework takes the stdin writer encoding from the console
+            # and emits its BOM during Start(), before any BaseStream copy.
+            # It has no StandardInputEncoding property. Override only while
+            # creating the process, then restore even when Start() fails.
+            $originalInputEncoding = [Console]::InputEncoding
+            try {
+                [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+                $started = $process.Start()
+            }
+            finally { [Console]::InputEncoding = $originalInputEncoding }
+        }
+        if (-not $started) { throw 'native process could not start' }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
         if ($InputFile) {
             $inputStream = [System.IO.File]::OpenRead($InputFile)

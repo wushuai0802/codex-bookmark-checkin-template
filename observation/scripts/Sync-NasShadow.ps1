@@ -300,23 +300,8 @@ try {
         Invoke-BoundedDashboardStatusSync (Join-Path $resolvedProjectRoot 'scripts\sync-v2-status.ps1') $SshTarget $NasDataDir $syncRoot $NodePath
         Write-Log 'V2 dashboard receipts and ownership synchronized.'
         Write-Log 'Uploading redacted snapshot and ledger to NAS staging.'
-        $archivePath = Join-Path $syncRoot 'nas-upload.tar.gz'
-        $publication = New-ShadowPublicationPlan $NasStagingDir $NasDataDir ([guid]::NewGuid().ToString('N'))
-        Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
-        & $tarCommand.Source '-czf' $archivePath '-C' $syncRoot 'shadow-beta-snapshot.json' 'shadow-ledger.jsonl' 'dashboard-generation.json'
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) { throw 'local snapshot archive failed' }
         $sshOptions = @('-T','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=10','-o','ServerAliveCountMax=2',$SshTarget)
-        $preflight = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.preflight)) 'nas_snapshot_preflight' '' 20 1
-        if ($preflight.exitCode -ne 0) { throw $preflight.failure }
-        $uploadTimeout = Get-ShadowUploadTimeoutSeconds (Get-Item -LiteralPath $archivePath).Length
-        $upload = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.upload)) 'nas_snapshot_upload' $archivePath $uploadTimeout 2
-        if ($upload.exitCode -ne 0) { throw $upload.failure }
-        $extract = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.extract)) 'nas_snapshot_extract' '' 30 2
-        if ($extract.exitCode -ne 0) { throw $extract.failure }
-        $commit = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.commit)) 'nas_commit' '' 30 2
-        if ($commit.exitCode -ne 0) { throw $commit.failure }
-        Write-Log 'NAS files replaced atomically.'
-        Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+        Invoke-ShadowPublication $tarCommand.Source $sshCommand.Source $sshOptions $NasStagingDir $NasDataDir $syncRoot
     }
 
     Replace-File $temporaryLedger $canonicalLedger
@@ -330,11 +315,6 @@ catch {
     exit 1
 }
 finally {
-    if ($publication -and $sshOptions) {
-        $cleanup = Invoke-ShadowPublicationCommand $sshCommand.Source @($sshOptions + @($publication.cleanup)) 'nas_snapshot_cleanup' '' 15 1
-        if ($cleanup.exitCode -ne 0) { Write-Log 'Snapshot staging cleanup deferred; the installed generation remains unchanged.' }
-    }
-    if ($archivePath) { Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $temporaryGeneration -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $temporarySnapshot,$temporaryLedger,$temporaryHealth,$temporaryHealthError -Force -ErrorAction SilentlyContinue
     Release-ShadowPublicationLease $publicationLease
