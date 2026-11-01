@@ -21,6 +21,7 @@ $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\
 $originUri = [uri]$Origin
 $targetUri = [uri]$Url
 $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
+if ($originValue -ceq 'https://piggo.me') { throw 'PigGo SPA requires the guarded calendar reader and executor.' }
 $profilePath = if ($UserDataDirOverride) {
     [System.IO.Path]::GetFullPath($UserDataDirOverride)
 } else {

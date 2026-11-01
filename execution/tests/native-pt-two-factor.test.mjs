@@ -10,6 +10,9 @@ import {recoverNativePtTwoFactor} from '../src/native-pt-two-factor.mjs';
 import {runNativePtGate} from '../src/native-pt-gate.mjs';
 import {readNativePtApiHeader} from '../src/native-pt-api.mjs';
 
+// PigGo moved to an SPA, so its PHP step-up flow now fails closed at the read policy. Removal follows separately.
+const retired={skip:'PigGo PHP step-up protocol retired'};
+
 const ORIGIN='https://piggo.me',HOME=ORIGIN+'/index.php',AUTH=ORIGIN+'/bank/authentication';
 const PROTOCOL=ORIGIN+'/inputWrap/js/index.js',CODE='123456',OWN='71823940';
 const SECRET=['PRIVATE','VAULT','SECRET'].join('_'),now=new Date('2026-10-13T04:00:00Z');
@@ -155,7 +158,7 @@ function safe(value){
 }
 const posts=f=>f.calls.filter(call=>call.method==='POST');
 
-test('formal recovery uses one original bound context and one authentication POST, leaving check-in to its parent',async t=>{
+test('formal recovery uses one original bound context and one authentication POST, leaving check-in to its parent',retired,async t=>{
   const f=fixture(t),result=await recoverNativePtTwoFactor(f.args);
   assert.deepEqual(result.nativeTwoFactorRecovery,{attempted:true,accepted:true,reason:'authentication_accepted'});
   assert.equal(result.readbackReceipt.status,'not_signed');assert.equal(result.readbackReceipt.submissionAttempted,false);
@@ -170,7 +173,7 @@ test('formal recovery uses one original bound context and one authentication POS
   assert.equal(registered.receiptAccepted,true);safe(result);safe({nativeTwoFactorRecovery:result.nativeTwoFactorRecovery,state:f.state()});
 });
 
-test('default native API parser recovers a real native challenge with hidden HTTP OTP markup and preserves authoritative proof',async t=>{
+test('default native API parser recovers a real native challenge with hidden HTTP OTP markup and preserves authoritative proof',retired,async t=>{
   const f=fixture(t,{realReader:true,readings:[{otp:'hidden'},{otp:'hidden'},{otp:'hidden'}]});
   const result=await recoverNativePtTwoFactor(f.args);
   assert.deepEqual(result.nativeTwoFactorRecovery,{attempted:true,accepted:true,reason:'authentication_accepted'});
@@ -185,7 +188,7 @@ test('default native API parser recovers a real native challenge with hidden HTT
   assert.equal(registration.receiptAccepted,true);safe(result);
 });
 
-test('default parser recognizes a signed reward anchor before vault operations or any authentication',async t=>{
+test('default parser recognizes a signed reward anchor before vault operations or any authentication',retired,async t=>{
   const f=fixture(t,{realReader:true,readings:[{status:'already_signed',otp:'hidden'}]});
   const result=await recoverNativePtTwoFactor(f.args);
   assert.equal(result.nativeTwoFactorRecovery.reason,'already_signed');assert.equal(result.nativeTwoFactorRecovery.attempted,false);
@@ -193,7 +196,7 @@ test('default parser recognizes a signed reward anchor before vault operations o
   assert.equal(f.codes,0);assert.equal(f.prepares,0);assert.deepEqual(f.calls.map(call=>call.url),[HOME]);safe(result);
 });
 
-test('default parser refuses active static OTP, login, WAF, ambiguous account and invalid transport without reading a code',async t=>{
+test('default parser refuses active static OTP, login, WAF, ambiguous account and invalid transport without reading a code',retired,async t=>{
   const controls=[{text:'PRIVATE_ACCOUNT',href:'/userdetails.php?id='+OWN},
     {text:'控制面板',href:'/usercp.php'},{text:'签到得魔力',href:'/attendance.php'}];
   for(const entry of [{otp:'active'},{hasPassword:true},{bodyText:'Just a moment Verify you are human'},
@@ -211,7 +214,7 @@ test('default parser refuses active static OTP, login, WAF, ambiguous account an
   }
 });
 
-test('default parser cannot return an after-auth receipt when the actual owned account changes',async t=>{
+test('default parser cannot return an after-auth receipt when the actual owned account changes',retired,async t=>{
   const f=fixture(t,{realReader:true,readings:[{otp:'hidden'},{otp:'hidden'},{otp:'hidden',ownId:'4444'}]});
   const result=await recoverNativePtTwoFactor(f.args);
   assert.equal(result.nativeTwoFactorRecovery.attempted,true);assert.equal(result.nativeTwoFactorRecovery.accepted,true);
@@ -219,7 +222,7 @@ test('default parser cannot return an after-auth receipt when the actual owned a
   assert.equal(result.readbackReceipt,undefined);assert.equal(posts(f).length,1);assert.equal(f.state().attempts[0].state,'accepted');safe(result);
 });
 
-test('already-signed home proof performs no vault prepare, code read, protocol request or POST',async t=>{
+test('already-signed home proof performs no vault prepare, code read, protocol request or POST',retired,async t=>{
   const f=fixture(t,{readings:[{status:'already_signed'}]}),result=await recoverNativePtTwoFactor(f.args);
   assert.equal(result.nativeTwoFactorRecovery.reason,'already_signed');assert.equal(result.nativeTwoFactorRecovery.attempted,false);
   assert.equal(result.readbackReceipt.status,'already_signed');assert.equal(f.codes,0);assert.equal(f.prepares,0);assert.equal(f.calls.length,0);
@@ -261,7 +264,7 @@ test('missing or mismatched controller lease refuses every browser and vault ope
   assert.equal(result.nativeTwoFactorRecovery.reason,'lease_unavailable');assert.equal(f.launched,0);assert.equal(f.codes,0);safe(result);
 });
 
-test('exact current bookmark scope and pause status are checked before any code retrieval',async t=>{
+test('exact current bookmark scope and pause status are checked before any code retrieval',retired,async t=>{
   for(const options of [{scope:false},{}]){
     const f=fixture(t,options);
     if(options.scope!==false){f.config.disabledCheckinOrigins=[ORIGIN];f.saveConfig();}
@@ -279,7 +282,7 @@ test('active execution run lock fails closed instead of borrowing another task l
   assert.deepEqual(JSON.parse(fs.readFileSync(file)),owner);safe(result);
 });
 
-test('vault credentials are absent in browser environment and restored only for caller after cleanup',async t=>{
+test('vault credentials are absent in browser environment and restored only for caller after cleanup',retired,async t=>{
   const f=fixture(t),keys=['BW_SESSION','BW_PASSWORD','BW_CLIENTID','BW_CLIENTSECRET'],previous=new Map();
   for(const key of keys){previous.set(key,process.env[key]);process.env[key]=SECRET;}
   try{
@@ -288,7 +291,7 @@ test('vault credentials are absent in browser environment and restored only for 
   }finally{for(const [key,value] of previous)if(value===undefined)delete process.env[key];else process.env[key]=value;}
 });
 
-test('slow vault preparation is followed by a renewed fresh passive proof',async t=>{
+test('slow vault preparation is followed by a renewed fresh passive proof',retired,async t=>{
   const f=fixture(t),prepare=f.args.prepare;
   f.args.prepare=async args=>{await prepare(args);f.setTime(now.getTime()+90_000);return {ready:true};};
   const result=await recoverNativePtTwoFactor(f.args);
@@ -296,14 +299,14 @@ test('slow vault preparation is followed by a renewed fresh passive proof',async
   assert.equal(f.state().attempts[0].attemptedAt,new Date(now.getTime()+90_000).toISOString());safe(result);
 });
 
-test('native challenge that expires during slow preparation cannot read a code',async t=>{
+test('native challenge that expires during slow preparation cannot read a code',retired,async t=>{
   const f=fixture(t),prepare=f.args.prepare;
   f.args.prepare=async args=>{await prepare(args);f.setTime(now.getTime()+300_001);return {ready:true};};
   const result=await recoverNativePtTwoFactor(f.args);
   assert.equal(result.nativeTwoFactorRecovery.reason,'challenge_invalid');assert.equal(f.codes,0);assert.equal(posts(f).length,0);safe(result);
 });
 
-test('unavailable, ambiguous, stale or wrong-day passive proof stops before vault preparation',async t=>{
+test('unavailable, ambiguous, stale or wrong-day passive proof stops before vault preparation',retired,async t=>{
   for(const entry of [{status:'unconfirmed'},{ownId:'invalid'},{authoritative:false},
     {observedAt:now.getTime()-30_001},{observedAt:now.getTime()+1},{observedAt:now.getTime()-86_400_000},
     {receiptChange:{profileBinding:'b'.repeat(64)}},{receiptChange:{accountKey:'other'}},
@@ -314,12 +317,12 @@ test('unavailable, ambiguous, stale or wrong-day passive proof stops before vaul
   }
 });
 
-test('account change between preparation and renewed proof never reads or submits a code',async t=>{
+test('account change between preparation and renewed proof never reads or submits a code',retired,async t=>{
   const f=fixture(t,{readings:[{}, {ownId:'4444'}]}),result=await recoverNativePtTwoFactor(f.args);
   assert.equal(result.nativeTwoFactorRecovery.reason,'account_changed');assert.equal(f.codes,0);assert.equal(posts(f).length,0);safe(result);
 });
 
-test('site becomes signed while preparing: return real signed proof with no code read',async t=>{
+test('site becomes signed while preparing: return real signed proof with no code read',retired,async t=>{
   const f=fixture(t,{readings:[{}, {status:'already_signed'}]}),result=await recoverNativePtTwoFactor(f.args);
   assert.equal(result.nativeTwoFactorRecovery.reason,'already_signed');assert.equal(result.readbackReceipt.status,'already_signed');
   assert.equal(f.codes,0);assert.equal(posts(f).length,0);safe(result);
@@ -338,7 +341,7 @@ test('unavailable vault or changed public protocol cannot issue a code request o
   }
 });
 
-test('bounded provider failure reasons distinguish vault/session preparation from site authentication',async t=>{
+test('bounded provider failure reasons distinguish vault/session preparation from site authentication',retired,async t=>{
   for(const reason of ['vault_locked','vault_unauthenticated','session_missing','session_invalid','session_unavailable',
     'server_mismatch','vault_sync_failed','provider_busy','totp_near_rotation','helper_output_invalid']){
     const f=fixture(t);f.args.prepare=async()=>({ready:false,reason,detail:SECRET});
@@ -349,7 +352,7 @@ test('bounded provider failure reasons distinguish vault/session preparation fro
   }
 });
 
-test('unconsumed code-provider failures preserve bounded causes without creating an authentication attempt',async t=>{
+test('unconsumed code-provider failures preserve bounded causes without creating an authentication attempt',retired,async t=>{
   for(const reason of ['session_invalid','vault_locked','totp_read_failed','totp_near_rotation','provider_busy']){
     const f=fixture(t);f.args.withTotp=async()=>({ready:false,reason,code:CODE,detail:SECRET});
     const result=await recoverNativePtTwoFactor(f.args);
@@ -358,7 +361,7 @@ test('unconsumed code-provider failures preserve bounded causes without creating
   }
 });
 
-test('arbitrary provider reasons, return values and error messages cannot escape either boundary',async t=>{
+test('arbitrary provider reasons, return values and error messages cannot escape either boundary',retired,async t=>{
   for(const phase of ['prepare','withTotp'])for(const value of [{ready:false,reason:SECRET+' '+CODE},
     {ready:false,reason:'prepared',body:SECRET},{ready:'false',reason:'vault_locked'},SECRET]){
     const f=fixture(t);f.args[phase]=async()=>value;
@@ -368,7 +371,7 @@ test('arbitrary provider reasons, return values and error messages cannot escape
   }
 });
 
-test('provider failure after a real accepted or unknown POST cannot overwrite actual authentication facts',async t=>{
+test('provider failure after a real accepted or unknown POST cannot overwrite actual authentication facts',retired,async t=>{
   for(const authentication of [{},{error:true}]){
     const f=fixture(t,{authentication});
     f.args.withTotp=async({consume})=>{
@@ -381,7 +384,7 @@ test('provider failure after a real accepted or unknown POST cannot overwrite ac
   }
 });
 
-test('configured pause during preparation prevents code retrieval and authentication',async t=>{
+test('configured pause during preparation prevents code retrieval and authentication',retired,async t=>{
   const f=fixture(t),prepare=f.args.prepare;
   f.args.prepare=async args=>{await prepare(args);f.config.disabledCheckinOrigins=[ORIGIN];f.saveConfig();return {ready:true};};
   const result=await recoverNativePtTwoFactor(f.args);
@@ -401,7 +404,7 @@ test('expired proof, near-rotation code and malformed code cannot dispatch a POS
   }
 });
 
-test('provider callbacks are single-use, awaited even if detached, and invalid after provider returns',async t=>{
+test('provider callbacks are single-use, awaited even if detached, and invalid after provider returns',retired,async t=>{
   let late;
   const f=fixture(t);
   f.args.withTotp=({consume})=>{late=consume;void consume(CODE,{validUntilMs:now.getTime()+20_000});
@@ -411,13 +414,13 @@ test('provider callbacks are single-use, awaited even if detached, and invalid a
   assert.equal(result.nativeTwoFactorRecovery.accepted,true);assert.equal(posts(f).length,1);safe(result);
 });
 
-test('late-only provider callback never submits after recovery completed',async t=>{
+test('late-only provider callback never submits after recovery completed',retired,async t=>{
   let late;const f=fixture(t);f.args.withTotp=async({consume})=>{late=consume;return CODE;};
   const result=await recoverNativePtTwoFactor(f.args);await late(CODE,{validUntilMs:now.getTime()+20_000});
   assert.equal(result.nativeTwoFactorRecovery.reason,'totp_unavailable');assert.equal(posts(f).length,0);safe(result);
 });
 
-test('rejected, redirected, malformed and unknown authentication stops without retry or signed status',async t=>{
+test('rejected, redirected, malformed and unknown authentication stops without retry or signed status',retired,async t=>{
   for(const authentication of [{body:{ret:1,msg:SECRET}},{body:{ret:'0',msg:'ok'}},{body:{code:0,data:'ok'}},
     {status:302},{status:500},{url:ORIGIN+'/login.php'},{jsonError:true},{error:true}]){
     const f=fixture(t,{authentication}),result=await recoverNativePtTwoFactor(f.args);
@@ -429,7 +432,7 @@ test('rejected, redirected, malformed and unknown authentication stops without r
   }
 });
 
-test('accepted authentication alone never becomes check-in success; post-auth account proof is mandatory',async t=>{
+test('accepted authentication alone never becomes check-in success; post-auth account proof is mandatory',retired,async t=>{
   for(const after of [{ownId:'9999'},{inspection:{securityVerification:true}},{authoritative:false},{status:'unconfirmed'}]){
     const f=fixture(t,{readings:[{}, {}, after]}),result=await recoverNativePtTwoFactor(f.args);
     assert.equal(result.nativeTwoFactorRecovery.accepted,true);assert.equal(result.nativeTwoFactorRecovery.attempted,true);
@@ -438,7 +441,7 @@ test('accepted authentication alone never becomes check-in success; post-auth ac
   }
 });
 
-test('durable same-day guard survives module/process restarts, while next business day can recover normally',async t=>{
+test('durable same-day guard survives module/process restarts, while next business day can recover normally',retired,async t=>{
   const f=fixture(t);await recoverNativePtTwoFactor(f.args);
   const restarted=await import('../src/native-pt-two-factor.mjs?restart='+crypto.randomUUID());
   const second=await restarted.recoverNativePtTwoFactor(f.args);
@@ -449,7 +452,7 @@ test('durable same-day guard survives module/process restarts, while next busine
   assert.equal(tomorrow.nativeTwoFactorRecovery.accepted,true);assert.equal(posts(f).length,2);assert.equal(f.state().attempts.length,2);safe(tomorrow);
 });
 
-test('crashed pending state and malformed state fail closed before reading a code',async t=>{
+test('crashed pending state and malformed state fail closed before reading a code',retired,async t=>{
   for(const state of [{schemaVersion:1,attempts:[{origin:ORIGIN,accountKey:'site-default',businessDate:'2026-10-13',
     profileBinding:'placeholder',state:'pending',attemptedAt:now.toISOString()}]}, {schemaVersion:9,attempts:[]}]){
     const f=fixture(t);if(state.schemaVersion===1)state.attempts[0].profileBinding=f.profileBinding;

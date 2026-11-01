@@ -300,6 +300,7 @@ function Invoke-MainChromeReadOnlyFallbackResult([string]$Origin, [int]$TimeoutS
     try {
         $fallback = $mainFallbackByOrigin[$Origin]
         $readOnlyUrl = ([uri]$Origin).GetLeftPart([System.UriPartial]::Authority) + '/index.php'
+        if ($Origin -ceq 'https://piggo.me') { $readOnlyUrl = $Origin + '/calendar' }
         # Use the same bounded UTF-8 transport as the evidence worker. Its
         # ASCII JSON envelope is safe even in Windows PowerShell 5.1. The
         # shared read budget is independent of a formal attendance timeout.
@@ -670,7 +671,7 @@ foreach ($candidate in $items) {
             # An unknown prior navigation can block the execution branch before
             # it gets a chance to observe today's real secondary verification.
             # Read only the same bound profile; never infer it from hidden HTML.
-            if (-not $useMain -and (Test-NativeTwoFactorRecoveryOptIn $candidateOrigin)) {
+            if (-not $useMain -and $candidateOrigin -cne 'https://piggo.me' -and (Test-NativeTwoFactorRecoveryOptIn $candidateOrigin)) {
                 try {
                     $probeArguments=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
                         (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1'),'-Origin',$candidateOrigin,
@@ -742,9 +743,19 @@ foreach ($item in $items) {
     }
 
     $apiProperty = $config.ptReadOnlyPolicies.PSObject.Properties[$origin]
+    if ($origin -ceq 'https://piggo.me' -and ($null -eq $apiProperty -or
+            $apiProperty.Value.piggoCalendar -ne $true -or $apiProperty.Value.nativeApiExecution -ne $true)) {
+        $preflightResults += [pscustomobject]@{origin=$origin;status='unconfirmed';failureCode='authoritative_status_unavailable';
+            nativeGate=$true;submissionAttempted=$false;reason='猪猪日历正式执行尚未显式启用，已停止旧站流程'}
+        continue
+    }
     if ($null -ne $apiProperty -and $apiProperty.Value.nativeApiExecution -eq $true) {
         try {
-            $apiText = & $node (Join-Path $PSScriptRoot 'Run-NativePtApiCheckin.mjs') '--origin' $origin '--url' $url
+            if ($origin -ceq 'https://piggo.me' -and [bool]$item.passiveOnly) {
+                $apiText = & $node (Join-Path $PSScriptRoot 'Read-NativePtHeader.mjs') '--origin' $origin '--url' ($origin + '/calendar') '--isolated' 'true'
+            } else {
+                $apiText = & $node (Join-Path $PSScriptRoot 'Run-NativePtApiCheckin.mjs') '--origin' $origin '--url' $url
+            }
             if (-not $apiText) { throw 'Native API receipt missing' }
             $apiResult = $apiText | ConvertFrom-Json
         } catch {

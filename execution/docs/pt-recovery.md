@@ -4,6 +4,52 @@ Use the bound existing account and Profile for every read. An uncertain prior
 submission remains protected until a fresh authoritative account/day result
 can be read; a transport or login failure supplies no negative daily proof.
 
+PigGo uses its SPA `/calendar` page. The real page supplies fresh same-origin
+`/v1/web/me` and `/v1/web/calendar` GET responses in the original isolated
+Profile and proxy route; no token is exported or reconstructed. The numeric
+site ID must match the existing expected-account configuration, never a
+Harvest database user ID. Only today's exact selected/detail date and
+`is_today: true` can yield `piggo_calendar_signed` (`checked`) or
+`piggo_calendar_unsigned` (`today`) API evidence. Makeup, none and unknown
+states remain unconfirmed. Historical intents remain intact. The usual fresh
+unsigned-proof gate precedes a single real-button POST for today's date; only
+a separate checked readback and durable finish establish completion. All old
+PHP endpoints, other dates, automatic POST retries and unreviewed login or
+CAPTCHA flows are blocked. Private opt-ins must migrate before use.
+
+PigGo's supplied Vue login form has no method/action attributes, token-list
+`autocomplete` values (optionally including `webauthn`) and a default submit
+button. The form inspector accepts only the unique named username/password
+pair and the unique visible “登录” submit button, with no other visible inputs,
+iframe, CAPTCHA or OTP. The `u.needed.value` CAPTCHA branch and the separate
+`c.value` OAuth account-completion form require manual handling. Invite-only
+registration text and the non-submit passkey button grant no login capability.
+
+`scripts/Diagnose-Piggo.mjs` defaults to help and never runs as part of the
+scheduler. Only Claude's explicitly invoked `--run-anonymous-login` opens two
+brand-new empty temporary Profiles to compare plugin assets blocked/allowed
+under the same firewall; it reports request paths, failures and the actual
+form inspection. No credentials are filled and no buttons are clicked.
+Nested assets, the exact Rocket Loader path shape, plugin JS/CSS and root
+images are permitted. External requests, telemetry POST, PHP and WebSockets
+remain blocked. Telegram client, OAuth provider list, passkey options and
+WS-ticket GETs stay blocked because the password form does not need them;
+their effect on live page startup still needs anonymous verification.
+
+First binding is manual: log in interactively in the dedicated, idle original
+Profile, independently check the displayed account and numeric site ID, then
+invoke `node scripts/Diagnose-Piggo.mjs --run-account-id --cdp-url <loopback-CDP-URL>`.
+The diagnostic connects to that existing Chrome (it does not launch one),
+opens a separate tab with service-worker bypass and an unarmed page firewall,
+captures a fresh exact `/me` response from `/calendar`, closes the tab and
+prints only the numeric candidate ID. It reads no vault/config/Profile files,
+writes no binding, and supplies no check-in receipt. Claude and the user must
+confirm the candidate against the independently checked account before manually
+setting `oauthExpectedAccountIds`; a missing/invalid binding remains
+`account_mismatch` in normal readers and submitters. Harvest IDs never bind an
+account. `--runtime-root <dependency-root>` can resolve an existing Playwright
+installation without reading that runtime's private configuration.
+
 The native API reader recognizes a fresh, exact-origin redirect to login.php
 as expired authentication. It does not follow that redirect or create an
 attendance intent. A redirect after the attendance request preserves the

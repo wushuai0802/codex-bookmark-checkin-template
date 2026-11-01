@@ -115,6 +115,11 @@ function Register-NativePtReadback($Result) {
             $receipt.inspection | Add-Member -NotePropertyName $name -NotePropertyValue $snapshot.$name
         }
     }
+    if ($script:NativePtGuard.origin -ceq 'https://piggo.me') {
+        foreach ($name in @('piggoCalendarVerified','accountMatched')) {
+            $receipt.inspection | Add-Member -NotePropertyName $name -NotePropertyValue $snapshot.$name
+        }
+    }
     return (Invoke-NativePtGate 'readback' '' $receipt)
 }
 

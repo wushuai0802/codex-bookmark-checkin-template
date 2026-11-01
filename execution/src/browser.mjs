@@ -1763,7 +1763,8 @@ export async function launchAutomationContext(config) {
     acceptDownloads: false,
     proxy: ptReadProxy(config),
     serviceWorkers: config.ptPassiveReadOnly === true ? "block" : "allow",
-    javaScriptEnabled: config.ptPassiveReadOnly !== true,
+    javaScriptEnabled: config.ptPassiveReadOnly !== true||config.nativePtReadOrigin==='https://piggo.me'&&
+      ptReadPolicy('https://piggo.me',config).piggoCalendar===true,
     args: [
       "--profile-directory=Default",
       "--no-first-run",
@@ -1791,6 +1792,8 @@ export async function processTarget(context, target, config, qaRules, logDirecto
 } = {}) {
   const configuredSkip = configuredTargetSkip(target, config);
   if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
+  if(target.origin==='https://piggo.me')return {status:'unconfirmed',failureCode:'authoritative_status_unavailable',
+    submissionAttempted:false,attempt:0,candidateHistory:[],reason:'猪猪必须通过已审阅的原生日历读取和守卫执行'};
   let passivePolicy;
   if(isPtExecutionTarget(target,{root:rootDirectory})){
     try{passivePolicy=ptReadPolicy(target.origin,config);}catch{}

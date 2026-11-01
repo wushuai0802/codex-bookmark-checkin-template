@@ -777,7 +777,7 @@ try {
         if(piggoPasswordLoginEnabled(config,current.origin)&&nativeRecoveryProfile){
           methods.push({method:'native_saved_password',executable:config.powershellExecutable||'pwsh.exe',
             args:['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(rootDirectory,'scripts/Recover-NativeLogin.ps1'),
-              '-Origin',current.origin,'-LoginUrl',current.origin+'/login.php','-UserDataDirOverride',nativeRecoveryProfile]});
+              '-Origin',current.origin,'-LoginUrl',current.origin+(current.origin==='https://piggo.me'?'/login':'/login.php'),'-UserDataDirOverride',nativeRecoveryProfile]});
         }
         if ((config.protectedCredentialOrigins ?? []).includes(current.origin)) {
           methods.push({
@@ -849,7 +849,9 @@ try {
         let succeeded = false;
         let authoritativeDailyCheckin = null;
         let terminalLoginFailure = null;
-        const identityBoundMethods = config.oauthExecutionAccountBindings?.[current.origin]
+        const identityBoundMethods = current.origin==='https://piggo.me'
+          ? methods.filter(method=>method.method==='native_saved_password'&&method.args.includes('-UserDataDirOverride'))
+          : config.oauthExecutionAccountBindings?.[current.origin]
           ? methods.filter(method => ["oauth", "native_oauth"].includes(method.method))
           : methods;
         for (const method of identityBoundMethods) {

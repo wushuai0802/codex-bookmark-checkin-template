@@ -12,6 +12,7 @@ import { recoverHhclubTwoFactorLogin, verifyHhclubNativeProfile,fillNexusBitward
 import {recoverPiggoPasswordLogin,piggoPasswordLoginEnabled,guardPiggoPasswordAutofill} from './native-pt-two-factor.mjs';
 import {readNativePtApiHeaderInContext,piggoNativePassiveContext} from './native-pt-api.mjs';
 import {waitForNativePasswordLoginPage} from './login-recovery.mjs';
+import {recoverPiggoSpaLogin} from './piggo-login.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -23,7 +24,8 @@ const actualProfile = path.resolve(rootDirectory, process.argv[4] || config.auto
 const hhclub = expectedOrigin === "https://hhanclub.net";
 const hddolbyLogin=expectedOrigin==='https://www.uhddolby.com'&&config.siteTwoFactorRecovery?.[expectedOrigin]?.allowPasswordLogin===true;
 const nativeMode=process.argv[5]??'Login';
-if(!['Login','ReadOnly','Checkin'].includes(nativeMode)||nativeMode!=='Login'&&!hddolbyLogin)throw Error('Native login mode rejected');
+if(!['Login','ReadOnly','Checkin'].includes(nativeMode)||nativeMode!=='Login'&&!hddolbyLogin&&
+  !(expectedOrigin==='https://piggo.me'&&nativeMode==='ReadOnly'))throw Error('Native login mode rejected');
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-login.mjs <port> <origin>");
 
 const browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
@@ -32,9 +34,18 @@ let failureCode = null;
 let page = null;
 let twoFactorRecovery = null;
 try {
-  page = await waitForNativePasswordLoginPage(()=>browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
+  if(expectedOrigin==='https://piggo.me'&&browser.contexts().length===1){
+    const blank=browser.contexts()[0].pages().filter(candidate=>candidate.url()==='about:blank');
+    if(blank.length===1)page=blank[0];
+  }
+  page ??= await waitForNativePasswordLoginPage(()=>browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
-  if(nativeMode!=='Login'){
+  if(expectedOrigin==='https://piggo.me'){
+    const result=await recoverPiggoSpaLogin({root:rootDirectory,page,profile:actualProfile,mode:nativeMode,
+      profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
+    console.log(JSON.stringify(result));
+    if(result.status!=='logged_in')process.exitCode=2;
+  }else if(nativeMode!=='Login'){
     await page.waitForLoadState('domcontentloaded',{timeout:15000}).catch(()=>{});
     const {runHddolbyNativeFlow}=await import('./hddolby-native-flow.mjs');
     console.log(JSON.stringify(await runHddolbyNativeFlow({root:rootDirectory,config,profile:actualProfile,port,page,mode:nativeMode})));

@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {runNativePtGate,nativePtDecision,nativePtNavigationRisk} from '../src/native-pt-gate.mjs';
+import {fixture as piggoFixture} from './helpers/piggo-spa-fixture.mjs';
+import {readNativePtApiHeader} from '../src/native-pt-api.mjs';
 
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'native-pt-gate-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -524,51 +526,24 @@ test('Ourbits scoped account header closes a bound intent and rejects ambiguity,
   assert.doesNotMatch(JSON.stringify(saved),/PRIVATE_|ourbitsHeader|successControl|bodyText/);
 });
 
-test('reviewed private PigGo daily reward readback closes its bound intent without broadening the public labels',async t=>{
-  const args={...fixture(t),origin:'https://piggo.me',url:'https://piggo.me/attendance.php'};
-  args.readPlan=async()=>({targets:[{origin:args.origin,candidates:[args.url],allowedOrigins:[args.origin],folderNames:['PT']}]});
-  const configFile=path.join(args.root,'config/config.json'),config=JSON.parse(fs.readFileSync(configFile));
-  config.nativeWafPreflightUrls=[args.url];
-  const policy={reviewed:true,mode:'safe_history_page',url:args.origin+'/index.php',selector:'#info_block',
-    dailyHeader:true,actionPath:'/attendance.php',signedRewardControl:true,unsignedTexts:['签到','签到得魔力']};
-  config.ptReadOnlyPolicies={[args.origin]:policy};
-  fs.writeFileSync(configFile,JSON.stringify(config));
-  const started=await runNativePtGate({...args,phase:'begin',attemptId:crypto.randomUUID(),action:'navigation'});
-  attachController(t,args);
-  const now=new Date(args.now.getTime()+1000),receipt=localReadbackFixture(args,started.profileBinding,now,'already_signed');
-  receipt.inspection.successControl='[签到已得840, 补签卡: 3]';
-  const file=path.join(args.root,'data/native-pt-attempts.json'),before=fs.readFileSync(file,'utf8');
-  for(const change of [{signedRewardControl:false},{signedRewardControl:undefined},{signedRewardControl:'true'},
-    {dailyHeader:false},{dailyHeader:undefined},{dailyHeader:'true'},
-    {signedRewardControl:false,signedTexts:['签到已得840,补签卡:3']},{reviewed:false}]){
-    config.ptReadOnlyPolicies[args.origin]={...policy,...change};fs.writeFileSync(configFile,JSON.stringify(config));
-    const rejected=await runNativePtGate({...args,now,phase:'readback',receipt});
-    assert.equal(rejected.allow,false);assert.equal(rejected.receiptAccepted,false);
-    assert.equal(fs.readFileSync(file,'utf8'),before);
-  }
-  config.ptReadOnlyPolicies[args.origin]=policy;fs.writeFileSync(configFile,JSON.stringify(config));
+test('PigGo accepts only fresh bound calendar receipts and rejects the retired Nexus reward proof',async t=>{
+  const f=piggoFixture(t),result=await readNativePtApiHeader(f),receipt=result.readbackReceipt;
+  assert.equal(receipt.status,'not_signed');
   const invalid=[{...receipt,accountKey:'other'},{...receipt,profileBinding:'b'.repeat(64)},
-    {...receipt,observedAt:new Date(now.getTime()-300001).toISOString(),
-      evidence:{...receipt.evidence,confirmedAt:new Date(now.getTime()-300001).toISOString()}},
-    {...receipt,businessDate:'2026-10-01',evidence:{...receipt.evidence,businessDate:'2026-10-01'}},
-    ...[{signedControlCount:2},{unsignedControlCount:1,unsignedControl:'签到得魔力'},
-      {authenticated:false},{waf:true},{securityVerification:true},{loginRoute:true},
-      {successControl:'历史签到已得840, 补签卡: 3'},{successControl:'任意成功文字'}]
+    {...receipt,observedAt:new Date(f.clock().getTime()-300001).toISOString(),
+      evidence:{...receipt.evidence,confirmedAt:new Date(f.clock().getTime()-300001).toISOString()}},
+    {...receipt,evidence:{...receipt.evidence,source:'page_text',pagePath:'/index.php',statusSignal:'nexus_daily_header_unsigned'}},
+    ...[{authenticated:false},{accountMatched:false},{piggoCalendarVerified:false},{waf:true},{securityVerification:true},{loginRoute:true}]
       .map(change=>({...receipt,inspection:{...receipt.inspection,...change}}))];
   for(const invalidReceipt of invalid){
-    const rejected=await runNativePtGate({...args,now,phase:'readback',receipt:invalidReceipt});
+    const rejected=await f.gate({...f,phase:'readback',receipt:invalidReceipt});
     assert.equal(rejected.allow,false);assert.equal(rejected.receiptAccepted,false);
-    assert.equal(fs.readFileSync(file,'utf8'),before);
   }
-  const registered=await runNativePtGate({...args,now,phase:'readback',receipt});
-  assert.equal(registered.allow,true);assert.equal(registered.receiptAccepted,true);assert.equal(registered.submissionAttempted,false);
-  const restarted=await import('../src/native-pt-gate.mjs?piggo-reward='+crypto.randomUUID());
-  const noReplay=await restarted.runNativePtGate({...args,now,phase:'begin',attemptId:crypto.randomUUID(),action:'navigation'});
-  assert.equal(noReplay.allow,false);assert.equal(noReplay.decision.status,'already_signed');assert.equal(noReplay.decision.submissionAttempted,false);
-  const saved=JSON.parse(fs.readFileSync(file));
-  assert.equal(saved.attempts.length,1);assert.equal(saved.attempts[0].state,'confirmed');
-  assert.equal(saved.attempts[0].resolution,'passive_readback');assert.equal(saved.readbacks.length,1);
-  assert.doesNotMatch(JSON.stringify(saved),/PRIVATE_FIXTURE_TEXT|签到已得840|successControl|bodyText/);
+  const registered=await f.gate({...f,phase:'readback',receipt});
+  assert.equal(registered.allow,true);assert.equal(registered.receiptAccepted,true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root,'data/native-pt-attempts.json'))).readbacks.length,1);
+  for(const suffix of ['/index.php','/login.php','/attendance.php','/takelogin.php'])
+    await assert.rejects(()=>f.gate({...f,url:f.origin+suffix,phase:'bind'}));
 });
 
 test('a reviewed bound home positive is persisted and closes today without accepting home negative proof',async t=>{

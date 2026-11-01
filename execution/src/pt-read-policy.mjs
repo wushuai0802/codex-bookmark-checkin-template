@@ -64,6 +64,16 @@ function privateNativeHeaderProxy(config,proxy){
 }
 
 export function ptReadPolicy(origin,config={}){
+  if(origin==='https://piggo.me'){
+    const policy=config.ptReadOnlyPolicies?.[origin],route=nativePtReadRoute(config,origin);
+    if(policy?.reviewed!==true||policy.piggoCalendar!==true||policy.mode!=='safe_history_page'||
+      policy.url!==origin+'/calendar'||policy.selector!=='.cal-page'||policy.loginPath!=='/login'||
+      policy.actionPath!=='/v1/web/calendar/attendance'||policy.nativeIsolatedChrome!==true||
+      policy.nativeMainChrome===true||policy.nativeApiHeaderFallback!==true||!policy.proxyServer||route?.mainProfile!==false)
+      throw Object.assign(Error('PigGo calendar capability is not reviewed'),{code:'PT_READONLY_UNSAFE'});
+    ptReadProxy({ptPassiveReadOnly:true,ptReadProxyServer:policy.proxyServer});
+    return {...policy};
+  }
   const nativeOrigin=value=>new URL(value).origin.replace(/^https:\/\/www\./,'https://');
   // Registration is validated against the exact current bookmark catalog by
   // the gateway. Passive index capability does not need the mutation allowlist.
