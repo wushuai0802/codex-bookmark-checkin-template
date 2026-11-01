@@ -8,7 +8,7 @@
 
 | 类别 | 文件数 |
 | --- | ---: |
-| 现役 | 226 |
+| 现役 | 227 |
 | 运维手动 | 65 |
 | 历史审计 | 4 |
 | 待确认 | 47 |
@@ -250,7 +250,8 @@
 | `observation/scripts/Start-NasShadowScheduler.ps1` | 现役 | 生产入口（架构调用链） |
 | `observation/scripts/Sync-NasShadow.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:11 (ps-join) |
 | `observation/scripts/Sync-OperationsSupport.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:86 (ps-call) |
-| `observation/scripts/Sync-ShadowPublication.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:137 (ps-call) |
+| `observation/scripts/Sync-PhaseTiming.ps1` | 现役 | observation/scripts/Sync-ShadowPublication.ps1:3 (ps-call) |
+| `observation/scripts/Sync-ShadowPublication.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:149 (ps-call) |
 | `observation/scripts/Sync-Transport.ps1` | 现役 | observation/scripts/Sync-OperationsSupport.ps1:3 (ps-join) |
 | `observation/scripts/adopt-v2-checkin.mjs` | 历史审计 | 旧 V2 adoption 一次性迁移；project-structure.md 的迁移保留边界，未见现行入口或人工命令。 |
 | `observation/scripts/archive-history.mjs` | 运维手动 | 人工用法见 docs/release-and-recovery.md |
@@ -264,16 +265,16 @@
 | `observation/scripts/check-liquid-glass.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `observation/scripts/check-structure.mjs` | 运维手动 | npm 人工命令 observation/package.json:check:structure |
 | `observation/scripts/check-ui-navigation.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `observation/scripts/collect-desired-plan.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:203 (ps-join) |
-| `observation/scripts/collect-monitor-catalog.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:210 (ps-join) |
+| `observation/scripts/collect-desired-plan.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:215 (ps-join) |
+| `observation/scripts/collect-monitor-catalog.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:222 (ps-join) |
 | `observation/scripts/deploy-nas-code.ps1` | 运维手动 | 人工用法见 observation/docs/nas-deployment.md |
 | `observation/scripts/enroll-fresh-v2-profiles.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/enroll-v2-site-profile.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/scripts/export-dashboard-status.mjs` | 现役 | observation/scripts/sync-v2-status.ps1:37 (ps-join) |
+| `observation/scripts/export-dashboard-status.mjs` | 现役 | observation/scripts/sync-v2-status.ps1:45 (ps-join) |
 | `observation/scripts/export-nas-bundle.mjs` | 运维手动 | npm 人工命令 observation/package.json:export:nas |
 | `observation/scripts/flush-v2-notifications.mjs` | 运维手动 | npm 人工命令 observation/package.json:notifications:flush |
-| `observation/scripts/harvest-fallback.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:228 (ps-join) |
-| `observation/scripts/harvest-observe.py` | 现役 | observation/scripts/Sync-NasShadow.ps1:214 (ps-join) |
+| `observation/scripts/harvest-fallback.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:240 (ps-join) |
+| `observation/scripts/harvest-observe.py` | 现役 | observation/scripts/Sync-NasShadow.ps1:226 (ps-join) |
 | `observation/scripts/import-v1-runtime.mjs` | 历史审计 | 旧 V1→V2 运行目录导入；project-structure.md 保留旧迁移供审计，无现行入口。 |
 | `observation/scripts/install-v2-canary-task.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/live-smoke.mjs` | 运维手动 | npm 人工命令 observation/package.json:smoke:live |
@@ -293,7 +294,7 @@
 | `observation/scripts/run-v2-canary.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/run-v2-daily.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/stage-account-migration.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/scripts/sync-v2-status.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:300 (ps-join) |
+| `observation/scripts/sync-v2-status.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:312 (ps-join) |
 | `observation/scripts/verify-open-cd.mjs` | 运维手动 | 人工用法见 observation/docs/reliability-operations.md |
 | `observation/scripts/verify-pt.mjs` | 运维手动 | 人工用法见 observation/docs/reliability-operations.md |
 | `observation/scripts/verify-v2-profile.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
