@@ -41,9 +41,10 @@ $other=Invoke-MainChromeReadOnlyFallbackResult 'https://tracker.example' 35 $fal
   });
 }
 
-test('other-site receipt predicates remain byte-for-byte identical to the work-order base',()=>{
+// Acceptance comparison against an explicit base revision; the normal suite has no Git-history dependency.
+test('other-site receipt predicates remain byte-for-byte identical to the work-order base',{skip:!process.env.PIGGO_BASELINE_REVISION},()=>{
   const root=fileURLToPath(new URL('../../',import.meta.url));
-  const original=file=>execFileSync('git',['show','HEAD:execution/src/'+file],{cwd:root,encoding:'utf8'}).replaceAll('\r\n','\n');
+  const original=file=>execFileSync('git',['show',process.env.PIGGO_BASELINE_REVISION+':execution/src/'+file],{cwd:root,encoding:'utf8'}).replaceAll('\r\n','\n');
   const current=file=>fs.readFileSync(new URL('../src/'+file,import.meta.url),'utf8').replaceAll('\r\n','\n');
   const between=(source,start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
   const gate=current('native-pt-gate.mjs').replace(
