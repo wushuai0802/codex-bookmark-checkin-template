@@ -44,7 +44,14 @@ export function dayVerdict(snapshot={}, {now=new Date()}={}){
       ['site_maintenance','site_migration','bookmark_origin_changed','entitlement_expired'].includes(code));
     const unavailable=evidence.verification==='feature_unavailable'||
       status==='not_available'&&evidence.authoritative===true&&evidence.verification==='verified';
+    const harvest=site?.harvestObservation,lastReceiptDay=harvest?.lastReceiptDay;
+    const receiptDayTime=/^\d{4}-\d{2}-\d{2}$/.test(lastReceiptDay??'')?Date.parse(lastReceiptDay+'T00:00:00Z'):NaN;
+    const missingDays=Number.isFinite(receiptDayTime)&&new Date(receiptDayTime).toISOString().slice(0,10)===lastReceiptDay
+      ?(Date.parse(businessDate+'T00:00:00Z')-receiptDayTime)/86400000:NaN;
+    const todayHarvestReceipt=[effective,...(site?.observations??[])].some(item=>item?.source==='harvest'&&
+      item.authoritative===true&&item.fresh===true&&dated(item.observedAt));
     let category='verifying';
+    let reasonCode=null;
     if(task.disabledByConfig===true||task.availabilityKind==='task_disabled'||task.condition==='task_disabled'||evidence.verification==='task_disabled')category='paused';
     else if(task.availabilityKind==='feature_disabled'||task.condition==='feature_disabled'||
       unavailable&&task.availabilityKind!=='temporary_unavailable'&&!externalCode)category='noFeature';
@@ -56,9 +63,14 @@ export function dayVerdict(snapshot={}, {now=new Date()}={}){
       siteFaultCodes.includes(effective.failureCode)||['site_migration','bookmark_origin_changed'].includes(effective.failureCode))||
       fresh&&(externalCode||
         task.availabilityKind==='temporary_unavailable')))category='external';
+    else if(current&&site?.harvestManaged===true&&site.disabledByConfig!==true&&harvest?.checkinEnabled===true&&harvest.businessDate===businessDate&&
+      harvest.taskCompletion?.status==='completed'&&missingDays>=2&&site.capabilities?.read===false&&!todayHarvestReceipt){
+      category='actionNeeded';reasonCode='harvest_stalled';
+    }
     else if(fresh&&!retrying&&(requiresHuman&&(manual||task.manualVerificationRequired===true||['interactive_challenge'].includes(status)||codes.includes('two_factor_required'))||
       manual&&!unknown&&!codes.includes('harvest_waiting')&&!signed(status)&&['needs_attention','deferred','login_required','failed','error','no_action','managed_challenge_timeout'].includes(status)))category='actionNeeded';
-    counts[category]++;items.push({taskId:task.taskId,class:category});
+    counts[category]++;items.push({taskId:task.taskId,class:category,...(reasonCode?{reasonCode,lastReceiptDay,missingDays,
+      summary:`Harvest 已 ${missingDays} 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能需要在 Harvest 里更新登录状态`}:{})});
   }
   return {businessDate,total:counts.done+counts.verifying+counts.actionNeeded,counts,items,
     settled:counts.verifying===0&&counts.actionNeeded===0};

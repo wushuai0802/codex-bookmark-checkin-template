@@ -499,7 +499,10 @@ test('Windows DPAPI fixture prepares metadata, syncs once daily and gets only ex
     let consumed;
     assert.deepEqual(await withBitwardenTotp({...fixture,consume:code=>{consumed=code;}}),{ready:true,reason:'totp_consumed'});
     assert.equal(consumed,otp);
-    assert.deepEqual(fixture.calls().filter(call=>call.args[0]==='get').map(call=>call.args),[['get','totp',itemId,'--raw','--nointeraction']]);
+    // The helper uses the real clock, so one extra read is allowed if a 30-second rotation falls inside the read.
+    const reads=fixture.calls().filter(call=>call.args[0]==='get').map(call=>call.args);
+    assert.ok(reads.length>=1&&reads.length<=2);
+    for(const read of reads)assert.deepEqual(read,['get','totp',itemId,'--raw','--nointeraction']);
     assert.ok(fixture.calls().every(call=>call.sessionPresent&&!call.nodeOptionsPresent));
     assert.ok(!fs.readFileSync(fixture.config.bitwardenTotp.sessionFile,'utf8').includes('A'.repeat(40)));
     assert.ok(!fs.readFileSync(path.join(fixture.root,'data','bitwarden','sync-state.json'),'utf8').includes(otp));

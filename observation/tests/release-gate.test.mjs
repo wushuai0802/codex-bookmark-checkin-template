@@ -51,6 +51,13 @@ test('settled day passes without requiring every business outcome to succeed',()
   assert.equal(evaluateReleaseGate(value,{now}).ok,true);
   assert.equal(evaluateReleaseGate(value,{now}).phase,'settled');
 });
+test('stalled Harvest actionNeeded does not close evidence_settled after automatic work ends',()=>{
+  const value=snapshot();
+  value.dayVerdict={settled:false,counts:{actionNeeded:1},items:[{taskId:'fixture',class:'actionNeeded',reasonCode:'harvest_stalled'}]};
+  value.evidence.value.dayVerdict=value.dayVerdict;
+  const result=evaluateReleaseGate(value,{now});
+  assert.equal(result.checks.evidence_settled.ok,true);assert.equal(result.ok,true);
+});
 const failures={
   tasks_ready:s=>{s.tasks.value[0].state='Running';},
   no_active_process:s=>{s.processes.value={count:1,roles:['evidence_worker']};},

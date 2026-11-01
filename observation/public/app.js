@@ -690,11 +690,13 @@ function renderPtStatus(data) {
     if (!effective.fresh) { chip.className = 'status-chip unknown stale'; chip.textContent = effective.observedAt ? `历史：${STATUS_LABELS[effective.status] ?? '未知'}` : '暂无今日记录'; }
     if(category==='unknown'&&['monitor_only_unconfirmed','verification_pending','guarded_read_needed','external_blocked','harvest_waiting'].includes(evidenceState))chip.textContent=PT_EVIDENCE_LABELS[evidenceState];
     if(evidenceState==='disabled')chip.textContent=PT_EVIDENCE_LABELS.disabled;
+    if(site.dayVerdict?.reasonCode==='harvest_stalled'){chip.textContent='需处理';chip.className='status-chip needs_attention';}
     append(statusCell, chip, site.discrepancy ? el('span', 'subtext discrepancy-text', '来源状态不一致') : null);
     const sourceCell = el('td'); const sourceText = (site.sourceStatuses ?? []).map((item) => `${{'legacy-checkin':'执行层','execution-supplement':'补签执行','v2-observer':'书签目录',harvest:'Harvest'}[item.source]??item.source}: ${STATUS_LABELS[item.status] ?? item.status}`).join(' · '); append(sourceCell, el('span', null, sourceText || '—'), el('span', 'subtext', site.reconciledFromUnknown ? '当日只读证据已闭环，原记录保留' : category==='reported' ? '执行回执待补证' : effective.authoritative ? '权威证据' : evidenceState==='monitor_only_unconfirmed' ? '没有回执不代表签到失败' : '状态待核验'));
     const observedCell = el('td'); append(observedCell, el('span', null, formatTime(effective.observedAt)), el('span', 'subtext', effective.fresh ? '当日回执' : effective.observedAt ? '历史记录 · 非今日确认' : '暂无今日记录'));
     const actionCell = el('td');
-    if (category==='confirmed') append(actionCell,
+    if(site.dayVerdict?.reasonCode==='harvest_stalled')append(actionCell,el('span',null,site.dayVerdict.summary));
+    else if (category==='confirmed') append(actionCell,
       el('span',null,effective.source==='harvest'?'Harvest 今日成功':effective.source==='execution-supplement'?'补签已确认':'执行账号今日完成'),
       effective.source==='harvest'?el('span','subtext','执行账号以自身回执为准'):null);
     else if(evidenceState==='monitor_only_unconfirmed')append(actionCell,el('span',null,'保持观测'),el('span','subtext','未授权执行；未知不计为失败'));

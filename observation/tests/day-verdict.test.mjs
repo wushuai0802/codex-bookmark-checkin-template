@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {dayVerdict} from '../public/day-verdict.mjs';
 import {verdictSnapshot} from '../src/daily-reconciliation.mjs';
 import {authorizedWorkload} from '../src/workload-view.mjs';
+import {buildPtStatus} from '../src/pt-status.mjs';
+import {retainHarvestPresentation} from '../src/pt-evidence-repair.mjs';
 
 const now=new Date('2026-10-31T04:00:00Z'),businessDate='2026-10-31',at=now.toISOString();
 const task=(taskId,extra={})=>({taskId,origin:`https://${taskId}.example`,businessDate,observedStatus:'needs_attention',observedAt:at,...extra});
@@ -10,6 +12,77 @@ const snapshot=tasks=>({businessDate,generatedAt:at,tasks,receipts:[]});
 const project=(value,time=now)=>dayVerdict(verdictSnapshot(value,{now:time}),{now:time});
 const completed={status:'signed',source:'harvest',authoritative:true,fresh:true,observedAt:at,
   evidence:{source:'harvest',authoritative:true,businessDate,confirmedAt:at}};
+
+function stalledSnapshot(){
+  const value=snapshot([task('stalled',{observedAt:'2026-10-06T01:00:00Z',failureCode:'submission_outcome_unknown'})]);
+  value.ptStatus=buildPtStatus({businessDate,generatedAt:at,monitorCatalog:{sites:[{origin:value.tasks[0].origin}]},
+    externalReport:{source:'harvest',businessDate,generatedAt:at,checkinInventoryComplete:true,taskCompletion:{status:'completed'},
+      sites:[{origin:value.tasks[0].origin,checkinEnabled:true,lastReceiptDay:'2026-10-28',latestActive:'2026-10-28T19:42:00+08:00',
+        observedAt:null,status:'unknown',evidence:{source:'harvest',authoritative:false}}]}});
+  return value;
+}
+
+test('stalled Harvest uses read-only observation context and preserves old unknown facts',()=>{
+  const value=stalledSnapshot(),before=JSON.stringify(value),verdict=project(value);
+  assert.equal(verdict.counts.actionNeeded,1);assert.equal(verdict.counts.verifying,0);
+  assert.deepEqual(verdict.items[0],{taskId:'stalled',class:'actionNeeded',reasonCode:'harvest_stalled',lastReceiptDay:'2026-10-28',missingDays:3,
+    summary:'Harvest 已 3 天没有处理这个站点，最后一次回执在 10-28，可能需要在 Harvest 里更新登录状态'});
+  assert.equal(value.ptStatus.sites[0].harvestObservation.latestActive,'2026-10-28T11:42:00.000Z');
+  assert.equal(JSON.stringify(value),before);
+});
+
+const notStalled={
+  disabled:site=>{site.harvestObservation.checkinEnabled=false;},
+  unmanaged:site=>{site.harvestManaged=false;},
+  running:site=>{site.harvestObservation.taskCompletion.status='running';},
+  failed:site=>{site.harvestObservation.taskCompletion.status='failed';},
+  missingTask:site=>{delete site.harvestObservation.taskCompletion;},
+  staleHarvest:site=>{site.harvestObservation.businessDate='2026-10-30';},
+  yesterdayReceipt:site=>{site.harvestObservation.lastReceiptDay='2026-10-30';},
+  nullReceipt:site=>{site.harvestObservation.lastReceiptDay=null;},
+  futureReceipt:site=>{site.harvestObservation.lastReceiptDay='2026-11-01';},
+  invalidReceipt:site=>{site.harvestObservation.lastReceiptDay='2026-02-30';},
+  reader:site=>{site.capabilities.read=true;},
+  unknownReader:site=>{delete site.capabilities;},
+  todayReceipt:site=>{site.harvestObservation.lastReceiptDay=businessDate;},
+  todayNegative:site=>{site.effective={...completed,status:'not_signed'};},
+  observedReceipt:site=>{site.observations=[{...completed,status:'not_signed'}];}
+};
+for(const [name,change] of Object.entries(notStalled))test('Harvest stalled rejects '+name,()=>{
+  const value=stalledSnapshot();change(value.ptStatus.sites[0]);
+  assert.equal(project(value).items[0].class,'verifying');assert.equal(project(value).items[0].reasonCode,undefined);
+});
+
+test('two missing calendar days qualify; today recovery and another legal completion win',()=>{
+  const value=stalledSnapshot(),site=value.ptStatus.sites[0];
+  site.harvestObservation.lastReceiptDay='2026-10-29';assert.equal(project(value).items[0].reasonCode,'harvest_stalled');
+  site.effective=completed;assert.equal(project(value).items[0].class,'done');
+  site.effective={...completed,source:'execution-supplement',evidence:{...completed.evidence,source:'pt_page'}};
+  assert.equal(project(value).items[0].class,'done');
+  // A maintenance gap that recovered today is not stalled, even with old unknown history.
+  site.harvestObservation.lastReceiptDay=businessDate;site.recovery={code:'prior_outcome_unknown',blockedSince:'2026-10-06'};
+  assert.equal(project(value).items[0].class,'done');
+  // A site the user paused stays out of the denominator even with a receipt today.
+  value.tasks[0].disabledByConfig=true;assert.equal(project(value).items[0].class,'paused');
+});
+
+test('paused and current external conditions precede stalled Harvest',()=>{
+  const value=stalledSnapshot(),site=value.ptStatus.sites[0];
+  site.effective={...completed,status:'unknown',authoritative:false,siteCondition:'site_maintenance'};
+  assert.equal(project(value).items[0].class,'external');
+  value.tasks[0].disabledByConfig=true;assert.equal(project(value).items[0].class,'paused');
+  const paused=stalledSnapshot();paused.ptStatus.sites[0].disabledByConfig=true;
+  assert.equal(project(paused).items[0].reasonCode,undefined);
+});
+
+test('passive dashboard rebuild retains dated Harvest display context without a waiting window',()=>{
+  const previous=stalledSnapshot(),rebuilt=structuredClone(previous);
+  delete rebuilt.ptStatus.sites[0].harvestObservation;delete rebuilt.ptStatus.sites[0].harvestManaged;
+  retainHarvestPresentation(rebuilt,previous);assert.deepEqual(project(rebuilt),project(previous));
+  assert.notEqual(rebuilt.ptStatus.sites[0].harvestObservation,previous.ptStatus.sites[0].harvestObservation);
+  const foreign={...rebuilt,businessDate:'2026-11-01',ptStatus:{sites:[{origin:previous.tasks[0].origin}]}};
+  retainHarvestPresentation(foreign,previous);assert.equal(foreign.ptStatus.sites[0].harvestObservation,undefined);
+});
 
 test('an old unknown plus today authoritative Harvest completion is done without changing facts',()=>{
   const old='2026-10-06T01:00:00Z',value=snapshot([task('one',{observedAt:old,failureCode:'submission_outcome_unknown'})]);
