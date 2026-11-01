@@ -444,7 +444,12 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
   });
   const projectedSnapshot=publicSnapshot(snapshot);
   const workload=authorizedWorkload({tasks,ptStatus,businessDate:snapshot?.businessDate,counts:projectedSnapshot?.counts});
-  const verdict=dayVerdict(verdictSnapshot(snapshot??{})),classes=new Map(verdict.items.map(item=>[item.taskId,item.class]));
+  const verdict=dayVerdict(verdictSnapshot(snapshot??{})),verdicts=new Map(verdict.items.map(item=>[item.taskId,item]));
+  for(const site of ptStatus?.sites??[]){
+    const tasks=workload.tasks.filter(task=>task.origin===site.origin&&(!site.accountRef||task.accountRef===site.accountRef));
+    const item=tasks.length===1?verdicts.get(tasks[0].taskId):null;
+    if(item?.reasonCode)site.dayVerdict=item;
+  }
   const {status,evidenceQuality}=workload;
   const execution={webExecutionEnabled:false,owners:workload.tasks.reduce((counts,task)=>{counts[task.executionOwner]=(counts[task.executionOwner]??0)+1;return counts;},{}),syncedAt:runtime?.generatedAt??null};
   if(projectedSnapshot){projectedSnapshot.counts=workload.counts;projectedSnapshot.planCounts=workload.planCounts;
@@ -457,7 +462,8 @@ function buildView(snapshot, ledger, canaryResults = [], runtime = null) {
     readiness: evaluateShadowHistory(ledger),
     ptStatus,
     status,
-    tasks:workload.tasks.map(task=>({...task,dayClass:classes.get(task.taskId)??'verifying'})),
+    tasks:workload.tasks.map(task=>({...task,dayClass:verdicts.get(task.taskId)?.class??'verifying',
+      ...(verdicts.get(task.taskId)?.reasonCode?{dayVerdict:verdicts.get(task.taskId)}:{})})),
     sites:workload.sites,
     accounts:workload.accounts,
     ledger: ledger.slice(-30).map((record) => ({

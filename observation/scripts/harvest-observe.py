@@ -87,19 +87,21 @@ def daily_task_schedule(conn, now, day):
 
 def export(db_path, now=None):
     now = now or datetime.datetime.now(ZoneInfo('Asia/Shanghai'))
+    now = now.astimezone(ZoneInfo('Asia/Shanghai'))
     day = now.date().isoformat()
     conn = sqlite3.connect('file:' + db_path + '?mode=ro', uri=True, timeout=5)
     conn.execute('PRAGMA query_only=ON')
     columns = {row[1] for row in conn.execute('PRAGMA table_info(mysite_mysite)')}
     ownership_columns = {'available', 'sign_in'}.issubset(columns)
     ownership_select = ',available,sign_in' if ownership_columns else ',NULL,NULL'
-    rows = conn.execute('SELECT mirror,nickname,user_id,username,sign_info' + ownership_select + ' FROM mysite_mysite').fetchall()
+    activity_select = ',latest_active' if 'latest_active' in columns else ',NULL'
+    rows = conn.execute('SELECT mirror,nickname,user_id,username,sign_info' + ownership_select + activity_select + ' FROM mysite_mysite').fetchall()
     task_completion = completed_daily_task(conn, now, day)
     task_schedule = daily_task_schedule(conn, now, day)
     conn.close()
     sites = []
     inventory_complete = ownership_columns
-    for mirror, name, uid, username, raw, available, sign_in in rows:
+    for mirror, name, uid, username, raw, available, sign_in, latest_active in rows:
         flags_known = type(available) in (int, bool) and available in (0, 1) and type(sign_in) in (int, bool) and sign_in in (0, 1)
         if not flags_known:
             inventory_complete = False
@@ -109,7 +111,27 @@ def export(db_path, now=None):
                 inventory_complete = False
             continue
         try:
-            record = json.loads(raw or '{}').get(day) or {}
+            activity = datetime.datetime.fromisoformat(latest_active)
+            if activity.tzinfo is None:
+                activity = activity.replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+            latest_active = activity.isoformat()
+        except (ValueError, TypeError):
+            latest_active = None
+        try:
+            records = json.loads(raw or '{}')
+            if not isinstance(records, dict):
+                records = {}
+        except (ValueError, TypeError):
+            records = {}
+        receipt_days = []
+        for key in records:
+            if re.fullmatch(r'\d{4}-\d{2}-\d{2}', key) and key <= day:
+                try:
+                    receipt_days.append(datetime.date.fromisoformat(key).isoformat())
+                except ValueError:
+                    pass
+        try:
+            record = records.get(day) or {}
             message = str(record.get('message') or record.get('info') or '')
             stamp = datetime.datetime.fromisoformat(record.get('created_at', ''))
             if stamp.tzinfo is None:
@@ -122,6 +144,7 @@ def export(db_path, now=None):
             'origin': 'https://' + url.netloc, 'displayName': str(name or '')[:80],
             'username': str(username or '')[:80], 'userId': str(uid or '')[:40],
             **({'checkinEnabled': bool(available and sign_in)} if flags_known else {}),
+            'latestActive': latest_active, 'lastReceiptDay': max(receipt_days, default=None),
             'status': status, 'observedAt': stamp.isoformat() if valid else None,
             'evidence': {'source': 'harvest', 'authoritative': status in ('signed', 'already_signed'),
                          'summary': 'Harvest 当日签到回执' if status in ('signed', 'already_signed')
