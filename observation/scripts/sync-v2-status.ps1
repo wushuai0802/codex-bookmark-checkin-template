@@ -1,7 +1,8 @@
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$SshTarget='',[string]$NasDataDir='/volume3/docker/checkin-fabric-v2/nas-data',[string]$NodePath='')
+param([string]$SshTarget='',[string]$NasDataDir='/volume3/docker/checkin-fabric-v2/nas-data',[string]$NodePath='', [string]$PhaseRecordFile='')
 $ErrorActionPreference='Stop';$root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Sync-Transport.ps1')
+. (Join-Path $PSScriptRoot 'Sync-PhaseTiming.ps1')
 
 function New-StatusSshArguments([string]$Target, [string]$RemoteCommand) {
   return @('-T','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=10','-o','ServerAliveCountMax=2',$Target,$RemoteCommand)
@@ -14,7 +15,12 @@ function Invoke-StatusSsh([string]$SshPath, [string]$Target, [string]$RemoteComm
 function Invoke-StatusSshWithRetry([string]$SshPath, [string]$Target, [string]$RemoteCommand, [string]$Phase, [string]$InputFile = '', [int]$TimeoutSeconds = 15, [int]$MaxAttempts = 2) {
   $MaxAttempts=[Math]::Max(1,[Math]::Min(3,$MaxAttempts))
   for($attempt=1;$attempt -le $MaxAttempts;$attempt++){
-    $result=Invoke-StatusSsh $SshPath $Target $RemoteCommand $Phase $InputFile $TimeoutSeconds
+    $result=$null; $clock=[Diagnostics.Stopwatch]::StartNew()
+    try { $result=Invoke-StatusSsh $SshPath $Target $RemoteCommand $Phase $InputFile $TimeoutSeconds }
+    finally {
+      $clock.Stop()
+      Write-SyncPhaseTiming 'Status sync phase' $Phase $attempt $clock.ElapsedMilliseconds $result $PhaseRecordFile -Log { param($line) Write-Output $line }
+    }
     if($result.exitCode -eq 0 -or $attempt -eq $MaxAttempts -or $result.failure -notmatch 'cause=(connection_timeout|connection_interrupted|ssh_transport_failed)\)'){return $result}
     Start-Sleep -Seconds ([Math]::Min(3,$attempt))
   }
@@ -34,8 +40,15 @@ if(-not $PSCmdlet.ShouldProcess($NasDataDir,'Sync redacted V2 canary status')){W
 $nodeCommand=if($NodePath){$NodePath}else{(Get-Command node.exe,node -ErrorAction SilentlyContinue|Select-Object -First 1).Source}
 if(-not $nodeCommand -or -not (Test-Path -LiteralPath $nodeCommand -PathType Leaf)){throw 'Node.js executable was not found'}
 $ssh=(Get-Command ssh.exe,ssh -ErrorAction SilentlyContinue|Select-Object -First 1).Source;if(-not $ssh){throw 'ssh is required'}
-& $nodeCommand (Join-Path $PSScriptRoot 'export-dashboard-status.mjs')
-if($LASTEXITCODE -ne 0){throw 'Dashboard status export failed'}
+$exportExit=-1; $clock=[Diagnostics.Stopwatch]::StartNew()
+try {
+  & $nodeCommand (Join-Path $PSScriptRoot 'export-dashboard-status.mjs')
+  $exportExit=$LASTEXITCODE
+  if($exportExit -ne 0){throw 'Dashboard status export failed'}
+} finally {
+  $clock.Stop()
+  Write-SyncPhaseTiming 'Status sync phase' 'export' 1 $clock.ElapsedMilliseconds ([pscustomobject]@{exitCode=$exportExit;timedOut=$false}) $PhaseRecordFile -Log { param($line) Write-Output $line }
+}
 $files=@(Get-Item -LiteralPath (Join-Path $root 'outputs\dashboard-runtime.json'))
 $nasProject=$NasDataDir.Substring(0,$NasDataDir.Length-'/nas-data'.Length)
 $stage="$nasProject/.v2-status-$([guid]::NewGuid().ToString('N'))"
@@ -53,6 +66,11 @@ try {
   }
   Write-Output "Synced $($files.Count) redacted V2 status files."
 } finally {
-  $cleanup=Invoke-StatusSsh $ssh $SshTarget "rm -f '$stage/dashboard-runtime.json'; rmdir -- '$stage'" 'status_cleanup' '' 10
+  $cleanup=$null; $clock=[Diagnostics.Stopwatch]::StartNew()
+  try { $cleanup=Invoke-StatusSsh $ssh $SshTarget "rm -f '$stage/dashboard-runtime.json'; rmdir -- '$stage'" 'status_cleanup' '' 10 }
+  finally {
+    $clock.Stop()
+    Write-SyncPhaseTiming 'Status sync phase' 'cleanup' 1 $clock.ElapsedMilliseconds $cleanup $PhaseRecordFile -Log { param($line) Write-Output $line }
+  }
   if($cleanup.exitCode -ne 0){Write-Verbose 'Status sync cleanup did not complete; the next bounded preflight will remove stale temporary directories.'}
 }
