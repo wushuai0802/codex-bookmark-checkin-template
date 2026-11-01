@@ -7,6 +7,7 @@ import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
 import {buildSnapshot,writeSnapshot} from './bridge.mjs';
 import {redactText} from './contracts.mjs';
 import {normalizeEvidence} from './evidence-contract.mjs';
+import {engineRowProvenance} from './engine-row-provenance.mjs';
 import {createLedgerRecord,appendLedgerRecord} from './shadow-ledger.mjs';
 import {commitDashboardGeneration} from './dashboard-generation.mjs';
 import {loadPtRecoveryDiagnostics} from './pt-reconciliation.mjs';
@@ -72,6 +73,7 @@ export function publishEngineReport({root,legacyRoot,exitCode=null,requireFreshS
     ...(r.submissionAttempted===true?{submissionAttempted:true}:{}),
     ...(r.submissionAttempted===false?{submissionAttempted:false}:{}),
     ...(r.retryable===false?{retryable:false}:{}),
+    ...engineRowProvenance(r,latest.finishedAt),
     ...(r.retryCause==='harvest_waiting'&&r.submissionAttempted===false?{retryCause:'harvest_waiting',
       ...(Number.isFinite(Date.parse(r.nextEligibleAt))?{nextEligibleAt:new Date(r.nextEligibleAt).toISOString()}:{})}:{}),
     ...(/^[a-f0-9]{64}$/.test(r.profileBinding??'')?{profileBinding:r.profileBinding}:{}),
