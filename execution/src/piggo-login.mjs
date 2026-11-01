@@ -84,6 +84,8 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     if(!guest||guest.status()!==200||!piggoResponseFresh(guest,clock())){reason='login_form_unreviewed';return outcome();}
     const guestText=await guest.text();
     if(Buffer.byteLength(guestText)>100_000||piggoApiData(JSON.parse(guestText))?.captcha!==false){reason='captcha_requires_manual';return outcome();}
+    // The page requests guest-config before it loads the lazy login chunk.
+    await page.waitForSelector(usernameSelector,{timeout:15000}).catch(()=>{});
     const form=await inspectForm(page);
     if(form?.challenge||form?.otp){reason=form.otp?'two_factor_requires_manual':'captcha_requires_manual';return outcome();}
     if(form?.reviewed!==true){reason='login_form_unreviewed';return outcome();}

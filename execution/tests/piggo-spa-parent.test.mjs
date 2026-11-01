@@ -41,6 +41,40 @@ $other=Invoke-MainChromeReadOnlyFallbackResult 'https://tracker.example' 35 $fal
   });
 }
 
+const loginResult=(shell,reader,origin='https://piggo.me',calendar='$true')=>{
+  const command=`$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${quote(scripts+'Prepare-NativeWafSession.ps1')}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'parse failed'}
+$fn=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PiggoLoginRequiredResult'},$true)[0]
+. ([scriptblock]::Create($fn.Extent.Text))
+$script:calls=0
+function Invoke-FakeReader {$script:calls++;${reader}}
+function Join-Path {'Read-NativePtHeader.mjs'}
+$node='Invoke-FakeReader'
+$config=[pscustomobject]@{ptReadOnlyPolicies=[pscustomobject]@{'https://piggo.me'=[pscustomobject]@{piggoCalendar=${calendar}}}}
+$result=Get-PiggoLoginRequiredResult '${origin}'
+[pscustomobject]@{result=$result;calls=$script:calls}|ConvertTo-Json -Depth 4 -Compress`;
+  return JSON.parse(execFileSync(shell,['-NoProfile','-NonInteractive','-EncodedCommand',
+    Buffer.from(command,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true,timeout:15000}));
+};
+for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pwsh']){
+  test(`a guarded PigGo reaches login recovery only on a read-only logged-out receipt (${shell})`,()=>{
+    const out=loginResult(shell,`return '{"status":"login_required","failureCode":"login_required","submissionAttempted":false}'`);
+    assert.equal(out.result.status,'login_required');assert.equal(out.result.inspectionStatus,'login_required');
+    assert.equal(out.result.nativeGate,true);assert.equal(out.result.submissionAttempted,false);
+    for(const reader of [`return '{"status":"not_signed","submissionAttempted":false}'`,`return '{"status":"already_signed","submissionAttempted":false}'`,
+      `return '{"status":"login_required","submissionAttempted":true}'`,`return '{"status":"login_required"}'`,`return 'not json'`,`throw 'reader failed'`])
+      assert.equal(loginResult(shell,reader).result,null,reader);
+  });
+  test(`other sites and an un-opted PigGo never run the extra read (${shell})`,()=>{
+    const reader=`return '{"status":"login_required","submissionAttempted":false}'`;
+    for(const out of [loginResult(shell,reader,'https://tracker.example'),loginResult(shell,reader,'https://piggo.me','$false')]){
+      assert.equal(out.result,null);assert.equal(out.calls,0);
+    }
+  });
+}
+
 // Acceptance comparison against an explicit base revision; the normal suite has no Git-history dependency.
 test('other-site receipt predicates remain byte-for-byte identical to the work-order base',{skip:!process.env.PIGGO_BASELINE_REVISION},()=>{
   const root=fileURLToPath(new URL('../../',import.meta.url));

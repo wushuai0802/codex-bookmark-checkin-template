@@ -324,6 +324,22 @@ function Invoke-MainChromeReadOnlyFallbackResult([string]$Origin, [int]$TimeoutS
     }
 }
 
+# The guard holds PigGo's write path while an old intent lacks fresh unsigned
+# proof, and that proof needs a session. A logged-out read therefore goes to the
+# parent's login recovery. Authentication submits nothing; the guard still decides.
+function Get-PiggoLoginRequiredResult([string]$Origin) {
+    if ($Origin -cne 'https://piggo.me') { return $null }
+    $property = $config.ptReadOnlyPolicies.PSObject.Properties[$Origin]
+    if ($null -eq $property -or $property.Value.piggoCalendar -ne $true) { return $null }
+    try {
+        $text = & $node (Join-Path $PSScriptRoot 'Read-NativePtHeader.mjs') '--origin' $Origin '--url' ($Origin + '/calendar') '--isolated' 'true' 2>$null
+        $read = ($text | Select-Object -Last 1) | ConvertFrom-Json
+    } catch { return $null }
+    if ([string]$read.status -cne 'login_required' -or $read.submissionAttempted -ne $false) { return $null }
+    return [pscustomobject]@{origin=$Origin;url=($Origin + '/calendar');status='login_required';inspectionStatus='login_required';
+        retryCause='login_required';nativeGate=$true;submissionAttempted=$false;reason='猪猪只读确认登录已失效，先恢复登录，签到仍由原生守卫决定'}
+}
+
 function Convert-NativeChildReceipt([object[]]$Output) {
     # Native stdout is a line array in Windows PowerShell. Parse the entire
     # envelope once; never rescue a trailing JSON object from mixed output.
@@ -737,6 +753,11 @@ foreach ($item in $items) {
     $gateProfile = if ($item.nativeMainDirect) { Split-Path -Parent ([string]$config.bookmarksPath) } else { $profilePath }
     $decision = Initialize-NativePtGuard -Root $root -Origin $origin -Url $gateUrl -ProfilePath $gateProfile -MainProfile:([bool]$item.nativeMainDirect)
     if ($null -ne $decision) {
+        $loginRequired = Get-PiggoLoginRequiredResult $origin
+        if ($null -ne $loginRequired) {
+            $preflightResults += $loginRequired
+            continue
+        }
         $decision | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
         $preflightResults += $decision
         continue
@@ -758,6 +779,10 @@ foreach ($item in $items) {
             }
             if (-not $apiText) { throw 'Native API receipt missing' }
             $apiResult = $apiText | ConvertFrom-Json
+            if ($origin -ceq 'https://piggo.me' -and [string]$apiResult.status -ceq 'login_required' -and $apiResult.submissionAttempted -eq $false) {
+                $apiResult | Add-Member -NotePropertyName inspectionStatus -NotePropertyValue 'login_required' -Force
+                $apiResult | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+            }
         } catch {
             $apiResult = [pscustomobject]@{origin=$origin;status='needs_attention';failureCode='submission_outcome_unknown';
                 submissionAttempted=$true;retryable=$false;reason='原生签到回执未能保存，先核验，禁止重放'}
