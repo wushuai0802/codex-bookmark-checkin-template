@@ -54,6 +54,27 @@ const diagnosticCodes=new Set(['request_rejected','profile_binding_unavailable',
   'authoritative_evidence_rejected','readback_inconclusive','entrypoint_unavailable',...failureCodes]);
 const cleanupCodes=new Set(['closed','already_closed','window_unavailable','window_not_owned','window_close_timeout','helper_only','cleanup_unavailable']);
 const diagnosticFacts=['sameOrigin','authenticated','waf','loginRoute','siteBodyLoaded','pageContentAvailable','hasDailySignal','hasSignedControl'];
+const detailBooleans=['inspectionPresent','securityVerification','dailyTextPresent','audiencesDailyHeaderVerified'];
+const detailCounts=['signedControlCount','unsignedControlCount','dailyControlCandidateCount'];
+const apiStages=new Set(['configuration','binding','launch','request','response_freshness','redirect','http_status',
+  'response_structure','day_boundary','authentication','profile_verification','daily_fields','completed']);
+
+// Private diagnostics only. Never coerce arbitrary child values into facts.
+export function safeNativeReadDetails(value={}){
+  return {...Object.fromEntries(detailBooleans.filter(key=>typeof value[key]==='boolean').map(key=>[key,value[key]])),
+    ...Object.fromEntries(detailCounts.filter(key=>Number.isInteger(value[key])&&value[key]>=0&&value[key]<=1000).map(key=>[key,value[key]])),
+    ...(['root','index','login','other','none'].includes(value.pathClass)?{pathClass:value.pathClass}:{}),
+    ...(apiStages.has(value.apiStage)?{apiStage:value.apiStage}:{}),
+    ...(Number.isInteger(value.httpStatus)&&value.httpStatus>=100&&value.httpStatus<=599?{httpStatus:value.httpStatus}:{})};
+}
+
+function readPathClass(value){
+  try{
+    const {pathname}=new URL(value);
+    return pathname==='/'?'root':pathname==='/index.php'?'index':
+      /\/(?:log[-_]?in|sign[-_]?in|auth)(?:\.(?:php|asp|aspx|html?))?(?:\/|$)/i.test(pathname)?'login':'other';
+  }catch{return 'none';}
+}
 
 export const asciiNativePtReadReceipt=value=>JSON.stringify(value).replace(/[\u007f-\uffff]/g,
   character=>'\\u'+character.charCodeAt(0).toString(16).padStart(4,'0'));
@@ -64,7 +85,8 @@ export function safeNativeReadback(value={}){
     durationMs:Math.min(600_000,Math.max(0,Number(value.durationMs)||0)),stderrPresent:value.stderrPresent===true,
     stderrBytes:Math.min(200_000,Math.max(0,Number(value.stderrBytes)||0)),
     ...(cleanupCodes.has(value.cleanupCode)?{cleanupCode:value.cleanupCode}:{}),
-    ...Object.fromEntries(diagnosticFacts.filter(key=>typeof value[key]==='boolean').map(key=>[key,value[key]]))};
+    ...Object.fromEntries(diagnosticFacts.filter(key=>typeof value[key]==='boolean').map(key=>[key,value[key]])),
+    ...safeNativeReadDetails(value)};
 }
 
 export class NativePtReadError extends Error{
@@ -198,9 +220,17 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
       value.nativeReadback?.code==='profile_binding_unavailable';
     const routeConflict=proxyPreflight&&value.nativeProxyFailureCode==='native_proxy_profile_conflict';
     const inspected=value.inspection??{};
-    const facts={sameOrigin:inspected.sameOrigin===true,authenticated:inspected.authenticated===true,waf:inspected.waf===true,
+    const legacyFacts={sameOrigin:inspected.sameOrigin===true,authenticated:inspected.authenticated===true,waf:inspected.waf===true,
       loginRoute:inspected.loginRoute===true,siteBodyLoaded:inspected.siteBodyLoaded===true,
       pageContentAvailable:inspected.pageContentAvailable===true,hasDailySignal:Boolean(inspected.successText),hasSignedControl:Boolean(inspected.successControl)};
+    const facts={...legacyFacts,...safeNativeReadDetails({
+      inspectionPresent:value.inspection!==null&&typeof value.inspection==='object'&&!Array.isArray(value.inspection),
+      securityVerification:inspected.securityVerification,signedControlCount:inspected.signedControlCount,
+      audiencesDailyHeaderVerified:inspected.audiencesDailyHeaderVerified,
+      unsignedControlCount:inspected.unsignedControlCount,pathClass:readPathClass(inspected.currentUrl),
+      dailyTextPresent:inspected.dailyTextPresent??value.nativeReadback?.dailyTextPresent,
+      dailyControlCandidateCount:inspected.dailyControlCandidateCount??value.nativeReadback?.dailyControlCandidateCount,
+      apiStage:value.nativeReadback?.apiStage,httpStatus:value.nativeReadback?.httpStatus})};
     let status=['signed','already_signed','not_signed','managed_challenge','login_required','unconfirmed','needs_attention'].includes(value.status)?value.status:'unconfirmed';
     const identityMatches=value.accountKey===binding.accountKey&&value.profileBinding===binding.profileBinding;
     const evidence=successful.has(status)&&identityMatches?receiptEvidence(value,origin,url,inspected,clock()):null;
@@ -230,7 +260,7 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
         observedAt:evidence.confirmedAt,businessDate:evidence.businessDate,submissionAttempted:false,
         operationMode:'safe_history_page',readSafety:'reviewed_passive',
         evidence:{...evidence,evidenceScope:'site_account_day'},inspection:{
-          currentUrl:inspected.currentUrl,...facts,securityVerification:inspected.securityVerification===true,
+          currentUrl:inspected.currentUrl,...legacyFacts,securityVerification:inspected.securityVerification===true,
           signedControlCount:inspected.signedControlCount,unsignedControlCount:inspected.unsignedControlCount,
           successControl:inspected.successControl??'',unsignedControl:inspected.unsignedControl??'',
           success:inspected.success===true,successText:Boolean(inspected.successText),
