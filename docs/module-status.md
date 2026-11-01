@@ -8,7 +8,7 @@
 
 | 类别 | 文件数 |
 | --- | ---: |
-| 现役 | 227 |
+| 现役 | 228 |
 | 运维手动 | 65 |
 | 历史审计 | 4 |
 | 待确认 | 47 |
@@ -113,7 +113,7 @@
 | `execution/scripts/Sync-ChromeSiteSessions.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/scripts/Sync-PrivateRuntime.ps1` | 运维手动 | 人工用法见 execution/README.md |
 | `execution/scripts/Sync-VibeCookiesWhenChromeCloses.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `execution/scripts/Test-CheckinHealth.ps1` | 现役 | observation/src/legacy-engine.mjs:46 (node-path) |
+| `execution/scripts/Test-CheckinHealth.ps1` | 现役 | observation/src/legacy-engine.mjs:47 (node-path) |
 | `execution/scripts/Test-Environment.ps1` | 运维手动 | 人工用法见 execution/AGENTS.md |
 | `execution/scripts/UserSchedulerSupervisor.vbs` | 现役 | execution/scripts/Test-CheckinHealth.ps1:56 (ps-join) |
 | `execution/scripts/V2-EngineGateway.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:6 (ps-call) |
@@ -320,7 +320,7 @@
 | `observation/src/contracts.mjs` | 现役 | observation/src/legacy-engine.mjs:8 (esm-static) |
 | `observation/src/daily-reconciliation.mjs` | 现役 | observation/src/dashboard-server.mjs:26 (esm-static) |
 | `observation/src/daily-runner.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/src/dashboard-generation.mjs` | 现役 | observation/src/legacy-engine.mjs:11 (esm-static) |
+| `observation/src/dashboard-generation.mjs` | 现役 | observation/src/legacy-engine.mjs:12 (esm-static) |
 | `observation/src/dashboard-operation-executor.mjs` | 现役 | observation/scripts/process-dashboard-operations.mjs:6 (esm-static) |
 | `observation/src/dashboard-operations-cli.mjs` | 现役 | observation/scripts/process-dashboard-operations.mjs:11 (nas-command) |
 | `observation/src/dashboard-operations.mjs` | 现役 | observation/src/dashboard-server.mjs:23 (esm-static) |
@@ -333,6 +333,7 @@
 | `observation/src/dry-transport-server.mjs` | 现役 | observation/src/worker-gateway.mjs:3 (esm-static) |
 | `observation/src/dry-transport-worker.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/src/effective-config.mjs` | 现役 | observation/src/bridge.mjs:16 (esm-static) |
+| `observation/src/engine-row-provenance.mjs` | 现役 | observation/src/legacy-engine.mjs:10 (esm-static) |
 | `observation/src/evidence-contract.mjs` | 现役 | observation/src/legacy-engine.mjs:9 (esm-static) |
 | `observation/src/execution-adapter-registry.mjs` | 运维手动 | observation/scripts/check-adapters.mjs:2 (esm-static) |
 | `observation/src/execution-journal.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
@@ -363,7 +364,7 @@
 | `observation/src/pt-execution-adapter.mjs` | 运维手动 | observation/src/execution-adapter-registry.mjs:3 (esm-static) |
 | `observation/src/pt-native-diagnostic.generated.mjs` | 现役 | observation/src/pt-site-execution.mjs:8 (esm-static) |
 | `observation/src/pt-readonly-adapter.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/src/pt-reconciliation.mjs` | 现役 | observation/src/legacy-engine.mjs:12 (esm-static) |
+| `observation/src/pt-reconciliation.mjs` | 现役 | observation/src/legacy-engine.mjs:13 (esm-static) |
 | `observation/src/pt-site-execution.mjs` | 现役 | observation/src/dashboard-server.mjs:21 (esm-static) |
 | `observation/src/pt-status.mjs` | 现役 | observation/src/dashboard-server.mjs:25 (esm-static) |
 | `observation/src/pt-verification.mjs` | 现役 | observation/src/harvest-fallback.mjs:10 (esm-static) |
@@ -374,7 +375,7 @@
 | `observation/src/schedule-gate.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/src/scheduler.mjs` | 待确认 | 当前文本仅见测试和 lint:domain 语法检查，生产调用待核实，暂不迁移。 |
 | `observation/src/shadow-acceptance.mjs` | 现役 | observation/src/dashboard-server.mjs:12 (esm-static) |
-| `observation/src/shadow-ledger.mjs` | 现役 | observation/src/legacy-engine.mjs:10 (esm-static) |
+| `observation/src/shadow-ledger.mjs` | 现役 | observation/src/legacy-engine.mjs:11 (esm-static) |
 | `observation/src/shadow-run.mjs` | 现役 | npm 生产脚本 observation/package.json:shadow |
 | `observation/src/site-identity-index.mjs` | 现役 | observation/src/pt-status.mjs:3 (esm-static) |
 | `observation/src/task-coordinator.mjs` | 运维手动 | observation/src/isolated-browser-worker.mjs:6 (esm-static) |
@@ -405,7 +406,7 @@
 | `observation/scripts/Start-NasShadowScheduler.ps1:225` | ps-call | 是 | 仓库内无对应文件；不读取运行副本；`observation/scripts/Invoke-DryWorkerIfDue.ps1` |
 | `observation/src/captcha-solver.mjs:86` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/isolated-browser-worker.mjs:32` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
-| `observation/src/legacy-engine.mjs:149` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `observation/src/legacy-engine.mjs:151` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/pt-site-execution.mjs:85` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/doctor.mjs:258` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 

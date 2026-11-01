@@ -47,7 +47,7 @@ test('stalled Harvest digest keeps tentative wording and reuses site-set excepti
   f.save();const before=fs.readFileSync(f.reportFile),output=f.run();
   assert.equal(output.dayVerdict.counts.actionNeeded,1);
   assert.deepEqual(output.events.map(event=>event.category),['action_needed','daily_digest']);
-  const expected='Harvest 已 3 天没有处理这个站点，最后一次回执在 10-28，可能需要在 Harvest 里更新登录状态';
+  const expected='Harvest 已 3 天没有处理这个站点，最后一次回执在 10-28，可能是站点已关闭或登录失效，请核对';
   for(const event of output.events)assert.ok(event.summary.includes(expected));
   const items=f.items();assert.equal(items.length,2);assert.equal(f.run().events.length,0);
   assert.deepEqual(f.items(),items);assert.deepEqual(fs.readFileSync(f.reportFile),before);

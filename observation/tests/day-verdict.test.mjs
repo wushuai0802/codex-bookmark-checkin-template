@@ -26,7 +26,7 @@ test('stalled Harvest uses read-only observation context and preserves old unkno
   const value=stalledSnapshot(),before=JSON.stringify(value),verdict=project(value);
   assert.equal(verdict.counts.actionNeeded,1);assert.equal(verdict.counts.verifying,0);
   assert.deepEqual(verdict.items[0],{taskId:'stalled',class:'actionNeeded',reasonCode:'harvest_stalled',lastReceiptDay:'2026-10-28',missingDays:3,
-    summary:'Harvest 已 3 天没有处理这个站点，最后一次回执在 10-28，可能需要在 Harvest 里更新登录状态'});
+    summary:'Harvest 已 3 天没有处理这个站点，最后一次回执在 10-28，可能是站点已关闭或登录失效，请核对'});
   assert.equal(value.ptStatus.sites[0].harvestObservation.latestActive,'2026-10-28T11:42:00.000Z');
   assert.equal(JSON.stringify(value),before);
 });
