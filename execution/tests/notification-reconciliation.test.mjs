@@ -39,6 +39,20 @@ function digestSandbox(t){
   return f;
 }
 
+test('stalled Harvest digest keeps tentative wording and reuses site-set exception deduplication',t=>{
+  const f=digestSandbox(t),origin=f.snapshot.tasks[1].origin;
+  f.snapshot.ptStatus.sites.push({origin,harvestManaged:true,capabilities:{read:false,guardedSubmit:false},
+    harvestObservation:{businessDate:f.date,checkinEnabled:true,lastReceiptDay:'2026-10-28',taskCompletion:{status:'completed'}},
+    effective:{status:'unknown',observedAt:null,fresh:false,authoritative:false},observations:[]});
+  f.save();const before=fs.readFileSync(f.reportFile),output=f.run();
+  assert.equal(output.dayVerdict.counts.actionNeeded,1);
+  assert.deepEqual(output.events.map(event=>event.category),['action_needed','daily_digest']);
+  const expected='Harvest 已 3 天没有处理这个站点，最后一次回执在 10-28，可能需要在 Harvest 里更新登录状态';
+  for(const event of output.events)assert.ok(event.summary.includes(expected));
+  const items=f.items();assert.equal(items.length,2);assert.equal(f.run().events.length,0);
+  assert.deepEqual(f.items(),items);assert.deepEqual(fs.readFileSync(f.reportFile),before);
+});
+
 test('daily digest inherits defaults, defers before 11, freezes one daily event and resets next day',t=>{
   const f=digestSandbox(t),before=fs.readFileSync(f.configFile,'utf8');
   const early=f.run('2026-10-31T02:59:59Z');assert.equal(early.deferred,true);assert.equal(f.items().length,0);

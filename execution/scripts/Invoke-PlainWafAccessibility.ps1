@@ -230,6 +230,8 @@ function Read-PageSnapshot {
         signedControlCount = $signedControls.Count
         unsignedControl = if ($unsignedControls.Count -eq 1) { $unsignedControls[0] } else { '' }
         unsignedControlCount = $unsignedControls.Count
+        dailyTextPresent = [bool]($bodyText -match '签到|簽到|check[ -]?in')
+        dailyControlCandidateCount = @($controlNames | Where-Object { $_ -match '签到|簽到|check[ -]?in' }).Count
         authenticated = [bool]$authenticated
         document = (@($documents | Select-Object -Unique) -join ' ').Substring(0, [Math]::Min(500, (@($documents | Select-Object -Unique) -join ' ').Length))
         waf = [bool]$waf

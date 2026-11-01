@@ -99,6 +99,13 @@ function extractHarvestReport(snapshot,businessDate){
 
 export function retainHarvestPresentation(snapshot,previous){
   if(snapshot.businessDate!==previous?.businessDate||!snapshot.ptStatus)return;
+  for(const site of snapshot.ptStatus.sites??[]){
+    const matches=(previous.ptStatus?.sites??[]).filter(old=>old.origin===site.origin&&old.accountRef===site.accountRef);
+    const old=matches.length===1?matches[0]:null;
+    if(old?.harvestObservation?.businessDate!==snapshot.businessDate)continue;
+    site.harvestObservation=structuredClone(old.harvestObservation);
+    if(old.harvestManaged===true)site.harvestManaged=true;
+  }
   const window=copyHarvestWindow(previous.ptStatus?.harvestWindow);
   if(!window||window.businessDate!==snapshot.businessDate)return;
   // Passive verification does not query Harvest. Keep the original observation

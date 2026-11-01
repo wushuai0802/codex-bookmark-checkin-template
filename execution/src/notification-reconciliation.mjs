@@ -238,7 +238,8 @@ export async function notificationVerdict({root,report,now=new Date(),reconcilia
     const ids=new Set(verdict.items.filter(item=>!['done','paused','noFeature'].includes(item.class)).map(item=>item.taskId));
     return {dayVerdict:verdict,verdictScope:scope,
       verdictTasks:projected.tasks.map(task=>({taskId:task.taskId,origin:task.origin,
-        failureCode:task.failureCode,observedStatus:task.observedStatus})),
+        failureCode:task.failureCode,observedStatus:task.observedStatus,
+        ...((item=>item?.reasonCode?{dayReasonCode:item.reasonCode,daySummary:item.summary}:{})(verdict.items.find(item=>item.taskId===task.taskId)))})),
       identityConflict:snapshot.businessDate===day(now)&&[...(snapshot.receipts??[]),...projected.tasks].some(item=>
         dated(item.observedAt??item.evidence?.confirmedAt,day(now),now)&&(item.evidence?.verification==='identity_conflict'||item.condition==='identity_conflict')),
       longUnsettled:projected.tasks.filter(task=>ids.has(task.taskId)&&(snapshot.ptStatus?.sites??[]).some(site=>

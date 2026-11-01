@@ -7,8 +7,8 @@ function availabilityCondition(task){
     value?.condition==='upstream_unavailable'&&siteFaultCodes.includes(value.failureCode)?'upstream_unavailable':null;
 }
 export function taskStatusCondition(task){return waitingTask(task)?'harvest_waiting':availabilityCondition(task)??task?.condition;}
-export function taskStatusSummary(task){return waitingTask(task)?harvestWaitSummary(task.waiting):task?.waiting?
-  '等待窗口已结束，尚无当日确认回执，请先核验':availabilityCondition(task)?task.availability.summary:task?.evidence?.summary;}
+export function taskStatusSummary(task){return task?.dayVerdict?.summary??(waitingTask(task)?harvestWaitSummary(task.waiting):task?.waiting?
+  '等待窗口已结束，尚无当日确认回执，请先核验':availabilityCondition(task)?task.availability.summary:task?.evidence?.summary);}
 export function cancelledTask(task){return task?.observedStatus==='not_available'&&task?.evidence?.verification==='task_disabled'&&
   task.evidence.authoritative===true&&task.evidence.rawSource==='configuration';}
 export function taskStatusLabel(task){return cancelledTask(task)?conditionLabels.task_disabled:

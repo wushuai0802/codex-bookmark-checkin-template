@@ -11,6 +11,36 @@ observer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observer)
 
 class HarvestEvidenceTest(unittest.TestCase):
+    def test_activity_and_last_receipt_are_optional_dates_only(self):
+        zone = datetime.timezone(datetime.timedelta(hours=8))
+        now = datetime.datetime(2026, 11, 1, 12, tzinfo=zone)
+        cases = [
+            (False, None, '{}', None, None),
+            (True, 'not a timestamp', '{invalid', None, None),
+            (True, None, '[]', None, None),
+            (True, '', 'null', None, None),
+            (True, None, '', None, None),
+            (True, '2026-10-29 19:42:00', '{"2026-10-29":{"message":"PRIVATE_MESSAGE"},"2026-11-02":{},"2026-02-30":{},"20261030":{}}', '2026-10-29T19:42:00+08:00', '2026-10-29'),
+            (True, '2026-10-29T11:42:00+00:00', '{"2026-11-01":{},"2026-10-31":{}}', '2026-10-29T11:42:00+00:00', '2026-11-01'),
+        ]
+        for present, activity, raw, expected_activity, expected_day in cases:
+            with self.subTest(present=present, activity=activity, raw=raw), tempfile.TemporaryDirectory() as folder:
+                database = Path(folder) / 'harvest.sqlite'
+                conn = sqlite3.connect(database)
+                conn.execute('CREATE TABLE mysite_mysite(mirror TEXT,nickname TEXT,user_id TEXT,username TEXT,sign_info TEXT,available INTEGER,sign_in INTEGER' + (',latest_active TEXT' if present else '') + ')')
+                values = ['https://fixture.example', 'fixture', '7', 'fixture', raw, 1, 1] + ([activity] if present else [])
+                conn.execute('INSERT INTO mysite_mysite VALUES(' + ','.join('?' for _ in values) + ')', values)
+                conn.commit(); conn.close()
+                before = database.read_bytes()
+                with patch.object(observer, 'ZoneInfo', return_value=zone):
+                    result = observer.export(str(database), now=now)
+                self.assertEqual(before, database.read_bytes())
+                self.assertTrue(result['checkinInventoryComplete'])
+                self.assertEqual(result['sites'][0]['latestActive'], expected_activity)
+                self.assertEqual(result['sites'][0]['lastReceiptDay'], expected_day)
+                self.assertNotIn('PRIVATE_MESSAGE', observer.json.dumps(result))
+                self.assertNotIn('message', result['sites'][0])
+
     def test_success_requires_explicit_positive_evidence(self):
         self.assertEqual(observer.classify('签到成功 这是第 1 次'), 'signed')
         self.assertEqual(observer.classify('已签到，请勿重复操作'), 'already_signed')
