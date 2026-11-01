@@ -420,7 +420,20 @@ export function buildPtStatus({
   }
   const status = Object.fromEntries(PT_STATUS_VALUES.map((value) => [value, 0]));
   for (const site of sites) status[site.effective?.status ?? 'unknown'] += 1;
-  for(const site of sites)if(harvestSiteAssignment(externalReport,site.origin).owner==='harvest')site.harvestManaged=true;
+  for(const site of sites){
+    const assignment=harvestSiteAssignment(externalReport,site.origin);
+    if(assignment.owner==='harvest')site.harvestManaged=true;
+    // Display context only; never changes effective evidence or execution candidates.
+    if(externalReport?.source==='harvest'&&assignment.site){
+      const value=assignment.site;
+      site.harvestObservation={businessDate:externalReport.businessDate,checkinEnabled:value.checkinEnabled===true,
+        latestActive:typeof value.latestActive==='string'&&Number.isFinite(Date.parse(value.latestActive))
+          ?new Date(value.latestActive).toISOString():null,
+        lastReceiptDay:/^\d{4}-\d{2}-\d{2}$/.test(value.lastReceiptDay??'')?value.lastReceiptDay:null,
+        taskCompletion:{status:['completed','running','failed'].includes(externalReport.taskCompletion?.status)
+          ?externalReport.taskCompletion.status:null}};
+    }
+  }
   return {
     schemaVersion: 1,
     generatedAt: new Date(generatedAt).toISOString(),

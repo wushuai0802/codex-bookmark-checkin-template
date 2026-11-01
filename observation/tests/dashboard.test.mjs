@@ -7,10 +7,31 @@ import { fileURLToPath } from 'node:url';
 import { buildSnapshot } from '../src/bridge.mjs';
 import { createDashboardServer,calendarHistory } from '../src/dashboard-server.mjs';
 import {projectOverviewSnapshot,overviewMetrics,overviewResultCounts} from '../public/overview-model.mjs';
-import {taskStatusLabel} from '../public/dashboard-model.mjs';
+import {taskStatusLabel,taskStatusSummary} from '../public/dashboard-model.mjs';
 import {taskIdentity,planHash} from '../src/contracts.mjs';
 
 const legacyRoot = fileURLToPath(new URL('./fixtures/legacy/', import.meta.url));
+
+test('dashboard actionable task and PT table share the stalled Harvest explanation',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-stalled-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const at=new Date(),day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(at);
+  const lastReceiptDay=new Date(Date.parse(day+'T00:00:00Z')-3*86400000).toISOString().slice(0,10);
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:at.toISOString()});snapshot.businessDate=day;
+  const origin='https://stalled.example';
+  snapshot.ptStatus={businessDate:day,sites:[{origin,fallbackEnabled:true,harvestManaged:true,capabilities:{read:false,guardedSubmit:false},
+    harvestObservation:{businessDate:day,checkinEnabled:true,lastReceiptDay,taskCompletion:{status:'completed'}},
+    effective:{source:'harvest',status:'unknown',observedAt:null,authoritative:false,fresh:false},observations:[],sourceStatuses:[]}]};
+  fs.writeFileSync(path.join(root,'shadow-beta-snapshot.json'),JSON.stringify(snapshot));
+  const {instance,base}=await start({dataDir:root});t.after(()=>close(instance));
+  const view=await(await fetch(base+'/api/overview')).json();
+  const item=view.tasks.find(task=>task.origin===origin),site=view.ptStatus.sites[0];
+  assert.equal(item.dayClass,'actionNeeded');assert.equal(item.dayVerdict.reasonCode,'harvest_stalled');
+  assert.equal(taskStatusSummary(item),`Harvest 已 3 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能需要在 Harvest 里更新登录状态`);
+  assert.equal(site.dayVerdict.summary,taskStatusSummary(item));
+  const filtered=await(await fetch(base+'/api/tasks?status=actionable')).json();
+  assert.ok(filtered.tasks.some(task=>task.origin===origin));
+  assert.equal(site.effective.status,'unknown');assert.deepEqual(site.capabilities,{read:false,guardedSubmit:false});
+});
 
 async function start(options) {
   const instance = createDashboardServer({ ...options, bind: '127.0.0.1', port: 0 });
