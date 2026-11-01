@@ -17,12 +17,12 @@
 
 | 模块 | 当前判定 | 核对依据 |
 | --- | --- | --- |
-| `scheduler.mjs` | 待确认 | 工单要求保留；当前文本仅见测试和 lint:domain 语法检查，生产调用待核实。 |
+| `scheduler.mjs` | 待确认 | 当前文本仅见测试和 lint:domain 语法检查，生产调用待核实，暂不迁移。 |
 | `notification-delivery.mjs` | 运维手动 | observation/src/v2-notification-flush.mjs:5 (esm-static) |
 | `runtime-config.mjs` | 现役 | observation/scripts/run-v1-engine.mjs:5 (esm-static) |
 | `shadow-acceptance.mjs` | 现役 | observation/src/dashboard-server.mjs:12 (esm-static) |
 
-工单把四者均视为现役；本工作树中 scheduler 仅见测试/语法检查，notification-delivery 可由 npm 人工通知刷新命令到达，未找到两者的生产调用链。保留此差异供复核，不强制改成现役，也不建议迁移这两者。
+这四个模块名字看着旧，过去的记录把它们都当作现役。当前 scheduler 仅见测试和语法检查，notification-delivery 可由 npm 人工通知刷新命令到达，未找到两者的生产调用链。不把它们强行标为现役，也不建议迁移。
 
 ## 生产入口
 
@@ -48,7 +48,7 @@
 | --- | --- | --- |
 | `execution/scripts/Backup-Sqlite.py` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/CheckinContract.generated.ps1` | 现役 | execution/scripts/ResultContract.ps1:1 (ps-call) |
-| `execution/scripts/Cleanup-NativePtRead.ps1` | 现役 | execution/src/native-pt-read.mjs:83 (node-path) |
+| `execution/scripts/Cleanup-NativePtRead.ps1` | 现役 | execution/src/native-pt-read.mjs:105 (node-path) |
 | `execution/scripts/Cleanup-PtWorker.ps1` | 现役 | observation/src/pt-worker-lifecycle.mjs:43 (node-path) |
 | `execution/scripts/Clear-AutomationChromeCache.ps1` | 运维手动 | 人工用法见 execution/README.md |
 | `execution/scripts/Clear-StalePrivateTemp.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:144 (ps-call) |
@@ -68,11 +68,11 @@
 | `execution/scripts/Invoke-BoundedCommand.ps1` | 现役 | execution/scripts/Invoke-CheckinNotificationOutbox.ps1:109 (ps-call) |
 | `execution/scripts/Invoke-CheckinNotificationOutbox.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:18 (ps-join) |
 | `execution/scripts/Invoke-CheckinReportOutbox.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:167 (node-path) |
+| `execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:189 (node-path) |
 | `execution/scripts/Invoke-NpmAuditWithRetry.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/scripts/Invoke-PlainOAuthAccessibility.ps1` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:211 (ps-call) |
 | `execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1` | 现役 | execution/src/index.mjs:841 (node-path) |
-| `execution/scripts/Invoke-PlainWafAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:167 (node-path) |
+| `execution/scripts/Invoke-PlainWafAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:189 (node-path) |
 | `execution/scripts/Manage-BitwardenTotp.ps1` | 运维手动 | 人工用法见 execution/docs/bitwarden-totp.md |
 | `execution/scripts/Native-ChromeDebug.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:13 (ps-call) |
 | `execution/scripts/Native-PtChromeProxy.ps1` | 现役 | execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1:99 (ps-call) |
@@ -371,7 +371,7 @@
 | `observation/src/release-info.mjs` | 现役 | observation/src/dashboard-server.mjs:22 (esm-static) |
 | `observation/src/runtime-config.mjs` | 现役 | observation/scripts/run-v1-engine.mjs:5 (esm-static) |
 | `observation/src/schedule-gate.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/src/scheduler.mjs` | 待确认 | 工单要求保留；当前文本仅见测试和 lint:domain 语法检查，生产调用待核实。 |
+| `observation/src/scheduler.mjs` | 待确认 | 当前文本仅见测试和 lint:domain 语法检查，生产调用待核实，暂不迁移。 |
 | `observation/src/shadow-acceptance.mjs` | 现役 | observation/src/dashboard-server.mjs:12 (esm-static) |
 | `observation/src/shadow-ledger.mjs` | 现役 | observation/src/legacy-engine.mjs:10 (esm-static) |
 | `observation/src/shadow-run.mjs` | 现役 | npm 生产脚本 observation/package.json:shadow |
@@ -395,7 +395,7 @@
 
 | 调用位置 | 类型 | 生产 | 未解析依据 / 有界候选 |
 | --- | --- | --- | --- |
-| `execution/src/native-pt-read.mjs:98` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `execution/src/native-pt-read.mjs:120` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/scripts/check-js-syntax.mjs:8` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/scripts/deploy-nas-code.ps1:146` | ps-join | 否 | 仓库内无对应文件；不读取运行副本；`observation/outputs/nas-bundle-deploy/nas-code-release.sh` |
 | `observation/scripts/m2-nas-client-smoke.mjs:14` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
