@@ -15,6 +15,10 @@ $node = Resolve-CheckinNode $config
 $originUri = [uri]$Origin
 if ($originUri.Scheme -ne 'https' -or -not $originUri.Host) { throw '原生登录恢复来源无效。' }
 $targetUrl = if ($LoginUrl) { [uri]$LoginUrl } else { [uri]::new($originUri, '/login') }
+if ($originUri.GetLeftPart([System.UriPartial]::Authority) -ceq 'https://piggo.me') {
+    if ($Mode -ceq 'Checkin') { throw 'PigGo attendance requires the guarded calendar runner.' }
+    $targetUrl = [uri]::new($originUri, $(if ($Mode -ceq 'ReadOnly') { '/calendar' } else { '/login' }))
+}
 if ($targetUrl.GetLeftPart([System.UriPartial]::Authority) -ne $originUri.GetLeftPart([System.UriPartial]::Authority)) {
     throw '原生登录恢复地址不属于目标站点。'
 }
@@ -30,8 +34,8 @@ if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法
 
 $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
 if ($Mode -cne 'Login') {
-    if ($originValue -cne 'https://www.uhddolby.com') { throw '原生只读或签到模式未审阅。' }
-    $targetUrl = [uri]::new($originUri, '/index.php')
+    if ($originValue -cne 'https://www.uhddolby.com' -and $originValue -cne 'https://piggo.me') { throw '原生只读或签到模式未审阅。' }
+    if ($originValue -ceq 'https://www.uhddolby.com') { $targetUrl = [uri]::new($originUri, '/index.php') }
 }
 try {
     # Chrome stores synced/account passwords in "Login Data For Account".
@@ -41,7 +45,7 @@ try {
     # still never reads or prints the saved username/password.
     [void](Reset-NativeChromeDebugPort $profilePath)
     $debugPort = Get-NativeChromeDebugPort
-    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri) -UserDataDirOverride $profilePath
+    & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager:($originValue -cne 'https://piggo.me') -DeferPiggoNavigation:($originValue -ceq 'https://piggo.me') -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri) -UserDataDirOverride $profilePath
     $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
     $loginSucceeded = $false
     if ($Mode -cne 'Login') {
@@ -62,10 +66,9 @@ try {
             if ($factorHandled -or [string]$nativeLoginResult.failureCode -ceq 'two_factor_required' -or $null -eq $nativeLoginResult) { break }
         }
         if (-not $loginSucceeded -and $originValue -ceq 'https://piggo.me') {
-            $nativeLoginResult = $null
-            try { $nativeLoginResult = ($nativeLoginOutput -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop } catch {}
-            $factor = $nativeLoginResult.nativeTwoFactorRecovery
-            if ($null -eq $nativeLoginResult -or ($null -ne $factor -and $factor.attempted -is [bool] -and $factor.accepted -is [bool])) { break }
+            # PigGo's own durable authentication audit owns all outcomes.
+            # Neither malformed output nor an unknown result permits replay.
+            break
         }
         if (-not $loginSucceeded -and $loginAttempt -lt 3) {
             # The account password store can take a few seconds to become

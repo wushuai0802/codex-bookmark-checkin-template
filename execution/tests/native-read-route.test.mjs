@@ -24,7 +24,15 @@ test('all native PT readers bind the profile used by the registered execution ro
     mainChromeFallbackUrls:['https://audiences.me/attendance.php','https://piggo.me/attendance.php',
       'https://www.hdkyl.in/attendance.php','https://ourbits.club/attendance.php']};
   fs.writeFileSync(path.join(root,'config/config.json'),JSON.stringify(config));
-  for(const [origin,profile,mainProfile] of [['https://audiences.me',shared,false],['https://piggo.me',piggo,false],
+  // PigGo binds through its calendar route; the policy below requires its private opt-in.
+  const piggoTarget={origin:'https://piggo.me',accountKey:'site-default',folderNames:['PT白名单'],allowedOrigins:['https://piggo.me']};
+  const piggoGate=await runNativePtGate({root,origin:piggoTarget.origin,url:piggoTarget.origin+'/calendar',profile:piggo,mainProfile:false,phase:'bind',
+    readPlan:async()=>({targets:[piggoTarget]})});
+  assert.equal(piggoGate.allow,true);
+  assert.equal(piggoGate.profileBinding,crypto.createHash('sha256').update(process.platform==='win32'?piggo.toLowerCase():piggo).digest('hex'));
+  assert.throws(()=>ptReadPolicy(piggoTarget.origin,config),/not reviewed/);
+  assert.throws(()=>ptObservationBinding(root,piggoTarget,config),/not reviewed/);
+  for(const [origin,profile,mainProfile] of [['https://audiences.me',shared,false],
     ['https://www.hdkyl.in',shared,false],['https://ourbits.club',main,true]]){
     const target={origin,accountKey:'site-default',folderNames:['PT白名单'],allowedOrigins:[origin]};
     const gate=await runNativePtGate({root,origin,url:origin+'/index.php',profile,mainProfile,phase:'bind',

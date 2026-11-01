@@ -90,7 +90,8 @@ export function normalizeEvidence(result,{businessDate,referenceAt,expectedId}={
     ...(validDay(raw.businessDate)?{businessDate:raw.businessDate}:{}),
     ...(/^[a-z0-9_]{1,80}$/.test(raw.statusSignal??'')?{statusSignal:raw.statusSignal}:{}),
     ...(raw.evidenceScope==='site_account_day'?{evidenceScope:raw.evidenceScope}:{}),
-    ...(raw.pagePath==='/index.php'?{pagePath:raw.pagePath}:{}),
+    ...(raw.pagePath==='/index.php'||result?.origin==='https://piggo.me'&&rawSource==='api'&&raw.pagePath==='/calendar'
+      ?{pagePath:raw.pagePath}:{}),
     ...(/^[a-f0-9]{64}$/.test(result?.profileBinding??'')?{profileBinding:result.profileBinding}:{}),
     ...(['legacy_checkin','formal_visit_checkin','safe_history_page','safe_status_endpoint'].includes(result?.operationMode)?{operationMode:result.operationMode}:{}),
     ...(['reviewed_passive','attendance_page_risk'].includes(result?.readSafety)?{readSafety:result.readSafety}:{})};

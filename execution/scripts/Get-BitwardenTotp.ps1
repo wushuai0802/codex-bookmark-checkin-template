@@ -216,8 +216,8 @@ try {
     $rule = $config.bitwardenTotp
     $route = $rule.routes.PSObject.Properties[$Origin].Value
     if($Mode-ceq 'Login'){
-        $opt=$config.siteTwoFactorRecovery.PSObject.Properties[$Origin].Value
-        if($Origin-cne 'https://www.uhddolby.com'-or $opt.enabled-ne $true-or $opt.reviewed-ne $true-or
+        $opt=if($Origin-ceq 'https://piggo.me'){$config.nativePtTwoFactorRecovery.PSObject.Properties[$Origin].Value}else{$config.siteTwoFactorRecovery.PSObject.Properties[$Origin].Value}
+        if($Origin-cnotin @('https://www.uhddolby.com','https://piggo.me')-or $opt.enabled-ne $true-or $opt.reviewed-ne $true-or
             $opt.allowPasswordLogin-ne $true-or $opt.loginSource-cne 'bitwarden'){Stop-Provider 'login_not_allowed'}
         try{
             $integration=Get-Content -LiteralPath (Join-Path $Root 'data/v2-integration.json') -Raw|ConvertFrom-Json

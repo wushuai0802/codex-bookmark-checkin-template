@@ -8,8 +8,8 @@
 
 | 类别 | 文件数 |
 | --- | ---: |
-| 现役 | 228 |
-| 运维手动 | 65 |
+| 现役 | 231 |
+| 运维手动 | 66 |
 | 历史审计 | 4 |
 | 待确认 | 47 |
 
@@ -48,11 +48,12 @@
 | --- | --- | --- |
 | `execution/scripts/Backup-Sqlite.py` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/CheckinContract.generated.ps1` | 现役 | execution/scripts/ResultContract.ps1:1 (ps-call) |
-| `execution/scripts/Cleanup-NativePtRead.ps1` | 现役 | execution/src/native-pt-read.mjs:105 (node-path) |
+| `execution/scripts/Cleanup-NativePtRead.ps1` | 现役 | execution/src/native-pt-read.mjs:106 (node-path) |
 | `execution/scripts/Cleanup-PtWorker.ps1` | 现役 | observation/src/pt-worker-lifecycle.mjs:43 (node-path) |
 | `execution/scripts/Clear-AutomationChromeCache.ps1` | 运维手动 | 人工用法见 execution/README.md |
 | `execution/scripts/Clear-StalePrivateTemp.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:144 (ps-call) |
 | `execution/scripts/Close-ManualLogin.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
+| `execution/scripts/Diagnose-Piggo.mjs` | 运维手动 | 人工用法见 execution/docs/pt-recovery.md |
 | `execution/scripts/Ensure-UserScheduler.ps1` | 现役 | execution/scripts/Test-CheckinHealth.ps1:55 (ps-join) |
 | `execution/scripts/Export-PublicBundle.ps1` | 运维手动 | 人工用法见 execution/README.md |
 | `execution/scripts/Extract-ChromeSessionStorage.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
@@ -68,11 +69,11 @@
 | `execution/scripts/Invoke-BoundedCommand.ps1` | 现役 | execution/scripts/Invoke-CheckinNotificationOutbox.ps1:109 (ps-call) |
 | `execution/scripts/Invoke-CheckinNotificationOutbox.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:18 (ps-join) |
 | `execution/scripts/Invoke-CheckinReportOutbox.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:189 (node-path) |
+| `execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:194 (node-path) |
 | `execution/scripts/Invoke-NpmAuditWithRetry.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/scripts/Invoke-PlainOAuthAccessibility.ps1` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:211 (ps-call) |
 | `execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1` | 现役 | execution/src/index.mjs:841 (node-path) |
-| `execution/scripts/Invoke-PlainWafAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:189 (node-path) |
+| `execution/scripts/Invoke-PlainWafAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:194 (node-path) |
 | `execution/scripts/Manage-BitwardenTotp.ps1` | 运维手动 | 人工用法见 execution/docs/bitwarden-totp.md |
 | `execution/scripts/Native-ChromeDebug.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:13 (ps-call) |
 | `execution/scripts/Native-PtChromeProxy.ps1` | 现役 | execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1:99 (ps-call) |
@@ -82,14 +83,14 @@
 | `execution/scripts/OAuth-AccountConfig.ps1` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:19 (ps-call) |
 | `execution/scripts/Open-ManualLogin.ps1` | 运维手动 | 人工用法见 docs/quickstart.md |
 | `execution/scripts/Open-OAuthAccountLogin.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `execution/scripts/Open-PlainLoginChrome.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:44 (ps-call) |
+| `execution/scripts/Open-PlainLoginChrome.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:48 (ps-call) |
 | `execution/scripts/Plain-CredentialLoginAccessibility.ps1` | 现役 | execution/scripts/Recover-ProtectedLogin.ps1:136 (ps-call) |
 | `execution/scripts/Prepare-NativeWafSession.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:289 (ps-call) |
 | `execution/scripts/Protect-PrivateRuntime.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `execution/scripts/Read-NativePtHeader.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:307 (ps-join) |
+| `execution/scripts/Read-NativePtHeader.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:308 (ps-join) |
 | `execution/scripts/Recover-NativeLogin.ps1` | 现役 | execution/src/index.mjs:779 (node-path) |
 | `execution/scripts/Recover-NativeOAuthLogin.ps1` | 现役 | execution/src/index.mjs:807 (node-path) |
-| `execution/scripts/Recover-NativePtTwoFactor.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:540 (ps-join) |
+| `execution/scripts/Recover-NativePtTwoFactor.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:541 (ps-join) |
 | `execution/scripts/Recover-ProtectedLogin.ps1` | 现役 | execution/src/index.mjs:788 (node-path) |
 | `execution/scripts/Remove-ScheduledTask.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Remove-UserScheduler.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
@@ -98,8 +99,8 @@
 | `execution/scripts/ResultIdentity.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:12 (ps-call) |
 | `execution/scripts/Run-Checkin.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:638 (ps-join) |
 | `execution/scripts/Run-HiddenPowerShell.vbs` | 现役 | 生产入口（架构调用链） |
-| `execution/scripts/Run-NativePtApiCheckin.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:747 (ps-join) |
-| `execution/scripts/Run-PtSupplement.mjs` | 现役 | observation/src/pt-site-execution.mjs:64 (node-path) |
+| `execution/scripts/Run-NativePtApiCheckin.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:757 (ps-join) |
+| `execution/scripts/Run-PtSupplement.mjs` | 现役 | observation/src/pt-site-execution.mjs:65 (node-path) |
 | `execution/scripts/RunLock.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:21 (ps-call) |
 | `execution/scripts/Safe-UIAutomation.ps1` | 现役 | execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1:30 (ps-call) |
 | `execution/scripts/Scan-PublicSafety.ps1` | 运维手动 | 人工用法见 execution/README.md |
@@ -118,7 +119,7 @@
 | `execution/scripts/UserSchedulerSupervisor.vbs` | 现役 | execution/scripts/Test-CheckinHealth.ps1:56 (ps-join) |
 | `execution/scripts/V2-EngineGateway.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:6 (ps-call) |
 | `execution/src/anyrouter-api-checkin.mjs` | 现役 | execution/src/browser.mjs:21 (esm-static) |
-| `execution/src/attention-urls.mjs` | 现役 | execution/scripts/Open-PlainLoginChrome.ps1:52 (ps-join) |
+| `execution/src/attention-urls.mjs` | 现役 | execution/scripts/Open-PlainLoginChrome.ps1:53 (ps-join) |
 | `execution/src/baidu-ocr.mjs` | 现役 | execution/src/browser.mjs:20 (esm-static) |
 | `execution/src/bitwarden-totp.mjs` | 现役 | execution/src/native-pt-two-factor.mjs:236 (esm-dynamic) |
 | `execution/src/bookmarks.mjs` | 现役 | execution/src/index.mjs:8 (esm-static) |
@@ -136,7 +137,7 @@
 | `execution/src/detector.mjs` | 现役 | execution/src/browser.mjs:6 (esm-static) |
 | `execution/src/google-session-choice.mjs` | 现役 | execution/src/native-oauth-login.mjs:17 (esm-static) |
 | `execution/src/harvest-pt-gate.mjs` | 现役 | execution/src/index.mjs:88 (esm-static) |
-| `execution/src/hddolby-native-flow.mjs` | 现役 | execution/src/native-login.mjs:39 (esm-dynamic) |
+| `execution/src/hddolby-native-flow.mjs` | 现役 | execution/src/native-login.mjs:50 (esm-dynamic) |
 | `execution/src/hddolby-readonly.mjs` | 现役 | execution/src/browser.mjs:27 (esm-static) |
 | `execution/src/hddolby-two-factor.mjs` | 现役 | execution/src/browser.mjs:28 (esm-static) |
 | `execution/src/hhclub-two-factor-login.mjs` | 现役 | execution/src/saved-password-login.mjs:9 (esm-static) |
@@ -151,7 +152,7 @@
 | `execution/src/native-browser-inspect.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:85 (ps-join) |
 | `execution/src/native-cdp.mjs` | 现役 | execution/src/native-login.mjs:7 (esm-static) |
 | `execution/src/native-credential-login.mjs` | 现役 | execution/scripts/Recover-ProtectedLogin.ps1:173 (ps-join) |
-| `execution/src/native-login.mjs` | 现役 | execution/scripts/Recover-NativeLogin.ps1:48 (ps-join) |
+| `execution/src/native-login.mjs` | 现役 | execution/scripts/Recover-NativeLogin.ps1:52 (ps-join) |
 | `execution/src/native-oauth-login.mjs` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:119 (ps-join) |
 | `execution/src/native-preflight-receipt.mjs` | 现役 | execution/src/index.mjs:53 (esm-static) |
 | `execution/src/native-preflight-result.mjs` | 现役 | execution/src/index.mjs:52 (esm-static) |
@@ -175,6 +176,9 @@
 | `execution/src/offscreen-windows.mjs` | 现役 | execution/src/browser.mjs:29 (esm-static) |
 | `execution/src/open-captcha-session.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/src/origin-routing.mjs` | 现役 | execution/src/anyrouter-api-checkin.mjs:4 (esm-static) |
+| `execution/src/piggo-calendar.mjs` | 现役 | execution/src/pt-observation-receipt.mjs:5 (esm-static) |
+| `execution/src/piggo-login-form.mjs` | 现役 | execution/src/piggo-login.mjs:13 (esm-static) |
+| `execution/src/piggo-login.mjs` | 现役 | execution/src/native-login.mjs:15 (esm-static) |
 | `execution/src/powershell-runtime.mjs` | 现役 | execution/scripts/Test-CheckinHealth.ps1:491 (ps-join) |
 | `execution/src/preflight-policy.mjs` | 现役 | execution/src/index.mjs:36 (esm-static) |
 | `execution/src/preflight.mjs` | 运维手动 | npm 人工命令 execution/package.json:preflight |
@@ -397,7 +401,7 @@
 
 | 调用位置 | 类型 | 生产 | 未解析依据 / 有界候选 |
 | --- | --- | --- | --- |
-| `execution/src/native-pt-read.mjs:120` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `execution/src/native-pt-read.mjs:121` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/scripts/check-js-syntax.mjs:8` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/scripts/deploy-nas-code.ps1:146` | ps-join | 否 | 仓库内无对应文件；不读取运行副本；`observation/outputs/nas-bundle-deploy/nas-code-release.sh` |
 | `observation/scripts/m2-nas-client-smoke.mjs:14` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
@@ -407,7 +411,7 @@
 | `observation/src/captcha-solver.mjs:86` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/isolated-browser-worker.mjs:32` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/legacy-engine.mjs:151` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
-| `observation/src/pt-site-execution.mjs:85` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `observation/src/pt-site-execution.mjs:86` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/doctor.mjs:258` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 
 ## 结构围栏

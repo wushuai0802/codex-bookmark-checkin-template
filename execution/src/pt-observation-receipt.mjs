@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {ptExecutionBinding,ptReadPolicy} from './pt-read-policy.mjs';
 import {nativePtReadBinding} from './native-pt-read.mjs';
+import {piggoOrigin,piggoCalendarEvidence} from './piggo-calendar.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 
 // Read an already-verified passive receipt, not a URL. This lets the mature
@@ -71,7 +72,8 @@ export function freshPtUnsignedObservation(root,target,config,{now=new Date(),af
   if(!result||now.getTime()-confirmed>5*60_000)return null;
   const hdd=['https://www.hddolby.com','https://www.uhddolby.com'].includes(target.origin)&&
     result.evidence.statusSignal==='hddolby_account_header_unsigned'&&result.evidence.pagePath==='/log.php'&&now.getTime()-confirmed<=30_000;
-  if(!hdd&&!['nexus_daily_header_unsigned','open_cd_daily_unsigned'].includes(result.evidence.statusSignal))return null;
+  if(!hdd&&!(target.origin===piggoOrigin?piggoCalendarEvidence(result.evidence,'not_signed'):
+    ['nexus_daily_header_unsigned','open_cd_daily_unsigned'].includes(result.evidence.statusSignal)))return null;
   return result;
 }
 

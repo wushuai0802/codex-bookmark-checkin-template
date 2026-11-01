@@ -68,7 +68,7 @@ function sameConfiguration(state){
   return hashFile(path.join(state.root,'config/config.json'))===state.configHash;
 }
 
-function readRecoveryState(root){
+export function readRecoveryState(root){
   const file=path.join(root,'data/bitwarden/recovery-state.json');
   if(!fs.existsSync(file))return {schemaVersion:1,attempts:[]};
   const value=read(file);
@@ -86,12 +86,12 @@ function readRecoveryState(root){
       'authentication_http_error','authentication_response_invalid'].includes(entry.reason)?{reason:entry.reason}:{})}))};
 }
 
-function attemptedToday(state,binding,businessDate,phase='stepup'){
+export function attemptedToday(state,binding,businessDate,phase='stepup'){
   return state.attempts.some(entry=>entry.origin===ORIGIN&&entry.accountKey===binding.accountKey&&
     entry.profileBinding===binding.profileBinding&&entry.businessDate===businessDate&&(entry.phase??'stepup')===phase);
 }
 
-function writeRecoveryState(root,state){
+export function writeRecoveryState(root,state){
   const file=path.join(root,'data/bitwarden/recovery-state.json'),temp=file+'.'+crypto.randomUUID()+'.tmp';
   fs.mkdirSync(path.dirname(file),{recursive:true});
   try{fs.writeFileSync(temp,JSON.stringify(state,null,2),{mode:0o600});fs.renameSync(temp,file);}

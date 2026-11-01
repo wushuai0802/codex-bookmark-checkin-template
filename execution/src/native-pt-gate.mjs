@@ -10,6 +10,7 @@ import {nativePtReadBinding} from './native-pt-read.mjs';
 import {verifiedPtObservation,boundPtObservation} from './pt-observation-receipt.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {ptReadPolicies,nativePtHeaderOrigins} from './checkin-contract.generated.mjs';
+import {piggoOrigin,piggoCalendarUrl,piggoAttendanceUrl,piggoCalendarEvidence,acceptedPiggoCalendarReceipt} from './piggo-calendar.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const success=value=>['signed','already_signed'].includes(value?.status);
@@ -20,6 +21,7 @@ const unknown=()=>({status:'needs_attention',failureCode:'submission_outcome_unk
 const deferred=(now,reason)=>({status:'deferred',retryCause:'native_readback_unavailable',submissionAttempted:false,nativeGate:true,
   nextEligibleAt:new Date(now.getTime()+15*60_000).toISOString(),reason});
 export function nativePtNavigationRisk(url){
+  if(url===piggoCalendarUrl||url===piggoOrigin+'/login')return false;
   try{const u=new URL(url);return u.search!==''||!['/','/index.php','/login.php'].includes(u.pathname);}catch{return true;}
 }
 export function nativeCurrentSuccess(result,now=new Date()){
@@ -40,6 +42,8 @@ function reviewedNativeHome(actual,expected,{unsigned=false}={}){
   }catch{return null;}
 }
 function acceptedReadback(value,target,binding,policy,now){
+  if(target.origin===piggoOrigin)return policy?.reviewed===true&&policy.piggoCalendar===true
+    ?acceptedPiggoCalendarReceipt(value,binding,now):null;
   const inspection=value?.inspection,evidence=value?.evidence,day=dayAt(now);
   const at=Date.parse(evidence?.confirmedAt??''),observed=Date.parse(value?.observedAt??'');
   const actualPath=reviewedNativeHome(inspection?.currentUrl,value?.url,{unsigned:value?.status==='not_signed'});
@@ -147,6 +151,8 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
   if(!['bind','readback','inspect','begin','finish'].includes(phase))throw Error('invalid native PT phase');
   const requested=new URL(origin),destination=new URL(url);
   if(requested.protocol!=='https:'||requested.origin!==origin||requested.username||requested.password||destination.protocol!=='https:'||destination.username||destination.password||destination.hash)throw Error('unsafe native PT target');
+  if(origin===piggoOrigin&&![piggoCalendarUrl,piggoOrigin+'/login',piggoAttendanceUrl].includes(destination.href))
+    throw Error('Unreviewed PigGo destination');
   const config=read(path.join(root,'config/config.json'),null);
   const plan=await readPlan(config.bookmarksPath,config);
   if(dayAt(clock())!==dayAt(now))return {managed:true,allow:false,decision:deferred(clock(),'业务日期已切换，先刷新当日原生核验')};
@@ -156,7 +162,8 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
   if(!isPtExecutionTarget(target,{root}))return {managed:false,allow:true};
   const entries=[...(config.nativeWafPreflightUrls??[]),...(config.nativeChallengePreflight??[]),...(config.mainChromeFallbackUrls??[])]
     .map(e=>typeof e==='string'?{url:e}:e).filter(e=>{try{return new URL(e.url).origin===origin||e.sourceOrigin===origin;}catch{return false;}});
-  if(![origin,...(target.allowedOrigins??[])].includes(destination.origin)||!entries.some(e=>e.url===url)&&!['/','/index.php','/login.php'].includes(destination.pathname))throw Error('unregistered native PT URL');
+  if(![origin,...(target.allowedOrigins??[])].includes(destination.origin)||!entries.some(e=>e.url===url)&&
+    !(origin===piggoOrigin?[piggoCalendarUrl,piggoOrigin+'/login'].includes(destination.href):['/','/index.php','/login.php'].includes(destination.pathname)))throw Error('unregistered native PT URL');
   const binding=bindingFor(root,config,target,profile,mainProfile,entries);
   const identity={accountKey:binding.accountKey,profileBinding:binding.profileBinding};
   let readPolicy;try{readPolicy=ptReadPolicy(target.origin,config);}catch{}
@@ -204,7 +211,10 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
         try{return new URL(entry.url).href===destination.href;}catch{return false;}
       });
       const finishPath=evidence?.pagePath;
-      const finishEvidenceBound=(!suppliedBinding||suppliedBinding===binding.profileBinding)&&
+      const finishEvidenceBound=target.origin===piggoOrigin?
+        registeredDestination&&destination.href===piggoAttendanceUrl&&piggoCalendarEvidence(evidence,status)&&
+          (!suppliedBinding||suppliedBinding===binding.profileBinding):
+        (!suppliedBinding||suppliedBinding===binding.profileBinding)&&
         (!suppliedScope||suppliedScope==='site_account_day')&&
         (finishPath==='/index.php'||registeredDestination&&finishPath===destination.pathname)&&
         (!suppliedSignal||['nexus_daily_header_signed','open_cd_daily_record_entry','submitted_success_response','same_day_page_text'].includes(suppliedSignal));
@@ -246,11 +256,13 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
     const storedReadbacks=(journal.readbacks??[]).filter(value=>sameAccount(value)&&
       value.profileBinding===binding.profileBinding&&value.businessDate===dayAt(now)&&value.submissionAttempted===false&&
       value.operationMode==='safe_history_page'&&value.readSafety==='reviewed_passive'&&
+      (target.origin===piggoOrigin?piggoCalendarEvidence(value.evidence,value.status):
       value.evidence?.authoritative===true&&value.evidence.source==='page_text'&&
       value.evidence.businessDate===dayAt(now)&&
       (value.status==='not_signed'?value.evidence.pagePath==='/index.php':success(value)&&['/','/index.php'].includes(value.evidence.pagePath))&&
       value.evidence.evidenceScope==='site_account_day'&&
-      value.evidence.statusSignal===(value.status==='not_signed'?'nexus_daily_header_unsigned':'nexus_daily_header_signed')&&
+      value.evidence.statusSignal===(value.status==='not_signed'?'nexus_daily_header_unsigned':'nexus_daily_header_signed'))&&
+      value.evidence.businessDate===dayAt(now)&&
       Number.isFinite(Date.parse(value.observedAt))&&Number.isFinite(Date.parse(value.evidence.confirmedAt))&&
       Date.parse(value.observedAt)<=now.getTime()&&Date.parse(value.evidence.confirmedAt)<=now.getTime()&&
       dayAt(value.observedAt)===dayAt(now)&&dayAt(value.evidence.confirmedAt)===dayAt(now)&&
@@ -291,7 +303,8 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
         pendingEntries.every(a=>a.profileBinding===binding.profileBinding)&&
         proof.submissionAttempted===false&&proof.readSafety==='reviewed_passive'&&proof.operationMode==='safe_history_page'&&
         proof.evidence?.authoritative===true&&proof.evidence.evidenceScope==='site_account_day'&&
-        ['page_text','pt_page'].includes(proof.evidence.source)&&['nexus_daily_header_unsigned','open_cd_daily_unsigned'].includes(proof.evidence.statusSignal)&&proof.evidence.pagePath==='/index.php'&&
+        (target.origin===piggoOrigin?piggoCalendarEvidence(proof.evidence,'not_signed'):
+        ['page_text','pt_page'].includes(proof.evidence.source)&&['nexus_daily_header_unsigned','open_cd_daily_unsigned'].includes(proof.evidence.statusSignal)&&proof.evidence.pagePath==='/index.php')&&
         proof.businessDate===dayAt(now)&&proof.evidence.businessDate===dayAt(now)&&Number.isFinite(at)&&
         Math.abs(Date.parse(proof.observedAt)-at)<=60_000&&at>after&&at<=now.getTime()&&now.getTime()-at<=5*60_000;
       if(valid&&(!unsigned||at>Date.parse(unsigned.confirmedAt)))unsigned=proof.evidence;

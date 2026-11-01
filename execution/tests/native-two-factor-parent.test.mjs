@@ -273,7 +273,7 @@ for(const shell of shells)test(`actual parent native loop closes Chrome before r
   }
 });
 
-for(const shell of shells)test(`actual early candidate gate recovers real 2FA while preserving unknown when recovery fails (${shell})`,t=>{
+for(const shell of shells)test(`PigGo early unknown gate never probes or recovers the retired Nexus 2FA route (${shell})`,t=>{
   const rows=run(t,shell,`$branch=$parentAst.FindAll({param($node)$node -is [Management.Automation.Language.ForEachStatementAst] -and
  $node.Extent.Text.StartsWith('foreach ($candidate in $items)') -and $node.Extent.Text.Contains('Invoke-NativeTwoFactorRecovery')},$true)|Select-Object -First 1
  if(-not $branch){throw 'Actual early candidate loop missing'}
@@ -287,13 +287,13 @@ for(const shell of shells)test(`actual early candidate gate recovers real 2FA wh
  [pscustomobject]@{case=$case;eligible=$eligibleItems.Count;resultCount=$preflightResults.Count;result=$preflightResults;
   calls=@(Get-FixtureCalls).Count;probes=$probes;mature=$mature;events=@(Get-FixtureEvents)}
  });ConvertTo-Json -InputObject $rows -Depth 10 -Compress`);
-  for(const row of rows){assert.equal(row.calls,1,row.case);assert.equal(row.probes,row.case==='resume'?2:1,row.case);assert.equal(row.mature,0,row.case);
-    assert.equal(row.eligible,row.case==='resume'?1:0,row.case);assert.equal(row.resultCount,row.case==='resume'?0:1,row.case);
-    if(row.case==='rejected'){assert.equal(row.result[0].failureCode,'submission_outcome_unknown');assert.equal(row.result[0].submissionAttempted,true);}
+  for(const row of rows){assert.equal(row.calls,0,row.case);assert.equal(row.probes,0,row.case);assert.equal(row.mature,0,row.case);
+    assert.equal(row.eligible,0,row.case);assert.equal(row.resultCount,1,row.case);
+    assert.equal(row.result[0].failureCode,'submission_outcome_unknown');assert.equal(row.result[0].submissionAttempted,true);
   }
 });
 
-for(const shell of shells)test(`early signed probe closes only after guard registration and inspection, without invoking 2FA (${shell})`,t=>{
+for(const shell of shells)test(`a retired PigGo PHP probe cannot close an early unknown intent (${shell})`,t=>{
   const rows=run(t,shell,`$branch=$parentAst.FindAll({param($node)$node -is [Management.Automation.Language.ForEachStatementAst] -and
  $node.Extent.Text.StartsWith('foreach ($candidate in $items)') -and $node.Extent.Text.Contains('Invoke-NativeTwoFactorRecovery')},$true)|Select-Object -First 1
  $rows=@(foreach($case in @('signed','save_denied','inspect_unknown')){
@@ -311,10 +311,10 @@ for(const shell of shells)test(`early signed probe closes only after guard regis
  [pscustomobject]@{case=$case;eligible=$eligibleItems.Count;results=$preflightResults;calls=@(Get-FixtureCalls).Count;
   probes=$probes;mature=$mature;registers=$registers;inspects=$inspects;originalFailure=$initialUnknown.failureCode;originalSubmitted=$initialUnknown.submissionAttempted}
  });ConvertTo-Json -InputObject $rows -Depth 10 -Compress`);
-  for(const row of rows){assert.equal(row.calls,0,row.case);assert.equal(row.mature,0,row.case);assert.equal(row.probes,1,row.case);
-    assert.equal(row.eligible,0,row.case);assert.equal(row.registers,1,row.case);assert.equal(row.results.length,1,row.case);
-    assert.equal(row.results[0].status,row.case==='signed'?'already_signed':'needs_attention',row.case);
-    assert.equal(row.inspects,row.case==='save_denied'?1:2,row.case);
+  for(const row of rows){assert.equal(row.calls,0,row.case);assert.equal(row.mature,0,row.case);assert.equal(row.probes,0,row.case);
+    assert.equal(row.eligible,0,row.case);assert.equal(row.registers,0,row.case);assert.equal(row.results.length,1,row.case);
+    assert.equal(row.results[0].status,'needs_attention',row.case);
+    assert.equal(row.inspects,1,row.case);
     assert.equal(row.originalFailure,'submission_outcome_unknown');assert.equal(row.originalSubmitted,true);
   }
 });

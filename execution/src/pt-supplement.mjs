@@ -69,7 +69,8 @@ export function publicSupplementResult(origin,result,now=new Date()){
       ...(Number.isFinite(confirmedAt)?{confirmedAt:new Date(confirmedAt).toISOString()}:{}),
       ...(result?.evidence?.businessDate?{businessDate:result.evidence.businessDate}:{}),
       ...(result?.evidence?.statusSignal?{statusSignal:result.evidence.statusSignal}:{}),
-      ...(['/index.php','/','/userdetails.php','/log.php'].includes(result?.evidence?.pagePath)?{pagePath:result.evidence.pagePath}:{}),
+      ...((['/index.php','/','/userdetails.php','/log.php'].includes(result?.evidence?.pagePath)||
+        origin==='https://piggo.me'&&result?.evidence?.source==='api'&&result?.evidence?.pagePath==='/calendar')?{pagePath:result.evidence.pagePath}:{}),
       evidenceScope:'site_account_day',summary:authoritative?(claimed==='not_signed'?'已登录首页确认今日尚未签到':'执行层确认今日签到'):
       terminal.has(claimed)&&result?.evidence?.statusSignal==='cumulative_reward'?'检测到签到已得，疑似已签到；尚缺今日回执':
       terminal.has(claimed)?'执行层返回完成状态，仍需权威证据复核':

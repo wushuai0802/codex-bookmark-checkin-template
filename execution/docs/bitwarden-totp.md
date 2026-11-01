@@ -25,11 +25,11 @@ origin, accountKey, profileBinding, itemId, itemName, adapterId
 
 请求绑定、私有路由和已封存元组必须完全一致。配置中增加一条路由或更换条目 UUID 不能取得新授权；重复来源、额外字段、错误协议、不同账号或 Profile 均在调用 CLI 前拒绝。多站共用同一个 Windows 用户、密码库会话、`sessionFile` 和独立客户端，不复制密码库凭据到 Chrome。新增授权需要单独、明确的本机登记，不能由 `Unlock` 自动扩大。
 
-猪猪的普通密码登录可在私有 `nativePtTwoFactorRecovery` 中显式选择 `allowPasswordLogin: true`。这条入口复用原 Profile 的 Chrome 自动填充及原封存的猪猪 TOTP 授权，填写已审阅的 `/login.php` 表单中的 `two_step_code`，只允许一次同源 `/takelogin.php` POST，不读取密码库的用户名或密码。表单、原 Profile、配置、当前租约和主锁都须通过检查。认证结果必须通过原账号当日首页回读并登记原生守卫；错误页没有密码框也不能视为登录成功。普通登录与登录后的安全验证在原认证审计中区分阶段，保留已有记录及未知提交保护。未显式选择该入口的安装维持原有辅助范围。
+猪猪 SPA 登录使用私有 `nativePtTwoFactorRecovery` 的 `allowPasswordLogin: true`、`loginSource: bitwarden`，以及显式的 `spaPasswordFormReviewed: true`。WO-12b 已按提供的登录分包和匿名 DOM 修正合约：唯一的命名 username/password 输入框，按令牌匹配 username/current-password 自动填充语义（可带 webauthn），以及唯一的可见“登录”提交按钮（允许 HTML 默认 submit）。Vue 表单不要求 method；action 缺省或精确同源 `/login`，target 缺省或 `_self`。其他可见输入、完善账号、验证码、OTP 或 iframe 均停止；真实带账号登录和两步验证仍待验收。复用原封存授权元组（包括原 adapterId），只在内存向固定表单交付用户名/密码并清空。原生窗口先停留空白页，保留原代理路由，在安装请求守卫后才加载 `/login`。站点自行执行 SRP，至多一次 challenge 和一次最终认证 POST；其自动回退或重发会被阻止。验证码或两步验证一律停在需要人工，不猜测验证码字段、不取 TOTP。登录成功须以原 Profile 的 `/me` 和当天 `/calendar` 回读核对预期站点账号，并登记原生守卫；首次缺少预期 ID 时须先按 `pt-recovery.md` 手工核对候选 ID，不能自动绑定。认证继续使用原有 `password_login` 审计和当日防重放记录。
 
 会话由当前Windows用户DPAPI保护，并绑定Windows SID、密码库账号、服务地址、站点、条目UUID和Profile。没有人为的每日或两小时到期；密码库CLI锁定、注销、授权撤销或账户变化仍须停止。不会保存主密码或导出TOTP种子。独立CLI的锁与手机/浏览器扩展的本地锁相互独立。
 
-遇 2FA 时先检查客户端，按同一密码库账号和共享客户端每天同步一次加密缓存，再核实账号后取指定 UUID 的当前验证码。三个站点不会各自重复同步整库；同步或取码与人工解锁共用 `provider.lock`。验证码仅经内存交给固定同源认证接口，不写入参数、URL、结果、截图或日志。消费者负责协议、账户和证据检查；猪猪认证后关闭 API 上下文，再以原 Profile 只读重开确认挑战解除。签/未签回执必须先通过原生守卫登记和复核，未签才至多续跑一次原成熟签到。认证请求拒绝或未知后，当日不重放；次日正常重新评估。
+已审阅的 2FA 消费者先检查客户端，按同一密码库账号和共享客户端每天同步一次加密缓存，再核实账号后取指定 UUID 的当前验证码。各站不会各自重复同步整库；同步或取码与人工解锁共用 `provider.lock`。验证码仅经内存交给固定同源认证接口，不写入参数、URL、结果、截图或日志。猪猪新 SPA 的两步验证未确认，当前不走取码入口。签/未签回执必须先通过原生守卫登记和复核；猪猪仅允许今日 `today` 状态触发一次真实日历按钮 POST，并以独立 `checked` 回读完成守卫。认证请求拒绝或未知后，当日不重放；次日正常重新评估。
 
 猪猪保留原有至少 6 秒的取码余量；HDDolby、HHCLUB 为认证前的只读和绑定检查预留至少 12 秒。跨过验证码窗口时最多等待并重读一次，旧码不进入消费者，不进行无限循环。
 

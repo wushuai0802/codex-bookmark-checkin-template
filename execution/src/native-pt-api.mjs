@@ -9,10 +9,13 @@ import {accountMetadataForOrigin} from './result-identity.mjs';
 import {runNativePtGate} from './native-pt-gate.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {classifyPageText} from './detector.mjs';
+import {piggoOrigin,piggoCalendarUrl,piggoAttendanceUrl,piggoDay,installPiggoCalendarFirewall,
+  readPiggoCalendarInContext,submitPiggoCalendar} from './piggo-calendar.mjs';
 
 const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const controlText=value=>String(value??'').replace(/^[\[【]|[\]】]$/g,'').trim();
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
+const piggoConfigHash=config=>crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
 const successful=value=>['signed','already_signed'].includes(value?.status);
 const unknown=identity=>({status:'needs_attention',failureCode:'submission_outcome_unknown',nativeGate:true,
   submissionAttempted:true,retryable:false,operationMode:'legacy_checkin',readSafety:'attendance_page_risk',attendanceRisk:true,
@@ -35,21 +38,26 @@ function settings(root,origin,{execution=false,url}={}){
   if(privatePolicy?.reviewed!==true||privatePolicy.nativeApiHeaderFallback!==true||
     execution&&privatePolicy.nativeApiExecution!==true)throw Error('Native API private opt-in missing');
   const policy=ptReadPolicy(origin,config);
-  if(policy.nativeIsolatedChrome!==true||policy.dailyHeader!==true||policy.mode!=='safe_history_page'||
+  if(origin!==piggoOrigin&&(policy.nativeIsolatedChrome!==true||policy.dailyHeader!==true||policy.mode!=='safe_history_page'||
     policy.url!==origin+'/index.php'||policy.selector!=='#info_block'||policy.actionPath!=='/attendance.php')
+    )
     throw Error('Native API policy rejected');
   const target={origin,...accountMetadataForOrigin(origin,config)};
   target.accountKey??='site-default';
   if((config.supplementalOAuthAccounts??[]).some(value=>value.origin===origin))throw Error('Native API account ambiguous');
   const binding=nativePtReadBinding(config,target,{root,isolated:true});
+  const expectedAccountId=origin===piggoOrigin?String(target.accountId??config.oauthExpectedAccountIds?.[origin]??''):null;
+  if(origin===piggoOrigin&&!/^[1-9][0-9]{0,15}$/.test(expectedAccountId))
+    throw Object.assign(Error('PigGo account binding unavailable'),{code:'account_mismatch'});
   if(execution){
     const destination=new URL(url);
     const entries=[...(config.nativeWafPreflightUrls??[]),...(config.nativeChallengePreflight??[])]
       .map(value=>typeof value==='string'?{url:value}:value);
-    if(destination.href!==origin+'/attendance.php'||destination.username||destination.password||
+    if(destination.href!==(origin===piggoOrigin?piggoAttendanceUrl:origin+'/attendance.php')||destination.username||destination.password||
       !entries.some(value=>value.url===url))throw Error('Native API GET destination unregistered');
   }
-  return {root,origin,config,policy,binding,
+  return {root,origin,config,policy,binding,expectedAccountId,
+    ...(origin===piggoOrigin?{configHash:piggoConfigHash(config)}:{}),
     identity:{origin,accountKey:binding.accountKey,profileBinding:binding.profileBinding}};
 }
 
@@ -205,6 +213,7 @@ async function fetchPage(context,url,policy,clock,diagnostic={}){
 }
 
 async function readInContext(context,state,clock,diagnostic={}){
+  if(state.origin===piggoOrigin)return readPiggoCalendarInContext(context,state,clock,diagnostic);
   const page=await fetchPage(context,state.policy.url,state.policy,clock,diagnostic);
   if(!page)return {result:unavailable(state.identity,undefined,undefined,diagnostic),accountId:null};
   if(page.rejected==='login_required')return {result:{...unavailable(state.identity,'login_required',
@@ -267,10 +276,14 @@ async function readInContext(context,state,clock,diagnostic={}){
       ...safeNativeReadDetails({...diagnostic,apiStage:'completed'})}}};
 }
 
-async function launchBound(state,launch){
+async function launchBound(state,launch,clock=()=>new Date()){
   const context=await launch({...state.config,automationUserDataDir:state.binding.profile,ptPassiveReadOnly:true,
     ptReadProxyServer:state.policy.proxyServer,nativePtReadOrigin:state.origin,failureScreenshots:false});
-  try{await context.route('**/*',route=>route.abort('blockedbyclient'));return context;}
+  try{
+    if(state.origin===piggoOrigin)await installPiggoCalendarFirewall(context,{clock});
+    else await context.route('**/*',route=>route.abort('blockedbyclient'));
+    return context;
+  }
   catch(error){await context.close().catch(()=>{});throw error;}
 }
 
@@ -283,15 +296,19 @@ export async function readNativePtApiHeader({root,origin,launch=launchAutomation
     if(bound.allow!==true||bound.accountKey!==state.identity.accountKey||bound.profileBinding!==state.identity.profileBinding)
       return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
     diagnostic.apiStage='launch';
-    context=await launchBound(state,launch);
-    return (await readInContext(context,state,clock,diagnostic)).result;
-  }catch{return unavailable(state?.identity,'native_readback_unavailable',undefined,diagnostic);}
+    context=await launchBound(state,launch,clock);
+    const result=(await readInContext(context,state,clock,diagnostic)).result;
+    if(origin===piggoOrigin&&piggoConfigHash(read(path.join(state.root,'config/config.json')))!==state.configHash)
+      return unavailable(state.identity,'native_readback_unavailable',undefined,{apiStage:'binding'});
+    return result;
+  }catch(error){return unavailable(state?.identity,origin===piggoOrigin&&error?.code==='account_mismatch'?
+    'account_mismatch':'native_readback_unavailable',undefined,diagnostic);}
   finally{await context?.close().catch(()=>{});}
 }
 
 export async function readNativePtApiHeaderInContext({root,origin,context,expectedProfileBinding,profileProof,
   clock=()=>new Date(),gate=runNativePtGate}={}){
-  let state;const diagnostic={apiStage:'configuration'};
+  let state,firewall;const diagnostic={apiStage:'configuration'};
   try{
     state=settings(root,origin);
     diagnostic.apiStage='binding';
@@ -300,28 +317,22 @@ export async function readNativePtApiHeaderInContext({root,origin,context,expect
     const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock});
     if(bound.allow!==true||bound.profileBinding!==state.identity.profileBinding||bound.accountKey!==state.identity.accountKey)
       return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
+    if(origin===piggoOrigin)firewall=await installPiggoCalendarFirewall(context,{clock});
     const value=(await readInContext(context,state,clock,diagnostic)).result;
     diagnostic.apiStage='profile_verification';
+    if(origin===piggoOrigin&&piggoConfigHash(read(path.join(state.root,'config/config.json')))!==state.configHash)
+      return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
     return await profileProof()?value:unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
-  }catch{return unavailable(state?.identity,'native_readback_unavailable',undefined,diagnostic);}
+  }catch(error){return unavailable(state?.identity,origin===piggoOrigin&&error?.code==='account_mismatch'?
+    'account_mismatch':'native_readback_unavailable',undefined,diagnostic);}
+  finally{await firewall?.dispose().catch(()=>{});}
 }
 
 // A native CDP context's API client does not inherit Chrome's command-line
 // proxy. Keep this passive account read inside the verified Chrome session.
 export function piggoNativePassiveContext(page){
-  const origin='https://piggo.me',url=origin+'/index.php';
-  return {newPage:()=>page.context().newPage(),request:{get:async target=>{
-    if(new URL(page.url()).origin!==origin||target!==url)throw Error('Passive request rejected');
-    const value=await page.evaluate(async destination=>{
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
-      try{
-        const response=await fetch(destination,{method:'GET',credentials:'same-origin',redirect:'manual',cache:'no-store',signal:controller.signal});
-        const body=await response.text();if(body.length>2_000_000)throw Error('Passive page too large');
-        return {url:response.url,status:response.status,date:response.headers.get('date'),body};
-      }finally{clearTimeout(timer);}
-    },target);
-    return {url:()=>value.url,status:()=>value.status,headers:()=>({date:value.date}),text:async()=>value.body};
-  }}};
+  if(new URL(page.url()).origin!==piggoOrigin)throw Error('Passive page rejected');
+  return page.context();
 }
 
 function formalCompletion(text,now){
@@ -339,6 +350,7 @@ function formalCompletion(text,now){
 
 export async function runNativePtApiCheckin({root,origin,url,launch=launchAutomationContext,clock=()=>new Date(),
   gate=runNativePtGate,validateLease=validateControllerLease,acquire=acquireRunLock,release=releaseRunLock}={}){
+  if(origin===piggoOrigin)return runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,validateLease,acquire,release});
   let state,context,lock,attempted=false;
   try{
     state=settings(root,origin,{execution:true,url});
@@ -378,5 +390,50 @@ export async function runNativePtApiCheckin({root,origin,url,launch=launchAutoma
       operationMode:'legacy_checkin',readSafety:'attendance_page_risk',attendanceRisk:true,
       reason:'原生 API 的当次 GET 响应已确认签到完成并持久化'};
   }catch{return attempted?unknown(state?.identity):unavailable(state?.identity,'native_readback_unavailable');}
+  finally{await context?.close().catch(()=>{});if(lock)await release(lock).catch(()=>{});}
+}
+
+async function runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,validateLease,acquire,release}){
+  let state,context,lock,attempted=false;
+  const unknownResult=()=>({...unknown(state?.identity),reason:'猪猪今日签到可能已提交，保留意图并先只读核验，禁止自动重放'});
+  try{
+    state=settings(root,origin,{execution:true,url});
+    const unchanged=()=>piggoConfigHash(read(path.join(state.root,'config/config.json')))===state.configHash;
+    await validateLease(state.root);
+    lock=await acquire(path.join(state.root,'tmp/run.lock'));
+    const args={root:state.root,origin,url,profile:state.binding.profile,mainProfile:false,clock};
+    const bound=await gate({...args,phase:'bind'});
+    if(bound.allow!==true||bound.accountKey!==state.identity.accountKey||bound.profileBinding!==state.identity.profileBinding)
+      return {...(bound.decision??unavailable(state.identity)),...state.identity,nativeGate:true};
+    context=await launch({...state.config,automationUserDataDir:state.binding.profile,ptPassiveReadOnly:true,
+      ptReadProxyServer:state.policy.proxyServer,nativePtReadOrigin:origin,failureScreenshots:false});
+    const firewall=await installPiggoCalendarFirewall(context,{clock});
+    const before=await readPiggoCalendarInContext(context,state,clock,{},true);
+    if(before.result.status!=='not_signed')return before.result;
+    const registered=await gate({...args,phase:'readback',receipt:before.result.readbackReceipt});
+    if(registered.allow!==true||registered.receiptAccepted!==true)return registered.decision??unavailable(state.identity);
+    const decision=await gate({...args,phase:'inspect'});
+    if(decision.allow!==true)return decision.decision??unavailable(state.identity);
+    const today=piggoDay(clock());
+    if(!unchanged()||before.result.businessDate!==today)return unavailable(state.identity);
+    await validateLease(state.root);
+    const attemptId=crypto.randomUUID();
+    const begun=await gate({...args,phase:'begin',attemptId,action:'click'});
+    if(begun.allow!==true)return begun.decision??unavailable(state.identity);
+    attempted=true;
+    if(!unchanged()||piggoDay(clock())!==today)return unknownResult();
+    const after=await submitPiggoCalendar(before.page,firewall,today,clock,
+      ()=>readPiggoCalendarInContext(context,state,clock));
+    if(!after||after.accountId!==before.accountId||after.result.status!=='already_signed'||
+      after.result.businessDate!==today||piggoDay(clock())!==today||!unchanged())return unknownResult();
+    const evidence=after.result.evidence;
+    const saved=await gate({...args,phase:'finish',attemptId,status:'signed',evidence});
+    if(saved?.allow!==true||saved.confirmed!==true||saved.confirmationState!=='confirmed')
+      return {...unknownResult(),confirmationState:'not_persisted'};
+    return {...state.identity,url:piggoCalendarUrl,status:'signed',nativeGate:true,submissionAttempted:true,
+      evidence,operationMode:'legacy_checkin',readSafety:'attendance_page_risk',attendanceRisk:true,
+      reason:'猪猪今日签到已由同账号日历回读确认并持久化'};
+  }catch(error){return attempted?unknownResult():unavailable(state?.identity,
+    error?.code==='account_mismatch'?'account_mismatch':'native_readback_unavailable');}
   finally{await context?.close().catch(()=>{});if(lock)await release(lock).catch(()=>{});}
 }

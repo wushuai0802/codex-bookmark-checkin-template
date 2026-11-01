@@ -160,8 +160,8 @@ export async function prepareBitwardenTotp({root,origin,binding,config,execute=e
 /** Selected login fields stay within a bound consumer; never return them to a caller or logger. */
 export async function withBitwardenLogin({root,origin,binding,config,consume,execute=executeFile}={}){
   clearInheritedVaultSecrets();
-  const loaded=loadConfiguration(root,config),opt=loaded?.siteTwoFactorRecovery?.[origin];
-  if(origin!=='https://www.uhddolby.com'||opt?.enabled!==true||opt.reviewed!==true||opt.allowPasswordLogin!==true||
+  const loaded=loadConfiguration(root,config),opt=origin===piggoOrigin?loaded?.nativePtTwoFactorRecovery?.[origin]:loaded?.siteTwoFactorRecovery?.[origin];
+  if(!['https://www.uhddolby.com',piggoOrigin].includes(origin)||opt?.enabled!==true||opt.reviewed!==true||opt.allowPasswordLogin!==true||
     opt.loginSource!=='bitwarden'||typeof consume!=='function')return fail('login_not_allowed');
   const policy=bitwardenTotpConfiguration(loaded,root,origin,binding);if(!policy.ready)return policy;
   const result=await helper(policy,'Login',execute);

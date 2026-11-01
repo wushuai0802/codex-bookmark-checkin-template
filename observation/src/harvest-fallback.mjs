@@ -38,10 +38,12 @@ export function reviewedFallbackReadOrigins(catalog,readPolicy){
   }).map(site=>site.origin);
 }
 
-function verifiedGuardedRecovery(checked,candidate,now,{readOnlyOrigins}){
+function verifiedGuardedRecovery(checked,candidate,now,{readOnlyOrigins,config={}}){
   const evidence=checked?.evidence,at=Date.parse(evidence?.confirmedAt??'');
   const signal=evidence?.statusSignal;
   return candidate.guardedSubmit===true&&
+    (candidate.origin!=='https://piggo.me'||reviewedNativeExecutor(candidate,config)&&
+      signal==='piggo_calendar_unsigned'&&evidence?.source==='api'&&evidence.pagePath==='/calendar')&&
     checked.origin===candidate.origin&&checked.accountKey===candidate.accountKey&&
     checked.status==='not_signed'&&checked.submissionAttempted===false&&
     checked.operationMode==='safe_history_page'&&checked.readSafety==='reviewed_passive'&&
@@ -50,6 +52,8 @@ function verifiedGuardedRecovery(checked,candidate,now,{readOnlyOrigins}){
     checked.businessDate===candidate.businessDate&&evidence.businessDate===candidate.businessDate&&
     Number.isFinite(at)&&at<=now.getTime()&&now.getTime()-at<=5*60_000&&
      ((candidate.origin==='https://open.cd'&&signal==='open_cd_daily_unsigned')||
+      (candidate.origin==='https://piggo.me'&&candidate.kind==='registered_review'&&
+        signal==='piggo_calendar_unsigned'&&evidence.source==='api'&&evidence.pagePath==='/calendar')||
       (candidate.kind==='registered_review'&&signal==='nexus_daily_header_unsigned')||
       (candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin)&&
         (signal==='nexus_daily_header_unsigned'||['https://www.hddolby.com','https://www.uhddolby.com'].includes(candidate.origin)&&
@@ -59,7 +63,10 @@ function verifiedGuardedRecovery(checked,candidate,now,{readOnlyOrigins}){
 function reviewedNativeExecutor(candidate,config){
   const policy=config.ptReadOnlyPolicies?.[candidate.origin];
   return candidate.kind==='registered_review'&&candidate.accountKey==='site-default'&&policy?.reviewed===true&&
-    policy.mode==='safe_history_page'&&policy.url===candidate.origin+'/index.php'&&
+    policy.mode==='safe_history_page'&&(candidate.origin==='https://piggo.me'?
+      policy.piggoCalendar===true&&policy.url===candidate.origin+'/calendar'&&policy.nativeApiExecution===true&&
+        policy.nativeApiHeaderFallback===true&&policy.nativeIsolatedChrome===true:
+      policy.url===candidate.origin+'/index.php')&&
     ((policy.nativeIsolatedChrome===true&&policy.nativeMainChrome!==true)||
      (policy.nativeMainChrome===true&&policy.nativeIsolatedChrome!==true));
 }
@@ -524,7 +531,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
         if(['signed','already_signed'].includes(checked.status)){
           outcomes.push({origin:candidate.origin,state:'confirmed_by_passive_read',v1Status:checked.status});continue;
         }
-        const guardedRecovery=candidate.guardedSubmit===true&&verifiedGuardedRecovery(checked,candidate,clock(),{readOnlyOrigins:normalizedReadOnlyOrigins});
+        const guardedRecovery=candidate.guardedSubmit===true&&verifiedGuardedRecovery(checked,candidate,clock(),{readOnlyOrigins:normalizedReadOnlyOrigins,config});
         if(readOnlyReview&&!guardedRecovery){
           // An inconclusive or non-opted-in registered review never falls
           // through to execution. A fresh bound unsigned proof may hand off

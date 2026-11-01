@@ -7,6 +7,9 @@ import crypto from 'node:crypto';
 import {recoverPiggoPasswordLogin,piggoPasswordFormReviewed,piggoPasswordLoginEnabled,guardPiggoPasswordAutofill} from '../src/native-pt-two-factor.mjs';
 import {runNativePtGate} from '../src/native-pt-gate.mjs';
 
+// PigGo's /login.php flow ended with its move to an SPA; the read policy now refuses it. Removal follows separately.
+const retired={skip:'PigGo PHP password login retired'};
+
 const origin='https://piggo.me',home=origin+'/index.php',login=origin+'/login.php';
 const now=new Date('2026-10-24T03:00:00Z'),code='123456';
 function fixture(t){
@@ -80,7 +83,7 @@ test('PigGo normal-login assistance needs explicit private consent and a reviewe
     assert.equal(piggoPasswordFormReviewed({...form,...changed}),false);
 });
 
-test('the real default provider path loads lazily and stops safely before CLI use when the fixture has no vault authorization',async t=>{
+test('the real default provider path loads lazily and stops safely before CLI use when the fixture has no vault authorization',retired,async t=>{
   const f=fixture(t),{prepare,withTotp,...args}=f.args;
   const result=await recoverPiggoPasswordLogin(args);
   assert.equal(result.status,'needs_attention');assert.equal(result.nativeTwoFactorRecovery.reason,'provider_disabled');
@@ -98,7 +101,7 @@ test('autofill Enter cannot submit the password form before the reviewed OTP con
   }
 });
 
-test('one scoped OTP login persists intent first, registers authoritative native proof and never reads or exports a password',async t=>{
+test('one scoped OTP login persists intent first, registers authoritative native proof and never reads or exports a password',retired,async t=>{
   const f=fixture(t);f.duplicateProvider();
   const value=await recoverPiggoPasswordLogin(f.args);
   assert.equal(value.status,'logged_in');assert.equal(value.nativeTwoFactorRecovery.accepted,true);
@@ -108,7 +111,7 @@ test('one scoped OTP login persists intent first, registers authoritative native
   noSecrets(value,f.journal);
 });
 
-test('an OTP input listener cannot authenticate before durable intent or cause a second submit',async t=>{
+test('an OTP input listener cannot authenticate before durable intent or cause a second submit',retired,async t=>{
   const f=fixture(t);f.autoSubmitOnFill();
   const value=await recoverPiggoPasswordLogin(f.args);
   assert.equal(value.status,'logged_in');assert.equal(f.posts,1);assert.equal(f.submitCalls,0);noSecrets(value,f.journal);
@@ -128,7 +131,7 @@ test('missing consent, root lease, main lock, Profile proof and malformed form a
   }
 });
 
-test('an old step-up record is preserved; an unknown password login cannot be replayed',async t=>{
+test('an old step-up record is preserved; an unknown password login cannot be replayed',retired,async t=>{
   const f=fixture(t);fs.mkdirSync(path.dirname(f.journal),{recursive:true});
   const old={origin,accountKey:'site-default',profileBinding:f.binding,businessDate:'2026-10-24',state:'unknown',attemptedAt:now.toISOString()};
   fs.writeFileSync(f.journal,JSON.stringify({schemaVersion:1,attempts:[old]}));f.rejectProof();
@@ -139,7 +142,7 @@ test('an old step-up record is preserved; an unknown password login cannot be re
   noSecrets(first,f.journal);noSecrets(second,f.journal);
 });
 
-test('an expiring code and a configuration change never create authentication intent',async t=>{
+test('an expiring code and a configuration change never create authentication intent',retired,async t=>{
   const expired=fixture(t);expired.expireCode();
   const result=await recoverPiggoPasswordLogin(expired.args);assert.equal(result.nativeTwoFactorRecovery.reason,'totp_expired');
   assert.equal(expired.posts,0);assert.equal(fs.existsSync(expired.journal),false);
@@ -148,7 +151,7 @@ test('an expiring code and a configuration change never create authentication in
   assert.equal(changed.reads,0);assert.equal(changed.posts,0);assert.equal(fs.existsSync(changed.journal),false);
 });
 
-test('an authenticated daily receipt avoids both a vault read and a password login',async t=>{
+test('an authenticated daily receipt avoids both a vault read and a password login',retired,async t=>{
   const f=fixture(t),value=f.receipt();
   value.status=value.readbackReceipt.status='already_signed';value.evidence.statusSignal='nexus_daily_header_signed';
   Object.assign(value.inspection,{signedControlCount:1,unsignedControlCount:0,successControl:'已签到',unsignedControl:'',success:true});
@@ -158,7 +161,7 @@ test('an authenticated daily receipt avoids both a vault read and a password log
   assert.equal(f.prepares,0);assert.equal(f.reads,0);assert.equal(f.posts,0);assert.equal(fs.existsSync(f.journal),false);
 });
 
-test('detached OTP consumers finish before releasing the scope and late callbacks cannot submit',async t=>{
+test('detached OTP consumers finish before releasing the scope and late callbacks cannot submit',retired,async t=>{
   const detached=fixture(t);detached.args.withTotp=async({consume})=>{
     void consume(code,{validUntilMs:now.getTime()+20000});return {ready:true};
   };

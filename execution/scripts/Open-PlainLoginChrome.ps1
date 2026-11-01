@@ -7,6 +7,7 @@ param(
     [switch]$DynamicRemoteDebuggingPort,
     [switch]$EnablePasswordManager,
     [switch]$DisableExtensions,
+    [switch]$DeferPiggoNavigation,
     [string]$UserDataDirOverride
 )
 
@@ -155,7 +156,14 @@ elseif ($RemoteDebuggingPort -gt 0) {
     $arguments += '--remote-debugging-address=127.0.0.1'
     $arguments += "--remote-allow-origins=http://127.0.0.1:$RemoteDebuggingPort"
 }
-$arguments += @($items | ForEach-Object { [string]$_.url })
+if ($DeferPiggoNavigation) {
+    if ($items.Count -ne 1 -or $origins.Count -ne 1 -or [string]$origins[0] -cne 'https://piggo.me' -or
+        ([uri][string]$items[0].url).AbsolutePath -cnotin @('/login','/calendar') -or
+        ([uri][string]$items[0].url).Query -or ([uri][string]$items[0].url).Fragment) { throw 'Deferred navigation is PigGo-only.' }
+    # Retain origin-based proxy resolution, but install request guards before
+    # loading any site script or exposing a saved login form.
+    $arguments += 'about:blank'
+} else { $arguments += @($items | ForEach-Object { [string]$_.url }) }
 
 if ($Offscreen -or $Minimized) {
     Start-Process -FilePath ([string]$config.chromeExecutable) -ArgumentList $arguments -WindowStyle Hidden

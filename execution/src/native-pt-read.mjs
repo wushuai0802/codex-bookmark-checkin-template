@@ -4,6 +4,7 @@ import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {nativePtHeaderOrigins} from './checkin-contract.generated.mjs';
+import {piggoOrigin,piggoCalendarUrl,acceptedPiggoCalendarReceipt} from './piggo-calendar.mjs';
 
 const runFile=promisify(execFile);
 export function nativePtReadRoute(config,origin){
@@ -43,7 +44,7 @@ export function nativePtReadBinding(config,target,{root,isolated=false}={}){
 const successful=new Set(['signed','already_signed','not_signed']);
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const normalizeOrigin=value=>new URL(value).origin.replace(/^https:\/\/www\./,'https://');
-const failureCodes=new Set(['accessibility_unavailable','window_not_created','window_merged','target_not_loaded','login_required','browser_route_conflict',
+const failureCodes=new Set(['accessibility_unavailable','window_not_created','window_merged','target_not_loaded','login_required','browser_route_conflict','account_mismatch',
   'two_factor_required','authoritative_status_unavailable','network_error','tls_certificate_invalid','tls_handshake_failed',
   'native_readback_unavailable']);
 const proxyPreflightCodes=new Set(['native_proxy_configuration_invalid','native_proxy_origin_not_registered','native_proxy_profile_conflict']);
@@ -57,7 +58,7 @@ const diagnosticFacts=['sameOrigin','authenticated','waf','loginRoute','siteBody
 const detailBooleans=['inspectionPresent','securityVerification','dailyTextPresent','audiencesDailyHeaderVerified'];
 const detailCounts=['signedControlCount','unsignedControlCount','dailyControlCandidateCount'];
 const apiStages=new Set(['configuration','binding','launch','request','response_freshness','redirect','http_status',
-  'response_structure','day_boundary','authentication','profile_verification','daily_fields','completed']);
+  'response_structure','day_boundary','authentication','profile_verification','daily_fields','identity','completed']);
 
 // Private diagnostics only. Never coerce arbitrary child values into facts.
 export function safeNativeReadDetails(value={}){
@@ -143,6 +144,10 @@ export function runNativeReadProcess(file,args,options={}){
 }
 
 function receiptEvidence(value,origin,url,inspected,now){
+  if(origin===piggoOrigin){
+    const receipt=acceptedPiggoCalendarReceipt(value,{accountKey:value.accountKey,profileBinding:value.profileBinding},now);
+    return url===piggoCalendarUrl?receipt?.evidence??null:null;
+  }
   let actual;try{actual=new URL(inspected.currentUrl);}catch{return null;}
   const evidence=value.evidence,confirmed=Date.parse(evidence?.confirmedAt??'');
   const day=dayAt(now);
@@ -179,7 +184,7 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
     stderrBytes:boundedBytes(transport.stderr),...extra});
   const fail=(stage,code,possible=false,extra={})=>{throw new NativePtReadError(code,diagnostic(stage,code,extra),possible);};
   let target;try{target=new URL(url);if(target.origin!==origin||target.protocol!=='https:'||target.username||target.password||
-    target.pathname!=='/index.php'||target.search||target.hash||!nativePtHeaderOrigins.some(value=>normalizeOrigin(value)===normalizeOrigin(origin)))
+    (origin===piggoOrigin?target.href!==piggoCalendarUrl||!isolated:target.pathname!=='/index.php')||target.search||target.hash||!nativePtHeaderOrigins.some(value=>normalizeOrigin(value)===normalizeOrigin(origin)))
       fail('preflight','request_rejected');}catch(error){if(error instanceof NativePtReadError)throw error;fail('preflight','request_rejected');}
   root=path.resolve(root??'');let config,binding;
   try{config=JSON.parse(fs.readFileSync(path.join(root,'config/config.json'),'utf8'));binding=nativePtReadBinding(config,{origin,accountKey:'site-default'},{root,isolated});}
@@ -193,6 +198,7 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
   try{
     let apiPolicy;
     if(isolated){try{const {ptReadPolicy}=await import('./pt-read-policy.mjs');apiPolicy=ptReadPolicy(origin,config);}catch{}}
+    if(origin===piggoOrigin&&apiPolicy?.piggoCalendar!==true)fail('preflight','request_rejected');
     if(apiPolicy?.nativeApiHeaderFallback===true){
       const read=inspectApi??(await import('./native-pt-api.mjs')).readNativePtApiHeader;
       const value=await read({root,origin,clock});
@@ -265,6 +271,7 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
           successControl:inspected.successControl??'',unsignedControl:inspected.unsignedControl??'',
           success:inspected.success===true,successText:Boolean(inspected.successText),
           audiencesDailyHeaderVerified:inspected.audiencesDailyHeaderVerified===true,
+          ...(origin===piggoOrigin?{piggoCalendarVerified:inspected.piggoCalendarVerified===true,accountMatched:inspected.accountMatched===true}:{}),
           ...(origin==='https://ourbits.club'?{
             ourbitsDailyHeaderVerified:inspected.ourbitsDailyHeaderVerified===true,
             ourbitsHeaderContextClear:inspected.ourbitsHeaderContextClear===true,
