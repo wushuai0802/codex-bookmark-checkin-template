@@ -1,5 +1,7 @@
 # A publication uses a unique transaction directory. A leftover from an older
 # upload can never turn a successfully installed generation into a sync error.
+. (Join-Path $PSScriptRoot 'Sync-PhaseTiming.ps1')
+
 function New-ShadowPublicationPlan([string]$NasStagingDir, [string]$NasDataDir, [string]$TransactionId,
     [ValidateSet('full', 'delta')][string]$Mode = 'full', [string]$LedgerSha256 = '') {
     if ($TransactionId -cnotmatch '^[a-f0-9]{32}\z' -or
@@ -60,8 +62,15 @@ function Invoke-ShadowPublicationCommand([string]$Executable, [string[]]$Argumen
     [scriptblock]$BeforeAttempt) {
     for ($attempt = 1; $attempt -le [Math]::Max(1, [Math]::Min(2, $MaxAttempts)); $attempt++) {
         if ($BeforeAttempt) { & $BeforeAttempt }
-        $result = if ($Invoke) { & $Invoke $Executable $Arguments $Phase $InputFile $TimeoutSeconds }
-            else { Invoke-BoundedSyncProcess $Executable $Arguments $Phase $InputFile $TimeoutSeconds }
+        $result = $null; $clock = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $result = if ($Invoke) { & $Invoke $Executable $Arguments $Phase $InputFile $TimeoutSeconds }
+                else { Invoke-BoundedSyncProcess $Executable $Arguments $Phase $InputFile $TimeoutSeconds }
+        }
+        finally {
+            $clock.Stop()
+            Write-SyncPhaseTiming 'Shadow phase' $Phase $attempt $clock.ElapsedMilliseconds $result -Log { param($line) Write-Log $line }
+        }
         if ($result.exitCode -eq 0 -or $attempt -ge $MaxAttempts -or
             $result.failure -notmatch 'cause=(connection_timeout|connection_interrupted|ssh_transport_failed)\)') { return $result }
         Start-Sleep -Milliseconds 500
