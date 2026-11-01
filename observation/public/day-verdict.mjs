@@ -70,7 +70,7 @@ export function dayVerdict(snapshot={}, {now=new Date()}={}){
     else if(fresh&&!retrying&&(requiresHuman&&(manual||task.manualVerificationRequired===true||['interactive_challenge'].includes(status)||codes.includes('two_factor_required'))||
       manual&&!unknown&&!codes.includes('harvest_waiting')&&!signed(status)&&['needs_attention','deferred','login_required','failed','error','no_action','managed_challenge_timeout'].includes(status)))category='actionNeeded';
     counts[category]++;items.push({taskId:task.taskId,class:category,...(reasonCode?{reasonCode,lastReceiptDay,missingDays,
-      summary:`Harvest 已 ${missingDays} 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能需要在 Harvest 里更新登录状态`}:{})});
+      summary:`Harvest 已 ${missingDays} 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能是站点已关闭或登录失效，请核对`}:{})});
   }
   return {businessDate,total:counts.done+counts.verifying+counts.actionNeeded,counts,items,
     settled:counts.verifying===0&&counts.actionNeeded===0};

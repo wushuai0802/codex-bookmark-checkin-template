@@ -26,7 +26,7 @@ test('dashboard actionable task and PT table share the stalled Harvest explanati
   const view=await(await fetch(base+'/api/overview')).json();
   const item=view.tasks.find(task=>task.origin===origin),site=view.ptStatus.sites[0];
   assert.equal(item.dayClass,'actionNeeded');assert.equal(item.dayVerdict.reasonCode,'harvest_stalled');
-  assert.equal(taskStatusSummary(item),`Harvest 已 3 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能需要在 Harvest 里更新登录状态`);
+  assert.equal(taskStatusSummary(item),`Harvest 已 3 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能是站点已关闭或登录失效，请核对`);
   assert.equal(site.dayVerdict.summary,taskStatusSummary(item));
   const filtered=await(await fetch(base+'/api/tasks?status=actionable')).json();
   assert.ok(filtered.tasks.some(task=>task.origin===origin));
