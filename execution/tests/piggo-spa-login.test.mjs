@@ -20,8 +20,14 @@ function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false
       fallback:async()=>{allowed=await context.request(method,url);}};
     await route(next);return allowed;
   };
+  let formRendered=false;
   const page={url:()=>currentUrl,context:()=>context,route:async(pattern,handler)=>{route=handler;},unroute:async()=>{route=null;},
-    evaluate:(fn,args)=>piggoLoginDom({captcha:captcha||afterChallenge&&posts>0,otp}).evaluate(fn,args),
+    // The real form only exists after the lazy chunk loads, so inspecting first must fail.
+    waitForSelector:async()=>{formRendered=true;},
+    evaluate:(fn,args)=>{
+      if(!formRendered)throw Error('form inspected before it rendered');
+      return piggoLoginDom({captcha:captcha||afterChallenge&&posts>0,otp}).evaluate(fn,args);
+    },
     waitForResponse:predicate=>new Promise(resolve=>waits.push({predicate,resolve,done:false})),
     goto:async url=>{assert.equal(url,f.origin+'/login');currentUrl=url;
       for(const [method,route,allowed] of observedLoginRequests)
