@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {launchAutomationContext} from './browser.mjs';
-import {nativePtReadBinding} from './native-pt-read.mjs';
+import {nativePtReadBinding,safeNativeReadDetails} from './native-pt-read.mjs';
 import {ptReadPolicy,nativeApiHeaderAuthenticated,classifyPtPassivePage} from './pt-read-policy.mjs';
 import {accountMetadataForOrigin} from './result-identity.mjs';
 import {runNativePtGate} from './native-pt-gate.mjs';
@@ -20,10 +20,11 @@ const unknown=identity=>({status:'needs_attention',failureCode:'submission_outco
 const emptyInspection=()=>({currentUrl:'',sameOrigin:false,pageContentAvailable:false,siteBodyLoaded:false,
   authenticated:false,waf:false,loginRoute:false,securityVerification:false,signedControlCount:0,unsignedControlCount:0,
   successControl:'',unsignedControl:'',success:false,successText:false,audiencesDailyHeaderVerified:false});
-const unavailable=(identity={},code='authoritative_status_unavailable',inspection=emptyInspection())=>({status:'unconfirmed',failureCode:code,
+const unavailable=(identity={},code='authoritative_status_unavailable',inspection=emptyInspection(),diagnostic={})=>({status:'unconfirmed',failureCode:code,
   nativeGate:true,submissionAttempted:false,...identity,reason:'原生 API 只读回执未满足已审阅的当日账号证据',
   inspection,
-  nativeReadback:{stage:'readback',code:'authoritative_evidence_rejected',exitCode:null,durationMs:0,stderrPresent:false,stderrBytes:0}});
+  nativeReadback:{stage:'readback',code:'authoritative_evidence_rejected',exitCode:null,durationMs:0,stderrPresent:false,stderrBytes:0,
+    ...safeNativeReadDetails(diagnostic)}});
 
 function settings(root,origin,{execution=false,url}={}){
   root=path.resolve(root);
@@ -178,12 +179,15 @@ function dailyControls(controls,policy){
   return {unsigned,signed};
 }
 
-async function fetchPage(context,url,policy,clock){
+async function fetchPage(context,url,policy,clock,diagnostic={}){
+  diagnostic.apiStage='request';delete diagnostic.httpStatus;
   const response=await context.request.get(url,{timeout:15000,maxRedirects:0,maxRetries:0,ignoreHTTPSErrors:false,
     failOnStatusCode:false,headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}});
+  diagnostic.httpStatus=response.status();diagnostic.apiStage='response_freshness';
   const now=clock();
   if(!responseFresh(response,url,now))return null;
   if([301,302,303,307,308].includes(response.status())){
+    diagnostic.apiStage='redirect';
     try{
       const next=new URL(response.headers().location,url);
       if(next.protocol==='https:'&&next.origin===new URL(url).origin&&!next.username&&!next.password&&!next.hash&&next.pathname==='/login.php')
@@ -191,18 +195,22 @@ async function fetchPage(context,url,policy,clock){
     }catch{/* An unreviewed redirect supplies no account or daily evidence. */}
     return null;
   }
+  diagnostic.apiStage='http_status';
   if(response.status()!==200)return null;
+  diagnostic.apiStage='response_structure';
   const snapshot=await parsePage(context,await response.text(),url,policy);
+  diagnostic.apiStage='day_boundary';
   if(day(clock())!==day(now))return null;
   return {snapshot,now};
 }
 
-async function readInContext(context,state,clock){
-  const page=await fetchPage(context,state.policy.url,state.policy,clock);
-  if(!page)return {result:unavailable(state.identity),accountId:null};
+async function readInContext(context,state,clock,diagnostic={}){
+  const page=await fetchPage(context,state.policy.url,state.policy,clock,diagnostic);
+  if(!page)return {result:unavailable(state.identity,undefined,undefined,diagnostic),accountId:null};
   if(page.rejected==='login_required')return {result:{...unavailable(state.identity,'login_required',
-    {...emptyInspection(),currentUrl:state.policy.url,sameOrigin:true,loginRoute:true}),status:'login_required'},accountId:null};
+    {...emptyInspection(),currentUrl:state.policy.url,sameOrigin:true,loginRoute:true},diagnostic),status:'login_required'},accountId:null};
   const {snapshot}=page;let {now}=page;
+  diagnostic.apiStage='authentication';
   const auth=authenticatedSnapshot(snapshot,state,state.policy.url);
   const counts=dailyControls(auth.controls,state.policy);
   const audience=state.origin==='https://audiences.me';
@@ -212,10 +220,10 @@ async function readInContext(context,state,clock){
     return [...text.matchAll(/(?:^|\s)已签到\s*\+\s*[0-9,.]+/g)].length===1&&
       !/(?:历史|歷史|昨日|昨天|上次|累计|累計).{0,24}已签到/.test(text);
   };
-  let ownProfileVerified=!audience;
+  let ownProfileVerified=!audience,profileReadFailed=false;
   if(audience&&auth.authenticated){
     const profileUrl=state.origin+'/userdetails.php?id='+auth.accountId;
-    const profile=await fetchPage(context,profileUrl,state.policy,clock);
+    const profile=await fetchPage(context,profileUrl,state.policy,clock,diagnostic);
     if(profile?.snapshot&&day(profile.now)===day(now)){
       const profileAuth=authenticatedSnapshot(profile.snapshot,state,profileUrl);
       const profileCounts=dailyControls(profileAuth.controls,state.policy);
@@ -225,7 +233,7 @@ async function readInContext(context,state,clock){
         !(counts.unsigned.length>0&&profileSigned)&&!(indexSigned&&profileCounts.unsigned.length>0)&&
         !(profileCounts.signed.length>0&&profileCounts.unsigned.length>0);
       now=profile.now;
-    }
+    }else profileReadFailed=true;
   }
   const result=classifyPtPassivePage({origin:state.origin,url:state.policy.url,policy:state.policy,
     bodyText:auth.headerText,controls:auth.controls,authenticated:auth.authenticated,httpStatus:200,now});
@@ -240,8 +248,13 @@ async function readInContext(context,state,clock){
     loginRoute:auth.loginRoute,securityVerification:auth.securityVerification,signedControlCount:counts.signed.length,
     unsignedControlCount:counts.unsigned.length,successControl:counts.signed.length===1?counts.signed[0]:'',
     unsignedControl:counts.unsigned.length===1?counts.unsigned[0]:'',success:positive,successText:false,audiencesDailyHeaderVerified:audienceHeaderVerified};
+  diagnostic.dailyTextPresent=/签到|簽到|check[ -]?in/i.test(auth.headerText);
+  diagnostic.audiencesDailyHeaderVerified=audienceHeaderVerified;
+  diagnostic.dailyControlCandidateCount=auth.controls.filter(value=>/签到|簽到|check[ -]?in/i.test(String(value.text??''))).length;
+  diagnostic.apiStage=snapshot?.headerCount!==1||snapshot?.baseValid!==true?'response_structure':
+    !auth.authenticated?'authentication':!ownProfileVerified?(profileReadFailed?diagnostic.apiStage:'profile_verification'):'daily_fields';
   if(!auth.authenticated||(!positive&&!negative)||!audienceHeaderVerified&&result.evidence?.authoritative!==true)
-    return {result:unavailable(state.identity,'authoritative_status_unavailable',inspection),accountId:null};
+    return {result:unavailable(state.identity,'authoritative_status_unavailable',inspection,diagnostic),accountId:null};
   const evidence={source:'page_text',authoritative:true,confirmedAt:now.toISOString(),businessDate:day(now),
     pagePath:'/index.php',statusSignal:negative?'nexus_daily_header_unsigned':'nexus_daily_header_signed',evidenceScope:'site_account_day'};
   const metadata={origin:state.origin,url:state.policy.url,...state.identity,status:negative?'not_signed':'already_signed',
@@ -250,7 +263,8 @@ async function readInContext(context,state,clock){
   return {accountId:auth.accountId,result:{...metadata,nativeGate:true,inspection,
     readbackReceipt:{...metadata,inspection},nativeReadback:{stage:'completed',code:'receipt_accepted',exitCode:0,
       durationMs:0,stderrPresent:false,stderrBytes:0,sameOrigin:true,authenticated:true,waf:false,loginRoute:false,
-      siteBodyLoaded:true,pageContentAvailable:true,hasDailySignal:positive,hasSignedControl:positive}}};
+      siteBodyLoaded:true,pageContentAvailable:true,hasDailySignal:positive,hasSignedControl:positive,
+      ...safeNativeReadDetails({...diagnostic,apiStage:'completed'})}}};
 }
 
 async function launchBound(state,launch){
@@ -261,31 +275,35 @@ async function launchBound(state,launch){
 }
 
 export async function readNativePtApiHeader({root,origin,launch=launchAutomationContext,clock=()=>new Date(),gate=runNativePtGate}={}){
-  let state,context;
+  let state,context;const diagnostic={apiStage:'configuration'};
   try{
     state=settings(root,origin);
+    diagnostic.apiStage='binding';
     const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock});
     if(bound.allow!==true||bound.accountKey!==state.identity.accountKey||bound.profileBinding!==state.identity.profileBinding)
-      return unavailable(state.identity,'native_readback_unavailable');
+      return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
+    diagnostic.apiStage='launch';
     context=await launchBound(state,launch);
-    return (await readInContext(context,state,clock)).result;
-  }catch{return unavailable(state?.identity,'native_readback_unavailable');}
+    return (await readInContext(context,state,clock,diagnostic)).result;
+  }catch{return unavailable(state?.identity,'native_readback_unavailable',undefined,diagnostic);}
   finally{await context?.close().catch(()=>{});}
 }
 
 export async function readNativePtApiHeaderInContext({root,origin,context,expectedProfileBinding,profileProof,
   clock=()=>new Date(),gate=runNativePtGate}={}){
-  let state;
+  let state;const diagnostic={apiStage:'configuration'};
   try{
     state=settings(root,origin);
+    diagnostic.apiStage='binding';
     if(state.binding.profileBinding!==expectedProfileBinding||typeof profileProof!=='function'||!await profileProof())
-      return unavailable(state.identity,'native_readback_unavailable');
+      return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
     const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock});
     if(bound.allow!==true||bound.profileBinding!==state.identity.profileBinding||bound.accountKey!==state.identity.accountKey)
-      return unavailable(state.identity,'native_readback_unavailable');
-    const value=(await readInContext(context,state,clock)).result;
-    return await profileProof()?value:unavailable(state.identity,'native_readback_unavailable');
-  }catch{return unavailable(state?.identity,'native_readback_unavailable');}
+      return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
+    const value=(await readInContext(context,state,clock,diagnostic)).result;
+    diagnostic.apiStage='profile_verification';
+    return await profileProof()?value:unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
+  }catch{return unavailable(state?.identity,'native_readback_unavailable',undefined,diagnostic);}
 }
 
 // A native CDP context's API client does not inherit Chrome's command-line
