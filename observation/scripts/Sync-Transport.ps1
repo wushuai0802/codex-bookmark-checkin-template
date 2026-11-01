@@ -71,13 +71,16 @@ function Invoke-BoundedSyncProcess {
     $process = $null; $inputStream = $null; $copyCancellation = $null
     $copyTask = $null; $stdoutTask = $null; $stderrTask = $null
     $timedOut = $false; $errorText = ''; $exitCode = -1
+    $result = $null; $clock = [Diagnostics.Stopwatch]::StartNew()
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     try {
         if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-            return [pscustomobject]@{exitCode=-1;failure="$Phase failed (exit=-1; cause=executable_missing)";output='';error='';timedOut=$false}
+            $result = [pscustomobject]@{exitCode=-1;failure="$Phase failed (exit=-1; cause=executable_missing)";output='';error='';timedOut=$false;elapsedMs=0L}
+            return $result
         }
         if ($InputFile -and -not (Test-Path -LiteralPath $InputFile -PathType Leaf)) {
-            return [pscustomobject]@{exitCode=-1;failure="$Phase failed (exit=-1; cause=input_missing)";output='';error='';timedOut=$false}
+            $result = [pscustomobject]@{exitCode=-1;failure="$Phase failed (exit=-1; cause=input_missing)";output='';error='';timedOut=$false;elapsedMs=0L}
+            return $result
         }
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $Executable; $startInfo.UseShellExecute = $false; $startInfo.CreateNoWindow = $true
@@ -137,12 +140,12 @@ function Invoke-BoundedSyncProcess {
         $stdout = if ($stdoutTask.Wait(2000)) { $stdoutTask.GetAwaiter().GetResult() } else { '' }
         $errorText = if ($stderrTask.Wait(2000)) { $stderrTask.GetAwaiter().GetResult() } else { '' }
         $failure = if ($exitCode -ne 0) { "$Phase failed (exit=$exitCode; cause=$(Get-SyncTransportFailureCause $exitCode $errorText $false))" } else { $null }
-        return [pscustomobject]@{exitCode=$exitCode;failure=$failure;output=[string]$stdout;error=[string]$errorText;timedOut=$false}
+        $result = [pscustomobject]@{exitCode=$exitCode;failure=$failure;output=[string]$stdout;error=[string]$errorText;timedOut=$false;elapsedMs=0L}
     }
     catch {
         if ($timedOut) { $exitCode=124 } elseif ($process -and $process.HasExited) { $exitCode=$process.ExitCode }
         $cause = Get-SyncTransportFailureCause $exitCode $errorText $timedOut
-        return [pscustomobject]@{exitCode=$exitCode;failure="$Phase failed (exit=$exitCode; cause=$cause)";output='';error='';timedOut=$timedOut}
+        $result = [pscustomobject]@{exitCode=$exitCode;failure="$Phase failed (exit=$exitCode; cause=$cause)";output='';error='';timedOut=$timedOut;elapsedMs=0L}
     }
     finally {
         if ($copyCancellation) { try { $copyCancellation.Cancel() } catch { } }
@@ -153,5 +156,8 @@ function Invoke-BoundedSyncProcess {
             try { $process.Dispose() } catch { }
         }
         if ($copyCancellation) { try { $copyCancellation.Dispose() } catch { } }
+        $clock.Stop()
+        if ($null -ne $result) { $result.elapsedMs = $clock.ElapsedMilliseconds }
     }
+    return $result
 }

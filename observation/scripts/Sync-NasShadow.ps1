@@ -105,8 +105,20 @@ function Invoke-BoundedDashboardStatusSync([string]$StatusScript, [string]$SshTa
         '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$StatusScript,
         '-SshTarget',$SshTarget,'-NasDataDir',$NasDataDir,'-NodePath',$NodePath
     )
-    $result = Invoke-BoundedSyncProcess $shell.Source $arguments 'dashboard_status_sync' '' 90
-    if ($result.exitCode -ne 0) { throw $result.failure }
+    $recordFile = ''
+    try { $recordFile = Join-Path $LogRoot ('status-phases-' + [guid]::NewGuid().ToString('N') + '.log') } catch { }
+    if ($recordFile) { $arguments += @('-PhaseRecordFile', $recordFile) }
+    $result = $null; $clock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $result = Invoke-BoundedSyncProcess $shell.Source $arguments 'dashboard_status_sync' '' 90
+        if ($result.exitCode -ne 0) { throw $result.failure }
+    }
+    finally {
+        $clock.Stop()
+        Receive-SyncPhaseTiming $recordFile -Log { param($line) Write-Log $line }
+        Write-SyncPhaseTiming 'Status sync phase' 'dashboard_status_sync' 1 $clock.ElapsedMilliseconds $result -Log { param($line) Write-Log $line }
+        if ($recordFile) { try { Remove-Item -LiteralPath $recordFile -Force -ErrorAction SilentlyContinue } catch { } }
+    }
 }
 
 function Remove-StaleHarvestFallbackPending([string]$ProjectRoot, [int]$RetentionDays = 14) {
