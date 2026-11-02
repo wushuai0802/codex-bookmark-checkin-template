@@ -69,6 +69,15 @@ for(const srp of [false,true])test('SPA login submits once through the real form
   assert.equal(again.nativeTwoFactorRecovery.reason,'daily_recovery_limit');assert.equal(f.posts,1);assert.equal(f.reads,1);
 });
 
+test('provider failures keep their reason code and leave the daily login budget unused',async t=>{
+  const prepareFails=loginFixture(t),prepared=await recoverPiggoSpaLogin({...prepareFails.args,prepare:async()=>({ready:false,reason:'vault_locked'})});
+  assert.deepEqual(prepared.nativeTwoFactorRecovery,{phase:'password_login',attempted:false,accepted:false,reason:'provider_unavailable',providerReason:'vault_locked'});
+  assert.equal(prepareFails.posts,0);assert.equal(fs.existsSync(prepareFails.file),false);
+  const loginFails=loginFixture(t),read=await recoverPiggoSpaLogin({...loginFails.args,withLogin:async()=>({ready:false,reason:'login_read_failed'})});
+  assert.equal(read.nativeTwoFactorRecovery.reason,'provider_unavailable');assert.equal(read.nativeTwoFactorRecovery.providerReason,'login_read_failed');
+  assert.equal(loginFails.posts,0);assert.equal(fs.existsSync(loginFails.file),false);
+});
+
 test('observed Vue form accepts default GET/no action and autocomplete token lists without reading values',async()=>{
   for(const webauthn of [false,true])for(const action of [undefined,'/login','https://piggo.me/login']){
     const dom=piggoLoginDom({webauthn,action,invite:true}),page={url:()=> 'https://piggo.me/login',evaluate:dom.evaluate};
