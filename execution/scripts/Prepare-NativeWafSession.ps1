@@ -328,7 +328,7 @@ function Invoke-MainChromeReadOnlyFallbackResult([string]$Origin, [int]$TimeoutS
 # proof, and that proof needs a session. A logged-out read therefore goes to the
 # parent's login recovery. Authentication submits nothing; the guard still decides.
 function Get-PiggoLoginRequiredResult([string]$Origin, $Read = $null) {
-    if ($Origin -cne 'https://piggo.me') { return $null }
+    if ($Origin -cne 'https://piggo.me' -or $null -eq $config.ptReadOnlyPolicies) { return $null }
     $property = $config.ptReadOnlyPolicies.PSObject.Properties[$Origin]
     if ($null -eq $property -or $property.Value.piggoCalendar -ne $true) { return $null }
     $read = $Read

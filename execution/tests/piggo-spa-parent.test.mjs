@@ -76,7 +76,7 @@ for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pw
 }
 
 // Runs the real eligibility loop: an old intent stops PigGo there, before the per-item loop.
-const eligibility=(shell,{origin='https://piggo.me',read,gate='unknown',useMain=false})=>{
+const eligibility=(shell,{origin='https://piggo.me',read,gate='unknown',useMain=false,policies=true})=>{
   const command=`$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('${quote(scripts+'Prepare-NativeWafSession.ps1')}',[ref]$tokens,[ref]$errors)
@@ -91,7 +91,7 @@ function Invoke-MainChromeReadOnlyFallbackResult {$script:readCalls++;${read}}
 function Register-NativePtReadback {$script:registerCalls++;[pscustomobject]@{allow=$false}}
 function Test-NativeTwoFactorRecoveryOptIn {$false}
 $node='must-not-run'
-$config=[pscustomobject]@{bookmarksPath='fixture\\Bookmarks';ptReadOnlyPolicies=[pscustomobject]@{'https://piggo.me'=[pscustomobject]@{piggoCalendar=$true}}}
+$config=[pscustomobject]@{bookmarksPath='fixture\\Bookmarks'${policies?";ptReadOnlyPolicies=[pscustomobject]@{'https://piggo.me'=[pscustomobject]@{piggoCalendar=$true}}":''}}
 $mainFallbackByOrigin=@{};${useMain?"$mainFallbackByOrigin['"+origin+"']=[pscustomobject]@{url='"+origin+"/index.php'}":''}
 $preflightResults=@()
 $items=@([pscustomobject]@{url='${origin}/calendar';sourceOrigin='${origin}';action='preflight';passiveOnly=$false;profilePath='fixture\\profile';waitSeconds=120})
@@ -117,8 +117,9 @@ for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pw
       assert.equal(out.results.length,1,read);assert.equal(out.eligible,0,read);
       assert.equal(out.results[0].failureCode,'submission_outcome_unknown',read);assert.equal(out.results[0].submissionAttempted,true,read);
     }
-    const other=eligibility(shell,{origin:'https://tracker.example',read:loggedOut});
-    assert.equal(other.results[0].failureCode,'submission_outcome_unknown');assert.equal(other.results[0].submissionAttempted,true);
+    for(const out of [eligibility(shell,{origin:'https://tracker.example',read:loggedOut}),eligibility(shell,{read:loggedOut,policies:false}),eligibility(shell,{read:`[pscustomobject]@{status='not_signed';submissionAttempted=$false}`,policies:false})]){
+      assert.equal(out.results[0].failureCode,'submission_outcome_unknown');assert.equal(out.results[0].submissionAttempted,true);
+    }
   });
   test(`a guard that allows PigGo stays eligible without an extra read (${shell})`,()=>{
     const out=eligibility(shell,{gate:'allow',read:loggedOut});
