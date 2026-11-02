@@ -29,10 +29,10 @@ async function validateController(root){
 export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode='Login',clock=()=>new Date(),
   gate=runNativePtGate,readHeader=readNativePtApiHeaderInContext,inspectForm=inspectPiggoSpaLogin,
   prepare,withLogin,validateLease=validateController,acquire=acquireRunLock,release=releaseRunLock}={}){
-  let lock,firewall,route,attempted=false,accepted=false,reason='recovery_unavailable',entry,journal,output;
+  let lock,firewall,route,attempted=false,accepted=false,reason='recovery_unavailable',providerReason,entry,journal,output;
   const outcome=()=>output=({origin:piggoOrigin,handled:true,status:accepted?'logged_in':'needs_attention',
     ...(!accepted?{failureCode:'two_factor_required'}:{}),
-    nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason}});
+    nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason,...(providerReason?{providerReason}:{})}});
   try{
     // A read-only consumer must not even prepare the vault or navigate login.
     if(mode!=='Login'){reason='readonly';return outcome();}
@@ -90,7 +90,8 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     if(form?.challenge||form?.otp){reason=form.otp?'two_factor_requires_manual':'captcha_requires_manual';return outcome();}
     if(form?.reviewed!==true){reason='login_form_unreviewed';return outcome();}
     if(!prepare||!withLogin){const provider=await import('./bitwarden-totp.mjs');prepare??=provider.prepareBitwardenTotp;withLogin??=provider.withBitwardenLogin;}
-    if((await prepare({root,origin:piggoOrigin,binding,config}))?.ready!==true){reason='provider_unavailable';return outcome();}
+    const prepared=await prepare({root,origin:piggoOrigin,binding,config});
+    if(prepared?.ready!==true){reason='provider_unavailable';providerReason=prepared?.reason;return outcome();}
     let consumed=false,accepting=true,pending;
     const consume=credential=>{
       if(!accepting||consumed)return Promise.resolve();consumed=true;
@@ -132,7 +133,7 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     let provided;
     try{provided=await withLogin({root,origin:piggoOrigin,binding,config,consume});}
     finally{accepting=false;if(pending)await pending;}
-    if(provided?.ready!==true&&!attempted)reason='provider_unavailable';
+    if(provided?.ready!==true&&!attempted){reason='provider_unavailable';providerReason=provided?.reason;}
     return outcome();
   }catch{return outcome();}
   finally{
