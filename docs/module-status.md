@@ -58,7 +58,7 @@
 | `execution/scripts/Export-PublicBundle.ps1` | 运维手动 | 人工用法见 execution/README.md |
 | `execution/scripts/Extract-ChromeSessionStorage.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/scripts/Gateway-Audit.ps1` | 现役 | execution/scripts/V2-EngineGateway.ps1:5 (ps-call) |
-| `execution/scripts/Get-BitwardenTotp.ps1` | 现役 | execution/src/bitwarden-totp.mjs:122 (node-path) |
+| `execution/scripts/Get-BitwardenTotp.ps1` | 现役 | execution/src/bitwarden-totp.mjs:124 (node-path) |
 | `execution/scripts/HealthReportClassification.ps1` | 现役 | execution/scripts/Test-CheckinHealth.ps1:20 (ps-call) |
 | `execution/scripts/Initialize-BrowserProfile.ps1` | 运维手动 | 人工用法见 docs/quickstart.md |
 | `execution/scripts/Initialize-BrowserProfileFromShadow.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |

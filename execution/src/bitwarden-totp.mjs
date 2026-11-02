@@ -23,7 +23,9 @@ const reasons = new Set(['disabled','origin_not_allowed','profile_mismatch','inv
   'cli_status_failed','cli_status_invalid','vault_sync_failed','totp_read_failed','totp_invalid',
   'totp_near_rotation','clock_invalid','clock_unstable','totp_wait_failed','totp_consumer_failed',
   'helper_failed','helper_output_invalid','prepared','totp_ready','totp_consumed',
-  'login_not_allowed','login_read_failed','login_invalid','login_ready','login_consumed']);
+  'login_not_allowed','login_binding_unreadable','login_engine_mismatch','login_controller_mismatch',
+  'login_legacy_root_mismatch','login_lease_unreadable','login_lease_mismatch','login_lease_owner_gone',
+  'login_read_failed','login_invalid','login_ready','login_consumed']);
 
 function clearInheritedVaultSecrets() {
   for (const key of Object.keys(process.env)) {

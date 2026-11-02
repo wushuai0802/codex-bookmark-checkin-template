@@ -219,16 +219,22 @@ try {
         $opt=if($Origin-ceq 'https://piggo.me'){$config.nativePtTwoFactorRecovery.PSObject.Properties[$Origin].Value}else{$config.siteTwoFactorRecovery.PSObject.Properties[$Origin].Value}
         if($Origin-cnotin @('https://www.uhddolby.com','https://piggo.me')-or $opt.enabled-ne $true-or $opt.reviewed-ne $true-or
             $opt.allowPasswordLogin-ne $true-or $opt.loginSource-cne 'bitwarden'){Stop-Provider 'login_not_allowed'}
+        # Every branch still refuses; a separate code only says which check refused.
+        if(-not $env:CHECKIN_V2_ENGINE_ROOT-or -not $env:CHECKIN_V2_ENGINE_LEASE){Stop-Provider 'login_not_allowed'}
+        $sameRoot={param($left,$right)[string]::Equals([IO.Path]::GetFullPath([string]$left),[IO.Path]::GetFullPath([string]$right),[StringComparison]::OrdinalIgnoreCase)}
         try{
             $integration=Get-Content -LiteralPath (Join-Path $Root 'data/v2-integration.json') -Raw|ConvertFrom-Json
             $controller=[IO.Path]::GetFullPath([string]$integration.v2ProjectRoot)
             $controllerConfig=Get-Content -LiteralPath (Join-Path $controller 'config/runtime.local.json') -Raw|ConvertFrom-Json
-            $lease=Get-Content -LiteralPath (Join-Path $controller 'data/v2-run.lock') -Raw|ConvertFrom-Json
-            if($integration.executionEngine-cne 'v1'-or -not [string]::Equals($controller,[IO.Path]::GetFullPath($env:CHECKIN_V2_ENGINE_ROOT),[StringComparison]::OrdinalIgnoreCase)-or
-                $controllerConfig.executionEngine-cne 'v1'-or -not [string]::Equals([IO.Path]::GetFullPath([string]$controllerConfig.legacyRoot),$Root,[StringComparison]::OrdinalIgnoreCase)-or
-                [string]$lease.nonce-cne $env:CHECKIN_V2_ENGINE_LEASE-or -not $lease.pid){throw 'lease'}
-            [void][Diagnostics.Process]::GetProcessById([int]$lease.pid)
-        }catch{Stop-Provider 'login_not_allowed'}
+            $controllerMatches=& $sameRoot $controller $env:CHECKIN_V2_ENGINE_ROOT
+            $legacyMatches=& $sameRoot $controllerConfig.legacyRoot $Root
+        }catch{Stop-Provider 'login_binding_unreadable'}
+        if($integration.executionEngine-cne 'v1'-or $controllerConfig.executionEngine-cne 'v1'){Stop-Provider 'login_engine_mismatch'}
+        if(-not $controllerMatches){Stop-Provider 'login_controller_mismatch'}
+        if(-not $legacyMatches){Stop-Provider 'login_legacy_root_mismatch'}
+        try{$lease=Get-Content -LiteralPath (Join-Path $controller 'data/v2-run.lock') -Raw|ConvertFrom-Json}catch{Stop-Provider 'login_lease_unreadable'}
+        if([string]$lease.nonce-cne $env:CHECKIN_V2_ENGINE_LEASE-or -not $lease.pid){Stop-Provider 'login_lease_mismatch'}
+        try{[void][Diagnostics.Process]::GetProcessById([int]$lease.pid)}catch{Stop-Provider 'login_lease_owner_gone'}
     }
     if ($rule.enabled -isnot [bool] -or $rule.enabled -ne $true -or
         $route.enabled -isnot [bool] -or $route.enabled -ne $true) { Stop-Provider 'disabled' }

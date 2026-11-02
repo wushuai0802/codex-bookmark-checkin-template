@@ -250,6 +250,26 @@ test('the local migration moves one sealed destination while retaining item, Pro
       delete process.env.CHECKIN_V2_ENGINE_LEASE;
       const blocked=await withBitwardenLogin({root,origin,config:after,binding:{accountKey:'site-default',profileBinding,adapterId:authorization.adapterId},consume:async()=>{throw Error('unexpected');}});
       assert.equal(blocked.ready,false);assert.equal(blocked.reason,'login_not_allowed');
+      // Each refusal names its check, and none of them reaches the consumer.
+      const refused=()=>withBitwardenLogin({root,origin,config:after,binding:{accountKey:'site-default',profileBinding,adapterId:authorization.adapterId},consume:async()=>{throw Error('unexpected');}});
+      const lockFile=path.join(controller,'data/v2-run.lock'),runtimeFile=path.join(controller,'config/runtime.local.json');
+      process.env.CHECKIN_V2_ENGINE_LEASE=crypto.randomUUID();
+      assert.deepEqual(await refused(),{ready:false,reason:'login_lease_mismatch'});
+      process.env.CHECKIN_V2_ENGINE_LEASE=lease;
+      process.env.CHECKIN_V2_ENGINE_ROOT=path.join(root,'other-controller');
+      assert.deepEqual(await refused(),{ready:false,reason:'login_controller_mismatch'});
+      process.env.CHECKIN_V2_ENGINE_ROOT=controller;
+      fs.writeFileSync(lockFile,JSON.stringify({pid:2147483646,nonce:lease}));
+      assert.deepEqual(await refused(),{ready:false,reason:'login_lease_owner_gone'});
+      fs.rmSync(lockFile);
+      assert.deepEqual(await refused(),{ready:false,reason:'login_lease_unreadable'});
+      fs.writeFileSync(lockFile,JSON.stringify({pid:process.pid,nonce:lease}));
+      fs.writeFileSync(runtimeFile,JSON.stringify({executionEngine:'v2',legacyRoot:root}));
+      assert.deepEqual(await refused(),{ready:false,reason:'login_engine_mismatch'});
+      fs.writeFileSync(runtimeFile,JSON.stringify({executionEngine:'v1',legacyRoot:path.join(root,'other')}));
+      assert.deepEqual(await refused(),{ready:false,reason:'login_legacy_root_mismatch'});
+      fs.writeFileSync(runtimeFile,'{broken');
+      assert.deepEqual(await refused(),{ready:false,reason:'login_binding_unreadable'});
     }finally{
       for(const [i,key] of ['CHECKIN_V2_ENGINE_ROOT','CHECKIN_V2_ENGINE_LEASE'].entries()){
         if(previous[i]===undefined)delete process.env[key];else process.env[key]=previous[i];
