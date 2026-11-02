@@ -30,9 +30,10 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
   gate=runNativePtGate,readHeader=readNativePtApiHeaderInContext,inspectForm=inspectPiggoSpaLogin,
   prepare,withLogin,validateLease=validateController,acquire=acquireRunLock,release=releaseRunLock}={}){
   let lock,firewall,route,attempted=false,accepted=false,reason='recovery_unavailable',providerReason,entry,journal,output;
+  let passiveDiagnostic={};
   const outcome=()=>output=({origin:piggoOrigin,handled:true,status:accepted?'logged_in':'needs_attention',
     ...(!accepted?{failureCode:'two_factor_required'}:{}),
-    nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason,...(providerReason?{providerReason}:{})}});
+    nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason,...(providerReason?{providerReason}:{}),...passiveDiagnostic}});
   try{
     // A read-only consumer must not even prepare the vault or navigate login.
     if(mode!=='Login'){reason='readonly';return outcome();}
@@ -64,7 +65,12 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     };
     const before=await verify();
     if(await register(before)){accepted=true;reason='already_authenticated';return outcome();}
-    if(before.status!=='login_required'){reason='passive_proof_unavailable';return outcome();}
+    if(before.status!=='login_required'){
+      reason='passive_proof_unavailable';
+      passiveDiagnostic=Object.fromEntries(Object.entries({passiveStatus:before.status,passiveFailure:before.failureCode,
+        passiveStage:before.nativeReadback?.apiStage}).filter(([,code])=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)));
+      return outcome();
+    }
     firewall=await installPiggoCalendarFirewall(page.context(),{clock});
     let challengePosts=0,loginPosts=0,armed=false;
     route=async intercepted=>{
