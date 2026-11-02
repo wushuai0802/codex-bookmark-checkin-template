@@ -11,8 +11,9 @@ if ($git -and (Test-Path -LiteralPath (Join-Path $root '.git'))) {
     $relativeFiles = @(& $git.Source -C $root ls-files --cached --others --exclude-standard)
 }
 else {
-    $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-        $_.FullName.Substring($root.Length + 1).Replace('\', '/')
+    # -Name stays relative; FullName can expand an 8.3 root and misalign a substring.
+    $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -Name -ErrorAction SilentlyContinue | ForEach-Object {
+        $_.Replace('\', '/')
     } | Where-Object {
         $_ -notmatch '^(node_modules|data|logs|tmp|outputs|work|inputs|downloads|\.git|\.venv|venv|\.pytest_cache)(/|$)' -and
         $_ -notmatch '(^|/)(__pycache__|\.pytest_cache)(/|$)' -and
