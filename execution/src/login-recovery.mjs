@@ -169,9 +169,12 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   const recoveryCode=code=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)?code:null;
   const recoveryReason=recoveryCode(value?.nativeTwoFactorRecovery?.reason);
   const providerReason=recoveryCode(value?.nativeTwoFactorRecovery?.providerReason);
+  const passiveDiagnostic=Object.fromEntries(['passiveStatus','passiveFailure','passiveStage']
+    .map(key=>[key,recoveryCode(value?.nativeTwoFactorRecovery?.[key])]).filter(([,code])=>code));
   return {
     ...(recoveryReason?{recoveryReason}:{}),
     ...(providerReason?{providerReason}:{}),
+    ...passiveDiagnostic,
     succeeded: status === "logged_in",
     status,
     diagnostic: (failureMessages[failureCode] ?? messages[status] ?? messages.failed)+

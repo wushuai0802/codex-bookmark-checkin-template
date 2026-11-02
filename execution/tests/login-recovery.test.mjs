@@ -56,6 +56,24 @@ test("登录助手保留恢复原因代码且丢弃其他文本", () => {
   assert.equal(loginHelperOutcome('{"status":"logged_in"}').recoveryReason, undefined);
 });
 
+test('passive login diagnostics survive result projection using the recovery reason code rules',()=>{
+  const outcome=loginHelperOutcome(JSON.stringify({status:'needs_attention',failureCode:'two_factor_required',
+    nativeTwoFactorRecovery:{reason:'passive_proof_unavailable',passiveStatus:'unconfirmed',
+      passiveFailure:'authoritative_status_unavailable',passiveStage:'http_status',bodyText:'PRIVATE RESPONSE'}}));
+  assert.equal(outcome.recoveryReason,'passive_proof_unavailable');assert.equal(outcome.passiveStatus,'unconfirmed');
+  assert.equal(outcome.passiveFailure,'authoritative_status_unavailable');assert.equal(outcome.passiveStage,'http_status');
+  assert.equal(outcome.failureCode,'two_factor_required');assert.equal(outcome.retryable,false);
+  assert.doesNotMatch(JSON.stringify(outcome),/PRIVATE RESPONSE/);
+  for(const code of ['https://private.example/path','PRIVATE','has space','with-hyphen','login_required\n',
+    'a'.repeat(41),42,null,{},'']){
+    const unsafe=loginHelperOutcome(JSON.stringify({status:'needs_attention',nativeTwoFactorRecovery:{
+      passiveStatus:code,passiveFailure:code,passiveStage:code}}));
+    for(const key of ['passiveStatus','passiveFailure','passiveStage'])assert.equal(unsafe[key],undefined);
+  }
+  for(const key of ['passiveStatus','passiveFailure','passiveStage'])
+    assert.equal(loginHelperOutcome('{"status":"logged_in"}')[key],undefined);
+});
+
 test("登录助手区分可自愈超时与确定性身份错误", () => {
   const timeout = loginHelperOutcome('{"status":"needs_attention","failureCode":"oauth_timeout"}');
   assert.equal(timeout.failureCode, "oauth_timeout");

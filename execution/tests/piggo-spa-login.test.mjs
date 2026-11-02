@@ -78,6 +78,28 @@ test('provider failures keep their reason code and leave the daily login budget 
   assert.equal(loginFails.posts,0);assert.equal(fs.existsSync(loginFails.file),false);
 });
 
+test('an unavailable passive proof retains only code diagnostics and never reaches the provider',async t=>{
+  for(const before of [
+    {status:'unconfirmed',failureCode:'native_readback_unavailable',nativeReadback:{apiStage:'binding'}},
+    {status:'unconfirmed',failureCode:'authoritative_status_unavailable',nativeReadback:{apiStage:'http_status'}},
+    {status:'not_signed',failureCode:'PRIVATE RESPONSE',nativeReadback:{apiStage:'https://private.example/path'}},
+  ]){
+    const f=loginFixture(t),result=await recoverPiggoSpaLogin({...f.args,readHeader:async()=>before});
+    assert.equal(result.nativeTwoFactorRecovery.reason,'passive_proof_unavailable');
+    assert.equal(result.nativeTwoFactorRecovery.passiveStatus,before.status);
+    if(before.failureCode==='PRIVATE RESPONSE'){
+      assert.equal(result.nativeTwoFactorRecovery.passiveFailure,undefined);
+      assert.equal(result.nativeTwoFactorRecovery.passiveStage,undefined);
+    }else{
+      assert.equal(result.nativeTwoFactorRecovery.passiveFailure,before.failureCode);
+      assert.equal(result.nativeTwoFactorRecovery.passiveStage,before.nativeReadback.apiStage);
+    }
+    assert.equal(result.failureCode,'two_factor_required');
+    assert.equal(f.reads,0);assert.equal(f.prepares,0);assert.equal(f.posts,0);assert.equal(fs.existsSync(f.file),false);
+    assert.doesNotMatch(JSON.stringify(result),/PRIVATE|private\.example/);
+  }
+});
+
 test('observed Vue form accepts default GET/no action and autocomplete token lists without reading values',async()=>{
   for(const webauthn of [false,true])for(const action of [undefined,'/login','https://piggo.me/login']){
     const dom=piggoLoginDom({webauthn,action,invite:true}),page={url:()=> 'https://piggo.me/login',evaluate:dom.evaluate};
