@@ -392,7 +392,7 @@ test("非 Git 安全扫描忽略依赖环境和本地运行数据", async () => 
     ]) {
       const target = path.join(sandbox, ...relative.split("/"));
       await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, "C:\\Users\\private-user private" + "@" + "example.net", "utf8");
+      await fs.writeFile(target, path.win32.join("C:/", "Users", "example-user") + " private" + "@" + "example.net", "utf8");
     }
     const { stdout } = await execFileAsync(powershell, [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",

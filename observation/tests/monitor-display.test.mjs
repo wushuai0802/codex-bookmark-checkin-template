@@ -57,15 +57,15 @@ test('older Harvest report is evaluated against current time, including day roll
 });
 
 test('display identity preserves actual ID and never includes credentials', () => {
-  const id = displayIdentity({ userId: '336579', username: 'example-user', password: 'TEST', label: 'Agent' });
-  assert.equal(id.userId, '336579'); assert.equal(identityTitle({ identity: id }), 'example-user');
+  const id = displayIdentity({ userId: '100006', username: 'example-user', password: 'TEST', label: 'Agent' });
+  assert.equal(id.userId, '100006'); assert.equal(identityTitle({ identity: id }), 'example-user');
   assert.equal('password' in id, false);
   assert.equal(displayIdentity({ username: 'token=bad' }).username, null);
 });
 
 test('KPI and identity searches use exact status groups, PT filters stay separate', () => {
-  const task = { origin: 'https://example.com', identity: { userId: '12345', username: 'reader' }, observedStatus: 'already_signed' };
-  assert.equal(matchesTask(task, { status: 'completed', query: '12345' }), true);
+  const task = { origin: 'https://example.com', identity: { userId: '100007', username: 'reader' }, observedStatus: 'already_signed' };
+  assert.equal(matchesTask(task, { status: 'completed', query: '100007' }), true);
   assert.equal(matchesTask(task, { status: 'pending' }), false);
   assert.equal(matchesTask({ ...task, observedStatus: 'not_available' }, { status: 'pending' }), false);
   assert.equal(matchesPt({ inLegacyPlan: false }, 'monitor'), true);

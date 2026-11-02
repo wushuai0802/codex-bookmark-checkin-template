@@ -24,8 +24,9 @@ else {
 }
 
 $patterns = [ordered]@{
-    'Windows user path' = '(?i)[A-Z]:\\Users\\[^\\\s''"]+'
-    'Private workspace path' = '(?i)[A-Z]:\\AIWorkspace\\'
+    'Windows user path' = '(?i)[A-Z]:(?:\\+|/)Users(?:\\+|/)[^\\/\s''"]+'
+    'Private workspace path' = '(?i)[A-Z]:(?:\\+|/)AIWorkspace(?:\\+|/|\b)'
+    'Private archive path' = '(?i)[A-Z]:(?:\\+|/)AIArchive(?:\\+|/|\b)'
     'Email address' = '(?i)\b[A-Z0-9._%+-]+@(?!(?:example\.com|[A-Z0-9.-]+\.example)\b)[A-Z0-9.-]+\.[A-Z]{2,}\b'
     'Telegram bot token' = '\b\d{7,12}:[A-Za-z0-9_-]{30,}\b'
     'OpenAI-style secret' = '\bsk-[A-Za-z0-9_-]{20,}\b'

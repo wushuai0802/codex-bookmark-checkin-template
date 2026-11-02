@@ -9,7 +9,7 @@ const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).for
 test('PT address review remains external through public projection without erasing an uncertain submit',()=>{
   const now=new Date(),businessDate=day(now),origin='https://pt.example',taskId='task';
   for(const code of ['site_migration','bookmark_origin_changed']){
-    const report=buildPtStatus({businessDate,generatedAt:now.toISOString(),planTargets:[{origin,folderNames:['PT白名单']}],
+    const report=buildPtStatus({businessDate,generatedAt:now.toISOString(),planTargets:[{origin,folderNames:['example-pt-folder']}],
       tasks:[{taskId,origin,observedStatus:'needs_attention',submissionAttempted:true,failureCode:'submission_outcome_unknown',underlyingFailureCode:code}],
       receipts:[{taskId,observedAt:now.toISOString(),evidence:{source:'none',authoritative:false}}]});
     const site=publicPtStatus(report).sites[0];
@@ -23,7 +23,7 @@ test('PT address review remains external through public projection without erasi
 test('public PT projection preserves classification, pending diagnostics and null-time inventory audits',()=>{
   const now=new Date(),businessDate=day(now),generatedAt=now.toISOString(),origin='https://pt.example';
   const report=buildPtStatus({businessDate,generatedAt,monitorCatalog:{sites:[{origin},{origin:'https://monitor.example'}]},
-    planTargets:[{origin,folderNames:['PT白名单']}],tasks:[{taskId:'task',origin,observedStatus:'needs_attention',submissionAttempted:true,failureCode:'submission_outcome_unknown'}]});
+    planTargets:[{origin,folderNames:['example-pt-folder']}],tasks:[{taskId:'task',origin,observedStatus:'needs_attention',submissionAttempted:true,failureCode:'submission_outcome_unknown'}]});
   const projected=publicPtStatus(report);
   assert.equal(projected.counts.monitorOnlyUnconfirmed,1);assert.equal(projected.counts.verificationPending,1);
   const pending=projected.sites.find(site=>site.origin===origin);assert.equal(pending.evidenceState,'verification_pending');
@@ -48,7 +48,7 @@ test('old PT snapshots are classified from sanitized facts, not stale or caller-
 
 test('public reconciliation cannot accept an unbound success merely because the old snapshot sets a flag',()=>{
   const now=new Date(),businessDate=day(now),origin='https://pt.example',accountRef='acct_0123456789abcdef',profileBinding='a'.repeat(64);
-  const args={businessDate,generatedAt:now.toISOString(),planTargets:[{origin,folderNames:['PT白名单']}],
+  const args={businessDate,generatedAt:now.toISOString(),planTargets:[{origin,folderNames:['example-pt-folder']}],
     tasks:[{taskId:'task',origin,accountRef,profileBinding,observedStatus:'needs_attention',submissionAttempted:true,failureCode:'submission_outcome_unknown'}],
     receipts:[{taskId:'task',observedAt:new Date(now.getTime()-1000).toISOString(),evidence:{source:'none',authoritative:false}}],
     fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,accountRef,status:'already_signed',observedAt:now.toISOString(),submissionAttempted:false,readSafety:'reviewed_passive',

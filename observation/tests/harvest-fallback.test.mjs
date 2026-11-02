@@ -13,7 +13,7 @@ const fixture=()=>({
     failed('https://ourbits.club'),failed('https://external.example'),{origin:'https://signed.example',status:'signed',observedAt:'2026-09-20T09:55:00+08:00',evidence:{authoritative:true}},
     {origin:'https://uncertain.example',userId:'7',status:'unknown',observedAt:null}
   ],taskCompletion:{resultId:5,status:'completed',startedAt:'2026-09-20T09:14:00+08:00',completedAt:'2026-09-20T09:16:00+08:00'}},catalog:{sites:[{origin:'https://ourbits.club'},{origin:'https://external.example',entryUrl:'https://external.example/attendance'},{origin:'https://signed.example',entryUrl:'https://signed.example/'}]},
-  plan:{targets:[{origin:'https://ourbits.club',folderNames:['PT白名单']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
+  plan:{targets:[{origin:'https://ourbits.club',folderNames:['example-pt-folder']}]},latest:{runId:'20260920-fixture',runState:'final',isComplete:true,results:[{origin:'https://ourbits.club',status:'deferred'}]}
 });
 
 test('a new bound unsigned observation renews exhausted passive work once and still needs a fresh executor check',async t=>{
@@ -326,7 +326,7 @@ test('site-bound PT fallback includes monitored sites outside the daily plan',()
 
 test('a monitored PT target keeps its execution result even when its execution folder is not named PT',()=>{
   const f=fixture();
-  f.plan.targets=[{origin:'https://external.example',folderNames:['公益站']}];
+  f.plan.targets=[{origin:'https://external.example',folderNames:['example-other-folder']}];
   f.harvest.sites=[failed('https://external.example')];
   f.catalog.sites=f.catalog.sites.filter(site=>site.origin==='https://external.example');
   const report=planHarvestFallback(f);
@@ -339,7 +339,7 @@ test('a monitored PT target keeps its execution result even when its execution f
 test('a dated authoritative read-only supplement prevents the same monitored origin entering fallback',()=>{
   const f=fixture();f.harvest.sites=[failed('https://external.example')];
   f.catalog.sites=f.catalog.sites.filter(site=>site.origin==='https://external.example');
-  f.plan.targets=[{origin:'https://external.example',folderNames:['公益站']}];
+  f.plan.targets=[{origin:'https://external.example',folderNames:['example-other-folder']}];
   f.fallbackReport={source:'execution-supplement',businessDate:'2026-09-20',sites:[{
     origin:'https://external.example',status:'already_signed',observedAt:'2026-09-20T01:59:00Z',
     evidence:{source:'pt_page',authoritative:true}}]};
@@ -427,7 +427,7 @@ test('Harvest completion audits every registered PT task, including one absent f
   const f=fixture();
   f.catalog.sites=f.catalog.sites.slice(0,1);
   f.harvest.sites=f.harvest.sites.slice(0,1);
-  f.plan.targets.push({origin:'https://unobserved.example',folderNames:['PT白名单']});
+  f.plan.targets.push({origin:'https://unobserved.example',folderNames:['example-pt-folder']});
   f.harvest.sites[0].status='unknown';f.harvest.sites[0].observedAt=null;f.harvest.sites[0].userId=null;
   const audit=planHarvestFallback(f);
   assert.equal(audit.registeredCount,2);
@@ -464,7 +464,7 @@ test('Audiences unknown review records a passive diagnostic and never calls the 
   const origin='https://audiences.me';
   f.harvest.sites=[failed(origin)];
   f.catalog.sites=[{origin}];
-  f.plan.targets=[{origin,folderNames:['PT白名单']}];
+  f.plan.targets=[{origin,folderNames:['example-pt-folder']}];
   f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
   let siteCalls=0,engineCalls=0;
   const passive={origin,status:'needs_attention',observedAt:f.now.toISOString(),businessDate:'2026-09-20',
@@ -496,7 +496,7 @@ test('registered OpenCD fresh unsigned proof resumes V1 once and remains quarant
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));configureUnifiedFixture(root);
   const f=fixture(),origin='https://open.cd';
   f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/index.php'}];
-  f.plan.targets=[{origin,folderNames:['公益站']}];
+  f.plan.targets=[{origin,folderNames:['example-other-folder']}];
   f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
   let engineCalls=0;
   const proof={origin,status:'not_signed',observedAt:now.toISOString(),businessDate:'2026-09-20',accountKey:'site-default',
@@ -515,7 +515,7 @@ test('registered review cannot resume from unverified, stale, wrong-day or non-o
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'pt-registered-open-deny-'));
     t.after(()=>fs.rmSync(root,{recursive:true,force:true}));configureUnifiedFixture(root);
     const f=fixture(),origin='https://open.cd';f.harvest.sites=[failed(origin)];f.catalog.sites=[{origin,entryUrl:origin+'/index.php'}];
-    f.plan.targets=[{origin,folderNames:['公益站']}];f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
+    f.plan.targets=[{origin,folderNames:['example-other-folder']}];f.latest.results=[{origin,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}];
     let engineCalls=0;const at=variant==='stale'?new Date(now.getTime()-6*60_000):now;
     const proof={origin,status:'not_signed',observedAt:at.toISOString(),businessDate:variant==='wrong-day'?'2026-09-19':'2026-09-20',
       accountKey:'site-default',profileBinding:'b'.repeat(64),operationMode:'safe_history_page',readSafety:'reviewed_passive',submissionAttempted:false,

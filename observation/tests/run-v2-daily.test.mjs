@@ -98,8 +98,8 @@ test('daily runner blocks migrations whose adapter is not implemented',async()=>
 test('daily runner dispatches an implemented non-New-API adapter',async()=>{
   const root=standaloneFixture('daily-agent-adapter-'),legacy=path.join(root,'legacy'),outputDir=path.join(root,'outputs');fs.mkdirSync(path.join(legacy,'config'),{recursive:true});fs.mkdirSync(path.join(legacy,'data'),{recursive:true});fs.mkdirSync(outputDir,{recursive:true});
   fs.writeFileSync(path.join(legacy,'config','config.json'),JSON.stringify({schedule:'08:05'}));fs.writeFileSync(path.join(legacy,'data','last-valid-bookmark-plan.json'),JSON.stringify({planFingerprint:'a'.repeat(64)}));
-  fs.writeFileSync(path.join(outputDir,'v2-profile-registry.json'),JSON.stringify({profiles:[{accountKey:'agentrouter-700001',origin:'https://agentrouter.org',state:'ready',identity:'700001',expectedIdentity:'700001',profileDir:path.join(root,'data','v2-profiles','agentrouter-700001','profile')}]}));
-  fs.writeFileSync(path.join(outputDir,'migration-agentrouter-700001.json'),JSON.stringify({state:'candidate',accountKey:'agentrouter-700001',origin:'https://agentrouter.org',accountId:'700001',adapterId:'oauth-reward.execute.v1'}));
+  fs.writeFileSync(path.join(outputDir,'v2-profile-registry.json'),JSON.stringify({profiles:[{accountKey:'agentrouter-100001',origin:'https://agentrouter.org',state:'ready',identity:'100001',expectedIdentity:'100001',profileDir:path.join(root,'data','v2-profiles','agentrouter-100001','profile')}]}));
+  fs.writeFileSync(path.join(outputDir,'migration-agentrouter-100001.json'),JSON.stringify({state:'candidate',accountKey:'agentrouter-100001',origin:'https://agentrouter.org',accountId:'100001',adapterId:'oauth-reward.execute.v1'}));
   let seen=null;const report=await runDaily({root,legacyRoot:legacy,execute:false,now:new Date('2026-09-09T01:00:00Z'),runAccount:async({task})=>{seen=task;return {stage:'already_done',phase:'already_done',mutationCount:0};}});
   assert.equal(report.results[0].stage,'already_done');assert.equal(seen.adapterId,'oauth-reward.execute.v1');
 });

@@ -21,7 +21,7 @@ function fixture(t){
     harvest:{source:'harvest',businessDate:'2026-10-30',generatedAt:now.toISOString(),
       sites:origins.map(origin=>({origin,status:'failed',observedAt:now.toISOString()})),
       taskCompletion:{status:'completed',resultId:1,startedAt:now.toISOString(),completedAt:now.toISOString()}},
-    catalog:{sites:origins.map(origin=>({origin}))},plan:{targets:origins.map(origin=>({origin,folderNames:['PT白名单']}))},
+    catalog:{sites:origins.map(origin=>({origin}))},plan:{targets:origins.map(origin=>({origin,folderNames:['example-pt-folder']}))},
     latest:{runId:'20261030-fixture',runState:'final',isComplete:true,results:origins.map(origin=>({origin,status:'deferred'}))}}};
 }
 function receipt(origin,at,status='not_signed'){

@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {planRelease,applyRelease,rollbackRelease,auditRelease} from './release-lib.mjs';
 import {probeRelease,releaseSafetyCallbacks,verifyRelease} from './release-runtime.mjs';
 import {evaluateReleaseGate} from './release-gate.mjs';
+import {scanConfiguredPrivateValues,formatPrivateValueFindings} from './private-value-scan.mjs';
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const fields={'--execution-root':'executionRoot','--observation-root':'observationRoot','--ops-root':'opsRoot',
   '--backup-root':'backupRoot','--task-names':'taskNames','--out':'out','--manifest':'manifest','--backup':'backup',
@@ -61,6 +62,9 @@ export async function runReleaseCli(argv,{projectSource=source,probe,stdout=valu
       // Read only: report whether apply would be admitted now, without taking a lock.
       if(!options.manifest)throw Error('manifest required');
       const plan=json(options.manifest,'release manifest');assertManifestRoots(plan,options);
+      const privacy=scanConfiguredPrivateValues({source:projectSource,
+        config:options.config??path.join(projectSource,'tools/release.local.json'),roots:options});
+      if(!privacy.ok){for(const line of formatPrivateValueFindings(privacy))stderr(line);return 3;}
       const inspect=probe??(current=>probeRelease(current,{taskNames:options.taskNames}));
       const result=evaluateReleaseGate(inspect(plan),{now:new Date()});stdout(JSON.stringify(result));
       return result.ok?0:3;

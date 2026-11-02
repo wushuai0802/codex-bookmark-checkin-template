@@ -32,14 +32,14 @@ test("不预设名称时列出候选书签目录供用户选择", async () => {
   assert.deepEqual(container.childFolders, [{ name: "每日领取", urlCount: 1 }]);
 });
 
-test("合并两个移动设备书签并按来源与站点去重", async () => {
+test("合并两个example-container并按来源与站点去重", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-bookmarks-"));
   const file = path.join(directory, "Bookmarks");
   const fixture = {
     roots: {
       bookmark_bar: {
         id: "1", type: "folder", name: "书签栏", children: [{
-          id: "10", type: "folder", name: "移动设备书签", children: [{
+          id: "10", type: "folder", name: "example-container", children: [{
             id: "11", type: "folder", name: "签到", children: [
               { id: "12", type: "url", name: "A", url: "https://a.example/attendance.php" },
               { id: "13", type: "url", name: "B 控制台", url: "https://b.example/console" },
@@ -48,8 +48,8 @@ test("合并两个移动设备书签并按来源与站点去重", async () => {
         }],
       },
       synced: {
-        id: "3", type: "folder", name: "移动设备书签", children: [{
-          id: "20", type: "folder", name: "公益站", children: [
+        id: "3", type: "folder", name: "example-container", children: [{
+          id: "20", type: "folder", name: "example-other-folder", children: [
             { id: "21", type: "url", name: "B 首页", url: "https://b.example/dashboard/overview" },
             { id: "22", type: "url", name: "C", url: "https://c.example/checkin" },
           ],
@@ -59,15 +59,15 @@ test("合并两个移动设备书签并按来源与站点去重", async () => {
   };
   await fs.writeFile(file, JSON.stringify(fixture));
   const plan = await readBookmarkPlan(file, {
-    mobileFolderNames: ["移动设备书签"],
-    targetFolderNames: ["签到", "公益站"],
+    mobileFolderNames: ["example-container"],
+    targetFolderNames: ["签到", "example-other-folder"],
   });
 
   assert.equal(plan.sources.length, 2);
   assert.equal(plan.exactUrlCount, 4);
   assert.equal(plan.targetCount, 3);
   assert.equal(plan.comparison["签到"].unionUrlCount, 2);
-  assert.equal(plan.comparison["公益站"].unionUrlCount, 2);
+  assert.equal(plan.comparison["example-other-folder"].unionUrlCount, 2);
   const bTarget = plan.targets.find((target) => target.origin === "https://b.example");
   assert.deepEqual(bTarget.candidates, ["https://b.example/dashboard/overview", "https://b.example/console"]);
   assert.deepEqual(bTarget.allowedOrigins, ["https://b.example"]);
@@ -81,16 +81,16 @@ test("精确书签范围只读取指定路径、ID 和 GUID", async () => {
       roots: {
         bookmark_bar: {
           id: "1", type: "folder", name: "书签栏", children: [{
-            id: "889", guid: "target-guid", type: "folder", name: "移动设备书签", children: [{
-              id: "2", type: "folder", name: "公益站", children: [
+            id: "889", guid: "target-guid", type: "folder", name: "example-container", children: [{
+              id: "2", type: "folder", name: "example-other-folder", children: [
                 { id: "3", type: "url", name: "保留", url: "https://keep.example/console" },
               ],
             }],
           }],
         },
         synced: {
-          id: "810", guid: "other-guid", type: "folder", name: "移动设备书签", children: [{
-            id: "4", type: "folder", name: "公益站", children: [
+          id: "810", guid: "other-guid", type: "folder", name: "example-container", children: [{
+            id: "4", type: "folder", name: "example-other-folder", children: [
               { id: "5", type: "url", name: "排除", url: "https://exclude.example/console" },
             ],
           }],
@@ -99,10 +99,10 @@ test("精确书签范围只读取指定路径、ID 和 GUID", async () => {
     }));
     const plan = await readBookmarkPlan(file, {
       mobileFolderNames: [],
-      mobileFolderPaths: ["书签栏 / 移动设备书签"],
+      mobileFolderPaths: ["书签栏 / example-container"],
       mobileFolderIds: ["889"],
       mobileFolderGuids: ["target-guid"],
-      targetFolderNames: ["公益站"],
+      targetFolderNames: ["example-other-folder"],
     });
     assert.equal(plan.exactScopeConfigured, true);
     assert.equal(plan.exactScopeReports[0].matchedFolderCount, 1);
@@ -116,25 +116,25 @@ test("精确范围不匹配时拒绝从旧备份恢复", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "checkin-bookmark-exact-backup-"));
   const file = path.join(directory, "Bookmarks");
   const options = {
-    mobileFolderNames: ["移动设备书签"],
-    mobileFolderPaths: ["书签栏 / 移动设备书签"],
+    mobileFolderNames: ["example-container"],
+    mobileFolderPaths: ["书签栏 / example-container"],
     mobileFolderIds: ["889"],
     mobileFolderGuids: ["current-guid"],
-    targetFolderNames: ["公益站"],
+    targetFolderNames: ["example-other-folder"],
   };
   try {
     await fs.writeFile(file, JSON.stringify({
       roots: { bookmark_bar: {
         id: "1", type: "folder", name: "书签栏", children: [{
-          id: "900", guid: "moved-guid", type: "folder", name: "移动设备书签", children: [],
+          id: "900", guid: "moved-guid", type: "folder", name: "example-container", children: [],
         }],
       } },
     }));
     await fs.writeFile(`${file}.bak`, JSON.stringify({
       roots: { bookmark_bar: {
         id: "1", type: "folder", name: "书签栏", children: [{
-          id: "889", guid: "current-guid", type: "folder", name: "移动设备书签", children: [{
-            id: "2", type: "folder", name: "公益站", children: [
+          id: "889", guid: "current-guid", type: "folder", name: "example-container", children: [{
+            id: "2", type: "folder", name: "example-other-folder", children: [
               { id: "3", type: "url", name: "旧站点", url: "https://stale.example/console" },
             ],
           }],
@@ -243,8 +243,8 @@ test("仅从显式配置加入关联签到入口", async () => {
   await fs.writeFile(file, JSON.stringify({
     roots: {
       synced: {
-        id: "1", type: "folder", name: "移动设备书签", children: [{
-          id: "2", type: "folder", name: "公益站", children: [
+        id: "1", type: "folder", name: "example-container", children: [{
+          id: "2", type: "folder", name: "example-other-folder", children: [
             { id: "3", type: "url", name: "旧入口", url: "https://old.example/console" },
           ],
         }],
@@ -252,8 +252,8 @@ test("仅从显式配置加入关联签到入口", async () => {
     },
   }));
   const plan = await readBookmarkPlan(file, {
-    mobileFolderNames: ["移动设备书签"],
-    targetFolderNames: ["公益站"],
+    mobileFolderNames: ["example-container"],
+    targetFolderNames: ["example-other-folder"],
     relatedCandidateUrls: { "https://old.example": ["https://new.example/"] },
   });
   assert.deepEqual(plan.targets[0].candidates, ["https://old.example/console", "https://new.example/"]);

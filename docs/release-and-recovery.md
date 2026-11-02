@@ -27,6 +27,10 @@ node tools/release.mjs verify --manifest "<observation-root>/outputs/release-pla
 
 发布前可用 `node tools/release.mjs gate --manifest "<清单>" --config tools/release.local.json` 只读查看当前是否允许发布，不取锁、不写文件；通过返回 0，门槛不通过返回 3，缺少清单等命令错误返回 1。
 
+`gate` 先检查本机私有值：从指定配置（默认 `tools/release.local.json`）的三个运行根读取 `config/` 直属的私有 JSON，排除 defaults、公开 qa/site rules、example 和 schema，仅收集工具中列出的账号、SSH、用户名、邮箱、Token、Webhook 和书签目录字段。它逐行扫描 `git ls-files` 的全部文本文件；命中只输出仓库相对 `文件:行号 键名类别`，不输出值。配置缺失、损坏、不可读或路径经过 Junction 时拒绝通过。Profile、加密文件和数据目录不读取；受管文件意外包含这些路径时直接拒绝。公开站点规则、路径字段、长度不足 5 的值及明显通用值不参与逐值比对。
+
+也可单独运行 `node tools/private-value-scan.mjs --config tools/release.local.json`，干净返回 0，命中或读取失败返回 1。本项只在本机发布前运行，CI 只跑合成配置测试。格式扫描仍由 `Scan-PublicSafety.ps1` 在本机和 CI 执行。`gate` 通过后再按授权流程应用；不要用 CI 的格式扫描代替本机逐值检查。
+
 清单覆盖明确的源码、脚本、公开资源和包元数据，也包括执行层的 `config/defaults.json`、`config/qa-rules.json`、`config/site-rules.public.json`、`requirements-ocr.txt`，以及观测层的 `Dockerfile`、`compose.nas.yaml`、`compose.worker.yaml`、`.dockerignore`。这些是公开运行输入，不会把整个 `config` 目录加入发布范围。
 
 私有配置、账号绑定、Profile、账本、原始结果和 node_modules 不覆盖。应用时取得执行租约，计划后源码或运行副本发生漂移则拒绝覆盖；回滚也先检查运行副本和备份哈希。不要提交含本机路径的清单。统一项目只使用根发布工具更新运行副本；`execution/scripts/Sync-PrivateRuntime.ps1` 保留旧安装兼容和只读诊断，不作为统一发布入口。

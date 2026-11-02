@@ -24,7 +24,8 @@ test('isolated browser worker binds only dedicated offscreen profile', async()=>
 });
 
 test('worker rejects normal Chrome profile paths', async()=>{
-  await assert.rejects(()=>runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:'C:/Users/test/AppData/Local/Google/Chrome/User Data/Default',dedicatedRoot:'C:/Users/test',executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async()=>({close(){}})}),/forbidden/);
+  const userRoot=path.win32.join('C:/','Users','example-user');
+  await assert.rejects(()=>runIsolatedBrowserTask({task,adapterDefinition:adapter,profileDir:path.win32.join(userRoot,'AppData/Local/Google/Chrome/User Data/Default'),dedicatedRoot:userRoot,executablePath:'C:/Chrome/chrome.exe',launchPersistentContext:async()=>({close(){}})}),/forbidden/);
 });
 
 test('worker rejects a profile bound to another V2 account', async()=>{

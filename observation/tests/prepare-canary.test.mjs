@@ -17,7 +17,7 @@ test('active canary task carries V2 ownership and disables legacy fallback',()=>
 });
 
 test('canary task preserves the selected concrete adapter',()=>{
-  const profile={accountKey:'agentrouter-700001',origin:'https://agentrouter.org',state:'ready',identity:'700001',expectedIdentity:'700001',profileDir:'profiles/agentrouter-700001'};
+  const profile={accountKey:'agentrouter-100001',origin:'https://agentrouter.org',state:'ready',identity:'100001',expectedIdentity:'100001',profileDir:'profiles/agentrouter-100001'};
   const task=buildCanaryTask({profile,businessDate:'2026-09-09',planHash:'a'.repeat(64),adapterId:'oauth-reward.execute.v1'});
   assert.equal(task.adapterId,'oauth-reward.execute.v1');
 });

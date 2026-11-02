@@ -14,6 +14,8 @@ OAuth diagnostics and site-address change handling.
 | `execution/` | Browser sessions, site rules, retries, authoritative receipts and notifications |
 | `observation/` | Scheduling lease, Harvest/PT reconciliation, redacted ledger and NAS dashboard |
 
+The three Windows runtime roots are `<execution-root>`, `<observation-root>`
+and `<operations-root>`, as described in [发布与恢复](docs/release-and-recovery.md).
 The deployed Windows runner uses its existing private configuration and Chrome
 profiles. The observation package calls that runner through a bounded lease;
 the NAS dashboard does not hold credentials or execute browser actions. Harvest
