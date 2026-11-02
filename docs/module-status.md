@@ -413,7 +413,7 @@
 | `observation/src/legacy-engine.mjs:151` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/pt-site-execution.mjs:86` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/doctor.mjs:258` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
-| `tools/private-value-scan.mjs:137` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `tools/private-value-scan.mjs:138` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 
 ## 结构围栏
 

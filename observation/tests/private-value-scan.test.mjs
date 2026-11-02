@@ -173,7 +173,7 @@ test('an empty directory marker under a runtime folder passes, but other files t
 
 test('the browser default mobile folder name is not treated as a private value', t => {
   const f = fixture(t);
-  fs.writeFileSync(path.join(f.executionRoot, 'config/generic.json'), JSON.stringify({mobileFolderNames: ['移动设备书签']}));
+  save(path.join(f.roots.executionRoot, 'config/config.json'), {mobileFolderNames: ['移动设备书签']});
   f.track('generic-folder.txt', '移动设备书签');
   assert.equal(f.scan().ok, true);
 });
