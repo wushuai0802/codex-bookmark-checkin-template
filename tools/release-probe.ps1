@@ -266,12 +266,9 @@ $fallback = Capture {
                     }
                 }
                 $latest = $items[-1]
-                if ($latest.state -in $deferred) {
-                    Require ($null -ne $latest.nextEligibleAt)
-                    if ((Day $latest.nextEligibleAt) -le $today) { @{ kind = 'scheduled_fallback' } }
-                }
-                elseif ($kind -eq 'verifications' -and $latest.outcome.status -notin @('signed','already_signed')) {
-                    # Completed candidates no longer enter preview.eligible.
+                if ($kind -eq 'verifications' -and $latest.outcome.status -notin @('signed','already_signed')) {
+                    # Completed candidates no longer enter preview.eligible, so
+                    # a deferred retry of one never runs and leaves its audit last.
                     # Only close the passive budget; activity and wakeups above
                     # must still block even when completion is already known.
                     $account = if ($latest.accountKey) { $latest.accountKey } else { 'site-default' }
@@ -288,6 +285,12 @@ $fallback = Capture {
                         if ($effective.status -in @('signed','already_signed') -and $effective.authoritative -eq $true -and $effective.fresh -eq $true -and
                             $null -ne $effective.observedAt -and (Day $effective.observedAt) -eq $today) { continue }
                     }
+                }
+                if ($latest.state -in $deferred) {
+                    Require ($null -ne $latest.nextEligibleAt)
+                    if ((Day $latest.nextEligibleAt) -le $today) { @{ kind = 'scheduled_fallback' } }
+                }
+                elseif ($kind -eq 'verifications' -and $latest.outcome.status -notin @('signed','already_signed')) {
                     # Without a remaining candidate proof, an unused passive
                     # budget cannot be declared settled from its status alone.
                     Require ($null -ne $latest.startedAt)

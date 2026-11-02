@@ -165,7 +165,13 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
     || (!failureCode && ["timeout", "failed"].includes(status))
   );
   const diagnostic=readOAuthProgress(progress);
+  // Fixed lowercase codes only, so the report can say why without carrying helper text.
+  const recoveryCode=code=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)?code:null;
+  const recoveryReason=recoveryCode(value?.nativeTwoFactorRecovery?.reason);
+  const providerReason=recoveryCode(value?.nativeTwoFactorRecovery?.providerReason);
   return {
+    ...(recoveryReason?{recoveryReason}:{}),
+    ...(providerReason?{providerReason}:{}),
     succeeded: status === "logged_in",
     status,
     diagnostic: (failureMessages[failureCode] ?? messages[status] ?? messages.failed)+

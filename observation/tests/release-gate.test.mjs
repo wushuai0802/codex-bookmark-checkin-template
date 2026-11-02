@@ -398,6 +398,26 @@ test('probe settles passive verification after a completed successful attempt fo
   delete f.verification.accountKey;delete f.audit.attempts[0].accountKey;
   assert.deepEqual(f.run(),[]);
 });
+test('probe settles a deferred verification only with authoritative proof for that site today',t=>{
+  const f=fallbackProbeFixture(t),busy={origin:f.origin,accountKey:f.verification.accountKey,state:'deferred_busy',startedAt:f.startedAt,nextEligibleAt:f.startedAt};
+  f.audit.verifications=[f.verification,busy];
+  assert.deepEqual(f.run(),[{kind:'scheduled_fallback'}]);
+  f.view.ptStatus.sites=[f.site];
+  assert.deepEqual(f.run(),[]);
+  for(const weak of [{authoritative:false},{fresh:false},{status:'needs_attention'}]){
+    f.site.effective={...f.effective,...weak};
+    assert.deepEqual(f.run(),[{kind:'scheduled_fallback'}]);
+  }
+  f.site.effective=f.effective;f.site.origin='https://other.example.test';
+  assert.deepEqual(f.run(),[{kind:'scheduled_fallback'}]);
+  f.site.origin=f.origin;f.audit.attempts=[{origin:f.origin,accountKey:f.verification.accountKey,state:'completed',outcome:{status:'signed'}}];
+  f.view.ptStatus.sites=[];
+  assert.deepEqual(f.run(),[]);
+  f.audit.attempts=[{origin:f.origin,state:'deferred_busy',nextEligibleAt:f.startedAt}];
+  assert.deepEqual(f.run(),[{kind:'scheduled_fallback'},{kind:'scheduled_fallback'}]);
+  f.view.ptStatus.sites=[f.site];
+  assert.deepEqual(f.run(),[{kind:'scheduled_fallback'}]);
+});
 test('probe does not use another origin or account successful attempt to settle passive verification',t=>{
   const f=fallbackProbeFixture(t);
   for(const other of [{origin:'https://other.example.test',accountKey:f.verification.accountKey},{origin:f.origin,accountKey:'another-account'}]){
@@ -433,13 +453,12 @@ test('probe keeps in-progress fallback pending despite authoritative effective c
     assert.deepEqual(f.run(),[{kind:'active_fallback'}]);f.audit[kind].pop();
   }
 });
-test('probe preserves due deferred, Harvest and unsigned wakeups despite effective completion',t=>{
+test('probe preserves due deferred attempts, Harvest and unsigned wakeups despite effective completion',t=>{
   const f=fallbackProbeFixture(t);f.view.ptStatus.sites=[f.site];
   for(const state of ['deferred_busy','deferred_preflight']){
-    f.verification.state=state;f.verification.nextEligibleAt=f.startedAt;
+    f.audit.attempts=[{origin:f.origin,accountKey:f.verification.accountKey,state,nextEligibleAt:f.startedAt}];
     assert.deepEqual(f.run(),[{kind:'scheduled_fallback'}]);
   }
-  f.verification.state='not_signed';
   f.audit.attempts=[{origin:f.origin,accountKey:f.verification.accountKey,state:'completed',submissionState:'not_submitted',v1Status:'deferred'}];
   assert.deepEqual(f.run(),[{kind:'harvest_wakeup'}]);f.audit.attempts=[];
   save(path.join(f.observationRoot,`outputs/pt-fallback-results-${f.today}.json`),{businessDate:f.today,sites:[{

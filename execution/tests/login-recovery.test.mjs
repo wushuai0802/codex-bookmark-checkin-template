@@ -42,6 +42,20 @@ test("登录助手保留二次验证终态且禁止普通重试", () => {
   assert.equal(outcome.retryable, false);
 });
 
+test("登录助手保留恢复原因代码且丢弃其他文本", () => {
+  const outcome = loginHelperOutcome(JSON.stringify({ status: "needs_attention", failureCode: "two_factor_required",
+    nativeTwoFactorRecovery: { attempted: false, accepted: false, reason: "provider_unavailable", providerReason: "vault_locked" } }));
+  assert.equal(outcome.recoveryReason, "provider_unavailable");
+  assert.equal(outcome.providerReason, "vault_locked");
+  assert.equal(outcome.failureCode, "two_factor_required");
+  assert.equal(outcome.retryable, false);
+  const unsafe = loginHelperOutcome(JSON.stringify({ status: "needs_attention",
+    nativeTwoFactorRecovery: { reason: "user@example.com", providerReason: "Secret Text" } }));
+  assert.equal(unsafe.recoveryReason, undefined);
+  assert.equal(unsafe.providerReason, undefined);
+  assert.equal(loginHelperOutcome('{"status":"logged_in"}').recoveryReason, undefined);
+});
+
 test("登录助手区分可自愈超时与确定性身份错误", () => {
   const timeout = loginHelperOutcome('{"status":"needs_attention","failureCode":"oauth_timeout"}');
   assert.equal(timeout.failureCode, "oauth_timeout");
