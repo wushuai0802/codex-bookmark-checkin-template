@@ -24,7 +24,7 @@ test('Agent adapter uses the OAuth relogin flow instead of a guessed check-in en
     waitForTimeout:async()=>{}
   };
   const context={page},adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{provider:'LinuxDO',forceLogout:true}});
-  const result=await adapter.methods.submit_once({identity:{userId:'700001'},context});
+  const result=await adapter.methods.submit_once({identity:{userId:'100001'},context});
   assert.equal(result.state,'accepted');
   assert.ok(calls.some(value=>value.includes('/api/user/logout')));
   assert.equal(calls.some(value=>value.includes('/api/user/checkin')||value.includes('/api/user/sign_in')),false);
@@ -40,7 +40,7 @@ test('Agent adapter waits for a provider button rendered after the login page lo
     getByRole:()=>delayed,getByText:()=>delayed,waitForEvent:async()=>null,waitForLoadState:async()=>{},waitForURL:async()=>{},waitForTimeout:async()=>{rendered=true;}
   };
   const adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{provider:'GitHub'}});
-  const result=await adapter.methods.submit_once({identity:{userId:'336634'},context:{page}});
+  const result=await adapter.methods.submit_once({identity:{userId:'100002'},context:{page}});
   assert.equal(result.state,'accepted');assert.equal(clicks[0],'provider');assert.ok(clicks.length>=1);
 });
 
@@ -51,7 +51,7 @@ test('GitHub provider accepts only its reviewed OAuth host family',async()=>{
     getByRole:()=>locator([]),getByText:()=>locator([]),waitForEvent:async()=>({current:'https://github.com/login/oauth/authorize',url(){return this.current;},evaluate:async(_fn,args)=>({status:200,body:{data:{id:Number(args.expected)}}}),waitForTimeout:async function(){this.current='https://agentrouter.org/console';},getByRole:()=>({count:async()=>0,isVisible:async()=>false})}),waitForTimeout:async()=>{}
   };
   const adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{provider:'GitHub'}});
-  const result=await adapter.methods.submit_once({identity:{userId:'336634'},context:{page}});
+  const result=await adapter.methods.submit_once({identity:{userId:'100002'},context:{page}});
   assert.equal(result.state,'accepted');
 });
 
@@ -61,16 +61,16 @@ test('OAuth reward status requires the current day, account, type, and amount',a
     url:()=> 'https://agentrouter.org/console',
     evaluate:async(_fn,args)=>{
       calls.push(args);
-      if(args?.keys)return ['700001'];
-      if(String(args?.path??'').startsWith('/api/user/self'))return {status:200,url:'https://agentrouter.org/api/user/self',body:{success:true,data:{id:700001}}};
+      if(args?.keys)return ['100001'];
+      if(String(args?.path??'').startsWith('/api/user/self'))return {status:200,url:'https://agentrouter.org/api/user/self',body:{success:true,data:{id:100001}}};
       return {status:200,url:'https://agentrouter.org/api/log/self',body:{success:true,data:{items:[
-        {type:4,user_id:700001,created_at:Date.parse('2026-09-14T02:00:00+08:00')/1000,content:'每日签到成功，增加额度 $25'},
+        {type:4,user_id:100001,created_at:Date.parse('2026-09-14T02:00:00+08:00')/1000,content:'每日签到成功，增加额度 $25'},
         {type:4,user_id:999,created_at:Date.parse(day+'T02:00:00+08:00')/1000,content:'每日签到成功，增加额度 $25'}
       ]}}};
     }
   };
   const adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org'});
-  const identity=await adapter.methods.identity({expectedIdentity:'700001',context:{page}});
+  const identity=await adapter.methods.identity({expectedIdentity:'100001',context:{page}});
   const status=await adapter.methods.read_status({identity,businessDate:day,context:{page}});
   assert.equal(status.state,'not_signed');assert.equal(calls.filter(args=>String(args?.path??'').includes('page_size=100')).length,1);
 });
@@ -118,10 +118,10 @@ test('Alibaba slider page is reported as CAPTCHA and is never auto-submitted',as
 });
 
 test('identity scan follows V1 across renamed SPA storage keys without returning values',async()=>{
-  const page={url:()=> 'https://agentrouter.org/console',evaluate:async(_fn,args)=>args?.keys?['424894']:({status:200,body:{success:true,data:{id:424894}}})};
+  const page={url:()=> 'https://agentrouter.org/console',evaluate:async(_fn,args)=>args?.keys?['100008']:({status:200,body:{success:true,data:{id:100008}}})};
   const adapter=createOAuthRewardExecutionAdapter({origin:'https://agentrouter.org',rule:{userStorageKeys:['legacy_missing_key']}});
-  const result=await adapter.methods.identity({expectedIdentity:'424894',context:{page}});
-  assert.equal(result.userId,'424894');
+  const result=await adapter.methods.identity({expectedIdentity:'100008',context:{page}});
+  assert.equal(result.userId,'100008');
 });
 
 test('authenticated log proves the stored account even when self is WAF blocked',async()=>{

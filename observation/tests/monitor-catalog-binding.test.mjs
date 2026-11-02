@@ -28,7 +28,7 @@ test('reviewed PT in another approved daily folder joins monitoring without admi
   ]}}}));
   const config={bookmarksPath:file,excludedOrigins:[]};
   const plan={targets:[{origin:'https://dstudio.me',title:'Depth',candidates:['https://dstudio.me/attendance.php']},
-    {origin:'https://open.cd',title:'OpenCD',folderNames:['公益站'],candidates:['https://open.cd/index.php#']},
+    {origin:'https://open.cd',title:'OpenCD',folderNames:['example-other-folder'],candidates:['https://open.cd/index.php#']},
     {origin:'https://service.example',candidates:['https://service.example/']}]};
   const catalog=boundMonitorCatalog(file,{parentId:'1',folderId:'2'},now,{config,plan});
   assert.equal(catalog.registration,'current-execution-plan');

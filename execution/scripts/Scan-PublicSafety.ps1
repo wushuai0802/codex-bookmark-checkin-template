@@ -11,8 +11,9 @@ if ($git -and (Test-Path -LiteralPath (Join-Path $root '.git'))) {
     $relativeFiles = @(& $git.Source -C $root ls-files --cached --others --exclude-standard)
 }
 else {
-    $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-        $_.FullName.Substring($root.Length + 1).Replace('\', '/')
+    # -Name stays relative; FullName can expand an 8.3 root and misalign a substring.
+    $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue -Name | ForEach-Object {
+        $_.Replace('\', '/')
     } | Where-Object {
         $_ -notmatch '^(node_modules|data|logs|tmp|outputs|work|inputs|downloads|\.git|\.venv|venv|\.pytest_cache)(/|$)' -and
         $_ -notmatch '(^|/)(__pycache__|\.pytest_cache)(/|$)' -and
@@ -24,8 +25,9 @@ else {
 }
 
 $patterns = [ordered]@{
-    'Windows user path' = '(?i)[A-Z]:\\Users\\[^\\\s''"]+'
-    'Private workspace path' = '(?i)[A-Z]:\\AIWorkspace\\'
+    'Windows user path' = '(?i)[A-Z]:(?:\\+|/)Users(?:\\+|/)[^\\/\s''"]+'
+    'Private workspace path' = '(?i)[A-Z]:(?:\\+|/)AIWorkspace(?:\\+|/|\b)'
+    'Private archive path' = '(?i)[A-Z]:(?:\\+|/)AIArchive(?:\\+|/|\b)'
     'Email address' = '(?i)\b[A-Z0-9._%+-]+@(?!(?:example\.com|[A-Z0-9.-]+\.example)\b)[A-Z0-9.-]+\.[A-Z]{2,}\b'
     'Telegram bot token' = '\b\d{7,12}:[A-Za-z0-9_-]{30,}\b'
     'OpenAI-style secret' = '\bsk-[A-Za-z0-9_-]{20,}\b'

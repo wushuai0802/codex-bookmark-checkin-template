@@ -14,14 +14,14 @@ test('Depth Studio completed header is authoritative only on its authenticated d
   const args={origin,policy,url:policy.url,now,authenticated:true,bodyText:'今日已完成已签到',controls:[{path:'/attendance.php',text:'今日已完成 已签到'}]};
   const result=classifyPtPassivePage(args);
   assert.equal(result.status,'already_signed');assert.equal(result.evidence.authoritative,true);
-  const pending=classifyPtPassivePage({...args,bodyText:'欢迎回来，wushuai0802',controls:[{path:'/attendance.php',text:'待签到'}]});
+  const pending=classifyPtPassivePage({...args,bodyText:'欢迎回来，example-user',controls:[{path:'/attendance.php',text:'待签到'}]});
   assert.equal(pending.status,'not_signed');assert.equal(pending.evidence.authoritative,true);
   assert.equal(pending.evidence.statusSignal,'nexus_daily_header_unsigned');
-  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，wushuai0802',controls:[{path:'/attendance.php',text:'点击签到'}]}).status,'not_signed');
-  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，wushuai0802',controls:[{path:'/attendance.php',text:'点击签到待签到'}]}).status,'not_signed');
+  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，example-user',controls:[{path:'/attendance.php',text:'点击签到'}]}).status,'not_signed');
+  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，example-user',controls:[{path:'/attendance.php',text:'点击签到待签到'}]}).status,'not_signed');
   assert.equal(classifyPtPassivePage({...args,authenticated:false}).status,'unknown');
-  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，wushuai0802',controls:[{path:'/forums.php',text:'待签到'}]}).status,'unknown');
-  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，wushuai0802',controls:[]}).status,'unknown');
+  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，example-user',controls:[{path:'/forums.php',text:'待签到'}]}).status,'unknown');
+  assert.equal(classifyPtPassivePage({...args,bodyText:'欢迎回来，example-user',controls:[]}).status,'unknown');
 });
 
 test('a scope failure after a possible native submission remains unknown instead of becoming an unsubmitted preflight',async t=>{
@@ -343,7 +343,7 @@ test('guarded recovery permits one registered daily supplement only after passiv
     launch:async config=>{launches++;assert.equal(config.ptPassiveReadOnly,launches===1);return {
       route:async()=>{},
       newPage:async()=>({goto:async()=>({status:()=>200}),url:()=>origin+'/index.php',locator:selector=>({
-        innerText:async()=> '欢迎回来，wushuai0802',
+        innerText:async()=> '欢迎回来，example-user',
         evaluateAll:async()=>selector==='a'?true:[{path:'/attendance.php',text:'待签到'}],
       }),close:async()=>{}}),close:async()=>{}};},
     readReward:async()=>null,

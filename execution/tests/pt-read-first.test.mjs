@@ -30,7 +30,7 @@ test('authenticated daily completion stops the real browser flow before any atte
       if(route.request().url()!==origin+'/index.php'){await route.abort();return;}
       await route.fulfill({status:200,contentType:'text/html; charset=utf-8',body:'<a href="/logout.php">退出</a><a href="/usercp.php">设置</a><a href="/userdetails.php?id=7">本人</a><div id="info_block"><a href="/attendance.php">'+control+'</a></div>'});
     });
-    const result=await processTarget(context,{origin,allowedOrigins:[origin],folderNames:['PT白名单'],candidates:[origin+'/attendance.php']},
+    const result=await processTarget(context,{origin,allowedOrigins:[origin],folderNames:['example-pt-folder'],candidates:[origin+'/attendance.php']},
       {retryCount:0,navigationTimeoutMs:15000,failureScreenshots:false},{},'unused');
     assert.equal(result.status,'already_signed',JSON.stringify({result,visited}));assert.equal(result.submissionAttempted,false,JSON.stringify({origin,result,visited}));
     assert.equal(result.evidence.authoritative,true);assert.equal(result.evidence.statusSignal,'nexus_daily_header_signed');
@@ -48,7 +48,7 @@ test('Depth Studio button pending control is an account-bound passive not-signed
       assert.equal(route.request().url(),origin+'/index.php');
       await route.fulfill({status:200,contentType:'text/html; charset=utf-8',body:
         '<a href="/logout.php">退出</a><a href="/usercp.php">设置</a><a href="/userdetails.php?id=7">本人</a>'+
-        '<div id="info_block"><strong>欢迎回来，wushuai0802</strong><button>待签到</button></div>'});
+        '<div id="info_block"><strong>欢迎回来，example-user</strong><button>待签到</button></div>'});
     });
     const policy=ptReadPolicy(origin),page=await context.newPage();
     const response=await page.goto(policy.url,{waitUntil:'domcontentloaded'});
@@ -77,7 +77,7 @@ test('an unsigned homepage calendar legend cannot suppress the real bookmarked a
       await route.fulfill({status:200,contentType:'text/html; charset=utf-8',body:header+
         (url.pathname==='/attendance.php'?'<p>今日签到成功</p>':'<p>橙色日期代表已签到；签到成功后可查看记录。</p>')});
     });
-    const target={origin,allowedOrigins:[origin],folderNames:['PT白名单'],candidates:[origin+'/attendance.php']};
+    const target={origin,allowedOrigins:[origin],folderNames:['example-pt-folder'],candidates:[origin+'/attendance.php']};
     const config={retryCount:0,navigationTimeoutMs:5000,cloudflareWaitMs:2000,actionWaitMs:0,
       failureScreenshots:false,capturePtEvidence:true,ptFallbackRecheck:true};
     const first=await processTarget(context,target,config,[],'unused');
@@ -95,7 +95,7 @@ test('V1 fallback marker carries a fresh passive not-signed proof into the actio
   const origin='https://dstudio.me',policy=ptReadPolicy(origin),old=process.env.CHECKIN_PT_FALLBACK_RECHECK;
   t.after(()=>{if(old===undefined)delete process.env.CHECKIN_PT_FALLBACK_RECHECK;else process.env.CHECKIN_PT_FALLBACK_RECHECK=old;});
   const page={url:()=>policy.url,locator:selector=>({
-    innerText:async()=> '欢迎回来，wushuai0802',
+    innerText:async()=> '欢迎回来，example-user',
     evaluateAll:async()=>selector==='a'?true:[{path:'/attendance.php',text:'待签到'}],
   })};
   delete process.env.CHECKIN_PT_FALLBACK_RECHECK;
@@ -157,7 +157,7 @@ test('homepage status legends cannot confirm check-in when the authenticated dai
         '<a href="/logout.php">退出</a><a href="/usercp.php">设置</a><a href="/userdetails.php?id=7">本人</a>'+
         '<div id="info_block"><a href="/attendance.php">[签到得魔力]</a></div><footer>状态说明：已签到 / 待签到</footer>'});
     });
-    const result=await processTarget(context,{origin,allowedOrigins:[origin],folderNames:['PT白名单'],candidates:[origin+'/index.php']},
+    const result=await processTarget(context,{origin,allowedOrigins:[origin],folderNames:['example-pt-folder'],candidates:[origin+'/index.php']},
       {retryCount:0,navigationTimeoutMs:5000,failureScreenshots:false},{},'unused');
     assert.equal(result.status,'visited');assert.equal(result.submissionAttempted,false);
     assert.notEqual(result.evidence?.authoritative,true);assert.deepEqual(visited,[origin+'/index.php']);

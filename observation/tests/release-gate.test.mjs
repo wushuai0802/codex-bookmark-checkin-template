@@ -267,10 +267,16 @@ function guardReadOnly(t){
 }
 for(const allowed of [true,false])test(`gate CLI returns ${allowed?0:3} without locking or writing`,async t=>{
   const f=fixture(t),plan=planRelease(f),file=path.join(f.root,'manifest.json');save(file,plan);
+  const source=path.join(f.root,'privacy-source'),config=path.join(f.root,'release.local.json');
+  fs.mkdirSync(source);fs.writeFileSync(path.join(source,'README.md'),'Public fixture');
+  execFileSync('git',['-C',source,'init','--quiet'],{stdio:'pipe'});execFileSync('git',['-C',source,'add','README.md'],{stdio:'pipe'});
+  for(const root of [f.executionRoot,f.observationRoot,f.opsRoot])save(path.join(root,'config/config.json'),{accountKey:'site-default'});
+  save(config,{executionRoot:f.executionRoot,observationRoot:f.observationRoot,opsRoot:f.opsRoot});
   guardReadOnly(t);
   try{
     let body,calls=0;
-    const result=await runReleaseCli(['gate','--manifest',file],{
+    const result=await runReleaseCli(['gate','--manifest',file,'--config',config],{
+      projectSource:source,
       probe:current=>{calls++;assert.deepEqual(current,plan);const value=snapshot(new Date());if(!allowed)value.lifecycle.value.exists=true;return value;},
       stdout:text=>{body=JSON.parse(text);},stderr:assert.fail
     });

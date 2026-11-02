@@ -19,10 +19,10 @@ test("导航仅允许书签源站与显式关联源站", () => {
 
 test("错误原因会移除用户目录、邮箱、令牌和 URL 查询凭据", () => {
   const value = safeErrorMessage(new Error(
-    "failed C:\\Users\\private-user\\profile user" + "@example.net "
+    "failed " + ["C:", "Users", "example-user", "profile"].join(String.fromCharCode(92)) + " user" + "@example.net "
       + "token=secret-value https://example.test/callback?code=secret-value",
   ));
-  assert.doesNotMatch(value, /private-user|user@example\.net|secret-value/);
+  assert.doesNotMatch(value, /example-user|user@example\.net|secret-value/);
   assert.match(value, /\[USER_PATH\]|\[EMAIL\]|\[REDACTED\]/);
 });
 

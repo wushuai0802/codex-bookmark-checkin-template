@@ -17,18 +17,18 @@ function fixtureRoot({ healthCheckedAt = '2026-09-02T01:00:00.000Z' } = {}) {
   fs.writeFileSync(path.join(root, 'data', 'scheduler-state.json'), JSON.stringify({ lastRunId: 'run-1', lastRunDate: '2026-09-02' }));
   fs.writeFileSync(path.join(root, 'data', 'last-valid-bookmark-plan.json'), JSON.stringify({
     generatedAt: '2026-09-02T01:00:00.000Z',
-    sources: [{ counts: { '公益站': 2 } }],
-    targets: [{ origin: 'https://agentrouter.org', accountKey:'agentrouter-700001', title: 'Agent Router', folderNames: ['公益站'] },
-      { origin:'https://agentrouter.org', accountKey:'agentrouter-336634',title:'Agent second',folderNames:['公益站'] },
-      { origin: 'https://new-api.abrdns.com', title: 'New API', folderNames: ['公益站'] }]
+    sources: [{ counts: { 'example-other-folder': 2 } }],
+    targets: [{ origin: 'https://agentrouter.org', accountKey:'agentrouter-100001', title: 'Agent Router', folderNames: ['example-other-folder'] },
+      { origin:'https://agentrouter.org', accountKey:'agentrouter-100002',title:'Agent second',folderNames:['example-other-folder'] },
+      { origin: 'https://new-api.abrdns.com', title: 'New API', folderNames: ['example-other-folder'] }]
   }));
   fs.writeFileSync(path.join(root, 'data', 'site-state.json'), JSON.stringify({ updatedAt: '2026-09-02T01:01:00.000Z' }));
   fs.writeFileSync(path.join(root, 'health.json'), JSON.stringify({ healthy: true, reason: 'ok', checkedAt: healthCheckedAt, failedChecks: [] }));
   fs.writeFileSync(path.join(root, 'logs', 'run-1', 'result.json'), JSON.stringify({
     runId: 'run-1', finishedAt: '2026-09-02T01:02:00.000Z', executionComplete: true, businessComplete: true,
     results: [
-      { origin: 'https://agentrouter.org/path', accountKey: 'agentrouter-700001', accountId: '700001', status: 'signed', reason: 'usage log reward $25 token=should-not-copy', evidence: { source: 'usage_log', createdAt: '2026-09-02T01:02:00.000Z' } },
-      { origin: 'https://agentrouter.org', accountKey: 'agentrouter-336634', accountId: '336634', status: 'signed', reason: '每日签到成功，增加额度 123456' },
+      { origin: 'https://agentrouter.org/path', accountKey: 'agentrouter-100001', accountId: '100001', status: 'signed', reason: 'usage log reward $25 token=should-not-copy', evidence: { source: 'usage_log', createdAt: '2026-09-02T01:02:00.000Z' } },
+      { origin: 'https://agentrouter.org', accountKey: 'agentrouter-100002', accountId: '100002', status: 'signed', reason: '每日签到成功，增加额度 123456' },
       { origin: 'https://new-api.abrdns.com', status: 'not_available', reason: 'not open' }
     ]
   }));
@@ -36,11 +36,11 @@ function fixtureRoot({ healthCheckedAt = '2026-09-02T01:00:00.000Z' } = {}) {
 }
 
 test('task identity is stable and includes account to prevent collisions', () => {
-  const a = taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-700001' });
-  const b = taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-336634' });
-  const tomorrow = taskIdentity({ businessDate: '2026-09-03', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-700001' });
+  const a = taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-100001' });
+  const b = taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-100002' });
+  const tomorrow = taskIdentity({ businessDate: '2026-09-03', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-100001' });
   assert.notEqual(a.taskId, b.taskId);
-  assert.equal(a.taskId, taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-700001' }).taskId);
+  assert.equal(a.taskId, taskIdentity({ businessDate: '2026-09-02', logicalSiteKey: 'https://agentrouter.org', accountKey: 'agentrouter-100001' }).taskId);
   assert.notEqual(a.taskId, tomorrow.taskId);
   assert.equal(a.planUnitId, tomorrow.planUnitId);
   assert.equal(planHash([a, b]), planHash([b, a]));
@@ -53,7 +53,7 @@ test('bridge preserves bounded retry and manual-verification diagnostics without
     retryableLoginRecovery:false,nextEligibleAt:'2026-09-03T01:00:00Z',
     recovery:{privateValue:'synthetic-private-recovery'}});
   fs.writeFileSync(file,JSON.stringify(report));
-  const snapshot=buildSnapshot({legacyRoot:root,generatedAt:'2026-09-02T02:00:00Z'}),task=snapshot.tasks.find(task=>task.accountKey==='agentrouter-700001');
+  const snapshot=buildSnapshot({legacyRoot:root,generatedAt:'2026-09-02T02:00:00Z'}),task=snapshot.tasks.find(task=>task.accountKey==='agentrouter-100001');
   assert.equal(task.retryable,false);assert.equal(task.retryExhaustedForDay,true);assert.equal(task.retryableLoginRecovery,false);
   assert.equal(task.manualVerificationRequired,true);assert.equal(task.nextEligibleAt,'2026-09-03T01:00:00.000Z');
   assert.doesNotMatch(JSON.stringify(snapshot),/synthetic-private-recovery/);
@@ -73,7 +73,7 @@ test('bridge imports 3 execution units and redacts sensitive evidence', () => {
   assert.equal(snapshot.counts.executionUnits, 3);
   assert.equal(snapshot.counts.logicalSites, 2);
   assert.equal(snapshot.tasks.filter((task) => task.origin === 'https://agentrouter.org').length, 2);
-  assert.equal(snapshot.tasks.find((task) => task.accountKey === 'agentrouter-700001').accountRef.startsWith('acct_'), true);
+  assert.equal(snapshot.tasks.find((task) => task.accountKey === 'agentrouter-100001').accountRef.startsWith('acct_'), true);
   const usageReceipt = snapshot.receipts.find((receipt) => receipt.evidence.source === 'usage_log');
   assert.match(usageReceipt.evidence.summary, /redacted|amount-redacted|number-redacted/);
   assert.equal(snapshot.receipts.some((receipt) => receipt.evidence.summary.includes('should-not-copy')), false);
@@ -88,7 +88,7 @@ test('a later targeted report cannot refresh the observed time of an untouched u
     submissionAttempted:true,observedAt:'2026-09-02T01:02:00.000Z',evidence:{}};
   fs.writeFileSync(file,JSON.stringify(report));
   const snapshot=buildSnapshot({legacyRoot:root,generatedAt:'2026-09-02T11:01:00.000Z'});
-  const task=snapshot.tasks.find(t=>t.accountKey==='agentrouter-700001');
+  const task=snapshot.tasks.find(t=>t.accountKey==='agentrouter-100001');
   assert.equal(snapshot.receipts.find(r=>r.taskId===task.taskId).observedAt,'2026-09-02T01:02:00.000Z');
   assert.equal(task.observedStatus,'needs_attention');
 });

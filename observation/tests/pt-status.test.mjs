@@ -7,7 +7,7 @@ const taskId = 'task_0123456789abcdef01234567';
 
 test('an earlier bound passive unsigned read becomes history after same-account daily completion',()=>{
   const origin='https://pt.example',businessDate='2026-10-28',binding='a'.repeat(64);
-  const input=()=>({generatedAt:'2026-10-28T02:00:00Z',businessDate,planTargets:[{origin,folderNames:['PT白名单']}],
+  const input=()=>({generatedAt:'2026-10-28T02:00:00Z',businessDate,planTargets:[{origin,folderNames:['example-pt-folder']}],
     monitorCatalog:{sites:[{origin}]},
     tasks:[{taskId,origin,accountRef,observedStatus:'signed',submissionAttempted:false}],
     receipts:[{taskId,observedAt:'2026-10-28T00:13:02Z',evidence:{source:'page_text',authoritative:true,businessDate,
@@ -59,7 +59,7 @@ test('Harvest OpenCD www receipt matches the canonical bookmark and regular task
 test('historical uncertainty preserves today evidence and maintenance without certifying completion',()=>{
   const origin='https://pt.example',businessDate='2026-10-02';
   const base={generatedAt:'2026-10-02T02:00:00Z',businessDate,
-    planTargets:[{origin,folderNames:['PT白名单']}],
+    planTargets:[{origin,folderNames:['example-pt-folder']}],
     tasks:[{taskId,origin,accountRef,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown'}],
     receipts:[{taskId,observedAt:'2026-10-02T01:50:00Z',evidence:{source:'none',authoritative:false,summary:'今日结果尚待核验'}}],
     recoveryReport:{businessDate,sites:[{origin,code:'prior_outcome_unknown',blockedSince:'2026-09-25',summary:'历史执行结果未确认'}]}};
@@ -89,13 +89,13 @@ test('PT status merges legacy plan sites with Harvest-only observations', () => 
     generatedAt: '2026-09-04T04:00:00.000Z',
     businessDate: '2026-09-04',
     planTargets: [
-      { origin: 'https://kylin.example/checkin', title: '麒麟', folderNames: ['PT白名单'] }
+      { origin: 'https://kylin.example/checkin', title: '示例站点', folderNames: ['example-pt-folder'] }
     ],
     tasks: [{ taskId, origin: 'https://kylin.example', accountRef, observedStatus: 'signed' }],
     receipts: [{ taskId, observedAt: '2026-09-04T03:00:00.000Z', evidence: { source: 'page_text', authoritative: true, summary: '今日已签到', redacted: true } }],
     externalReport: {
       generatedAt: '2026-09-04T04:00:00.000Z', source: 'harvest', businessDate: '2026-09-04',
-      sites: [{ origin: 'https://baozi.example/', displayName: '包子', status: 'not_signed', observedAt: '2026-09-04T03:30:00.000Z', evidence: { source: 'api', authoritative: true, summary: '今日未签到' } }]
+      sites: [{ origin: 'https://baozi.example/', displayName: '示例外部站点', status: 'not_signed', observedAt: '2026-09-04T03:30:00.000Z', evidence: { source: 'api', authoritative: true, summary: '今日未签到' } }]
     }
   });
   assert.equal(result.mode, 'status_observe_only');
@@ -116,15 +116,15 @@ test('PT status merges legacy plan sites with Harvest-only observations', () => 
 test('a newer weak signed report cannot replace earlier authoritative same-day completion',()=>{
   const origin='https://ourbits.club';
   const result=buildPtStatus({generatedAt:'2026-10-01T10:30:00Z',businessDate:'2026-10-01',
-    planTargets:[{origin,title:'我堡',folderNames:['PT白名单']}],
+    planTargets:[{origin,title:'示例站点',folderNames:['example-pt-folder']}],
     tasks:[{taskId,origin,accountRef,observedStatus:'signed'}],
     receipts:[{taskId,observedAt:'2026-10-01T10:22:00Z',evidence:{source:'none',authoritative:false}}],
-    monitorCatalog:{sites:[{origin,displayName:'我堡'}]},
+    monitorCatalog:{sites:[{origin,displayName:'示例站点'}]},
     fallbackReport:{source:'execution-supplement',businessDate:'2026-10-01',generatedAt:'2026-10-01T10:21:00Z',
       sites:[{origin,status:'already_signed',observedAt:'2026-10-01T10:21:00Z',evidence:{source:'pt_page',authoritative:true,businessDate:'2026-10-01'}}]}});
   assert.equal(result.sites[0].effective.status,'already_signed');
   assert.equal(result.sites[0].effective.authoritative,true);
-  assert.equal(result.sites[0].displayName,'我堡');
+  assert.equal(result.sites[0].displayName,'示例站点');
 });
 
 test('a supplement keeps the bookmark display name for monitoring-only sites',()=>{
@@ -139,7 +139,7 @@ test('a supplement keeps the bookmark display name for monitoring-only sites',()
 test('a monitored PT site is joined to the full execution plan across a non-PT folder label',()=>{
   const result=buildPtStatus({
     generatedAt:'2026-09-04T04:00:00.000Z',businessDate:'2026-09-04',
-    planTargets:[{origin:'https://open.cd',title:'OpenCD',folderNames:['公益站']}],
+    planTargets:[{origin:'https://open.cd',title:'OpenCD',folderNames:['example-other-folder']}],
     tasks:[{taskId:'open-task',origin:'https://open.cd/index.php',accountRef:null,observedStatus:'signed'}],
     receipts:[{taskId:'open-task',observedAt:'2026-09-04T03:00:00.000Z',evidence:{source:'page_text',authoritative:true,summary:'今日已签到'}}],
     monitorCatalog:{sites:[{origin:'https://open.cd',displayName:'OpenCD'}]},
@@ -154,7 +154,7 @@ test('a monitored PT site is joined to the full execution plan across a non-PT f
 test('conflicting sources are visible and stale observations are never supplement candidates', () => {
   const result = buildPtStatus({
     generatedAt: '2026-09-04T04:00:00.000Z', businessDate: '2026-09-04',
-    planTargets: [{ origin: 'https://piggo.example', title: '猪猪', folderNames: ['PT白名单'] }],
+    planTargets: [{ origin: 'https://piggo.example', title: '猪猪', folderNames: ['example-pt-folder'] }],
     tasks: [{ taskId, origin: 'https://piggo.example', accountRef: null, observedStatus: 'signed' }],
     receipts: [{ taskId, observedAt: '2026-09-04T03:00:00.000Z', evidence: { source: 'page_text', authoritative: true, summary: '已签到', redacted: true } }],
     externalReport: {
@@ -173,7 +173,7 @@ test('conflicting sources are visible and stale observations are never supplemen
 test('a later unverified unknown cannot hide same-day authoritative V1 completion', () => {
   const base = {
     generatedAt: '2026-09-20T03:00:00.000Z', businessDate: '2026-09-20',
-    planTargets: [{ origin: 'https://pt.example', folderNames: ['PT白名单'] }],
+    planTargets: [{ origin: 'https://pt.example', folderNames: ['example-pt-folder'] }],
     tasks: [{ taskId, origin: 'https://pt.example', accountRef: null, observedStatus: 'signed' }],
     receipts: [{ taskId, observedAt: '2026-09-20T00:00:00.000Z', evidence: { source: 'page_text', authoritative: true, summary: '今日已签到' } }],
     externalReport: { source: 'harvest', businessDate: '2026-09-20', sites: [
@@ -194,7 +194,7 @@ test('a later unverified unknown cannot hide same-day authoritative V1 completio
 
 test('a newer non-authoritative execution failure cannot hide an authoritative OpenCD read-only receipt',()=>{
   const result=buildPtStatus({generatedAt:'2026-09-29T03:00:00Z',businessDate:'2026-09-29',
-    planTargets:[{origin:'https://open.cd',folderNames:['公益站']}],
+    planTargets:[{origin:'https://open.cd',folderNames:['example-other-folder']}],
     tasks:[{taskId:'open',origin:'https://open.cd',accountRef:null,observedStatus:'failed'}],
     receipts:[{taskId:'open',observedAt:'2026-09-29T02:55:00Z',evidence:{source:'none',authoritative:false,summary:'提交结果不明'}}],
     monitorCatalog:{sites:[{origin:'https://open.cd'}]},
@@ -242,7 +242,7 @@ test('same-day site supplement is visible without adding a daily task',()=>{
 
 test('yesterday completion stays in source history but cannot count as today completed',()=>{
   const origin='https://pt.example',base={generatedAt:'2026-09-30T00:55:00+08:00',businessDate:'2026-09-30',
-    planTargets:[{origin,folderNames:['PT白名单']}],
+    planTargets:[{origin,folderNames:['example-pt-folder']}],
     tasks:[{taskId,origin,accountRef:null,observedStatus:'signed'}],
     receipts:[{taskId,observedAt:'2026-09-29T10:00:00+08:00',evidence:{source:'page_text',authoritative:true,summary:'昨日已签到'}}],
     monitorCatalog:{sites:[{origin}]}};
@@ -262,7 +262,7 @@ test('Harvest unknown separates registered reads, monitor observations, pending 
   const businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
   const origin='https://registered.example',pending='https://pending.example',monitor='https://monitor.example',maintenance='https://maintenance.example';
   const result=buildPtStatus({businessDate,generatedAt,monitorCatalog:{sites:[origin,pending,monitor,maintenance].map(origin=>({origin}))},
-    planTargets:[origin,pending,maintenance].map(origin=>({origin,folderNames:['PT白名单']})),
+    planTargets:[origin,pending,maintenance].map(origin=>({origin,folderNames:['example-pt-folder']})),
     tasks:[{taskId:'registered',origin,accountRef,observedStatus:'deferred'},
       {taskId:'pending',origin:pending,accountRef,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}],
     receipts:[{taskId:'pending',observedAt:'2026-10-09T01:00:00Z',evidence:{source:'none',authoritative:false}}],
@@ -287,7 +287,7 @@ test('authorized exact-catalog fallback-only sites retain guarded-read capabilit
 
 test('same-kind authorities use execution priority while signed/unsigned conflicts remain visible and cannot supplement',()=>{
   const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
-  const args={businessDate,generatedAt,monitorCatalog:{sites:[{origin}]},planTargets:[{origin,folderNames:['PT白名单']}],
+  const args={businessDate,generatedAt,monitorCatalog:{sites:[{origin}]},planTargets:[{origin,folderNames:['example-pt-folder']}],
     tasks:[{taskId,origin,accountRef,observedStatus:'signed'}],receipts:[{taskId,observedAt:'2026-10-09T02:00:00Z',evidence:{source:'page_text',authoritative:true}}],
     externalReport:{source:'harvest',businessDate,sites:[{origin,status:'signed',observedAt:'2026-10-09T03:00:00Z',evidence:{source:'harvest',authoritative:true}}]}};
   assert.equal(buildPtStatus(args).sites[0].effective.source,'legacy-checkin');
@@ -300,7 +300,7 @@ test('same-kind authorities use execution priority while signed/unsigned conflic
 
 test('only a current same-account profile-bound passive completion marks an unknown submission reconciled',()=>{
   const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z',profileBinding='a'.repeat(64);
-  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],
+  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['example-pt-folder']}],
     tasks:[{taskId,origin,accountRef,observedStatus:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true}],
     receipts:[{taskId,observedAt:'2026-10-09T01:00:00Z',evidence:{source:'none',authoritative:false,profileBinding}}],
     fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,accountRef,status:'already_signed',observedAt:'2026-10-09T03:00:00Z',submissionAttempted:false,readSafety:'reviewed_passive',
@@ -321,7 +321,7 @@ test('only a current same-account profile-bound passive completion marks an unkn
 test('external classification requires a specific site condition rather than generic local network errors',()=>{
   const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
   for(const [failureCode,expected] of [['network_error','guarded_read_needed'],['tls_certificate_invalid','external_blocked'],['site_server_error','external_blocked']]){
-    const site=buildPtStatus({businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],tasks:[{taskId,origin,observedStatus:'deferred',failureCode,retryCause:'upstream_unavailable'}]}).sites[0];
+    const site=buildPtStatus({businessDate,generatedAt,planTargets:[{origin,folderNames:['example-pt-folder']}],tasks:[{taskId,origin,observedStatus:'deferred',failureCode,retryCause:'upstream_unavailable'}]}).sites[0];
     assert.equal(site.evidenceState,expected);
   }
 });
@@ -338,7 +338,7 @@ test('explicit wrong-day evidence never becomes authoritative even with a today 
 test('confirmed unsigned, unavailable and configuration-disabled evidence stay distinct from monitor-only uncertainty',()=>{
   const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z';
   for(const [status,verification,expected] of [['not_signed',undefined,'not_signed_confirmed'],['not_available',undefined,'unavailable'],['not_available','task_disabled','disabled']]){
-    const result=buildPtStatus({businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],tasks:[{taskId,origin,observedStatus:status}],
+    const result=buildPtStatus({businessDate,generatedAt,planTargets:[{origin,folderNames:['example-pt-folder']}],tasks:[{taskId,origin,observedStatus:status}],
       receipts:[{taskId,observedAt:'2026-10-09T03:00:00Z',evidence:{source:'pt_page',authoritative:true,businessDate,verification}}]});
     assert.equal(result.sites[0].evidenceState,expected);
     if(status==='not_signed')assert.equal(result.counts.notSignedConfirmed,1);
@@ -348,7 +348,7 @@ test('confirmed unsigned, unavailable and configuration-disabled evidence stay d
 test('successful formal submissions are confirmed rather than mistaken for unknown submissions',()=>{
   const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z',profileBinding='a'.repeat(64);
   const evidence={source:'pt_page',authoritative:true,businessDate,confirmedAt:'2026-10-09T03:00:00Z',profileBinding};
-  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],
+  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['example-pt-folder']}],
     tasks:[{taskId,origin,accountRef,profileBinding,observedStatus:'signed',submissionAttempted:true}],
     receipts:[{taskId,observedAt:'2026-10-09T03:00:00Z',evidence}]};
   const formal=buildPtStatus(args).sites[0];assert.equal(formal.evidenceState,'confirmed');assert.equal(formal.reconciledFromUnknown,undefined);
@@ -359,7 +359,7 @@ test('successful formal submissions are confirmed rather than mistaken for unkno
 
 test('a precise same-profile formal outcome confirms completion without relabeling historical unknown audit as a passive reconciliation',()=>{
   const origin='https://pt.example',businessDate='2026-10-09',generatedAt='2026-10-09T04:00:00Z',profileBinding='a'.repeat(64);
-  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['PT白名单']}],
+  const args={businessDate,generatedAt,planTargets:[{origin,folderNames:['example-pt-folder']}],
     tasks:[{taskId,origin,accountRef,profileBinding,observedStatus:'needs_attention',submissionAttempted:true,failureCode:'submission_outcome_unknown'}],
     receipts:[{taskId,observedAt:'2026-10-09T01:00:00Z',evidence:{source:'none',authoritative:false}}],
     fallbackReport:{source:'execution-supplement',businessDate,sites:[{origin,accountRef,status:'signed',submissionAttempted:true,observedAt:'2026-10-09T03:00:00Z',
