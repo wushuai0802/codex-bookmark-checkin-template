@@ -12,7 +12,7 @@ if ($git -and (Test-Path -LiteralPath (Join-Path $root '.git'))) {
 }
 else {
     # -Name stays relative; FullName can expand an 8.3 root and misalign a substring.
-    $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -Name -ErrorAction SilentlyContinue | ForEach-Object {
+    $relativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue -Name | ForEach-Object {
         $_.Replace('\', '/')
     } | Where-Object {
         $_ -notmatch '^(node_modules|data|logs|tmp|outputs|work|inputs|downloads|\.git|\.venv|venv|\.pytest_cache)(/|$)' -and
