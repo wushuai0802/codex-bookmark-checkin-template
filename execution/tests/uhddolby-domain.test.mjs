@@ -247,6 +247,11 @@ test('the local migration moves one sealed destination while retaining item, Pro
       const result=await withBitwardenLogin({root,origin,config:after,binding:{accountKey:'site-default',profileBinding,adapterId:authorization.adapterId},
         consume:async credential=>{assert.equal(credential.username,fixtureUsername);assert.equal(credential.password,fixtureValue);consumed=true;}});
       assert.deepEqual(result,{ready:true,reason:'login_consumed'});assert.equal(consumed,true);assert.equal(JSON.stringify(result).includes(fixtureValue),false);
+      // run-v1-engine's real root ends in a separator; another folder is still refused below.
+      process.env.CHECKIN_V2_ENGINE_ROOT=controller+path.sep;
+      const separated=await withBitwardenLogin({root,origin,config:after,binding:{accountKey:'site-default',profileBinding,adapterId:authorization.adapterId},consume:async()=>{}});
+      assert.deepEqual(separated,{ready:true,reason:'login_consumed'});
+      process.env.CHECKIN_V2_ENGINE_ROOT=controller;
       delete process.env.CHECKIN_V2_ENGINE_LEASE;
       const blocked=await withBitwardenLogin({root,origin,config:after,binding:{accountKey:'site-default',profileBinding,adapterId:authorization.adapterId},consume:async()=>{throw Error('unexpected');}});
       assert.equal(blocked.ready,false);assert.equal(blocked.reason,'login_not_allowed');

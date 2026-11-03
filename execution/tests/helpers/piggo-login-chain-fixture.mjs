@@ -81,7 +81,7 @@ export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out'
   fs.writeFileSync(config.bitwardenTotp.cliEntryPoint,`const fs=require('node:fs'),path=require('node:path');
 const args=process.argv.slice(2),data=process.env.BITWARDENCLI_APPDATA_DIR;
 fs.appendFileSync(path.join(data,'calls.jsonl'),JSON.stringify({args,
- engineRootMatched:process.env.CHECKIN_V2_ENGINE_ROOT===${JSON.stringify(controller)},
+ engineRootMatched:process.env.CHECKIN_V2_ENGINE_ROOT===${JSON.stringify(controller+path.sep)},
  engineLeaseMatched:process.env.CHECKIN_V2_ENGINE_LEASE===${JSON.stringify(nonce)},
  outerMarkerMatched:process.env.WO16_CHAIN_SENTINEL==='synthetic-outer',
  sessionMatched:process.env.BW_SESSION==='A'.repeat(40),nodeOptionsPresent:!!process.env.NODE_OPTIONS})+'\\n');
@@ -164,7 +164,8 @@ await fetch('/v1/web/login',{method:'POST',body:'{}'}).catch(()=>{});
   await new Promise(resolve=>fixtureServer.listen(0,'127.0.0.1',resolve));
   const url=`http://127.0.0.1:${fixtureServer.address().port}`;
   config.ptReadOnlyPolicies[origin].proxyServer=url;save();
-  const env={...process.env,CHECKIN_V2_ENGINE_ROOT:controller,CHECKIN_V2_ENGINE_LEASE:nonce,
+  // run-v1-engine derives its root from new URL('../'), so the real value ends in a separator.
+  const env={...process.env,CHECKIN_V2_ENGINE_ROOT:controller+path.sep,CHECKIN_V2_ENGINE_LEASE:nonce,
     WO16_CHAIN_SENTINEL:'synthetic-outer',WO16_FIXTURE_URL:url};
   for(const key of Object.keys(env))if(/^(?:BW_|PIGGO_BW_|BITWARDENCLI_APPDATA_DIR$|NODE_OPTIONS$|NODE_PATH$|CHECKIN_LEGACY_ROOT$)/i.test(key))delete env[key];
   const run=async(file,args=[],overrides={})=>{
