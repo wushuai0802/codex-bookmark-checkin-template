@@ -221,7 +221,8 @@ try {
             $opt.allowPasswordLogin-ne $true-or $opt.loginSource-cne 'bitwarden'){Stop-Provider 'login_not_allowed'}
         # Every branch still refuses; a separate code only says which check refused.
         if(-not $env:CHECKIN_V2_ENGINE_ROOT-or -not $env:CHECKIN_V2_ENGINE_LEASE){Stop-Provider 'login_not_allowed'}
-        $sameRoot={param($left,$right)[string]::Equals([IO.Path]::GetFullPath([string]$left),[IO.Path]::GetFullPath([string]$right),[StringComparison]::OrdinalIgnoreCase)}
+        # The engine passes its root with a trailing separator, which GetFullPath keeps.
+        $sameRoot={param($left,$right)[string]::Equals([IO.Path]::GetFullPath([string]$left).TrimEnd([char[]]'\/'),[IO.Path]::GetFullPath([string]$right).TrimEnd([char[]]'\/'),[StringComparison]::OrdinalIgnoreCase)}
         try{
             $integration=Get-Content -LiteralPath (Join-Path $Root 'data/v2-integration.json') -Raw|ConvertFrom-Json
             $controller=[IO.Path]::GetFullPath([string]$integration.v2ProjectRoot)
