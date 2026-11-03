@@ -74,6 +74,31 @@ test('passive login diagnostics survive result projection using the recovery rea
     assert.equal(loginHelperOutcome('{"status":"logged_in"}')[key],undefined);
 });
 
+test('submitted login diagnostics keep only stage codes, bounded numbers and same-origin API paths',()=>{
+  const outcome=loginHelperOutcome(JSON.stringify({status:'needs_attention',failureCode:'two_factor_required',
+    nativeTwoFactorRecovery:{reason:'authentication_unknown',submitStage:'post_login_receipt',postLoginForm:'unchanged',
+      afterStatus:'login_required',afterFailure:'login_required',afterStage:'authentication',loginHttpStatus:200,loginApiCode:1001,
+      loginPosts:1,challengePosts:1,loginPagePath:'/login',blockedPosts:['/v1/web/auth/srp/verify'],msg:'PRIVATE RESPONSE'}}));
+  assert.deepEqual({...outcome,diagnostic:undefined,status:undefined,succeeded:undefined},{recoveryReason:'authentication_unknown',
+    submitStage:'post_login_receipt',postLoginForm:'unchanged',afterStatus:'login_required',afterFailure:'login_required',
+    afterStage:'authentication',loginHttpStatus:200,loginApiCode:1001,loginPosts:1,challengePosts:1,loginPagePath:'/login',
+    blockedPosts:['/v1/web/auth/srp/verify'],failureCode:'two_factor_required',retryable:false,
+    diagnostic:undefined,status:undefined,succeeded:undefined});
+  for(const value of ['PRIVATE',1.5,-1,1e12,'200',null,{}]){
+    const unsafe=loginHelperOutcome(JSON.stringify({status:'needs_attention',nativeTwoFactorRecovery:{
+      submitStage:value,loginHttpStatus:value,loginApiCode:value,loginPosts:value,challengePosts:value,loginPagePath:value,blockedPosts:value}}));
+    for(const key of ['submitStage','loginHttpStatus','loginApiCode','loginPosts','challengePosts','loginPagePath','blockedPosts'])
+      if(!(key==='loginApiCode'&&value===-1))assert.equal(unsafe[key],undefined,key+' '+JSON.stringify(value));
+  }
+  for(const blockedPosts of [['/v1/web/PRIVATE'],['/v1/web/a?b=c'],['/other/path'],['https://foreign.example/v1/web/x'],
+    ['/v1/web/user/42/heartbeat'],['/v1/web/x/'],Array(5).fill('/v1/web/x'),[]]){
+    assert.equal(loginHelperOutcome(JSON.stringify({status:'needs_attention',nativeTwoFactorRecovery:{blockedPosts}})).blockedPosts,undefined);
+  }
+  for(const loginPagePath of ['/Login','/login?next=1','https://piggo.me/login','/'+'a'.repeat(61),'/u/42','/user/42/profile'])
+    assert.equal(loginHelperOutcome(JSON.stringify({status:'needs_attention',nativeTwoFactorRecovery:{loginPagePath}})).loginPagePath,undefined);
+  assert.doesNotMatch(JSON.stringify(outcome),/PRIVATE/);
+});
+
 test("登录助手区分可自愈超时与确定性身份错误", () => {
   const timeout = loginHelperOutcome('{"status":"needs_attention","failureCode":"oauth_timeout"}');
   assert.equal(timeout.failureCode, "oauth_timeout");

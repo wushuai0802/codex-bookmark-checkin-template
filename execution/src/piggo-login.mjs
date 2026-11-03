@@ -14,6 +14,21 @@ import {inspectPiggoSpaLogin,usernameSelector,passwordSelector,submitSelector} f
 export {inspectPiggoSpaLogin} from './piggo-login-form.mjs';
 
 const loginUrl=piggoOrigin+'/login';
+// Every path segment starts with a letter, so numeric account IDs never enter diagnostics.
+const safePath=/^\/(?:[a-z][a-z0-9_-]{0,30}(?:\/[a-z][a-z0-9_-]{0,30}){0,7})?$/;
+const apiPath=value=>safePath.test(value)&&value.startsWith('/v1/web/');
+const readbackCodes=values=>Object.fromEntries(Object.entries(values).filter(([,code])=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)));
+const pagePath=page=>{
+  try{const url=new URL(page.url());return url.origin===piggoOrigin&&safePath.test(url.pathname)?url.pathname:undefined;}
+  catch{return undefined;}
+};
+// Only the API envelope's numeric code is kept; its message and data never leave here.
+async function envelopeCode(response){
+  try{
+    const text=await response.text();if(Buffer.byteLength(text)>100_000)return undefined;
+    const code=JSON.parse(text)?.code;return Number.isSafeInteger(code)&&Math.abs(code)<1e9?code:undefined;
+  }catch{return undefined;}
+}
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 async function validateController(root){
@@ -30,10 +45,11 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
   gate=runNativePtGate,readHeader=readNativePtApiHeaderInContext,inspectForm=inspectPiggoSpaLogin,
   prepare,withLogin,validateLease=validateController,acquire=acquireRunLock,release=releaseRunLock}={}){
   let lock,firewall,route,attempted=false,accepted=false,reason='recovery_unavailable',providerReason,entry,journal,output;
-  let passiveDiagnostic={};
+  let passiveDiagnostic={},submitDiagnostic={};const blockedPosts=[];
   const outcome=()=>output=({origin:piggoOrigin,handled:true,status:accepted?'logged_in':'needs_attention',
     ...(!accepted?{failureCode:'two_factor_required'}:{}),
-    nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason,...(providerReason?{providerReason}:{}),...passiveDiagnostic}});
+    nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason,...(providerReason?{providerReason}:{}),...passiveDiagnostic,
+      ...submitDiagnostic,...(blockedPosts.length?{blockedPosts:[...blockedPosts]}:{})}});
   try{
     // A read-only consumer must not even prepare the vault or navigate login.
     if(mode!=='Login'){reason='readonly';return outcome();}
@@ -67,20 +83,25 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     if(await register(before)){accepted=true;reason='already_authenticated';return outcome();}
     if(before.status!=='login_required'){
       reason='passive_proof_unavailable';
-      passiveDiagnostic=Object.fromEntries(Object.entries({passiveStatus:before.status,passiveFailure:before.failureCode,
-        passiveStage:before.nativeReadback?.apiStage}).filter(([,code])=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)));
+      passiveDiagnostic=readbackCodes({passiveStatus:before.status,passiveFailure:before.failureCode,
+        passiveStage:before.nativeReadback?.apiStage});
       return outcome();
     }
     firewall=await installPiggoCalendarFirewall(page.context(),{clock});
-    let challengePosts=0,loginPosts=0,armed=false;
+    let challengePosts=0,loginPosts=0,armed=false,clicked=false;
     route=async intercepted=>{
       const request=intercepted.request();let target;try{target=new URL(request.url());}catch{return intercepted.abort('blockedbyclient');}
       if(request.method()==='GET')return intercepted.fallback();
-      if(!armed||target.origin!==piggoOrigin||target.search||target.hash||target.username||target.password||request.method()!=='POST')
+      const block=()=>{
+        // After the click, a blocked same-origin API path says which request the page still needed.
+        if(clicked&&blockedPosts.length<4&&target.origin===piggoOrigin&&apiPath(target.pathname))blockedPosts.push(target.pathname);
         return intercepted.abort('blockedbyclient');
+      };
+      if(!armed||target.origin!==piggoOrigin||target.search||target.hash||target.username||target.password||request.method()!=='POST')
+        return block();
       if(target.pathname==='/v1/web/auth/srp/challenge'&&challengePosts===0&&loginPosts===0){challengePosts++;return intercepted.continue();}
       if(['/v1/web/auth/srp/login','/v1/web/login'].includes(target.pathname)&&loginPosts===0){loginPosts++;return intercepted.continue();}
-      return intercepted.abort('blockedbyclient');
+      return block();
     };
     await page.route('**/*',route);
     const guestWait=page.waitForResponse(response=>response.url()===piggoOrigin+'/v1/web/auth/guest-config'&&
@@ -111,27 +132,47 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
         phase:'password_login',state:'pending',attemptedAt:clock().toISOString()};
       journal.attempts.push(entry);writeRecoveryState(root,journal);attempted=true;reason='authentication_unknown';
       const username=page.locator(usernameSelector),password=page.locator(passwordSelector);
+      // The last stage reached tells an unknown result apart: before the click nothing was sent.
+      const stage=value=>{submitDiagnostic.submitStage=value;};
       try{
+        stage('fill');
         await username.fill(credential.username);await password.fill(credential.password);
         const filled=await inspectForm(page);
         if(filled?.reviewed!==true||filled.challenge||filled.otp||!await bound())throw Error('form changed');
         const responseWait=page.waitForResponse(response=>
           [piggoOrigin+'/v1/web/auth/srp/login',piggoOrigin+'/v1/web/login'].includes(response.url())&&
           response.request().method()==='POST',{timeout:20000}).catch(()=>null);
-        armed=true;
+        armed=true;clicked=true;stage('click');
         await page.locator(submitSelector).click({timeout:10000});
+        stage('login_response');
         const response=await responseWait;armed=false;
-        if(loginPosts!==1||!response||!piggoResponseFresh(response,clock()))return;
+        Object.assign(submitDiagnostic,{challengePosts,loginPosts});
+        if(loginPosts!==1||!response)return;
+        stage('login_response_freshness');
+        if(!piggoResponseFresh(response,clock()))return;
+        stage('login_http_status');submitDiagnostic.loginHttpStatus=response.status();
         if([400,401,403,422].includes(response.status())){entry.state='rejected';reason='authentication_rejected';return;}
         if(response.status()!==200)return;
+        stage('post_login_form');
+        const apiCode=await envelopeCode(response);if(apiCode!==undefined)submitDiagnostic.loginApiCode=apiCode;
         const challenge=await inspectForm(page);
+        submitDiagnostic.postLoginForm=!challenge?'navigated':challenge.otp?'otp':challenge.challenge?'challenge':
+          challenge.reviewed?'unchanged':'changed';
         if(challenge?.otp||challenge?.challenge){reason=challenge.otp?'two_factor_requires_manual':'captcha_requires_manual';return;}
+        stage('post_login_readback');
         const after=await verify();
-        if(!await bound()||!await register(after))return;
+        Object.assign(submitDiagnostic,readbackCodes({afterStatus:after?.status,afterFailure:after?.failureCode,
+          afterStage:after?.nativeReadback?.apiStage}));
+        const landed=pagePath(page);if(landed)submitDiagnostic.loginPagePath=landed;
+        stage('post_login_binding');
+        if(!await bound())return;
+        stage('post_login_receipt');
+        if(!await register(after))return;
+        stage('accepted');
         accepted=true;entry.state='accepted';reason='authentication_accepted';
       }finally{
         armed=false;
-        // No credential, code, raw response, title or exception enters output.
+        // No credential, one-time code, raw response, title or exception enters output; only fixed codes and numbers do.
         await username.fill('').catch(()=>{});await password.fill('').catch(()=>{});
       }
       })();

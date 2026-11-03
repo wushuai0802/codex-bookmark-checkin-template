@@ -167,14 +167,26 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   const diagnostic=readOAuthProgress(progress);
   // Fixed lowercase codes only, so the report can say why without carrying helper text.
   const recoveryCode=code=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)?code:null;
-  const recoveryReason=recoveryCode(value?.nativeTwoFactorRecovery?.reason);
-  const providerReason=recoveryCode(value?.nativeTwoFactorRecovery?.providerReason);
-  const passiveDiagnostic=Object.fromEntries(['passiveStatus','passiveFailure','passiveStage']
-    .map(key=>[key,recoveryCode(value?.nativeTwoFactorRecovery?.[key])]).filter(([,code])=>code));
+  const recovery=value?.nativeTwoFactorRecovery;
+  const recoveryReason=recoveryCode(recovery?.reason);
+  const providerReason=recoveryCode(recovery?.providerReason);
+  const recoveryCodes=Object.fromEntries(['passiveStatus','passiveFailure','passiveStage','submitStage','postLoginForm',
+    'afterStatus','afterFailure','afterStage'].map(key=>[key,recoveryCode(recovery?.[key])]).filter(([,code])=>code));
+  // Bounded integers and same-origin API paths say where a submitted login stopped.
+  const recoveryNumbers=Object.fromEntries([['loginHttpStatus',100,599],['loginApiCode',-999_999_999,999_999_999],
+    ['loginPosts',0,9],['challengePosts',0,9]].filter(([key,min,max])=>Number.isSafeInteger(recovery?.[key])&&
+    recovery[key]>=min&&recovery[key]<=max).map(([key])=>[key,recovery[key]]));
+  // Every segment starts with a letter, so numeric account IDs never pass.
+  const recoveryPath=item=>typeof item==='string'&&/^\/(?:[a-z][a-z0-9_-]{0,30}(?:\/[a-z][a-z0-9_-]{0,30}){0,7})?$/.test(item);
+  const blockedPosts=Array.isArray(recovery?.blockedPosts)&&recovery.blockedPosts.length>0&&recovery.blockedPosts.length<=4&&
+    recovery.blockedPosts.every(item=>recoveryPath(item)&&item.startsWith('/v1/web/'))?[...recovery.blockedPosts]:null;
   return {
     ...(recoveryReason?{recoveryReason}:{}),
     ...(providerReason?{providerReason}:{}),
-    ...passiveDiagnostic,
+    ...recoveryCodes,
+    ...recoveryNumbers,
+    ...(recoveryPath(recovery?.loginPagePath)?{loginPagePath:recovery.loginPagePath}:{}),
+    ...(blockedPosts?{blockedPosts}:{}),
     succeeded: status === "logged_in",
     status,
     diagnostic: (failureMessages[failureCode] ?? messages[status] ?? messages.failed)+
