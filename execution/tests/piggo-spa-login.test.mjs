@@ -7,7 +7,7 @@ import {readNativePtApiHeader} from '../src/native-pt-api.mjs';
 import {withBitwardenLogin} from '../src/bitwarden-totp.mjs';
 import {fixture,response,piggoLoginDom,observedLoginRequests} from './helpers/piggo-spa-fixture.mjs';
 
-function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false,srp=false,replay=false,unknown=false}={}){
+function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false,srp=false,replay=false,unknown=false,body={},blockedEndpoint}={}){
   const f=fixture(t),context=f.createContext(),waits=[],filled={};
   const file=path.join(f.root,'data/bitwarden/recovery-state.json');
   f.config.nativePtTwoFactorRecovery={[f.origin]:{enabled:true,reviewed:true,provider:'bitwarden',allowPasswordLogin:true,
@@ -43,11 +43,17 @@ function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false
       assert.equal(elements[0].tagName,'BUTTON');assert.equal(elements[0].type,'submit');
       clicks++;
       if(srp)assert.equal(await dispatch('POST',f.origin+'/v1/web/auth/srp/challenge'),true);
+      if(blockedEndpoint){
+        // The page needs a request the firewall never allows, so the login response never comes.
+        assert.equal(await dispatch('POST',new URL(blockedEndpoint,f.origin).href),false);
+        for(const waiter of waits)if(!waiter.done){waiter.done=true;waiter.resolve(null);}
+        return;
+      }
       const url=f.origin+(srp?'/v1/web/auth/srp/login':'/v1/web/login');
       if(await dispatch('POST',url)){
         posts++;authenticated=status===200&&!unknown;
         if(replay)assert.equal(await dispatch('POST',f.origin+'/v1/web/login'),false);
-        emit(response(url,{}, {status,method:'POST'}));
+        emit(response(url,body,{status,method:'POST'}));
       }
     }};}};
   const credential={username:'fixture-user',password:['WO12','MARKED','CREDENTIAL'].join('_')};
@@ -62,6 +68,11 @@ function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false
 for(const srp of [false,true])test('SPA login submits once through the real form contract and registers same-account calendar readback '+srp,async t=>{
   const f=loginFixture(t,{srp,replay:true}),result=await recoverPiggoSpaLogin(f.args);
   assert.equal(result.status,'logged_in');assert.equal(result.nativeTwoFactorRecovery.accepted,true);assert.equal(f.posts,1);assert.equal(f.clicks,1);
+  const recovery=result.nativeTwoFactorRecovery;
+  assert.equal(recovery.submitStage,'accepted');assert.equal(recovery.loginHttpStatus,200);
+  assert.equal(recovery.loginPosts,1);assert.equal(recovery.challengePosts,srp?1:0);
+  // The pre-click analytics POST is not kept; only the blocked replay after the click is.
+  assert.deepEqual(recovery.blockedPosts,['/v1/web/login']);
   assert.equal(JSON.parse(fs.readFileSync(f.file)).attempts[0].state,'accepted');
   assert.ok(Object.values(f.filled).every(value=>value===''));
   assert.ok(!JSON.stringify(result).includes(f.credential.password));assert.ok(!fs.readFileSync(f.file,'utf8').includes(f.credential.password));
@@ -134,12 +145,35 @@ test('setup/loading/captcha/OTP, foreign actions, extra inputs and ambiguous for
 });
 
 test('rejected or ambiguous authentication remains in the existing audit and cannot replay that day',async t=>{
-  for(const options of [{status:401},{unknown:true},{afterChallenge:true}]){
+  for(const [options,expected] of [
+    [{status:401},{submitStage:'login_http_status',loginHttpStatus:401,loginPosts:1,challengePosts:0}],
+    [{unknown:true},{submitStage:'post_login_receipt',loginHttpStatus:200,postLoginForm:'unchanged',afterStatus:'login_required',loginPagePath:'/login'}],
+    [{afterChallenge:true},{submitStage:'post_login_form',loginHttpStatus:200,postLoginForm:'otp'}],
+  ]){
     const f=loginFixture(t,options),result=await recoverPiggoSpaLogin(f.args);
     assert.equal(result.status,'needs_attention');assert.equal(f.posts,1);
     assert.equal(JSON.parse(fs.readFileSync(f.file)).attempts[0].state,options.status===401?'rejected':'unknown');
+    for(const [key,value] of Object.entries(expected))assert.equal(result.nativeTwoFactorRecovery[key],value,key);
     assert.equal((await recoverPiggoSpaLogin(f.args)).nativeTwoFactorRecovery.reason,'daily_recovery_limit');assert.equal(f.posts,1);
     assert.ok(!JSON.stringify(result).includes(f.credential.password));
+  }
+});
+
+test('an unknown submission says how far it got without carrying the response message or private paths',async t=>{
+  const failed=loginFixture(t,{unknown:true,body:{code:1001,msg:'PRIVATE RESPONSE',data:null}});
+  const result=await recoverPiggoSpaLogin(failed.args);
+  assert.equal(result.nativeTwoFactorRecovery.reason,'authentication_unknown');assert.equal(result.nativeTwoFactorRecovery.loginApiCode,1001);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE/);
+  const blocked=loginFixture(t,{srp:true,blockedEndpoint:'/v1/web/auth/srp/verify'}),stopped=await recoverPiggoSpaLogin(blocked.args);
+  assert.equal(stopped.nativeTwoFactorRecovery.reason,'authentication_unknown');assert.equal(blocked.posts,0);
+  assert.equal(JSON.parse(fs.readFileSync(blocked.file)).attempts[0].state,'unknown');
+  assert.deepEqual(Object.fromEntries(['submitStage','loginPosts','challengePosts','blockedPosts','loginHttpStatus']
+    .map(key=>[key,stopped.nativeTwoFactorRecovery[key]])),
+    {submitStage:'login_response',loginPosts:0,challengePosts:1,blockedPosts:['/v1/web/auth/srp/verify'],loginHttpStatus:undefined});
+  for(const endpoint of ['/v1/web/PRIVATE_PATH','/other/private','https://foreign.example/v1/web/x','/v1/web/user/42/heartbeat']){
+    const f=loginFixture(t,{blockedEndpoint:endpoint}),outcome=await recoverPiggoSpaLogin(f.args);
+    assert.equal(outcome.nativeTwoFactorRecovery.submitStage,'login_response');assert.equal(outcome.nativeTwoFactorRecovery.blockedPosts,undefined);
+    assert.doesNotMatch(JSON.stringify(outcome),/PRIVATE|foreign/);
   }
 });
 
