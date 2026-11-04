@@ -42,13 +42,19 @@ export const observedLoginRequests=[
 // button WITHOUT a type attribute (the browser's type property is "submit").
 // This small DOM double implements selectors, not the inspection's answer.
 export function piggoLoginDom({webauthn=true,captcha=false,otp=false,setup=false,invite=false,
-  loading=false,passkey=true,action,target,method,extra=[],iframe=false}={}){
+  loading=false,passkey=true,action,target,method,extra=[],iframe=false,unlock=false}={}){
   const node=(tag,attrs={},text='',children=[])=>({tagName:tag.toUpperCase(),attrs,textContent:text,children});
   const username=node('input',{type:'text',name:'username',id:'username',autocomplete:webauthn?'username webauthn':'username'});
   const password=node('input',{type:'password',name:'password',id:'password',autocomplete:webauthn?'current-password webauthn':'current-password'});
   const submit=node('button',{class:'btn',...(loading?{disabled:''}:{})},loading?'登录中…':'登录');
   const form=node('form',{...(action===undefined?{}:{action}),...(target===undefined?{}:{target}),...(method===undefined?{}:{method})},'',
     [username,...(passkey?[node('button',{type:'button','aria-label':'通行密钥登录'},'')]:[]),password]);
+  if(unlock){
+    Object.assign(form.attrs,{class:'step-up'});
+    Object.assign(username.attrs,{class:'username-a11y',autocomplete:'username',readonly:'',tabindex:'-1',hidden:''});
+    Object.assign(password.attrs,{class:'cell-input',required:'',placeholder:'当前密码'});
+    Object.assign(submit.attrs,{type:'submit'});submit.textContent=loading?'验证中…':'解锁';
+  }
   if(setup){
     delete password.attrs.name;password.attrs.autocomplete='new-password';
     form.children.push(node('input',{type:'email',autocomplete:'email'}),node('input',{type:'password',autocomplete:'new-password'}),
@@ -105,7 +111,7 @@ export function piggoLoginDom({webauthn=true,captcha=false,otp=false,setup=false
   return {document,form,username,password,submit,root,
     evaluate:(fn,args)=>{
       const keys=['document','location','getComputedStyle'],previous=keys.map(key=>Object.getOwnPropertyDescriptor(globalThis,key));
-      Object.assign(globalThis,{document,location:{origin,href:origin+'/login'},getComputedStyle:element=>({display:'block',visibility:'visible'})});
+      Object.assign(globalThis,{document,location:{origin,href:origin+(unlock?'/locked':'/login')},getComputedStyle:element=>({display:'block',visibility:'visible'})});
       try{return fn(args);}finally{keys.forEach((key,index)=>{if(previous[index])Object.defineProperty(globalThis,key,previous[index]);else delete globalThis[key];});}
     }};
 }

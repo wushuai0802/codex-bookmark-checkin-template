@@ -13,6 +13,31 @@ import {nexusFixture,header as nexusHeader,origin as nexusOrigin,now as nexusNow
 const journal=f=>path.join(f.root,'data/native-pt-attempts.json');
 const privateFree=value=>assert.doesNotMatch(JSON.stringify(value),/PRIVATE|918273645|username|password|bodyText|accountId/);
 
+test('idle locks require the bounded envelope code or a same-origin locked route; other 423s stay unconfirmed',async t=>{
+  for(const network of [
+    {me:{code:'idle_locked',msg:'PRIVATE',data:{}},meOptions:{status:423}},
+    {me:{code:1,data:{code:'idle_locked',token:'PRIVATE'}},meOptions:{status:423}},
+    {data:{code:'idle_locked',msg:'PRIVATE'},options:{status:423}},
+    {data:{data:{code:'idle_locked',token:'PRIVATE'}},options:{status:423}},
+    {redirect:'https://piggo.me/locked'},
+  ]){
+    const f=fixture(t,{network:[network]}),result=await readNativePtApiHeader(f);
+    assert.equal(result.status,'login_required');assert.equal(result.failureCode,'idle_locked');
+    assert.equal(result.nativeReadback.apiStage,'idle_lock');assert.equal(result.submissionAttempted,false);privateFree(result);
+    const decodedFixture=fixture(t,{network:[network]});
+    const decoded=await inspectNativePtHeader({...decodedFixture,url:piggoCalendarUrl,isolated:true,
+      inspectApi:options=>readNativePtApiHeader({...decodedFixture,...options}),execute:async()=>{throw Error('legacy helper forbidden');}});
+    assert.equal(decoded.status,'login_required');assert.equal(decoded.failureCode,'idle_locked');
+    assert.equal(decoded.nativeReadback.apiStage,'idle_lock');assert.equal(decoded.submissionAttempted,false);privateFree(decoded);
+  }
+  for(const network of [{meOptions:{status:423}},{options:{status:423}},{data:{code:'other'},options:{status:423}},
+    {data:{msg:'idle_locked'},options:{status:423}},{data:{code:'idle_locked',msg:'x'.repeat(100_001)},options:{status:423}},
+    {data:{code:'idle_locked'},options:{status:200}},{redirect:'https://foreign.example/locked'}]){
+    const result=await readNativePtApiHeader(fixture(t,{network:[network]}));
+    assert.equal(result.status,'unconfirmed');assert.notEqual(result.failureCode,'idle_locked');privateFree(result);
+  }
+});
+
 // Restored generic API reads on the still-supported Nexus header origin.
 // Audiences additionally requires a corroborating passive self-profile read.
 function defineNexusReadTests(){
@@ -238,7 +263,9 @@ test('legacy pending intent requires fresh new negative proof; one real button P
 test('makeup, none, unknown, checked and wrong-date pre-reads never submit',async t=>{
   for(const status of ['makeup','none','unknown','checked']){
     const f=fixture(t,{network:[{data:calendarData(status)}]});
-    assert.equal((await runNativePtApiCheckin(f)).submissionAttempted,false);assert.equal(f.posts.length,0);assert.equal(fs.existsSync(journal(f)),false);
+    assert.equal((await runNativePtApiCheckin(f)).submissionAttempted,false);assert.equal(f.posts.length,0);
+    assert.equal(fs.existsSync(journal(f)),status==='checked');
+    if(status==='checked')assert.equal(JSON.parse(fs.readFileSync(journal(f))).readbacks[0].status,'already_signed');
   }
   const data=calendarData();data.selected=data.detail.ymd='2026-10-31';
   const f=fixture(t,{network:[{data}]});assert.equal((await runNativePtApiCheckin(f)).submissionAttempted,false);assert.equal(f.posts.length,0);

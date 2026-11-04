@@ -9,7 +9,7 @@ import net from 'node:net';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright-core';
-import {piggoOrigin as origin,piggoCalendarUrl,piggoDay} from '../../src/piggo-calendar.mjs';
+import {piggoOrigin as origin,piggoCalendarUrl,piggoAttendanceUrl,piggoDay} from '../../src/piggo-calendar.mjs';
 
 const execute=promisify(execFile);
 const execution=fileURLToPath(new URL('../../',import.meta.url));
@@ -35,7 +35,7 @@ $stream=$request.GetRequestStream();try{$stream.Write($bytes,0,$bytes.Length)}fi
 $response=$request.GetResponse();$response.Dispose()
 `;
 
-export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out'}={}){
+export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out',idleUnlock=false,calendarMode='passive'}={}){
   const root=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'piggo-login-chain-')));
   let context,fixtureServer;
   t.after(async()=>{
@@ -60,11 +60,11 @@ export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out'
     accountKey:'site-default',profileBinding,adapterId:'piggo-nexus-stepup-v1'};
   const config={nodeExecutable:process.execPath,powershellExecutable:shell,automationUserDataDir:profile,
     bookmarksPath:path.join(root,'synthetic-bookmarks.json'),mobileFolderIds:['10'],targetFolderNames:['PT'],
-    nativeWafPreflightUrls:[{url:piggoCalendarUrl,automationUserDataDir:profile,passiveOnly:true}],
+    nativeWafPreflightUrls:[{url:calendarMode==='submit'?piggoAttendanceUrl:piggoCalendarUrl,automationUserDataDir:profile,passiveOnly:calendarMode!=='submit'}],
     oauthExpectedAccountIds:{[origin]:'42'},
     ptReadOnlyPolicies:{[origin]:{reviewed:true,piggoCalendar:true,mode:'safe_history_page',url:piggoCalendarUrl,
       selector:'.cal-page',loginPath:'/login',actionPath:'/v1/web/calendar/attendance',
-      nativeIsolatedChrome:true,nativeApiHeaderFallback:true,proxyServer:'http://127.0.0.1:1'}},
+      nativeIsolatedChrome:true,nativeApiHeaderFallback:true,nativeApiExecution:true,proxyServer:'http://127.0.0.1:1'}},
     nativePtTwoFactorRecovery:{[origin]:{enabled:true,reviewed:true,provider:'bitwarden',allowPasswordLogin:true,
       loginSource:'bitwarden',spaPasswordFormReviewed:true}},
     bitwardenTotp:{enabled:true,serverUrl,cliEntryPoint:path.join(root,'tools/bitwarden-cli/bw.js'),
@@ -104,18 +104,34 @@ try{[IO.File]::WriteAllText(${quote(config.bitwardenTotp.sessionFile)},(@{schema
   await execute('pwsh.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(protect,'utf16le').toString('base64')],
     {windowsHide:true,timeout:15000});
   fs.rmSync(payload);
-  const requests=[],launches=[],errors=[];let authenticated=false;
+  const requests=[],launches=[],errors=[];let authenticated=idleUnlock,unlocked=!idleUnlock,signed=calendarMode==='checked';
   const serve=async intercepted=>{
     const request=intercepted.request(),url=new URL(request.url()),method=request.method();
     requests.push({method,path:url.pathname});
     assert.equal(url.origin,origin,'the fixture never forwards a request');
     let status=200,contentType='application/json',body={};
-    if(method==='GET'&&['/calendar','/login'].includes(url.pathname)){
+    if(method==='GET'&&['/calendar','/login','/locked'].includes(url.pathname)){
       contentType='text/html';
       body='<meta charset="utf-8"><link rel="icon" href="data:,">'+(url.pathname==='/calendar'?
-        `<main class="cal-page"></main><script>
-fetch('/v1/web/me');fetch('/v1/web/calendar');
-</script>`:
+        `<main class="cal-page"><div class="cal-att"></div></main><script>
+Promise.all([fetch('/v1/web/me'),fetch('/v1/web/calendar').then(r=>r.json())]).then(([,data])=>{
+ if(data.detail?.attendance?.status!=='today')return;
+ const button=document.createElement('button');button.className='cal-att-pill act';button.textContent='签到 · +10';
+ button.onclick=async()=>{await fetch('/v1/web/calendar/attendance',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({ymd:data.selected})});button.remove();};document.querySelector('.cal-att').append(button);
+});
+</script>`:url.pathname==='/locked'?
+        `<style>.username-a11y{display:none}</style><h1>页面已锁定</h1><p>空闲过久，请验证是你本人。</p>
+<form class="step-up"><input class="username-a11y" type="text" name="username" autocomplete="username" readonly tabindex="-1" value="synthetic-bound-user">
+<p>验证后继续使用。</p><label>当前密码<input class="cell-input" type="password" name="password" autocomplete="current-password webauthn" required placeholder="当前密码"></label>
+<button class="passkey-btn" type="button">通行密钥</button><button class="btn" type="submit">解锁</button></form><script>
+document.querySelector('form').onsubmit=async event=>{event.preventDefault();
+ if(document.querySelector('[name=username]').value!=='synthetic-bound-user'||document.querySelector('[name=password]').value!==${JSON.stringify(loginFields.password)})throw Error('Synthetic fields changed');
+ await fetch('/v1/web/me/lab-unlock/srp/challenge',{method:'POST',body:'{}'});
+ await fetch('/v1/web/me/lab-unlock/srp',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({ticket:'synthetic-ticket',a:'synthetic-a',m1:'synthetic-proof'})});
+ await fetch('/v1/web/me/lab-lock',{method:'POST'}).catch(()=>{});
+};</script>`:
         `<main id="app"></main><script>
 fetch('/v1/web/auth/guest-config').then(()=>{
 document.querySelector('#app').innerHTML='<h1>用账号登录</h1><form><input type="text" name="username" autocomplete="username webauthn"><input type="password" name="password" autocomplete="current-password webauthn"><button>登录</button></form>';
@@ -129,10 +145,20 @@ await fetch('/v1/web/login',{method:'POST',body:'{}'}).catch(()=>{});
     }else if(method==='GET'&&url.pathname==='/v1/web/auth/guest-config')body={captcha:false};
     else if(method==='GET'&&['/v1/web/me','/v1/web/calendar'].includes(url.pathname)){
       if(!authenticated){status=passive==='unavailable'?503:401;}
+      else if(!unlocked){status=423;body={code:'idle_locked',msg:'synthetic',data:{}};}
       else if(url.pathname==='/v1/web/me')body={user:{id:42}};
-      else{const today=piggoDay(new Date());body={cells:[],selected:today,detail:{ymd:today,is_today:true,attendance:{status:'today'}}};}
+      else{const today=piggoDay(new Date());body={cells:[],selected:today,detail:{ymd:today,is_today:true,attendance:{status:signed?'checked':'today'}}};}
     }else if(method==='POST'&&url.pathname==='/v1/web/login'){
       assert.deepEqual(request.postDataJSON(),loginFields);authenticated=true;
+    }else if(method==='POST'&&url.pathname==='/v1/web/me/lab-unlock/srp/challenge'){
+      assert.equal(idleUnlock,true);body={code:0,msg:'synthetic',data:{i:'synthetic-i',s:'synthetic-s',B:'synthetic-b',ticket:'synthetic-ticket'}};
+    }else if(method==='POST'&&url.pathname==='/v1/web/me/lab-unlock/srp'){
+      assert.equal(idleUnlock,true);assert.deepEqual(request.postDataJSON(),{ticket:'synthetic-ticket',a:'synthetic-a',m1:'synthetic-proof'});
+      unlocked=true;body={code:0,msg:'synthetic',data:{m2:'synthetic-m2'}};
+    }else if(method==='POST'&&url.pathname==='/v1/web/calendar/attendance'){
+      assert.equal(calendarMode,'submit');assert.equal(authenticated&&unlocked,true);
+      const today=piggoDay(new Date());assert.deepEqual(request.postDataJSON(),{ymd:today});signed=true;
+      body={cells:[],selected:today,detail:{ymd:today,is_today:true,attendance:{status:'checked'}}};
     }else throw Error('Unexpected synthetic request');
     await intercepted.fulfill({status,contentType,headers:{date:new Date().toUTCString()},
       body:typeof body==='string'?body:JSON.stringify(body)});

@@ -7,7 +7,35 @@ import {
   resolveLoginRecoveryUrl,
   nativePasswordLoginPage,
   waitForNativePasswordLoginPage,
+  piggoLoginDailyCheckin,
 } from "../src/login-recovery.mjs";
+
+test('native PigGo completion requires its exact profile, current day and confirmed gate receipt',()=>{
+  const origin='https://piggo.me',now=new Date('2026-11-01T04:00:00Z'),profileBinding='a'.repeat(64);
+  const binding={origin,profileBinding,now};
+  const receipt={origin,url:origin+'/calendar',accountKey:'site-default',profileBinding,nativeGate:true,status:'signed',
+    submissionAttempted:true,confirmationState:'confirmed',evidence:{source:'api',authoritative:true,
+      confirmedAt:now.toISOString(),businessDate:'2026-11-01',pagePath:'/calendar',statusSignal:'piggo_calendar_signed',evidenceScope:'site_account_day'}};
+  const helper=dailyCheckin=>loginHelperOutcome(JSON.stringify({origin,status:'logged_in',dailyCheckin,
+    nativeTwoFactorRecovery:{recoveryMode:'idle_unlock'}}));
+  assert.equal(authoritativeLoginDailyCheckin('native_saved_password',helper(receipt),binding).status,'signed');
+  const checked={...receipt,status:'already_signed',submissionAttempted:false,confirmationState:undefined,receiptAccepted:true};
+  assert.equal(authoritativeLoginDailyCheckin('native_saved_password',helper(checked),binding).status,'already_signed');
+  const unsigned={...checked,status:'not_signed',evidence:{...checked.evidence,statusSignal:'piggo_calendar_unsigned'}};
+  assert.equal(piggoLoginDailyCheckin('native_saved_password',helper(unsigned),binding).status,'not_signed');
+  assert.equal(authoritativeLoginDailyCheckin('native_saved_password',helper(unsigned),binding),null);
+  for(const change of [{nativeGate:false},{confirmationState:undefined},{submissionAttempted:false},{profileBinding:'b'.repeat(64)},
+    {accountKey:'other'},{origin:'https://tracker.example'},{url:origin+'/index.php'},
+    {evidence:{...receipt.evidence,pagePath:'/index.php'}},{evidence:{...receipt.evidence,authoritative:false}},
+    {evidence:{...receipt.evidence,confirmedAt:'2026-11-01T03:54:59Z'}},
+    {evidence:{...receipt.evidence,confirmedAt:'2026-11-01T04:00:01Z'}}])
+    assert.equal(authoritativeLoginDailyCheckin('native_saved_password',helper({...receipt,...change}),binding),null,JSON.stringify(change));
+  assert.equal(authoritativeLoginDailyCheckin('saved_password',helper(receipt),binding),null);
+  assert.equal(authoritativeLoginDailyCheckin('native_saved_password',helper(receipt),{...binding,origin:'https://tracker.example'}),null);
+  assert.equal(helper(receipt).recoveryMode,'idle_unlock');
+  for(const recoveryMode of ['PRIVATE','idle_unlock\n','stepup',null,42])
+    assert.equal(loginHelperOutcome(JSON.stringify({status:'logged_in',nativeTwoFactorRecovery:{recoveryMode}})).recoveryMode,undefined);
+});
 
 test('PigGo native recovery selects its newest actual login tab rather than a restored error or home page',()=>{
   const origin='https://piggo.me',page=url=>({url:()=>url});

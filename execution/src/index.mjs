@@ -16,6 +16,7 @@ import { cleanupOldLogs, createRunLog, writeRunResult } from "./logger.mjs";
 import {
   authoritativeLoginDailyCheckin,
   loginHelperOutcome,
+  piggoLoginDailyCheckin,
   resolveLoginRecoveryUrl,
 } from "./login-recovery.mjs";
 import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompletionKey } from "./logical-checkin.mjs";
@@ -537,6 +538,13 @@ try {
       }
     };
 
+    const piggoLoginPreflight=target=>{
+      const result=nativeWafPreflight.get(target.origin);
+      return target.origin==='https://piggo.me'&&result?.status==='login_required'&&result.nativeGate===true&&
+        result.submissionAttempted===false&&!['clicked','checkinClicked','checkinClickAttempted'].some(key=>result[key]===true)&&
+        (!result.profileBinding||result.profileBinding===target.profileBinding)?result:null;
+    };
+
     const runOneTarget = async (activeContext, target, allowReuse = true) => {
       const started = Date.now();
       const key = logicalCompletionKey(target, config.logicalCheckinGroups);
@@ -553,6 +561,8 @@ try {
       }
       const result = await runWithRecentNotAvailableCache(target, siteState, config, async () => {
         const preflight = nativeWafPreflight.get(target.origin);
+        const piggoLogin=piggoLoginPreflight(target);
+        if(piggoLogin)return {...piggoLogin,attempt:0,nativePreflight:true};
         const submitted = nativeUnconfirmedSubmission(preflight);
         if (nativeWafOrigins.has(target.origin) && submitted) return {
           ...submitted,url:submitted.url||target.candidates?.[0]||target.origin,attempt:preflight.nativeGate===true?0:1,nativePreflight:true,
@@ -674,6 +684,9 @@ try {
           ?? pendingQuotaClaim(target, siteState, previousFinalReport, config)
           ?? pendingOpenCdSubmission(target, siteState, previousFinalReport,
             {now:new Date(),profileBinding:target.profileBinding});
+        // A clean passive logged-out/locked read may recover authentication;
+        // it never clears the durable submission journal or authorizes a replay.
+        if(guardedQuotaClaim?.failureCode==='submission_outcome_unknown'&&!target.closureBindingError&&piggoLoginPreflight(target))guardedQuotaClaim=null;
         let ptRecovery=null;
         if(target.origin==='https://open.cd'&&guardedQuotaClaim?.failureCode==='submission_outcome_unknown'){
           const claimed=await claimPtUnsignedRecovery({root:rootDirectory,target,config,state:siteState,
@@ -848,6 +861,7 @@ try {
         const attempts = [];
         let succeeded = false;
         let authoritativeDailyCheckin = null;
+        let piggoDailyCheckin = null;
         let terminalLoginFailure = null;
         const identityBoundMethods = current.origin==='https://piggo.me'
           ? methods.filter(method=>method.method==='native_saved_password'&&method.args.includes('-UserDataDirOverride'))
@@ -873,7 +887,9 @@ try {
               break;
             }
             if (outcome.succeeded) {
-              authoritativeDailyCheckin = authoritativeLoginDailyCheckin(method.method, outcome);
+              const binding={origin:current.origin,accountKey:current.accountKey??'site-default',profileBinding:current.profileBinding};
+              authoritativeDailyCheckin = authoritativeLoginDailyCheckin(method.method, outcome,binding);
+              piggoDailyCheckin = piggoLoginDailyCheckin(method.method,outcome,binding);
               succeeded = true;
               break;
             }
@@ -910,6 +926,7 @@ try {
           ...(terminalLoginFailure ? { terminalLoginFailure } : {}),
           ...(oauthRetryGroup ? { retryGroup: oauthRetryGroup } : {}),
           ...(authoritativeDailyCheckin ? { authoritativeDailyCheckin } : {}),
+          ...(piggoDailyCheckin ? { piggoDailyCheckin } : {}),
         });
       }
 
@@ -927,6 +944,10 @@ try {
           let recoveredResult;
           if (["signed", "already_signed"].includes(helperDailyCheckin?.status)) {
             recoveredResult = helperDailyCheckin;
+          } else if(loginRecovery?.succeeded&&target.origin==='https://piggo.me'){
+            recoveredResult=loginRecovery.piggoDailyCheckin??{status:'unconfirmed',failureCode:'authoritative_status_unavailable',
+              submissionAttempted:false,retryable:false,nativeGate:true,url:initialResult.url,
+              reason:'猪猪登录已恢复，但同会话尚未取得经守卫确认的当日结果'};
           } else if (loginRecovery?.succeeded && nativeWafOrigins.has(target.origin)) {
             recoveredResult = withRetrySchedule({
               status: "deferred",

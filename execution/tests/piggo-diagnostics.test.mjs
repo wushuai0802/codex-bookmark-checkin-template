@@ -7,6 +7,28 @@ import {readNativePtApiHeader,readNativePtApiHeaderInContext,runNativePtApiCheck
 import {diagnosticOptions,runPiggoDiagnostic} from '../scripts/Diagnose-Piggo.mjs';
 import {fixture,observedLoginRequests,response,now} from './helpers/piggo-spa-fixture.mjs';
 
+test('locked navigation is denied by default and permitted only by the scoped recovery firewall and bind gate',async t=>{
+  const f=fixture(t),context=f.createContext(),url=piggoOrigin+'/locked';
+  const base=await installPiggoCalendarFirewall(context,{clock:f.clock});
+  assert.equal(await context.request('GET',url),false);await base.dispose();
+  await installPiggoCalendarFirewall(context,{clock:f.clock,allowIdleUnlock:true});
+  assert.equal(await context.request('GET',url),true);
+  for(const path of ['/locked?next=1','/locked/','/v1/web/me/lab-unlock/passkey/options','/v1/web/calendar/makeup'])
+    assert.equal(await context.request('GET',piggoOrigin+path),false,path);
+  for(const method of ['POST','PUT','DELETE'])for(const path of ['/v1/web/me/lab-lock','/v1/web/me/lab-unlock/srp',
+    '/v1/web/me/lab-unlock/srp/challenge','/v1/web/me/lab-unlock/passkey'])
+    assert.equal(await context.request(method,piggoOrigin+path),false,method+path);
+  const args={root:f.root,origin:f.origin,url,profile:f.profile,clock:f.clock};
+  for(const change of [{phase:'bind'},{phase:'inspect',recoveryMode:'idle_unlock'},
+    {phase:'begin',recoveryMode:'idle_unlock'},{phase:'bind',mainProfile:true,recoveryMode:'idle_unlock'}])
+    await assert.rejects(()=>f.gate({...args,...change}),/Unreviewed PigGo/);
+  await assert.rejects(()=>f.gate({...args,phase:'bind',recoveryMode:'idle_unlock'}),/Unreviewed PigGo/);
+  f.config.nativePtTwoFactorRecovery={[f.origin]:{enabled:true,reviewed:true,provider:'bitwarden',allowPasswordLogin:true,
+    loginSource:'bitwarden',spaPasswordFormReviewed:true}};f.save();
+  assert.equal((await f.gate({...args,phase:'bind',recoveryMode:'idle_unlock'})).allow,true);
+  assert.equal(fs.existsSync(path.join(f.root,'data/native-pt-attempts.json')),false);
+});
+
 test('firewall baseline covers every observed anonymous request with synthetic release-independent asset names',async t=>{
   const f=fixture(t),context=f.createContext();
   await installPiggoCalendarFirewall(context,{clock:f.clock});
