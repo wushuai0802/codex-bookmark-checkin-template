@@ -198,6 +198,7 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   const recoveryMode=['idle_unlock','password_login'].includes(recovery?.recoveryMode)?recovery.recoveryMode:null;
   const recoveryCodes=Object.fromEntries(['passiveStatus','passiveFailure','passiveStage','submitStage','postLoginForm',
     'afterStatus','afterFailure','afterStage'].map(key=>[key,recoveryCode(recovery?.[key])]).filter(([,code])=>code));
+  if(recovery?.loginEnvelope==='unavailable')recoveryCodes.loginEnvelope='unavailable';
   // Bounded integers and same-origin API paths say where a submitted login stopped.
   const recoveryNumbers=Object.fromEntries([['loginHttpStatus',100,599],['loginApiCode',-999_999_999,999_999_999],
     ['loginPosts',0,9],['challengePosts',0,9]].filter(([key,min,max])=>Number.isSafeInteger(recovery?.[key])&&

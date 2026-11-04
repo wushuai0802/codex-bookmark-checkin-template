@@ -328,3 +328,11 @@ test('midnight after the single POST preserves its original date and leaves the 
   assert.equal(result.failureCode,'submission_outcome_unknown');assert.equal(result.retryable,false);
   assert.deepEqual(f.posts,[{ymd:'2026-11-01'}]);assert.equal(JSON.parse(fs.readFileSync(journal(f))).attempts[0].state,'submitted');
 });
+
+test('an abandoned calendar response body ends as an unknown submission and never replays',async t=>{
+  const f=fixture(t,{post:{options:{text:()=>new Promise(()=>{})}}});
+  const result=await runNativePtApiCheckin(f);
+  assert.equal(result.failureCode,'submission_outcome_unknown');assert.equal(result.retryable,false);
+  assert.equal(f.posts.length,1);assert.equal(JSON.parse(fs.readFileSync(journal(f))).attempts[0].state,'submitted');
+  await runNativePtApiCheckin(f);assert.equal(f.posts.length,1);
+});

@@ -8,9 +8,12 @@ import {loginHelperOutcome,authoritativeLoginDailyCheckin,piggoLoginDailyCheckin
 import {withBitwardenLogin} from '../src/bitwarden-totp.mjs';
 import {fixture,response,piggoLoginDom,observedLoginRequests,calendarData} from './helpers/piggo-spa-fixture.mjs';
 import {runOfflinePiggoIndex} from './helpers/piggo-index-fixture.mjs';
+import {readRecoveryState,attemptedToday,writeRecoveryState} from '../src/native-pt-two-factor.mjs';
+import {installPiggoCalendarFirewall} from '../src/piggo-calendar.mjs';
 
 function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false,srp=false,replay=false,unknown=false,body,
-  blockedEndpoint,unlock=false,passiveOnly=true,network=[],post={},stale=false,noResponse=false}={}){
+  blockedEndpoint,unlock=false,passiveOnly=true,network=[],post={},stale=false,noResponse=false,
+  landing=false,responseText,afterClick}={}){
   const f=fixture(t,{network,post}),context=f.createContext(),waits=[],filled={},fills=[];
   const file=path.join(f.root,'data/bitwarden/recovery-state.json');
   f.config.nativePtTwoFactorRecovery={[f.origin]:{enabled:true,reviewed:true,provider:'bitwarden',allowPasswordLogin:true,
@@ -18,14 +21,14 @@ function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false
   f.config.nativeWafPreflightUrls[0].passiveOnly=passiveOnly;f.save();
   let route,currentUrl='about:blank',posts=0,clicks=0,prepares=0,reads=0,authenticated=false;
   const emit=value=>{for(const waiter of waits)if(!waiter.done&&waiter.predicate(value)){waiter.done=true;waiter.resolve(value);}};
-  const dispatch=async(method,url)=>{
+  const mainFrame={page:()=>page},dispatch=async(method,url,metadata={})=>{
     let allowed=false;
     const next={request:()=>({url:()=>url,method:()=>method}),continue:async()=>{allowed=true;},abort:async()=>{},
-      fallback:async()=>{allowed=await context.request(method,url);}};
+      fallback:async()=>{allowed=await context.request(method,url,undefined,metadata);}};
     await route(next);return allowed;
   };
   let formRendered=false;
-  const page={url:()=>currentUrl,context:()=>context,route:async(pattern,handler)=>{route=handler;},unroute:async()=>{route=null;},
+  const page={url:()=>currentUrl,context:()=>context,mainFrame:()=>mainFrame,route:async(pattern,handler)=>{route=handler;},unroute:async()=>{route=null;},
     // The real form only exists after the lazy chunk loads, so inspecting first must fail.
     waitForSelector:async()=>{formRendered=true;},
     evaluate:(fn,args)=>{
@@ -67,9 +70,14 @@ function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false
       if(await dispatch('POST',url)){
         posts++;authenticated=status===200&&!unknown;
         if(replay)assert.equal(await dispatch('POST',unlock?url:f.origin+'/v1/web/login'),false);
+        if(afterClick)await afterClick({file,page});
+        if(landing){
+          assert.equal(await dispatch('GET',f.origin+'/',{isNavigationRequest:()=>true,resourceType:()=> 'document',frame:()=>mainFrame}),true);
+          currentUrl=f.origin+'/';
+        }
         if(noResponse){for(const waiter of waits)if(!waiter.done){waiter.done=true;waiter.resolve(null);}return;}
         emit(response(url,body??(unlock?{code:0,msg:'synthetic',data:{m2:'synthetic-proof'}}:{}),
-          {status,method:'POST',...(stale?{date:'invalid'}:{})}));
+          {status,method:'POST',text:responseText,...(stale?{date:'invalid'}:{})}));
       }
     }};}};
   const credential={username:'fixture-user',password:['WO12','MARKED','CREDENTIAL'].join('_')};
@@ -289,8 +297,7 @@ test('unlock HTTP/envelope rejection and missing, stale or ambiguous responses k
   for(const [options,state] of [
     ...[400,401,403,422].map(status=>[{status},'rejected']),
     [{body:{code:12,msg:'PRIVATE RESPONSE',data:{}}},'rejected'],[{body:{code:'denied',msg:'PRIVATE RESPONSE'}},'rejected'],
-    [{status:500},'unknown'],[{status:302},'unknown'],[{noResponse:true},'unknown'],[{stale:true},'unknown'],
-    [{body:{}},'unknown'],[{body:{code:0,msg:'x'.repeat(100_001)}},'unknown'],[{unknown:true},'unknown'],
+    [{status:500},'unknown'],[{status:302},'unknown'],[{stale:true},'unknown'],[{unknown:true},'unknown'],
     [{network:[{me:{user:{id:43}}}]},'unknown'],
   ]){
     const f=loginFixture(t,{unlock:true,...options}),result=await recoverPiggoSpaLogin(f.args);
@@ -299,6 +306,95 @@ test('unlock HTTP/envelope rejection and missing, stale or ambiguous responses k
     assert.equal((await recoverPiggoSpaLogin(f.args)).nativeTwoFactorRecovery.reason,'daily_recovery_limit');
     assert.equal(f.posts,1);assert.equal(f.reads,1);assert.doesNotMatch(JSON.stringify(result),/PRIVATE RESPONSE|synthetic-proof/);
   }
+});
+
+for(const unlock of [false,true])test(`authentication document landing is allowed and remains passive: ${unlock}`,async t=>{
+  const f=loginFixture(t,{unlock,landing:true}),result=await recoverPiggoSpaLogin(f.args);
+  assert.equal(result.status,'logged_in');assert.equal(result.dailyCheckin.status,'not_signed');
+  assert.equal(result.dailyCheckin.submissionAttempted,false);assert.equal(f.f.posts.length,0);
+  assert.equal(result.nativeTwoFactorRecovery.recoveryMode,unlock?'idle_unlock':'password_login');
+  assert.equal(result.nativeTwoFactorRecovery.loginPagePath,'/');assert.equal(f.posts,1);
+  // No clearing the old fields after navigation; the tab/context owns cleanup.
+  assert.equal(f.fills.length,unlock?1:2);
+});
+
+test('auth landing firewall accepts only the exact top-level GET document and is opt-in',async t=>{
+  const f=fixture(t),context=f.createContext(),page={},frame={page:()=>page},child={page:()=>page};page.mainFrame=()=>frame;
+  const metadata={isNavigationRequest:()=>true,resourceType:()=> 'document',frame:()=>frame};
+  for(const allowAuthLanding of [false,true]){
+    const firewall=await installPiggoCalendarFirewall(context,{clock:f.clock,allowAuthLanding});
+    assert.equal(await context.request('GET',f.origin+'/',undefined,metadata),allowAuthLanding);
+    for(const route of ['/?x=1','/?','/#x','/#','/other','/v1/web/me/lab-unlock/passkey/options'])
+      assert.equal(await context.request('GET',f.origin+route,undefined,metadata),false,route);
+    for(const change of [{isNavigationRequest:()=>false},{resourceType:()=> 'fetch'},{frame:()=>child}])
+      assert.equal(await context.request('GET',f.origin+'/',undefined,{...metadata,...change}),false);
+    assert.equal(await context.request('POST',f.origin+'/',{},metadata),false);
+    assert.equal(await context.request('GET','https://foreign.example/',undefined,metadata),false);
+    await firewall.dispose();
+  }
+});
+
+for(const unlock of [false,true])for(const missing of ['body','response','envelope','oversized'])
+  test(`unavailable ${missing} needs a registered account/day receipt: ${unlock}`,async t=>{
+    for(const valid of [true,false]){
+      const f=loginFixture(t,{unlock,unknown:!valid,noResponse:missing==='response',
+        responseText:missing==='body'?()=>new Promise(()=>{}):undefined,
+        body:missing==='envelope'?{}:missing==='oversized'?{code:0,msg:'x'.repeat(100001)}:undefined});
+      const result=await recoverPiggoSpaLogin({...f.args,timeouts:{body:25}}),entry=readRecoveryState(f.f.root).attempts[0];
+      assert.equal(result.nativeTwoFactorRecovery.accepted,valid);
+      assert.equal(result.nativeTwoFactorRecovery.loginEnvelope,'unavailable');
+      assert.equal(loginHelperOutcome(JSON.stringify(result)).loginEnvelope,'unavailable');
+      assert.equal(entry.state,valid?'accepted':'unknown');assert.ok(entry.finishedAt);
+      assert.equal(entry.reason,valid?'authentication_accepted':'authentication_unknown');
+      assert.equal(fs.existsSync(path.join(f.f.root,'tmp/piggo-password-login.lock')),false);
+      assert.equal((await recoverPiggoSpaLogin(f.args)).nativeTwoFactorRecovery.reason,'daily_recovery_limit');
+      assert.equal(f.posts,1);
+    }
+  });
+
+test('the consume deadline stops a hung readback and late settlement cannot authenticate or submit',async t=>{
+  const f=loginFixture(t,{unlock:true});let reads=0,settle;
+  const result=await recoverPiggoSpaLogin({...f.args,timeouts:{consume:1500},readHeader:()=>++reads===1
+    ?Promise.resolve({status:'login_required',failureCode:'idle_locked'}):new Promise(resolve=>{settle=resolve;})});
+  const entry=readRecoveryState(f.f.root).attempts[0];
+  assert.equal(result.nativeTwoFactorRecovery.accepted,false);assert.equal(entry.state,'unknown');
+  assert.equal(entry.stage,'unlock_post_login_readback');assert.equal(entry.recoveryMode,'idle_unlock');
+  assert.equal(entry.reason,'authentication_unknown');assert.ok(entry.finishedAt);
+  assert.equal(fs.existsSync(path.join(f.f.root,'tmp/piggo-password-login.lock')),false);
+  const finalized=fs.readFileSync(f.file,'utf8');settle({status:'not_signed'});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(fs.readFileSync(f.file,'utf8'),finalized);assert.equal(f.f.posts.length,0);
+});
+
+for(const step of ['review','binding','register','close','unroute','dispose'])test(`hung ${step} has a finite bound`,async t=>{
+  const f=loginFixture(t,{unlock:true});let reviews=0,binds=0;
+  const args={...f.args,timeouts:{review:25,binding:2500,cleanup:25}};
+  if(step==='review')args.inspectUnlock=page=>++reviews<4?inspectPiggoIdleUnlock(page):new Promise(()=>{});
+  if(step==='binding')args.gate=options=>options.phase==='bind'&&++binds===7?new Promise(()=>{}):f.f.gate(options);
+  if(step==='register')args.gate=options=>options.phase==='readback'?new Promise(()=>{}):f.f.gate(options);
+  if(step==='close')f.args.page.close=()=>new Promise(()=>{});
+  if(step==='unroute')f.args.page.unroute=()=>new Promise(()=>{});
+  // The last disposal is authentication's outer firewall (the others are readers).
+  if(step==='dispose'){const original=f.context.unroute;let calls=0;f.context.unroute=(...args)=>++calls===3?new Promise(()=>{}):original(...args);}
+  const result=await recoverPiggoSpaLogin(args),entry=readRecoveryState(f.f.root).attempts[0];
+  assert.ok(entry.finishedAt);assert.equal(entry.state,['close','unroute','dispose'].includes(step)?'accepted':'unknown');
+  assert.equal(result.nativeTwoFactorRecovery.accepted,entry.state==='accepted');
+  assert.equal(fs.existsSync(path.join(f.f.root,'tmp/piggo-password-login.lock')),false);
+});
+
+test('stages are durable before the click returns, compatible with daily guards, and reject extra private fields',async t=>{
+  let interrupted;
+  const f=loginFixture(t,{unlock:true,afterClick:({file})=>{
+    interrupted=JSON.parse(fs.readFileSync(file)).attempts[0];throw Error('synthetic interruption');
+  }});
+  await recoverPiggoSpaLogin(f.args);
+  assert.equal(interrupted.state,'pending');assert.equal(interrupted.stage,'unlock_click');
+  assert.equal(interrupted.recoveryMode,'idle_unlock');assert.equal(interrupted.finishedAt,undefined);
+  const journal={schemaVersion:1,attempts:[interrupted]};writeRecoveryState(f.f.root,journal);
+  assert.equal(attemptedToday(readRecoveryState(f.f.root),{accountKey:'site-default',profileBinding:f.f.profileBinding},interrupted.businessDate,'password_login'),true);
+  assert.equal((await recoverPiggoSpaLogin(f.args)).nativeTwoFactorRecovery.reason,'daily_recovery_limit');
+  journal.attempts[0].stage='PRIVATE';journal.attempts[0].recoveryMode='PRIVATE';writeRecoveryState(f.f.root,journal);
+  assert.equal(readRecoveryState(f.f.root).attempts[0].stage,undefined);
+  assert.equal(readRecoveryState(f.f.root).attempts[0].recoveryMode,undefined);
 });
 
 test('login and idle unlock consume the same daily password budget in both directions',async t=>{
@@ -362,3 +458,14 @@ test('real index keeps submission-marked preflight quarantined and leaves other 
   assert.equal(out.calls.length,1);assert.equal(out.report.results[0].status,'deferred');
   assert.equal(out.report.results[0].loginRecovered,true);
 });
+
+test('real index times out a helper tree once and retains unknown login semantics',
+  {skip:process.platform!=='win32'?'Windows taskkill dispatch seam required':false},async t=>{
+    const f=loginFixture(t),out=await runOfflinePiggoIndex(f.f,{}, {hangHelper:true});
+    assert.equal(out.calls.length,1);assert.equal(out.calls[0].timeout,0);
+    assert.ok(fs.existsSync(path.join(f.f.root,'tmp/tree-kill.json')));
+    assert.equal(out.report.results[0].recovery.history[0].login.attempts[0].status,'timeout');
+    assert.equal(out.report.results[0].recovery.history[0].login.succeeded,false);
+    const pids=JSON.parse(fs.readFileSync(path.join(f.f.root,'tmp/helper-pids.json')));
+    for(const pid of pids)assert.throws(()=>process.kill(pid,0));
+  });

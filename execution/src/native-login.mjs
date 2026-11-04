@@ -13,6 +13,7 @@ import {recoverPiggoPasswordLogin,piggoPasswordLoginEnabled,guardPiggoPasswordAu
 import {readNativePtApiHeaderInContext,piggoNativePassiveContext} from './native-pt-api.mjs';
 import {waitForNativePasswordLoginPage} from './login-recovery.mjs';
 import {recoverPiggoSpaLogin} from './piggo-login.mjs';
+import {bounded} from './bounded-wait.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright-core");
@@ -243,6 +244,10 @@ try {
   if (status !== "logged_in") process.exitCode = 2;
   }
 } catch(error){
+  if(expectedOrigin==='https://piggo.me'){
+    console.log(JSON.stringify({origin:expectedOrigin,status:'needs_attention',failureCode:'browser_startup'}));
+    process.exitCode=2;
+  }else{
   if(page)throw error;
   const pageKinds=browser.contexts().flatMap(context=>context.pages()).map(candidate=>{
     try{const url=new URL(candidate.url());return url.origin===expectedOrigin?'site':url.protocol==='about:'?'blank':
@@ -250,6 +255,11 @@ try {
   });
   console.log(JSON.stringify({origin:expectedOrigin,status:'needs_attention',failureCode:'browser_startup',stage:'target_page',pageKinds}));
   process.exitCode=2;
+  }
 } finally {
-  await browser.close().catch(() => {});
+  if(expectedOrigin==='https://piggo.me'){
+    await bounded(browser.close(),5000).catch(()=>{});
+    await bounded(new Promise(resolve=>process.stdout.write('',resolve)),1000).catch(()=>{});
+    process.exit(process.exitCode??0);
+  }else await browser.close().catch(() => {});
 }

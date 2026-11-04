@@ -1,13 +1,12 @@
 import path from 'node:path';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
+import {execLoginHelper} from './login-helper-process.mjs';
 import {validateSiteTwoFactorScope} from './two-factor-scope.mjs';
 import {parseLoginHelperResult} from './login-recovery.mjs';
 import {hddolbyDailyStatusProof} from './hddolby-readonly.mjs';
 import {projectPtNativeDiagnostic} from './pt-native-diagnostic.mjs';
 import {ptFailureMessages,ptRetryCauses} from './checkin-contract.generated.mjs';
 
-const executeFile=promisify(execFile),ORIGIN='https://hhanclub.net',ADAPTER='hhclub-nexus-login-v1';
+const executeFile=execLoginHelper,ORIGIN='https://hhanclub.net',ADAPTER='hhclub-nexus-login-v1';
 const adapters={[ORIGIN]:ADAPTER,'https://www.uhddolby.com':'hddolby-nexus-stepup-v1'};
 const reasons=new Set(['already_signed','already_authenticated','authentication_accepted','authentication_unknown',
   'authentication_rejected','account_mismatch','configuration_invalid','scope_unavailable','login_not_ready',

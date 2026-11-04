@@ -35,7 +35,7 @@ $stream=$request.GetRequestStream();try{$stream.Write($bytes,0,$bytes.Length)}fi
 $response=$request.GetResponse();$response.Dispose()
 `;
 
-export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out',idleUnlock=false,calendarMode='passive'}={}){
+export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out',idleUnlock=false,calendarMode='passive',authLanding=false}={}){
   const root=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'piggo-login-chain-')));
   let context,fixtureServer;
   t.after(async()=>{
@@ -110,7 +110,10 @@ try{[IO.File]::WriteAllText(${quote(config.bitwardenTotp.sessionFile)},(@{schema
     requests.push({method,path:url.pathname});
     assert.equal(url.origin,origin,'the fixture never forwards a request');
     let status=200,contentType='application/json',body={};
-    if(method==='GET'&&['/calendar','/login','/locked'].includes(url.pathname)){
+    if(method==='GET'&&url.pathname==='/'){
+      assert.equal(authLanding,true);assert.equal(request.isNavigationRequest(),true);assert.equal(request.resourceType(),'document');
+      assert.equal(request.frame(),request.frame().page().mainFrame());contentType='text/html';body='<main>synthetic landing</main>';
+    }else if(method==='GET'&&['/calendar','/login','/locked'].includes(url.pathname)){
       contentType='text/html';
       body='<meta charset="utf-8"><link rel="icon" href="data:,">'+(url.pathname==='/calendar'?
         `<main class="cal-page"><div class="cal-att"></div></main><script>
@@ -130,6 +133,7 @@ document.querySelector('form').onsubmit=async event=>{event.preventDefault();
  await fetch('/v1/web/me/lab-unlock/srp/challenge',{method:'POST',body:'{}'});
  await fetch('/v1/web/me/lab-unlock/srp',{method:'POST',headers:{'Content-Type':'application/json'},
  body:JSON.stringify({ticket:'synthetic-ticket',a:'synthetic-a',m1:'synthetic-proof'})});
+ ${authLanding?"location.href='/';return;":''}
  await fetch('/v1/web/me/lab-lock',{method:'POST'}).catch(()=>{});
 };</script>`:
         `<main id="app"></main><script>
@@ -138,6 +142,7 @@ document.querySelector('#app').innerHTML='<h1>用账号登录</h1><form><input t
 document.querySelector('form').onsubmit=async event=>{event.preventDefault();
 await fetch('/v1/web/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
  username:document.querySelector('[name=username]').value,password:document.querySelector('[name=password]').value})});
+${authLanding?"location.href='/';return;":''}
 // A second POST must be stopped by the real login firewall.
 await fetch('/v1/web/login',{method:'POST',body:'{}'}).catch(()=>{});
 };});

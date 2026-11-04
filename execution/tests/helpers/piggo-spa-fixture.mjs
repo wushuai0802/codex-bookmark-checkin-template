@@ -119,8 +119,8 @@ export function piggoLoginDom({webauthn=true,captcha=false,otp=false,setup=false
 export const now=new Date('2026-11-01T04:00:00Z');
 export const calendarData=(status='today',today=piggoDay(now))=>({cells:[],selected:today,
   detail:{ymd:today,is_today:true,attendance:{status,streak:23,points:918273645,cards:9}}});
-export function response(url,data,{status=200,date=now.toUTCString(),method='GET',responseUrl=url}={}){
-  return {url:()=>responseUrl,status:()=>status,headers:()=>({date}),text:async()=>JSON.stringify(data),request:()=>({method:()=>method})};
+export function response(url,data,{status=200,date=now.toUTCString(),method='GET',responseUrl=url,text}={}){
+  return {url:()=>responseUrl,status:()=>status,headers:()=>({date}),text:text??(async()=>JSON.stringify(data)),request:()=>({method:()=>method})};
 }
 
 export function fixture(t,{network=[],post={},scope=true,lease=true,gateChange,clock=()=>now}={}){
@@ -159,9 +159,9 @@ export function fixture(t,{network=[],post={},scope=true,lease=true,gateChange,c
       unroute:async(pattern,fn)=>{const i=routes.indexOf(fn);if(i>=0)routes.splice(i,1);},
       routeWebSocket:async(pattern,fn)=>{let closed=false;fn({close:()=>{closed=true;}});assert.equal(closed,true);},
       close:async()=>{context.closed=true;for(const page of pages)await page.close();},
-      request:async(method,url,body)=>{
+      request:async(method,url,body,metadata={})=>{
         let allowed=false;
-        const request={url:()=>url,method:()=>method,postDataJSON:()=>body};
+        const request={url:()=>url,method:()=>method,postDataJSON:()=>body,isNavigationRequest:()=>false,...metadata};
         const handler=routes.at(-1);assert.ok(handler,'firewall installed before navigation');
         await handler({request:()=>request,continue:async()=>{allowed=true;},abort:async()=>{},fallback:async()=>{throw Error('unexpected fallback');}});
         if(allowed)calls.push({method,url,...(body?{body}:{})});

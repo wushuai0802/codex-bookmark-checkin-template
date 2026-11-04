@@ -1,3 +1,4 @@
+import {bounded,TIMED_OUT} from './bounded-wait.mjs';
 // Reviewed PigGo SPA contract. No storage, cookie or token access belongs here.
 export const piggoOrigin='https://piggo.me';
 export const piggoCalendarUrl=piggoOrigin+'/calendar';
@@ -72,7 +73,7 @@ export function piggoResponseFresh(response,now){
 }
 
 /** All writes and legacy endpoints are blocked until one dated intent is armed. */
-export async function installPiggoCalendarFirewall(context,{clock=()=>new Date(),allowPluginAssets=false,allowIdleUnlock=false}={}){
+export async function installPiggoCalendarFirewall(context,{clock=()=>new Date(),allowPluginAssets=false,allowIdleUnlock=false,allowAuthLanding=false}={}){
   let armedDay=null,used=false;
   const route=async intercepted=>{
     const request=intercepted.request(),raw=request.url(),url=sameOriginUrl(raw);
@@ -96,7 +97,9 @@ export async function installPiggoCalendarFirewall(context,{clock=()=>new Date()
       /^\/cdn-cgi\/scripts\/[a-f0-9]{8,64}\/cloudflare-static\/rocket-loader\.min\.js$/.test(url.pathname)||
       allowPluginAssets&&/^\/v1\/web\/plugin-assets\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\.(?:js|css)$/.test(url.pathname)||
       /^\/[A-Za-z0-9_.-]+\.(?:svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname));
-    const safe=(!url.search&&(['/calendar','/login'].includes(url.pathname)||allowIdleUnlock&&url.href===piggoLockedUrl||api.includes(url.pathname)||asset))||
+    const authLanding=allowAuthLanding&&raw===piggoOrigin+'/'&&request.isNavigationRequest()&&
+      request.resourceType()==='document'&&request.frame()===request.frame().page().mainFrame();
+    const safe=authLanding||(!url.search&&(['/calendar','/login'].includes(url.pathname)||allowIdleUnlock&&url.href===piggoLockedUrl||api.includes(url.pathname)||asset))||
       piggoCalendarResponseUrl(url.href,piggoDay(clock()));
     return safe?intercepted.continue():intercepted.abort('blockedbyclient');
   };
@@ -108,7 +111,8 @@ export async function installPiggoCalendarFirewall(context,{clock=()=>new Date()
 }
 
 async function responseData(response){
-  const text=await response.text();
+  const text=await bounded(response.text(),5000);
+  if(text===TIMED_OUT)throw Error('Calendar response unavailable');
   if(Buffer.byteLength(text,'utf8')>1_000_000)throw Error('Calendar response too large');
   return JSON.parse(text);
 }
@@ -117,7 +121,7 @@ async function responseData(response){
 async function idleLocked(response){
   if(response?.status()!==423)return false;
   try{
-    const text=await response.text();if(Buffer.byteLength(text)>100_000)return false;
+    const text=await bounded(response.text(),5000);if(text===TIMED_OUT||Buffer.byteLength(text)>100_000)return false;
     const value=JSON.parse(text);
     return value?.code==='idle_locked'||value?.data?.code==='idle_locked';
   }catch{return false;}
@@ -141,7 +145,7 @@ export async function readPiggoAccountIdInContext(context,{clock=()=>new Date()}
     const id=piggoApiData(await responseData(me))?.user?.id;
     return Number.isSafeInteger(id)&&id>0?String(id):null;
   }catch{return null;}
-  finally{await page?.close().catch(()=>{});await cdp?.detach().catch(()=>{});}
+  finally{await bounded(page?.close(),5000).catch(()=>{});await bounded(cdp?.detach(),5000).catch(()=>{});}
 }
 
 /** Capture only requests made by the real page; never reconstruct its auth client. */
@@ -199,7 +203,7 @@ export async function readPiggoCalendarInContext(context,state,clock,diagnostic=
     return {accountId,...(retained?{page}:{}),result:{...metadata,nativeGate:true,inspection,readbackReceipt:{...metadata,inspection},
       nativeReadback:{stage:'completed',code:'receipt_accepted',apiStage:'completed',httpStatus:200}}};
   }catch{return fail();}
-  finally{if(!retained)await page?.close().catch(()=>{});}
+  finally{if(!retained)await bounded(page?.close(),5000).catch(()=>{});}
 }
 
 // The published Calendar component supplies this exact unique button class.

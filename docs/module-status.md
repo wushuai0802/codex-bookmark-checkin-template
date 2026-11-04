@@ -8,7 +8,7 @@
 
 | 类别 | 文件数 |
 | --- | ---: |
-| 现役 | 231 |
+| 现役 | 233 |
 | 运维手动 | 66 |
 | 历史审计 | 4 |
 | 待确认 | 47 |
@@ -72,10 +72,10 @@
 | `execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:194 (node-path) |
 | `execution/scripts/Invoke-NpmAuditWithRetry.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/scripts/Invoke-PlainOAuthAccessibility.ps1` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:211 (ps-call) |
-| `execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1` | 现役 | execution/src/index.mjs:854 (node-path) |
+| `execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1` | 现役 | execution/src/index.mjs:855 (node-path) |
 | `execution/scripts/Invoke-PlainWafAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:194 (node-path) |
 | `execution/scripts/Manage-BitwardenTotp.ps1` | 运维手动 | 人工用法见 execution/docs/bitwarden-totp.md |
-| `execution/scripts/Native-ChromeDebug.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:13 (ps-call) |
+| `execution/scripts/Native-ChromeDebug.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:56 (ps-call) |
 | `execution/scripts/Native-PtChromeProxy.ps1` | 现役 | execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1:99 (ps-call) |
 | `execution/scripts/Native-PtGate.mjs` | 现役 | execution/scripts/Native-PtGuard.ps1:4 (ps-join) |
 | `execution/scripts/Native-PtGuard.ps1` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:83 (ps-call) |
@@ -83,15 +83,15 @@
 | `execution/scripts/OAuth-AccountConfig.ps1` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:19 (ps-call) |
 | `execution/scripts/Open-ManualLogin.ps1` | 运维手动 | 人工用法见 docs/quickstart.md |
 | `execution/scripts/Open-OAuthAccountLogin.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `execution/scripts/Open-PlainLoginChrome.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:48 (ps-call) |
+| `execution/scripts/Open-PlainLoginChrome.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:91 (ps-call) |
 | `execution/scripts/Plain-CredentialLoginAccessibility.ps1` | 现役 | execution/scripts/Recover-ProtectedLogin.ps1:136 (ps-call) |
 | `execution/scripts/Prepare-NativeWafSession.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:289 (ps-call) |
 | `execution/scripts/Protect-PrivateRuntime.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Read-NativePtHeader.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:308 (ps-join) |
-| `execution/scripts/Recover-NativeLogin.ps1` | 现役 | execution/src/index.mjs:792 (node-path) |
-| `execution/scripts/Recover-NativeOAuthLogin.ps1` | 现役 | execution/src/index.mjs:820 (node-path) |
+| `execution/scripts/Recover-NativeLogin.ps1` | 现役 | execution/src/index.mjs:793 (node-path) |
+| `execution/scripts/Recover-NativeOAuthLogin.ps1` | 现役 | execution/src/index.mjs:821 (node-path) |
 | `execution/scripts/Recover-NativePtTwoFactor.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:565 (ps-join) |
-| `execution/scripts/Recover-ProtectedLogin.ps1` | 现役 | execution/src/index.mjs:801 (node-path) |
+| `execution/scripts/Recover-ProtectedLogin.ps1` | 现役 | execution/src/index.mjs:802 (node-path) |
 | `execution/scripts/Remove-ScheduledTask.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Remove-UserScheduler.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Resolve-Runtime.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:11 (ps-join) |
@@ -121,9 +121,10 @@
 | `execution/src/anyrouter-api-checkin.mjs` | 现役 | execution/src/browser.mjs:21 (esm-static) |
 | `execution/src/attention-urls.mjs` | 现役 | execution/scripts/Open-PlainLoginChrome.ps1:53 (ps-join) |
 | `execution/src/baidu-ocr.mjs` | 现役 | execution/src/browser.mjs:20 (esm-static) |
-| `execution/src/bitwarden-totp.mjs` | 现役 | execution/src/native-pt-two-factor.mjs:236 (esm-dynamic) |
-| `execution/src/bookmarks.mjs` | 现役 | execution/src/index.mjs:8 (esm-static) |
-| `execution/src/browser.mjs` | 现役 | execution/src/index.mjs:9 (esm-static) |
+| `execution/src/bitwarden-totp.mjs` | 现役 | execution/src/native-pt-two-factor.mjs:238 (esm-dynamic) |
+| `execution/src/bookmarks.mjs` | 现役 | execution/src/index.mjs:9 (esm-static) |
+| `execution/src/bounded-wait.mjs` | 现役 | execution/src/piggo-calendar.mjs:1 (esm-static) |
+| `execution/src/browser.mjs` | 现役 | execution/src/index.mjs:10 (esm-static) |
 | `execution/src/captcha-ocr.mjs` | 现役 | execution/src/browser.mjs:9 (esm-static) |
 | `execution/src/checkin-api.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/src/checkin-click.mjs` | 现役 | execution/src/browser.mjs:16 (esm-static) |
@@ -136,51 +137,52 @@
 | `execution/src/deployment-integrity.mjs` | 现役 | execution/scripts/Test-CheckinHealth.ps1:480 (ps-join) |
 | `execution/src/detector.mjs` | 现役 | execution/src/browser.mjs:6 (esm-static) |
 | `execution/src/google-session-choice.mjs` | 现役 | execution/src/native-oauth-login.mjs:17 (esm-static) |
-| `execution/src/harvest-pt-gate.mjs` | 现役 | execution/src/index.mjs:89 (esm-static) |
-| `execution/src/hddolby-native-flow.mjs` | 现役 | execution/src/native-login.mjs:50 (esm-dynamic) |
+| `execution/src/harvest-pt-gate.mjs` | 现役 | execution/src/index.mjs:90 (esm-static) |
+| `execution/src/hddolby-native-flow.mjs` | 现役 | execution/src/native-login.mjs:51 (esm-dynamic) |
 | `execution/src/hddolby-readonly.mjs` | 现役 | execution/src/browser.mjs:27 (esm-static) |
 | `execution/src/hddolby-two-factor.mjs` | 现役 | execution/src/browser.mjs:28 (esm-static) |
 | `execution/src/hhclub-two-factor-login.mjs` | 现役 | execution/src/saved-password-login.mjs:9 (esm-static) |
 | `execution/src/index.mjs` | 现役 | npm 生产脚本 execution/package.json:start |
 | `execution/src/inspect-target.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `execution/src/isolated-site-profiles.mjs` | 现役 | execution/src/index.mjs:61 (esm-static) |
-| `execution/src/logger.mjs` | 现役 | execution/src/index.mjs:15 (esm-static) |
-| `execution/src/logical-checkin.mjs` | 现役 | execution/src/index.mjs:22 (esm-static) |
-| `execution/src/login-recovery.mjs` | 现役 | execution/src/index.mjs:16 (esm-static) |
+| `execution/src/isolated-site-profiles.mjs` | 现役 | execution/src/index.mjs:62 (esm-static) |
+| `execution/src/logger.mjs` | 现役 | execution/src/index.mjs:16 (esm-static) |
+| `execution/src/logical-checkin.mjs` | 现役 | execution/src/index.mjs:23 (esm-static) |
+| `execution/src/login-helper-process.mjs` | 现役 | execution/src/index.mjs:7 (esm-static) |
+| `execution/src/login-recovery.mjs` | 现役 | execution/src/index.mjs:17 (esm-static) |
 | `execution/src/login-sync-origins.mjs` | 现役 | execution/scripts/Sync-ChromeSavedLogins.ps1:9 (ps-join) |
 | `execution/src/manual-session.mjs` | 运维手动 | execution/scripts/Open-ManualLogin.ps1:25 (ps-join) |
 | `execution/src/native-browser-inspect.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:85 (ps-join) |
 | `execution/src/native-cdp.mjs` | 现役 | execution/src/native-login.mjs:7 (esm-static) |
 | `execution/src/native-credential-login.mjs` | 现役 | execution/scripts/Recover-ProtectedLogin.ps1:173 (ps-join) |
-| `execution/src/native-login.mjs` | 现役 | execution/scripts/Recover-NativeLogin.ps1:52 (ps-join) |
+| `execution/src/native-login.mjs` | 现役 | execution/scripts/Recover-NativeLogin.ps1:95 (ps-join) |
 | `execution/src/native-oauth-login.mjs` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:119 (ps-join) |
-| `execution/src/native-preflight-receipt.mjs` | 现役 | execution/src/index.mjs:54 (esm-static) |
-| `execution/src/native-preflight-result.mjs` | 现役 | execution/src/index.mjs:53 (esm-static) |
+| `execution/src/native-preflight-receipt.mjs` | 现役 | execution/src/index.mjs:55 (esm-static) |
+| `execution/src/native-preflight-result.mjs` | 现役 | execution/src/index.mjs:54 (esm-static) |
 | `execution/src/native-pt-api.mjs` | 现役 | execution/src/native-pt-two-factor.mjs:7 (esm-static) |
 | `execution/src/native-pt-gate.mjs` | 现役 | execution/src/native-pt-two-factor.mjs:8 (esm-static) |
-| `execution/src/native-pt-read.mjs` | 现役 | execution/src/index.mjs:87 (esm-static) |
-| `execution/src/native-pt-two-factor.mjs` | 现役 | execution/src/index.mjs:55 (esm-static) |
-| `execution/src/native-waf-profile.mjs` | 现役 | execution/src/index.mjs:85 (esm-static) |
+| `execution/src/native-pt-read.mjs` | 现役 | execution/src/index.mjs:88 (esm-static) |
+| `execution/src/native-pt-two-factor.mjs` | 现役 | execution/src/index.mjs:56 (esm-static) |
+| `execution/src/native-waf-profile.mjs` | 现役 | execution/src/index.mjs:86 (esm-static) |
 | `execution/src/new-api-account-checkin.mjs` | 现役 | execution/src/supplemental-oauth-accounts.mjs:7 (esm-static) |
 | `execution/src/new-api-signin.mjs` | 现役 | execution/src/browser.mjs:18 (esm-static) |
 | `execution/src/notification-reconciliation.mjs` | 现役 | execution/scripts/Submit-UnifiedCheckinReport.ps1:131 (ps-join) |
 | `execution/src/oauth-api-checkin.mjs` | 现役 | execution/src/browser.mjs:15 (esm-static) |
 | `execution/src/oauth-callback.mjs` | 现役 | execution/src/oauth-login.mjs:10 (esm-static) |
-| `execution/src/oauth-execution-binding.mjs` | 现役 | execution/src/index.mjs:70 (esm-static) |
+| `execution/src/oauth-execution-binding.mjs` | 现役 | execution/src/index.mjs:71 (esm-static) |
 | `execution/src/oauth-flow-diagnostics.mjs` | 现役 | execution/src/login-recovery.mjs:3 (esm-static) |
-| `execution/src/oauth-login.mjs` | 现役 | execution/src/index.mjs:831 (node-path) |
+| `execution/src/oauth-login.mjs` | 现役 | execution/src/index.mjs:832 (node-path) |
 | `execution/src/oauth-recovery-profile.mjs` | 现役 | execution/src/oauth-login.mjs:17 (esm-static) |
-| `execution/src/oauth-recovery-target.mjs` | 现役 | execution/src/index.mjs:86 (esm-static) |
+| `execution/src/oauth-recovery-target.mjs` | 现役 | execution/src/index.mjs:87 (esm-static) |
 | `execution/src/oauth-relogin-checkin.mjs` | 现役 | execution/src/browser.mjs:14 (esm-static) |
-| `execution/src/oauth-session-profiles.mjs` | 现役 | execution/src/index.mjs:65 (esm-static) |
+| `execution/src/oauth-session-profiles.mjs` | 现役 | execution/src/index.mjs:66 (esm-static) |
 | `execution/src/offscreen-windows.mjs` | 现役 | execution/src/browser.mjs:29 (esm-static) |
 | `execution/src/open-captcha-session.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/src/origin-routing.mjs` | 现役 | execution/src/anyrouter-api-checkin.mjs:4 (esm-static) |
 | `execution/src/piggo-calendar.mjs` | 现役 | execution/src/login-recovery.mjs:4 (esm-static) |
-| `execution/src/piggo-login-form.mjs` | 现役 | execution/src/piggo-login.mjs:13 (esm-static) |
+| `execution/src/piggo-login-form.mjs` | 现役 | execution/src/piggo-login.mjs:14 (esm-static) |
 | `execution/src/piggo-login.mjs` | 现役 | execution/src/native-login.mjs:15 (esm-static) |
 | `execution/src/powershell-runtime.mjs` | 现役 | execution/scripts/Test-CheckinHealth.ps1:491 (ps-join) |
-| `execution/src/preflight-policy.mjs` | 现役 | execution/src/index.mjs:37 (esm-static) |
+| `execution/src/preflight-policy.mjs` | 现役 | execution/src/index.mjs:38 (esm-static) |
 | `execution/src/preflight.mjs` | 运维手动 | npm 人工命令 execution/package.json:preflight |
 | `execution/src/protected-credential-api.mjs` | 现役 | execution/src/credential-api-login.mjs:8 (esm-static) |
 | `execution/src/protected-login-flow.mjs` | 现役 | execution/src/native-login.mjs:6 (esm-static) |
@@ -190,34 +192,34 @@
 | `execution/src/pt-login-recovery.mjs` | 现役 | execution/src/pt-supplement.mjs:11 (esm-static) |
 | `execution/src/pt-login-resume-guard.mjs` | 现役 | execution/src/pt-supplement.mjs:13 (esm-static) |
 | `execution/src/pt-native-diagnostic.mjs` | 现役 | execution/src/hddolby-two-factor.mjs:8 (esm-static) |
-| `execution/src/pt-observation-receipt.mjs` | 现役 | execution/src/index.mjs:25 (esm-static) |
+| `execution/src/pt-observation-receipt.mjs` | 现役 | execution/src/index.mjs:26 (esm-static) |
 | `execution/src/pt-profile-read.mjs` | 现役 | execution/src/pt-supplement.mjs:9 (esm-static) |
-| `execution/src/pt-read-policy.mjs` | 现役 | execution/src/index.mjs:88 (esm-static) |
-| `execution/src/pt-submission-closure.mjs` | 现役 | execution/src/index.mjs:26 (esm-static) |
+| `execution/src/pt-read-policy.mjs` | 现役 | execution/src/index.mjs:89 (esm-static) |
+| `execution/src/pt-submission-closure.mjs` | 现役 | execution/src/index.mjs:27 (esm-static) |
 | `execution/src/pt-submission-guard.mjs` | 现役 | execution/src/browser.mjs:23 (esm-static) |
 | `execution/src/pt-supplement.mjs` | 现役 | execution/scripts/Run-PtSupplement.mjs:6 (esm-static) |
-| `execution/src/qa-solver.mjs` | 现役 | execution/src/index.mjs:36 (esm-static) |
-| `execution/src/quota-claim-guard.mjs` | 现役 | execution/src/index.mjs:24 (esm-static) |
-| `execution/src/report-reason.mjs` | 现役 | execution/src/index.mjs:83 (esm-static) |
-| `execution/src/result-contract.mjs` | 现役 | execution/src/index.mjs:84 (esm-static) |
-| `execution/src/result-identity.mjs` | 现役 | execution/src/index.mjs:42 (esm-static) |
-| `execution/src/retry-policy.mjs` | 现役 | execution/src/index.mjs:71 (esm-static) |
+| `execution/src/qa-solver.mjs` | 现役 | execution/src/index.mjs:37 (esm-static) |
+| `execution/src/quota-claim-guard.mjs` | 现役 | execution/src/index.mjs:25 (esm-static) |
+| `execution/src/report-reason.mjs` | 现役 | execution/src/index.mjs:84 (esm-static) |
+| `execution/src/result-contract.mjs` | 现役 | execution/src/index.mjs:85 (esm-static) |
+| `execution/src/result-identity.mjs` | 现役 | execution/src/index.mjs:43 (esm-static) |
+| `execution/src/retry-policy.mjs` | 现役 | execution/src/index.mjs:72 (esm-static) |
 | `execution/src/run-lock.mjs` | 现役 | tools/release-lib.mjs:100 (esm-dynamic) |
-| `execution/src/saved-password-login.mjs` | 现役 | execution/src/index.mjs:841 (node-path) |
+| `execution/src/saved-password-login.mjs` | 现役 | execution/src/index.mjs:842 (node-path) |
 | `execution/src/search-site-checkin.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `execution/src/security.mjs` | 现役 | execution/src/index.mjs:23 (esm-static) |
-| `execution/src/session-preflight.mjs` | 现役 | execution/src/index.mjs:69 (esm-static) |
+| `execution/src/security.mjs` | 现役 | execution/src/index.mjs:24 (esm-static) |
+| `execution/src/session-preflight.mjs` | 现役 | execution/src/index.mjs:70 (esm-static) |
 | `execution/src/setup-config.mjs` | 运维手动 | execution/scripts/Initialize-Checkin.ps1:22 (ps-join) |
-| `execution/src/shared-context-lifecycle.mjs` | 现役 | execution/src/index.mjs:52 (esm-static) |
+| `execution/src/shared-context-lifecycle.mjs` | 现役 | execution/src/index.mjs:53 (esm-static) |
 | `execution/src/site-migration.mjs` | 现役 | execution/src/browser.mjs:17 (esm-static) |
-| `execution/src/site-state.mjs` | 现役 | execution/src/index.mjs:29 (esm-static) |
-| `execution/src/supplemental-oauth-accounts.mjs` | 现役 | execution/src/index.mjs:56 (esm-static) |
+| `execution/src/site-state.mjs` | 现役 | execution/src/index.mjs:30 (esm-static) |
+| `execution/src/supplemental-oauth-accounts.mjs` | 现役 | execution/src/index.mjs:57 (esm-static) |
 | `execution/src/two-factor-scope.mjs` | 现役 | execution/src/saved-password-login.mjs:10 (esm-static) |
 | `execution/src/u2-captcha-session.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/src/u2-reference-fetch.mjs` | 现役 | execution/src/browser.mjs:11 (esm-static) |
 | `execution/src/u2-vision.mjs` | 现役 | execution/src/browser.mjs:10 (esm-static) |
 | `execution/src/url-routes.mjs` | 现役 | execution/src/login-recovery.mjs:2 (esm-static) |
-| `execution/src/vibe-readonly.mjs` | 现役 | execution/src/index.mjs:27 (esm-static) |
+| `execution/src/vibe-readonly.mjs` | 现役 | execution/src/index.mjs:28 (esm-static) |
 | `observation/public/app.js` | 现役 | observation/public/index.html:89 (public-asset) |
 | `observation/public/appearance.mjs` | 现役 | observation/public/app.js:10 (esm-static) |
 | `observation/public/article-glass.css` | 现役 | observation/public/preview-styles.js:3 (literal-script) |
