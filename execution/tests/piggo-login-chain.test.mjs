@@ -39,7 +39,8 @@ for(const shell of ['powershell.exe','pwsh.exe'])test(`offline native login chai
     assert.equal(journal.attempts.length,1);assert.equal(journal.attempts[0].state,'accepted');
     assert.equal(fs.existsSync(path.join(f.root,'tmp/piggo-password-login.lock')),false);
     const audit=JSON.parse(fs.readFileSync(path.join(f.root,'data/native-pt-attempts.json'),'utf8'));
-    assert.equal(audit.attempts.length,0);assert.equal(audit.readbacks.length,1);
+    assert.equal(audit.attempts.length,0);assert.ok(audit.readbacks.length>=1);
+    assert.ok(audit.readbacks.every(row=>row.profileBinding===f.profileBinding&&row.status==='not_signed'));
     assert.equal(loginHelperOutcome(out.stdout).succeeded,true);
     assert.doesNotMatch(out.stdout+out.stderr,/synthetic-user|wo16-synthetic-only/);
   });
@@ -80,4 +81,22 @@ for(const shell of ['powershell.exe','pwsh.exe'])test(`offline provider refuses 
     const out=await f.run('Get-BitwardenTotp.ps1',f.providerArgs,{env});
     assert.equal(out.code,0,out.stderr);assert.deepEqual(JSON.parse(out.stdout),{ready:false,reason:'login_not_allowed'});
     assert.deepEqual(f.calls(),[]);assert.deepEqual(f.requests,[]);
+  });
+
+for(const calendarMode of ['passive','submit','checked'])test(`offline core chain unlocks the real StepUpGate and completes its calendar in one context: ${calendarMode}`,
+  {skip,timeout:120000},async t=>{
+    const f=await loginChainFixture(t,{idleUnlock:true,calendarMode}),out=await f.runCore();
+    assert.deepEqual(f.errors,[]);assert.equal(out.code,0,out.stderr);
+    const result=parseLoginHelperResult(out.stdout);
+    assert.equal(result.nativeTwoFactorRecovery.recoveryMode,'idle_unlock');assert.equal(result.nativeTwoFactorRecovery.accepted,true);
+    assert.deepEqual(f.passiveReads()[0],{status:'login_required',failureCode:'idle_locked',apiStage:'idle_lock'});
+    assert.deepEqual(f.requests.filter(row=>row.method==='POST').map(row=>row.path),[
+      '/v1/web/me/lab-unlock/srp/challenge','/v1/web/me/lab-unlock/srp',
+      ...(calendarMode==='submit'?['/v1/web/calendar/attendance']:[])]);
+    assert.equal(result.dailyCheckin.status,{passive:'not_signed',submit:'signed',checked:'already_signed'}[calendarMode]);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.root,'data/bitwarden/recovery-state.json'))).attempts[0].state,'accepted');
+    const audit=JSON.parse(fs.readFileSync(path.join(f.root,'data/native-pt-attempts.json')));
+    assert.equal(audit.attempts.length,calendarMode==='submit'?1:0);
+    if(calendarMode==='submit')assert.equal(audit.attempts[0].state,'confirmed');
+    assert.doesNotMatch(out.stdout+out.stderr,/synthetic-user|wo16-synthetic-only|synthetic-bound-user|synthetic-m2/);
   });

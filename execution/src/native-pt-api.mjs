@@ -54,7 +54,7 @@ function settings(root,origin,{execution=false,url}={}){
     const entries=[...(config.nativeWafPreflightUrls??[]),...(config.nativeChallengePreflight??[])]
       .map(value=>typeof value==='string'?{url:value}:value);
     if(destination.href!==(origin===piggoOrigin?piggoAttendanceUrl:origin+'/attendance.php')||destination.username||destination.password||
-      !entries.some(value=>value.url===url))throw Error('Native API GET destination unregistered');
+      !entries.some(value=>value.url===url&&value.passiveOnly!==true))throw Error('Native API GET destination unregistered');
   }
   return {root,origin,config,policy,binding,expectedAccountId,
     ...(origin===piggoOrigin?{configHash:piggoConfigHash(config)}:{}),
@@ -394,11 +394,9 @@ export async function runNativePtApiCheckin({root,origin,url,launch=launchAutoma
 }
 
 async function runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,validateLease,acquire,release}){
-  let state,context,lock,attempted=false;
-  const unknownResult=()=>({...unknown(state?.identity),reason:'猪猪今日签到可能已提交，保留意图并先只读核验，禁止自动重放'});
+  let state,context,lock;
   try{
     state=settings(root,origin,{execution:true,url});
-    const unchanged=()=>piggoConfigHash(read(path.join(state.root,'config/config.json')))===state.configHash;
     await validateLease(state.root);
     lock=await acquire(path.join(state.root,'tmp/run.lock'));
     const args={root:state.root,origin,url,profile:state.binding.profile,mainProfile:false,clock};
@@ -407,33 +405,65 @@ async function runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,valida
       return {...(bound.decision??unavailable(state.identity)),...state.identity,nativeGate:true};
     context=await launch({...state.config,automationUserDataDir:state.binding.profile,ptPassiveReadOnly:true,
       ptReadProxyServer:state.policy.proxyServer,nativePtReadOrigin:origin,failureScreenshots:false});
-    const firewall=await installPiggoCalendarFirewall(context,{clock});
+    return await runPiggoCalendarCheckinInContext({root:state.root,context,expectedProfileBinding:state.binding.profileBinding,
+      profileProof:async()=>true,clock,gate,validateLease,expectedConfigHash:state.configHash});
+  }catch(error){return unavailable(state?.identity,error?.code==='account_mismatch'?'account_mismatch':'native_readback_unavailable');}
+  finally{await context?.close().catch(()=>{});if(lock)await release(lock).catch(()=>{});}
+}
+
+// The caller owns the browser and execution lock. Login recovery calls this
+// before releasing its authenticated session; the standalone runner uses it too.
+export async function runPiggoCalendarCheckinInContext({root,context,expectedProfileBinding,profileProof,
+  clock=()=>new Date(),gate=runNativePtGate,validateLease=validateControllerLease,expectedConfigHash}={}){
+  let state,firewall,page,attempted=false;
+  const unknownResult=()=>({...unknown(state?.identity),reason:'猪猪今日签到可能已提交，保留意图并先只读核验，禁止自动重放'});
+  try{
+    state=settings(root,piggoOrigin);
+    const unchanged=async()=>piggoConfigHash(read(path.join(state.root,'config/config.json')))===state.configHash&&
+      typeof profileProof==='function'&&await profileProof();
+    if(state.binding.profileBinding!==expectedProfileBinding||expectedConfigHash&&expectedConfigHash!==state.configHash||!await unchanged())
+      return unavailable(state.identity,'native_readback_unavailable');
+    const entries=[...(state.config.nativeWafPreflightUrls??[]),...(state.config.nativeChallengePreflight??[])];
+    const canSubmit=entries.some(value=>typeof value==='string'?value===piggoAttendanceUrl:
+      value?.url===piggoAttendanceUrl&&value.passiveOnly!==true);
+    if(canSubmit)settings(root,piggoOrigin,{execution:true,url:piggoAttendanceUrl});
+    const args={root:state.root,origin:piggoOrigin,url:canSubmit?piggoAttendanceUrl:piggoCalendarUrl,
+      profile:state.binding.profile,mainProfile:false,clock};
+    await validateLease(state.root);
+    const bound=await gate({...args,phase:'bind'});
+    if(bound.managed!==true||bound.allow!==true||bound.accountKey!==state.identity.accountKey||
+      bound.profileBinding!==state.identity.profileBinding)return unavailable(state.identity,'native_readback_unavailable');
+    firewall=await installPiggoCalendarFirewall(context,{clock});
     const before=await readPiggoCalendarInContext(context,state,clock,{},true);
-    if(before.result.status!=='not_signed')return before.result;
+    page=before.page;
+    if(!await unchanged())return unavailable(state.identity,'native_readback_unavailable');
+    if(!['not_signed','already_signed'].includes(before.result.status))return before.result;
     const registered=await gate({...args,phase:'readback',receipt:before.result.readbackReceipt});
     if(registered.allow!==true||registered.receiptAccepted!==true)return registered.decision??unavailable(state.identity);
+    if(before.result.status==='already_signed'||!canSubmit)return {...before.result,receiptAccepted:true};
     const decision=await gate({...args,phase:'inspect'});
     if(decision.allow!==true)return decision.decision??unavailable(state.identity);
     const today=piggoDay(clock());
-    if(!unchanged()||before.result.businessDate!==today)return unavailable(state.identity);
+    if(!await unchanged()||before.result.businessDate!==today)return unavailable(state.identity);
     await validateLease(state.root);
     const attemptId=crypto.randomUUID();
     const begun=await gate({...args,phase:'begin',attemptId,action:'click'});
     if(begun.allow!==true)return begun.decision??unavailable(state.identity);
     attempted=true;
-    if(!unchanged()||piggoDay(clock())!==today)return unknownResult();
+    if(!await unchanged()||piggoDay(clock())!==today)return unknownResult();
     const after=await submitPiggoCalendar(before.page,firewall,today,clock,
       ()=>readPiggoCalendarInContext(context,state,clock));
     if(!after||after.accountId!==before.accountId||after.result.status!=='already_signed'||
-      after.result.businessDate!==today||piggoDay(clock())!==today||!unchanged())return unknownResult();
+      after.result.businessDate!==today||piggoDay(clock())!==today||!await unchanged())return unknownResult();
     const evidence=after.result.evidence;
     const saved=await gate({...args,phase:'finish',attemptId,status:'signed',evidence});
     if(saved?.allow!==true||saved.confirmed!==true||saved.confirmationState!=='confirmed')
       return {...unknownResult(),confirmationState:'not_persisted'};
     return {...state.identity,url:piggoCalendarUrl,status:'signed',nativeGate:true,submissionAttempted:true,
+      confirmationState:'confirmed',
       evidence,operationMode:'legacy_checkin',readSafety:'attendance_page_risk',attendanceRisk:true,
       reason:'猪猪今日签到已由同账号日历回读确认并持久化'};
   }catch(error){return attempted?unknownResult():unavailable(state?.identity,
     error?.code==='account_mismatch'?'account_mismatch':'native_readback_unavailable');}
-  finally{await context?.close().catch(()=>{});if(lock)await release(lock).catch(()=>{});}
+  finally{await page?.close().catch(()=>{});await firewall?.dispose().catch(()=>{});}
 }

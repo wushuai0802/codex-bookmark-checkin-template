@@ -110,6 +110,12 @@ for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pw
     assert.equal(row.status,'login_required');assert.equal(row.inspectionStatus,'login_required');assert.equal(row.retryCause,'login_required');
     assert.equal(row.nativeGate,true);assert.equal(row.submissionAttempted,false);assert.equal(row.url,'https://piggo.me/calendar');
   });
+  test(`an idle-locked PigGo passes the historical-intent eligibility branch with its fixed lock code (${shell})`,()=>{
+    const out=eligibility(shell,{read:`[pscustomobject]@{status='login_required';failureCode='idle_locked';submissionAttempted=$false}`});
+    assert.equal(out.results[0].status,'login_required');assert.equal(out.results[0].failureCode,'idle_locked');
+    assert.equal(out.results[0].nativeReadback.apiStage,'idle_lock');assert.equal(out.results[0].submissionAttempted,false);
+    assert.equal(out.readCalls,1);assert.equal(out.registerCalls,0);assert.equal(out.eligible,0);
+  });
   test(`the eligibility loop keeps the unknown for anything but a clean logged-out PigGo read (${shell})`,()=>{
     for(const read of [`[pscustomobject]@{status='login_required';submissionAttempted=$true}`,`[pscustomobject]@{status='login_required'}`,
       `[pscustomobject]@{status='unconfirmed';submissionAttempted=$false}`,`[pscustomobject]@{status='managed_challenge';submissionAttempted=$false}`,'$null']){

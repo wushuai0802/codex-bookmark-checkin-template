@@ -1,6 +1,7 @@
 // Reviewed PigGo SPA contract. No storage, cookie or token access belongs here.
 export const piggoOrigin='https://piggo.me';
 export const piggoCalendarUrl=piggoOrigin+'/calendar';
+export const piggoLockedUrl=piggoOrigin+'/locked';
 export const piggoAttendanceUrl=piggoOrigin+'/v1/web/calendar/attendance';
 export const piggoDay=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -71,7 +72,7 @@ export function piggoResponseFresh(response,now){
 }
 
 /** All writes and legacy endpoints are blocked until one dated intent is armed. */
-export async function installPiggoCalendarFirewall(context,{clock=()=>new Date(),allowPluginAssets=false}={}){
+export async function installPiggoCalendarFirewall(context,{clock=()=>new Date(),allowPluginAssets=false,allowIdleUnlock=false}={}){
   let armedDay=null,used=false;
   const route=async intercepted=>{
     const request=intercepted.request(),raw=request.url(),url=sameOriginUrl(raw);
@@ -95,7 +96,7 @@ export async function installPiggoCalendarFirewall(context,{clock=()=>new Date()
       /^\/cdn-cgi\/scripts\/[a-f0-9]{8,64}\/cloudflare-static\/rocket-loader\.min\.js$/.test(url.pathname)||
       allowPluginAssets&&/^\/v1\/web\/plugin-assets\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\.(?:js|css)$/.test(url.pathname)||
       /^\/[A-Za-z0-9_.-]+\.(?:svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname));
-    const safe=(!url.search&&(['/calendar','/login'].includes(url.pathname)||api.includes(url.pathname)||asset))||
+    const safe=(!url.search&&(['/calendar','/login'].includes(url.pathname)||allowIdleUnlock&&url.href===piggoLockedUrl||api.includes(url.pathname)||asset))||
       piggoCalendarResponseUrl(url.href,piggoDay(clock()));
     return safe?intercepted.continue():intercepted.abort('blockedbyclient');
   };
@@ -110,6 +111,16 @@ async function responseData(response){
   const text=await response.text();
   if(Buffer.byteLength(text,'utf8')>1_000_000)throw Error('Calendar response too large');
   return JSON.parse(text);
+}
+
+// Project only the lock code from a bounded envelope. Never retain its message or data.
+async function idleLocked(response){
+  if(response?.status()!==423)return false;
+  try{
+    const text=await response.text();if(Buffer.byteLength(text)>100_000)return false;
+    const value=JSON.parse(text);
+    return value?.code==='idle_locked'||value?.data?.code==='idle_locked';
+  }catch{return false;}
 }
 
 /** Manual first-binding diagnostic. A candidate ID is never an accepted receipt. */
@@ -137,7 +148,7 @@ export async function readPiggoAccountIdInContext(context,{clock=()=>new Date()}
 export async function readPiggoCalendarInContext(context,state,clock,diagnostic={},keepPage=false){
   let page,retained=false;const started=clock(),today=piggoDay(started);
   const identity=state.identity;
-  const fail=code=>({result:{...identity,status:code==='login_required'?'login_required':'unconfirmed',
+  const fail=code=>({result:{...identity,status:['login_required','idle_locked'].includes(code)?'login_required':'unconfirmed',
     failureCode:code??'authoritative_status_unavailable',nativeGate:true,submissionAttempted:false,
     reason:'猪猪日历尚未取得当日同账号权威回执',nativeReadback:{stage:'readback',code:'authoritative_evidence_rejected',
       apiStage:diagnostic.apiStage,httpStatus:diagnostic.httpStatus}},accountId:null});
@@ -149,8 +160,13 @@ export async function readPiggoCalendarInContext(context,state,clock,diagnostic=
     const calendarWait=page.waitForResponse(response=>piggoCalendarResponseUrl(response.url(),today)&&response.request().method()==='GET',
       {timeout:15000}).catch(()=>null);
     await page.goto(piggoCalendarUrl,{waitUntil:'domcontentloaded',timeout:15000});
+    if(sameOriginUrl(page.url())?.pathname==='/locked'){diagnostic.apiStage='idle_lock';return fail('idle_locked');}
     if(sameOriginUrl(page.url())?.pathname==='/login'){diagnostic.apiStage='authentication';return fail('login_required');}
     const [me,calendar]=await Promise.all([meWait,calendarWait]);
+    if(sameOriginUrl(page.url())?.pathname==='/locked'||await idleLocked(me)||await idleLocked(calendar)){
+      diagnostic.apiStage='idle_lock';diagnostic.httpStatus=me?.status()===423||calendar?.status()===423?423:undefined;
+      return fail('idle_locked');
+    }
     diagnostic.apiStage='authentication';
     if(me?.status()===401||calendar?.status()===401||sameOriginUrl(page.url())?.pathname==='/login'){
       diagnostic.httpStatus=401;return fail('login_required');

@@ -58,7 +58,7 @@ const diagnosticFacts=['sameOrigin','authenticated','waf','loginRoute','siteBody
 const detailBooleans=['inspectionPresent','securityVerification','dailyTextPresent','audiencesDailyHeaderVerified'];
 const detailCounts=['signedControlCount','unsignedControlCount','dailyControlCandidateCount'];
 const apiStages=new Set(['configuration','binding','launch','request','response_freshness','redirect','http_status',
-  'response_structure','day_boundary','authentication','profile_verification','daily_fields','identity','completed']);
+  'response_structure','day_boundary','authentication','idle_lock','profile_verification','daily_fields','identity','completed']);
 
 // Private diagnostics only. Never coerce arbitrary child values into facts.
 export function safeNativeReadDetails(value={}){
@@ -239,6 +239,8 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
       apiStage:value.nativeReadback?.apiStage,httpStatus:value.nativeReadback?.httpStatus})};
     let status=['signed','already_signed','not_signed','managed_challenge','login_required','unconfirmed','needs_attention'].includes(value.status)?value.status:'unconfirmed';
     const identityMatches=value.accountKey===binding.accountKey&&value.profileBinding===binding.profileBinding;
+    const idleLock=origin===piggoOrigin&&identityMatches&&status==='login_required'&&
+      value.failureCode==='idle_locked'&&facts.apiStage==='idle_lock';
     const evidence=successful.has(status)&&identityMatches?receiptEvidence(value,origin,url,inspected,clock()):null;
     const accepted=evidence!==null;
     const code=proxyPreflight?'profile_binding_unavailable':accepted?'receipt_accepted':facts.waf||status==='managed_challenge'?'waf_present':facts.loginRoute||status==='login_required'?'login_required':
@@ -256,7 +258,7 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
         code==='two_factor_required'?`${label} 只读回读需要二次验证`:code==='network_error'?'站点连接未能建立，尚未读取签到页面':
         code==='tls_certificate_invalid'?'站点证书验证未通过，尚未读取签到页面':
         code==='tls_handshake_failed'?'站点 TLS 连接未能建立，尚未读取签到页面':`${label} 只读回读未取得当日权威证据`,
-      ...(accepted?{evidence}:{failureCode:routeConflict?'browser_route_conflict':code==='login_required'?'login_required':
+      ...(accepted?{evidence}:{failureCode:routeConflict?'browser_route_conflict':idleLock?'idle_locked':code==='login_required'?'login_required':
         failureCodes.has(value.failureCode)?value.failureCode:'authoritative_status_unavailable'}),
       submissionAttempted:false,nativeReadback};
     // Recovery consumes the verified child receipt from the same actual

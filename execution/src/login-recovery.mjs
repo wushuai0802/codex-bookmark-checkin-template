@@ -1,6 +1,7 @@
 import { safeErrorMessage } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
 import {readOAuthProgress,oauthStageLabels} from './oauth-flow-diagnostics.mjs';
+import {piggoOrigin,piggoCalendarUrl,piggoCalendarEvidence,piggoDay} from './piggo-calendar.mjs';
 
 const LOGIN_HELPER_STATUSES = new Set([
   "logged_in",
@@ -103,6 +104,29 @@ function safeTerminalDailyCheckin(value) {
   };
 }
 
+// PigGo's native helper may return a passive unsigned receipt or a protected
+// unknown as well as completion. Keep only the bound gate result, never a DOM.
+function safePiggoDailyCheckin(value){
+  if(value?.origin!==piggoOrigin||value.accountKey!=='site-default'||!/^[a-f0-9]{64}$/.test(value.profileBinding??'')||
+    value.nativeGate!==true)return null;
+  const identity={origin:piggoOrigin,url:piggoCalendarUrl,accountKey:'site-default',profileBinding:value.profileBinding,nativeGate:true};
+  if(value.status==='needs_attention'&&value.failureCode==='submission_outcome_unknown'&&value.submissionAttempted===true)
+    return {...identity,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,retryable:false,
+      reason:'猪猪同会话签到结果不明，保留提交意图，禁止自动重放'};
+  if(value.url!==piggoCalendarUrl||!['signed','already_signed','not_signed'].includes(value.status)||!piggoCalendarEvidence(value.evidence,value.status)||
+    (value.status==='signed'?(value.submissionAttempted!==true||value.confirmationState!=='confirmed'):
+      value.submissionAttempted!==false||value.receiptAccepted!==true))return null;
+  const evidence=value.evidence,at=Date.parse(evidence.confirmedAt??'');
+  if(!Number.isFinite(at)||!/^\d{4}-\d{2}-\d{2}$/.test(evidence.businessDate??'')||piggoDay(at)!==evidence.businessDate)return null;
+  return {...identity,status:value.status,submissionAttempted:value.submissionAttempted,
+    ...(value.status==='signed'?{confirmationState:'confirmed'}:{receiptAccepted:true}),
+    evidence:{source:'api',authoritative:true,confirmedAt:new Date(at).toISOString(),businessDate:evidence.businessDate,
+      pagePath:'/calendar',statusSignal:evidence.statusSignal,evidenceScope:'site_account_day'},
+    ...(value.status==='not_signed'?{retryable:false}:{}),
+    reason:value.status==='signed'?'猪猪同会话签到已由同账号日历回读确认并持久化':
+      value.status==='already_signed'?'猪猪同账号日历已确认今日签到完成':'猪猪只读核验成功，今日尚未签到，提交未开放'};
+}
+
 export function parseLoginHelperResult(text) {
   const lines = String(text ?? "").split(/\r?\n/).map((line) => line.trim()).filter(line=>{
     if(!line)return false;
@@ -156,7 +180,8 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
     oauth_callback_rejected: "站点拒绝 OAuth 回调，未取得有效登录会话",
     two_factor_required: "站点要求完成异地登录 2FA 验证",
   };
-  const dailyCheckin = status === "logged_in" ? safeTerminalDailyCheckin(value?.dailyCheckin) : null;
+  const dailyCheckin = status === "logged_in" ? (value?.origin===piggoOrigin?
+    safePiggoDailyCheckin(value?.dailyCheckin):safeTerminalDailyCheckin(value?.dailyCheckin)) : null;
   const diagnosticCode = ["invalid_credential", "credential_missing", "no_saved_credential"].includes(status)
     ? status
     : null;
@@ -170,6 +195,7 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   const recovery=value?.nativeTwoFactorRecovery;
   const recoveryReason=recoveryCode(recovery?.reason);
   const providerReason=recoveryCode(recovery?.providerReason);
+  const recoveryMode=['idle_unlock','password_login'].includes(recovery?.recoveryMode)?recovery.recoveryMode:null;
   const recoveryCodes=Object.fromEntries(['passiveStatus','passiveFailure','passiveStage','submitStage','postLoginForm',
     'afterStatus','afterFailure','afterStage'].map(key=>[key,recoveryCode(recovery?.[key])]).filter(([,code])=>code));
   // Bounded integers and same-origin API paths say where a submitted login stopped.
@@ -183,6 +209,7 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   return {
     ...(recoveryReason?{recoveryReason}:{}),
     ...(providerReason?{providerReason}:{}),
+    ...(recoveryMode?{recoveryMode}:{}),
     ...recoveryCodes,
     ...recoveryNumbers,
     ...(recoveryPath(recovery?.loginPagePath)?{loginPagePath:recovery.loginPagePath}:{}),
@@ -199,7 +226,20 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   };
 }
 
-export function authoritativeLoginDailyCheckin(method, outcome) {
+export function piggoLoginDailyCheckin(method,outcome,{origin,accountKey='site-default',profileBinding,now=new Date()}={}){
+  if(method!=='native_saved_password'||outcome?.succeeded!==true||origin!==piggoOrigin||accountKey!=='site-default')return null;
+  const result=safePiggoDailyCheckin(outcome.dailyCheckin);
+  if(!result||result.profileBinding!==profileBinding)return null;
+  if(result.failureCode==='submission_outcome_unknown')return result;
+  const at=Date.parse(result.evidence.confirmedAt);
+  return at<=now.getTime()&&now.getTime()-at<=300_000&&result.evidence.businessDate===piggoDay(now)?result:null;
+}
+
+export function authoritativeLoginDailyCheckin(method, outcome, binding) {
+  if(method==='native_saved_password'){
+    const result=piggoLoginDailyCheckin(method,outcome,binding);
+    return TERMINAL_DAILY_CHECKIN_STATUSES.has(result?.status)?result:null;
+  }
   if (!["oauth", "native_oauth", "protected_credential"].includes(method) || outcome?.succeeded !== true) return null;
   return safeTerminalDailyCheckin(outcome.dailyCheckin);
 }

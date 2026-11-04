@@ -10,7 +10,7 @@ import {nativePtReadBinding} from './native-pt-read.mjs';
 import {verifiedPtObservation,boundPtObservation} from './pt-observation-receipt.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {ptReadPolicies,nativePtHeaderOrigins} from './checkin-contract.generated.mjs';
-import {piggoOrigin,piggoCalendarUrl,piggoAttendanceUrl,piggoCalendarEvidence,acceptedPiggoCalendarReceipt} from './piggo-calendar.mjs';
+import {piggoOrigin,piggoCalendarUrl,piggoLockedUrl,piggoAttendanceUrl,piggoCalendarEvidence,acceptedPiggoCalendarReceipt} from './piggo-calendar.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const success=value=>['signed','already_signed'].includes(value?.status);
@@ -145,15 +145,23 @@ function writeJournal(file,value){
 // The short gate lock serializes intent updates. Production writes additionally
 // require the controller's live lease, inherited by the native subprocess.
 export async function runNativePtGate({root,origin,url,profile,mainProfile=false,phase='inspect',attemptId,action,status,evidence,receipt:readback,
+  recoveryMode,
   now,clock=now?()=>new Date(now):()=>new Date(),readPlan=readBookmarkPlanWithBackup,harvest=checkHarvestPtBeforeWrite,
   verify=verifiedPtObservation,verifyHistorical=boundPtObservation}={}){
   now=clock();
   if(!['bind','readback','inspect','begin','finish'].includes(phase))throw Error('invalid native PT phase');
   const requested=new URL(origin),destination=new URL(url);
   if(requested.protocol!=='https:'||requested.origin!==origin||requested.username||requested.password||destination.protocol!=='https:'||destination.username||destination.password||destination.hash)throw Error('unsafe native PT target');
-  if(origin===piggoOrigin&&![piggoCalendarUrl,piggoOrigin+'/login',piggoAttendanceUrl].includes(destination.href))
+  const idleUnlock=origin===piggoOrigin&&destination.href===piggoLockedUrl&&phase==='bind'&&!mainProfile&&recoveryMode==='idle_unlock';
+  if(origin===piggoOrigin&&!idleUnlock&&![piggoCalendarUrl,piggoOrigin+'/login',piggoAttendanceUrl].includes(destination.href))
     throw Error('Unreviewed PigGo destination');
   const config=read(path.join(root,'config/config.json'),null);
+  if(idleUnlock){
+    const opt=config.nativePtTwoFactorRecovery?.[piggoOrigin];
+    if(opt?.enabled!==true||opt.reviewed!==true||opt.provider!=='bitwarden'||opt.allowPasswordLogin!==true||
+      opt.loginSource!=='bitwarden'||opt.spaPasswordFormReviewed!==true)throw Error('Unreviewed PigGo unlock');
+    ptReadPolicy(piggoOrigin,config);
+  }
   const plan=await readPlan(config.bookmarksPath,config);
   if(dayAt(clock())!==dayAt(now))return {managed:true,allow:false,decision:deferred(clock(),'业务日期已切换，先刷新当日原生核验')};
   const matches=(plan.targets??[]).filter(t=>t.origin===origin||(t.allowedOrigins??[]).includes(origin));
@@ -163,7 +171,7 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
   const entries=[...(config.nativeWafPreflightUrls??[]),...(config.nativeChallengePreflight??[]),...(config.mainChromeFallbackUrls??[])]
     .map(e=>typeof e==='string'?{url:e}:e).filter(e=>{try{return new URL(e.url).origin===origin||e.sourceOrigin===origin;}catch{return false;}});
   if(![origin,...(target.allowedOrigins??[])].includes(destination.origin)||!entries.some(e=>e.url===url)&&
-    !(origin===piggoOrigin?[piggoCalendarUrl,piggoOrigin+'/login'].includes(destination.href):['/','/index.php','/login.php'].includes(destination.pathname)))throw Error('unregistered native PT URL');
+    !idleUnlock&&!(origin===piggoOrigin?[piggoCalendarUrl,piggoOrigin+'/login'].includes(destination.href):['/','/index.php','/login.php'].includes(destination.pathname)))throw Error('unregistered native PT URL');
   const binding=bindingFor(root,config,target,profile,mainProfile,entries);
   const identity={accountKey:binding.accountKey,profileBinding:binding.profileBinding};
   let readPolicy;try{readPolicy=ptReadPolicy(target.origin,config);}catch{}

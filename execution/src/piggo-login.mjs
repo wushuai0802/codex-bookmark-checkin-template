@@ -5,13 +5,14 @@ import {pathToFileURL} from 'node:url';
 import {nativePtReadBinding} from './native-pt-read.mjs';
 import {ptReadPolicy} from './pt-read-policy.mjs';
 import {runNativePtGate} from './native-pt-gate.mjs';
-import {readNativePtApiHeaderInContext} from './native-pt-api.mjs';
+import {readNativePtApiHeaderInContext,runPiggoCalendarCheckinInContext} from './native-pt-api.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {readRecoveryState,attemptedToday,writeRecoveryState} from './native-pt-two-factor.mjs';
-import {piggoOrigin,piggoCalendarUrl,piggoDay,piggoApiData,piggoResponseFresh,
+import {piggoOrigin,piggoCalendarUrl,piggoLockedUrl,piggoDay,piggoApiData,piggoResponseFresh,
   acceptedPiggoCalendarReceipt,installPiggoCalendarFirewall} from './piggo-calendar.mjs';
-import {inspectPiggoSpaLogin,usernameSelector,passwordSelector,submitSelector} from './piggo-login-form.mjs';
-export {inspectPiggoSpaLogin} from './piggo-login-form.mjs';
+import {inspectPiggoSpaLogin,inspectPiggoIdleUnlock,usernameSelector,passwordSelector,submitSelector,
+  unlockPasswordSelector,unlockSubmitSelector} from './piggo-login-form.mjs';
+export {inspectPiggoSpaLogin,inspectPiggoIdleUnlock} from './piggo-login-form.mjs';
 
 const loginUrl=piggoOrigin+'/login';
 // Every path segment starts with a letter, so numeric account IDs never enter diagnostics.
@@ -29,6 +30,14 @@ async function envelopeCode(response){
     const code=JSON.parse(text)?.code;return Number.isSafeInteger(code)&&Math.abs(code)<1e9?code:undefined;
   }catch{return undefined;}
 }
+async function unlockEnvelope(response){
+  try{
+    const text=await response.text();if(Buffer.byteLength(text)>100_000)return null;
+    const value=JSON.parse(text);
+    if(!value||typeof value!=='object'||Array.isArray(value)||!Object.hasOwn(value,'code'))return null;
+    return {accepted:value.code===0,...(Number.isSafeInteger(value.code)&&Math.abs(value.code)<1e9?{code:value.code}:{})};
+  }catch{return null;}
+}
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 async function validateController(root){
@@ -43,12 +52,14 @@ async function validateController(root){
 
 export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode='Login',clock=()=>new Date(),
   gate=runNativePtGate,readHeader=readNativePtApiHeaderInContext,inspectForm=inspectPiggoSpaLogin,
+  inspectUnlock=inspectPiggoIdleUnlock,checkinInContext=runPiggoCalendarCheckinInContext,
   prepare,withLogin,validateLease=validateController,acquire=acquireRunLock,release=releaseRunLock}={}){
   let lock,firewall,route,attempted=false,accepted=false,reason='recovery_unavailable',providerReason,entry,journal,output;
-  let passiveDiagnostic={},submitDiagnostic={};const blockedPosts=[];
+  let passiveDiagnostic={},submitDiagnostic={},recoveryMode='password_login',dailyCheckin,finalized=false;const blockedPosts=[];
   const outcome=()=>output=({origin:piggoOrigin,handled:true,status:accepted?'logged_in':'needs_attention',
+    ...(dailyCheckin?{dailyCheckin}:{}),
     ...(!accepted?{failureCode:'two_factor_required'}:{}),
-    nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason,...(providerReason?{providerReason}:{}),...passiveDiagnostic,
+    nativeTwoFactorRecovery:{phase:'password_login',recoveryMode,attempted,accepted,reason,...(providerReason?{providerReason}:{}),...passiveDiagnostic,
       ...submitDiagnostic,...(blockedPosts.length?{blockedPosts:[...blockedPosts]}:{})}});
   try{
     // A read-only consumer must not even prepare the vault or navigate login.
@@ -79,15 +90,34 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
       const saved=await gate({...args,phase:'readback',receipt:result.readbackReceipt});
       return saved.allow===true&&saved.receiptAccepted===true;
     };
+    const complete=async()=>{
+      // Persist authentication before any attendance intent. A failed audit
+      // finalization leaves the daily guard and never opens the write path.
+      if(entry){entry.finishedAt=clock().toISOString();entry.reason='authentication_accepted';writeRecoveryState(root,journal);finalized=true;}
+      dailyCheckin=await checkinInContext({root,context:page.context(),expectedProfileBinding:binding.profileBinding,
+        profileProof:async()=>await bound(),clock,gate,validateLease});
+      return outcome();
+    };
     const before=await verify();
-    if(await register(before)){accepted=true;reason='already_authenticated';return outcome();}
+    if(await register(before)){accepted=true;reason='already_authenticated';return await complete();}
     if(before.status!=='login_required'){
       reason='passive_proof_unavailable';
       passiveDiagnostic=readbackCodes({passiveStatus:before.status,passiveFailure:before.failureCode,
         passiveStage:before.nativeReadback?.apiStage});
       return outcome();
     }
-    firewall=await installPiggoCalendarFirewall(page.context(),{clock});
+    const unlocking=before.failureCode==='idle_locked';
+    recoveryMode=unlocking?'idle_unlock':'password_login';
+    const review=unlocking?inspectUnlock:inspectForm,passwordField=unlocking?unlockPasswordSelector:passwordSelector,
+      submitButton=unlocking?unlockSubmitSelector:submitSelector;
+    const challengePath=unlocking?'/v1/web/me/lab-unlock/srp/challenge':'/v1/web/auth/srp/challenge';
+    const submitPaths=unlocking?['/v1/web/me/lab-unlock/srp']:['/v1/web/auth/srp/login','/v1/web/login'];
+    if(unlocking){
+      const unlockBound=await gate({...args,url:piggoLockedUrl,phase:'bind',recoveryMode});
+      if(unlockBound.managed!==true||unlockBound.allow!==true||unlockBound.accountKey!==binding.accountKey||
+        unlockBound.profileBinding!==binding.profileBinding||!await bound())return outcome();
+    }
+    firewall=await installPiggoCalendarFirewall(page.context(),{clock,allowIdleUnlock:unlocking});
     let challengePosts=0,loginPosts=0,armed=false,clicked=false;
     route=async intercepted=>{
       const request=intercepted.request();let target;try{target=new URL(request.url());}catch{return intercepted.abort('blockedbyclient');}
@@ -97,23 +127,26 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
         if(clicked&&blockedPosts.length<4&&target.origin===piggoOrigin&&apiPath(target.pathname))blockedPosts.push(target.pathname);
         return intercepted.abort('blockedbyclient');
       };
-      if(!armed||target.origin!==piggoOrigin||target.search||target.hash||target.username||target.password||request.method()!=='POST')
+      if(!armed||target.origin!==piggoOrigin||target.search||target.hash||target.username||target.password||request.method()!=='POST'||
+        /\.\.|\\|%(?:2e|2f|5c)/i.test(request.url().split(/[?#]/)[0]))
         return block();
-      if(target.pathname==='/v1/web/auth/srp/challenge'&&challengePosts===0&&loginPosts===0){challengePosts++;return intercepted.continue();}
-      if(['/v1/web/auth/srp/login','/v1/web/login'].includes(target.pathname)&&loginPosts===0){loginPosts++;return intercepted.continue();}
+      if(target.pathname===challengePath&&challengePosts===0&&loginPosts===0){challengePosts++;return intercepted.continue();}
+      if(submitPaths.includes(target.pathname)&&loginPosts===0&&(!unlocking||challengePosts===1)){loginPosts++;return intercepted.continue();}
       return block();
     };
     await page.route('**/*',route);
-    const guestWait=page.waitForResponse(response=>response.url()===piggoOrigin+'/v1/web/auth/guest-config'&&
+    const guestWait=unlocking?null:page.waitForResponse(response=>response.url()===piggoOrigin+'/v1/web/auth/guest-config'&&
       response.request().method()==='GET',{timeout:15000}).catch(()=>null);
-    await page.goto(loginUrl,{waitUntil:'domcontentloaded',timeout:15000});
+    await page.goto(unlocking?piggoLockedUrl:loginUrl,{waitUntil:'domcontentloaded',timeout:15000});
+    if(!unlocking){
     const guest=await guestWait;
     if(!guest||guest.status()!==200||!piggoResponseFresh(guest,clock())){reason='login_form_unreviewed';return outcome();}
     const guestText=await guest.text();
     if(Buffer.byteLength(guestText)>100_000||piggoApiData(JSON.parse(guestText))?.captcha!==false){reason='captcha_requires_manual';return outcome();}
+    }
     // The page requests guest-config before it loads the lazy login chunk.
-    await page.waitForSelector(usernameSelector,{timeout:15000}).catch(()=>{});
-    const form=await inspectForm(page);
+    await page.waitForSelector(unlocking?passwordField:usernameSelector,{timeout:15000}).catch(()=>{});
+    const form=await review(page);
     if(form?.challenge||form?.otp){reason=form.otp?'two_factor_requires_manual':'captcha_requires_manual';return outcome();}
     if(form?.reviewed!==true){reason='login_form_unreviewed';return outcome();}
     if(!prepare||!withLogin){const provider=await import('./bitwarden-totp.mjs');prepare??=provider.prepareBitwardenTotp;withLogin??=provider.withBitwardenLogin;}
@@ -123,7 +156,7 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     const consume=credential=>{
       if(!accepting||consumed)return Promise.resolve();consumed=true;
       return pending=(async()=>{
-      const latest=await inspectForm(page);
+      const latest=await review(page);
       if(latest?.reviewed!==true||latest.challenge||latest.otp||!await bound()){reason='login_form_changed';return;}
       await validateLease(root);
       journal=readRecoveryState(root);
@@ -131,19 +164,19 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
       entry={origin:piggoOrigin,accountKey:binding.accountKey,profileBinding:binding.profileBinding,businessDate:today,
         phase:'password_login',state:'pending',attemptedAt:clock().toISOString()};
       journal.attempts.push(entry);writeRecoveryState(root,journal);attempted=true;reason='authentication_unknown';
-      const username=page.locator(usernameSelector),password=page.locator(passwordSelector);
+      const username=unlocking?null:page.locator(usernameSelector),password=page.locator(passwordField);
       // The last stage reached tells an unknown result apart: before the click nothing was sent.
-      const stage=value=>{submitDiagnostic.submitStage=value;};
+      const stage=value=>{submitDiagnostic.submitStage=unlocking?'unlock_'+value:value;};
       try{
         stage('fill');
-        await username.fill(credential.username);await password.fill(credential.password);
-        const filled=await inspectForm(page);
+        if(username)await username.fill(credential.username);await password.fill(credential.password);
+        const filled=await review(page);
         if(filled?.reviewed!==true||filled.challenge||filled.otp||!await bound())throw Error('form changed');
         const responseWait=page.waitForResponse(response=>
-          [piggoOrigin+'/v1/web/auth/srp/login',piggoOrigin+'/v1/web/login'].includes(response.url())&&
+          submitPaths.some(value=>response.url()===piggoOrigin+value)&&
           response.request().method()==='POST',{timeout:20000}).catch(()=>null);
         armed=true;clicked=true;stage('click');
-        await page.locator(submitSelector).click({timeout:10000});
+        await page.locator(submitButton).click({timeout:10000});
         stage('login_response');
         const response=await responseWait;armed=false;
         Object.assign(submitDiagnostic,{challengePosts,loginPosts});
@@ -153,9 +186,15 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
         stage('login_http_status');submitDiagnostic.loginHttpStatus=response.status();
         if([400,401,403,422].includes(response.status())){entry.state='rejected';reason='authentication_rejected';return;}
         if(response.status()!==200)return;
+        if(unlocking){
+          const envelope=await unlockEnvelope(response);
+          if(envelope?.code!==undefined)submitDiagnostic.loginApiCode=envelope.code;
+          if(!envelope)return;
+          if(!envelope.accepted){entry.state='rejected';reason='authentication_rejected';return;}
+        }
         stage('post_login_form');
         const apiCode=await envelopeCode(response);if(apiCode!==undefined)submitDiagnostic.loginApiCode=apiCode;
-        const challenge=await inspectForm(page);
+        const challenge=await review(page);
         submitDiagnostic.postLoginForm=!challenge?'navigated':challenge.otp?'otp':challenge.challenge?'challenge':
           challenge.reviewed?'unchanged':'changed';
         if(challenge?.otp||challenge?.challenge){reason=challenge.otp?'two_factor_requires_manual':'captcha_requires_manual';return;}
@@ -173,7 +212,7 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
       }finally{
         armed=false;
         // No credential, one-time code, raw response, title or exception enters output; only fixed codes and numbers do.
-        await username.fill('').catch(()=>{});await password.fill('').catch(()=>{});
+        if(username)await username.fill('').catch(()=>{});await password.fill('').catch(()=>{});
       }
       })();
     };
@@ -181,19 +220,22 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     try{provided=await withLogin({root,origin:piggoOrigin,binding,config,consume});}
     finally{accepting=false;if(pending)await pending;}
     if(provided?.ready!==true&&!attempted){reason='provider_unavailable';providerReason=provided?.reason;}
-    return outcome();
-  }catch{return outcome();}
+    return accepted?await complete():outcome();
+  }catch{if(entry&&!finalized){accepted=false;if(entry.state==='accepted')entry.state='unknown';reason='authentication_unknown';}return outcome();}
   finally{
-    if(entry){
+    if(entry&&!finalized){
       if(entry.state==='pending')entry.state='unknown';
       entry.finishedAt=clock().toISOString();entry.reason=accepted?'authentication_accepted':
         entry.state==='rejected'?'authentication_rejected':'authentication_unknown';
       try{writeRecoveryState(root,journal);}catch{
         accepted=false;reason='authentication_unknown';
         if(output)Object.assign(output,{status:'needs_attention',failureCode:'two_factor_required',
-          nativeTwoFactorRecovery:{phase:'password_login',attempted,accepted,reason}});
+          nativeTwoFactorRecovery:{phase:'password_login',recoveryMode,attempted,accepted,reason}});
       }
     }
+    // Closing the credential tab may emit lab-lock; keep both firewalls in
+    // place until it is closed. The caller still owns the browser context.
+    if(firewall&&typeof page.close==='function')await page.close().catch(()=>{});
     if(route)await page.unroute('**/*',route).catch(()=>{});
     await firewall?.dispose().catch(()=>{});
     if(lock)await release(lock).catch(()=>{});

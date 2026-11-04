@@ -339,8 +339,13 @@ function Get-PiggoLoginRequiredResult([string]$Origin, $Read = $null) {
         } catch { return $null }
     }
     if ([string]$read.status -cne 'login_required' -or $read.submissionAttempted -ne $false) { return $null }
-    return [pscustomobject]@{origin=$Origin;url=($Origin + '/calendar');status='login_required';inspectionStatus='login_required';
+    $result = [pscustomobject]@{origin=$Origin;url=($Origin + '/calendar');status='login_required';inspectionStatus='login_required';
         retryCause='login_required';nativeGate=$true;submissionAttempted=$false;reason='猪猪只读确认登录已失效，先恢复登录，签到仍由原生守卫决定'}
+    if ([string]$read.failureCode -ceq 'idle_locked') {
+        $result | Add-Member -NotePropertyName failureCode -NotePropertyValue 'idle_locked'
+        $result | Add-Member -NotePropertyName nativeReadback -NotePropertyValue ([pscustomobject]@{apiStage='idle_lock'})
+    }
+    return $result
 }
 
 function Convert-NativeChildReceipt([object[]]$Output) {
