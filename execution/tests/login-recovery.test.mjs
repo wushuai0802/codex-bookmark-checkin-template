@@ -103,6 +103,10 @@ test('passive login diagnostics survive result projection using the recovery rea
 });
 
 test('submitted login diagnostics keep only stage codes, bounded numbers and same-origin API paths',()=>{
+  for(const loginEnvelope of ['unavailable','PRIVATE','accepted',null,1]){
+    const projected=loginHelperOutcome(JSON.stringify({status:'needs_attention',nativeTwoFactorRecovery:{loginEnvelope}}));
+    assert.equal(projected.loginEnvelope,loginEnvelope==='unavailable'?'unavailable':undefined);
+  }
   const outcome=loginHelperOutcome(JSON.stringify({status:'needs_attention',failureCode:'two_factor_required',
     nativeTwoFactorRecovery:{reason:'authentication_unknown',submitStage:'post_login_receipt',postLoginForm:'unchanged',
       afterStatus:'login_required',afterFailure:'login_required',afterStage:'authentication',loginHttpStatus:200,loginApiCode:1001,

@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import {execLoginHelper,loginHelperTimeout} from './login-helper-process.mjs';
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { publicBookmarkReport, readBookmarkPlanWithBackup } from "./bookmarks.mjs";
 import {
@@ -870,10 +871,10 @@ try {
           : methods;
         for (const method of identityBoundMethods) {
           try {
-            const helperOutput = await execFileAsync(method.executable, method.args, {
+            const helperOutput = await execLoginHelper(method.executable, method.args, {
               cwd: rootDirectory,
               windowsHide: true,
-              timeout: 180000,
+              timeout: loginHelperTimeout(current.origin),
               maxBuffer: 1024 * 1024,
             });
             const outcome = loginHelperOutcome(helperOutput.stdout,'failed',helperOutput.stderr);

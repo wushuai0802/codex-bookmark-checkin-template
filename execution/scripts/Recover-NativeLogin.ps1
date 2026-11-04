@@ -7,6 +7,49 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Invoke-PiggoLoginProcess {
+    param([string]$Node, [string]$Script, [int]$Port, [string]$SiteOrigin, [string]$Profile,
+        [string]$LoginMode, [int]$TimeoutMs = 240000)
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $Node
+    # These are validated local paths, a numeric port and fixed mode/origin.
+    # Quote trailing backslashes correctly for Windows' argv parser (PS 5.1).
+    $quoted = @($Script, [string]$Port, $SiteOrigin, $Profile, $LoginMode) | ForEach-Object {
+        if ($_ -match '"') { throw 'Native helper argument rejected.' }
+        '"' + ($_ -replace '(\\+)$', '$1$1') + '"'
+    }
+    $start.Arguments = $quoted -join ' '
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $child = New-Object System.Diagnostics.Process
+    $child.StartInfo = $start
+    $started = $false
+    try {
+        [void]$child.Start()
+        $started = $true
+        # Drain both pipes concurrently; either one can fill before exit.
+        $stdout = $child.StandardOutput.ReadToEndAsync()
+        $stderr = $child.StandardError.ReadToEndAsync()
+        $exited = $child.WaitForExit($TimeoutMs)
+        if (-not $exited) {
+            $child.Kill()
+            [void]$child.WaitForExit(5000)
+        }
+        if ($stdout.Wait(5000)) { Write-Output $stdout.Result }
+        # Retain the original stdout protocol. Raw helper errors are not diagnostics.
+        [void]$stderr.Wait(5000)
+        if (-not $exited) { throw 'PigGo native login helper timed out.' }
+        if ($child.ExitCode -ne 0) { throw 'PigGo native login helper did not complete.' }
+    }
+    finally {
+        if ($started -and -not $child.HasExited) { $child.Kill(); [void]$child.WaitForExit(5000) }
+        $child.Dispose()
+    }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'config\config.json') | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
@@ -48,7 +91,11 @@ try {
     & (Join-Path $PSScriptRoot 'Open-PlainLoginChrome.ps1') -Offscreen -EnablePasswordManager:($originValue -cne 'https://piggo.me') -DeferPiggoNavigation:($originValue -ceq 'https://piggo.me') -RemoteDebuggingPort $debugPort -Urls @($targetUrl.AbsoluteUri) -UserDataDirOverride $profilePath
     $debugPort = Wait-NativeChromeDebugPort $profilePath $debugPort 25
     $loginSucceeded = $false
-    if ($Mode -cne 'Login') {
+    if ($originValue -ceq 'https://piggo.me') {
+        Invoke-PiggoLoginProcess -Node $node -Script (Join-Path $root 'src\native-login.mjs') -Port $debugPort -SiteOrigin $originValue -Profile $profilePath -LoginMode $Mode
+        $loginSucceeded = $true
+    }
+    elseif ($Mode -cne 'Login') {
         & $node (Join-Path $root 'src\native-login.mjs') $debugPort $originValue $profilePath $Mode
         if ($LASTEXITCODE -ne 0) { throw '原生 HDDolby 回读未完成。' }
         $loginSucceeded = $true

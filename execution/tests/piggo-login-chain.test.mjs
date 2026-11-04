@@ -100,3 +100,15 @@ for(const calendarMode of ['passive','submit','checked'])test(`offline core chai
     if(calendarMode==='submit')assert.equal(audit.attempts[0].state,'confirmed');
     assert.doesNotMatch(out.stdout+out.stderr,/synthetic-user|wo16-synthetic-only|synthetic-bound-user|synthetic-m2/);
   });
+
+for(const idleUnlock of [false,true])test(`offline browser follows a full auth landing navigation and only reads the calendar: ${idleUnlock}`,
+  {skip,timeout:120000},async t=>{
+    const f=await loginChainFixture(t,{idleUnlock,authLanding:true}),out=await f.runCore();
+    assert.deepEqual(f.errors,[]);assert.equal(out.code,0,out.stderr);
+    const result=parseLoginHelperResult(out.stdout);
+    assert.equal(result.nativeTwoFactorRecovery.accepted,true);
+    assert.equal(result.nativeTwoFactorRecovery.recoveryMode,idleUnlock?'idle_unlock':'password_login');
+    assert.equal(result.dailyCheckin.status,'not_signed');assert.equal(result.dailyCheckin.submissionAttempted,false);
+    assert.ok(f.requests.some(row=>row.method==='GET'&&row.path==='/'));
+    assert.equal(f.requests.filter(row=>row.path==='/v1/web/calendar/attendance').length,0);
+  });

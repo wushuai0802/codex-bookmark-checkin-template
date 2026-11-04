@@ -81,6 +81,8 @@ export function readRecoveryState(root){
   return {schemaVersion:1,attempts:value.attempts.map(entry=>({origin:entry.origin,accountKey:entry.accountKey,
     profileBinding:entry.profileBinding,businessDate:entry.businessDate,state:entry.state,attemptedAt:entry.attemptedAt,
     ...(entry.phase?{phase:entry.phase}:{}),
+    ...(['password_login','idle_unlock'].includes(entry.recoveryMode)?{recoveryMode:entry.recoveryMode}:{}),
+    ...(/^(?:unlock_)?(?:fill|click|login_response|login_response_freshness|login_http_status|post_login_form|post_login_readback|post_login_binding|post_login_receipt|accepted)$/.test(entry.stage??'')?{stage:entry.stage}:{}),
     ...(Number.isFinite(Date.parse(entry.finishedAt??''))?{finishedAt:entry.finishedAt}:{}),
     ...(['authentication_accepted','authentication_rejected','authentication_unknown','authentication_redirected',
       'authentication_http_error','authentication_response_invalid'].includes(entry.reason)?{reason:entry.reason}:{})}))};

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {bounded} from './bounded-wait.mjs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {pathToFileURL} from 'node:url';
@@ -325,7 +326,7 @@ export async function readNativePtApiHeaderInContext({root,origin,context,expect
     return await profileProof()?value:unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
   }catch(error){return unavailable(state?.identity,origin===piggoOrigin&&error?.code==='account_mismatch'?
     'account_mismatch':'native_readback_unavailable',undefined,diagnostic);}
-  finally{await firewall?.dispose().catch(()=>{});}
+  finally{await bounded(firewall?.dispose(),5000).catch(()=>{});}
 }
 
 // A native CDP context's API client does not inherit Chrome's command-line
@@ -465,5 +466,5 @@ export async function runPiggoCalendarCheckinInContext({root,context,expectedPro
       reason:'猪猪今日签到已由同账号日历回读确认并持久化'};
   }catch(error){return attempted?unknownResult():unavailable(state?.identity,
     error?.code==='account_mismatch'?'account_mismatch':'native_readback_unavailable');}
-  finally{await page?.close().catch(()=>{});await firewall?.dispose().catch(()=>{});}
+  finally{await bounded(page?.close(),5000).catch(()=>{});await bounded(firewall?.dispose(),5000).catch(()=>{});}
 }
