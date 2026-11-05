@@ -446,6 +446,30 @@ test('probe keeps passive verification pending for multiple accounts at one orig
   const f=fallbackProbeFixture(t);f.view.ptStatus.sites=[f.site,{...f.site,accountKey:'another-account'}];
   assert.deepEqual(f.run(),[{kind:'unsettled_passive_fallback_budget'}]);
 });
+test('probe closes the unused passive budget of a paused site, but not its active or due steps',t=>{
+  const f=fallbackProbeFixture(t);
+  const effective={status:'not_available',authoritative:true,fresh:true,observedAt:f.startedAt};
+  const paused={...f.site,effective,disabledByConfig:true,fallbackEnabled:false};
+  f.view.ptStatus.sites=[paused];
+  assert.deepEqual(f.run(),[]);
+  const {disabledByConfig,...unpaused}=paused;assert.equal(disabledByConfig,true);
+  for(const weak of [unpaused,{...paused,disabledByConfig:false},{...paused,fallbackEnabled:true}]){
+    f.view.ptStatus.sites=[weak];
+    assert.deepEqual(f.run(),[{kind:'unsettled_passive_fallback_budget'}]);
+  }
+  f.view.ptStatus.sites=[paused,{...paused}];
+  assert.deepEqual(f.run(),[{kind:'unsettled_passive_fallback_budget'}]);
+  f.view.ptStatus.sites=[{...paused,origin:'https://other.example.test'}];
+  assert.deepEqual(f.run(),[{kind:'unsettled_passive_fallback_budget'}]);
+  f.view.ptStatus.sites=[paused];
+  f.audit.verifications=[f.verification,{origin:f.origin,accountKey:f.verification.accountKey,state:'deferred_busy',startedAt:f.startedAt,nextEligibleAt:f.startedAt}];
+  assert.deepEqual(f.run(),[{kind:'scheduled_fallback'}]);
+  f.audit.verifications=[f.verification,{...f.verification,state:'in_progress'}];
+  assert.deepEqual(f.run(),[{kind:'active_fallback'}]);
+  f.audit.verifications=[f.verification];
+  f.audit.attempts=[{origin:f.origin,accountKey:f.verification.accountKey,state:'completed',submissionState:'not_submitted',v1Status:'deferred'}];
+  assert.deepEqual(f.run(),[{kind:'harvest_wakeup'}]);
+});
 test('probe keeps in-progress fallback pending despite authoritative effective completion',t=>{
   const f=fallbackProbeFixture(t);f.view.ptStatus.sites=[f.site];
   for(const kind of ['attempts','verifications']){
