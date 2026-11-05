@@ -266,6 +266,7 @@ $fallback = Capture {
                     }
                 }
                 $latest = $items[-1]
+                $paused = $false
                 if ($kind -eq 'verifications' -and $latest.outcome.status -notin @('signed','already_signed')) {
                     # Completed candidates no longer enter preview.eligible, so
                     # a deferred retry of one never runs and leaves its audit last.
@@ -281,6 +282,10 @@ $fallback = Capture {
                     Require ($snapshot.ptStatus.sites -is [array])
                     $matching = @($snapshot.ptStatus.sites | Where-Object { $_.origin -eq $latest.origin })
                     if ($matching.Count -eq 1) {
+                        # harvest-fallback refuses paused origins, so a site paused
+                        # after its first passive check never spends the rest of
+                        # its budget today. Only that budget closes here.
+                        $paused = $matching[0].disabledByConfig -eq $true -and $matching[0].fallbackEnabled -ne $true
                         $effective = $matching[0].effective
                         if ($effective.status -in @('signed','already_signed') -and $effective.authoritative -eq $true -and $effective.fresh -eq $true -and
                             $null -ne $effective.observedAt -and (Day $effective.observedAt) -eq $today) { continue }
@@ -290,7 +295,7 @@ $fallback = Capture {
                     Require ($null -ne $latest.nextEligibleAt)
                     if ((Day $latest.nextEligibleAt) -le $today) { @{ kind = 'scheduled_fallback' } }
                 }
-                elseif ($kind -eq 'verifications' -and $latest.outcome.status -notin @('signed','already_signed')) {
+                elseif ($kind -eq 'verifications' -and $latest.outcome.status -notin @('signed','already_signed') -and -not $paused) {
                     # Without a remaining candidate proof, an unused passive
                     # budget cannot be declared settled from its status alone.
                     Require ($null -ne $latest.startedAt)
