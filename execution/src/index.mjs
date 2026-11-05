@@ -561,6 +561,11 @@ try {
         };
       }
       const result = await runWithRecentNotAvailableCache(target, siteState, config, async () => {
+        // The main-run preflight skips paused origins, so a paused native target
+        // has no preflight result. Settle the pause before the native branches
+        // turn that missing result into a deferred readback.
+        const configuredSkip = configuredTargetSkip(target, config);
+        if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
         const preflight = nativeWafPreflight.get(target.origin);
         const piggoLogin=piggoLoginPreflight(target);
         if(piggoLogin)return {...piggoLogin,attempt:0,nativePreflight:true};

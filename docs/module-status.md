@@ -72,7 +72,7 @@
 | `execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:194 (node-path) |
 | `execution/scripts/Invoke-NpmAuditWithRetry.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/scripts/Invoke-PlainOAuthAccessibility.ps1` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:211 (ps-call) |
-| `execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1` | 现役 | execution/src/index.mjs:855 (node-path) |
+| `execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1` | 现役 | execution/src/index.mjs:860 (node-path) |
 | `execution/scripts/Invoke-PlainWafAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:194 (node-path) |
 | `execution/scripts/Manage-BitwardenTotp.ps1` | 运维手动 | 人工用法见 execution/docs/bitwarden-totp.md |
 | `execution/scripts/Native-ChromeDebug.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:56 (ps-call) |
@@ -88,10 +88,10 @@
 | `execution/scripts/Prepare-NativeWafSession.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:289 (ps-call) |
 | `execution/scripts/Protect-PrivateRuntime.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Read-NativePtHeader.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:308 (ps-join) |
-| `execution/scripts/Recover-NativeLogin.ps1` | 现役 | execution/src/index.mjs:793 (node-path) |
-| `execution/scripts/Recover-NativeOAuthLogin.ps1` | 现役 | execution/src/index.mjs:821 (node-path) |
+| `execution/scripts/Recover-NativeLogin.ps1` | 现役 | execution/src/index.mjs:798 (node-path) |
+| `execution/scripts/Recover-NativeOAuthLogin.ps1` | 现役 | execution/src/index.mjs:826 (node-path) |
 | `execution/scripts/Recover-NativePtTwoFactor.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:565 (ps-join) |
-| `execution/scripts/Recover-ProtectedLogin.ps1` | 现役 | execution/src/index.mjs:802 (node-path) |
+| `execution/scripts/Recover-ProtectedLogin.ps1` | 现役 | execution/src/index.mjs:807 (node-path) |
 | `execution/scripts/Remove-ScheduledTask.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Remove-UserScheduler.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Resolve-Runtime.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:11 (ps-join) |
@@ -170,7 +170,7 @@
 | `execution/src/oauth-callback.mjs` | 现役 | execution/src/oauth-login.mjs:10 (esm-static) |
 | `execution/src/oauth-execution-binding.mjs` | 现役 | execution/src/index.mjs:71 (esm-static) |
 | `execution/src/oauth-flow-diagnostics.mjs` | 现役 | execution/src/login-recovery.mjs:3 (esm-static) |
-| `execution/src/oauth-login.mjs` | 现役 | execution/src/index.mjs:832 (node-path) |
+| `execution/src/oauth-login.mjs` | 现役 | execution/src/index.mjs:837 (node-path) |
 | `execution/src/oauth-recovery-profile.mjs` | 现役 | execution/src/oauth-login.mjs:17 (esm-static) |
 | `execution/src/oauth-recovery-target.mjs` | 现役 | execution/src/index.mjs:87 (esm-static) |
 | `execution/src/oauth-relogin-checkin.mjs` | 现役 | execution/src/browser.mjs:14 (esm-static) |
@@ -205,7 +205,7 @@
 | `execution/src/result-identity.mjs` | 现役 | execution/src/index.mjs:43 (esm-static) |
 | `execution/src/retry-policy.mjs` | 现役 | execution/src/index.mjs:72 (esm-static) |
 | `execution/src/run-lock.mjs` | 现役 | tools/release-lib.mjs:100 (esm-dynamic) |
-| `execution/src/saved-password-login.mjs` | 现役 | execution/src/index.mjs:842 (node-path) |
+| `execution/src/saved-password-login.mjs` | 现役 | execution/src/index.mjs:847 (node-path) |
 | `execution/src/search-site-checkin.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `execution/src/security.mjs` | 现役 | execution/src/index.mjs:24 (esm-static) |
 | `execution/src/session-preflight.mjs` | 现役 | execution/src/index.mjs:70 (esm-static) |
