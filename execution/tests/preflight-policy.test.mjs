@@ -107,6 +107,45 @@ test("已取消的书签目标不会进入原生预热", () => {
   }), []);
 });
 
+test("按范围预热时跳过暂停站点，续跑带入的暂停站点也不打开页面", async () => {
+  const script = path.join(root, "scripts", "Prepare-NativeWafSession.ps1");
+  const source = await fs.readFile(script, "utf8");
+  assert.match(source, /if \(-not \$AllConfigured\) \{\s*\$items = @\(Select-ScopedPreflightItems \$items \$Origins \$config\.disabledCheckinOrigins\)\s*\}/);
+  const quote = (value) => String(value).replaceAll("'", "''");
+  const command = `
+$ErrorActionPreference='Stop'
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${quote(script)}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'parse failed'}
+$fn=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Select-ScopedPreflightItems'},$true)[0]
+. ([scriptblock]::Create($fn.Extent.Text))
+$items=@(
+  [pscustomobject]@{url='https://active.test/checkin'},
+  [pscustomobject]@{url='https://paused.test/challenge'},
+  [pscustomobject]@{url='https://new.test/profile';sourceOrigin='https://moved.test'},
+  [pscustomobject]@{url='https://outside.test/checkin'}
+)
+$origins=@('https://active.test/','https://paused.test','https://moved.test')
+$cases=[ordered]@{
+  none=@(Select-ScopedPreflightItems $items $origins @())
+  missing=@(Select-ScopedPreflightItems $items $origins $null)
+  paused=@(Select-ScopedPreflightItems $items $origins @('https://paused.test',' https://moved.test ','',$null))
+  onlyPaused=@(Select-ScopedPreflightItems $items @('https://paused.test') @('https://paused.test'))
+  movedUrlHostPaused=@(Select-ScopedPreflightItems $items @('https://moved.test') @('https://new.test'))
+}
+$out=[ordered]@{}; foreach($k in $cases.Keys){ $out[$k]=@($cases[$k] | ForEach-Object { $_.url }) }
+$out | ConvertTo-Json -Compress -Depth 3
+`;
+  const { stdout } = await execFileAsync("pwsh.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8" });
+  const out = JSON.parse(stdout);
+  const scoped = ["https://active.test/checkin", "https://paused.test/challenge", "https://new.test/profile"];
+  assert.deepEqual(out.none, scoped);
+  assert.deepEqual(out.missing, scoped);
+  assert.deepEqual(out.paused, ["https://active.test/checkin"]);
+  assert.deepEqual(out.onlyPaused, []);
+  assert.deepEqual(out.movedUrlHostPaused, ["https://new.test/profile"]);
+});
+
 test("原生预热脚本拒绝未显式指定范围", async () => {
   const script = path.join(root, "scripts", "Prepare-NativeWafSession.ps1");
   await assert.rejects(
