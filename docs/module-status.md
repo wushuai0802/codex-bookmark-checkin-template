@@ -87,10 +87,10 @@
 | `execution/scripts/Plain-CredentialLoginAccessibility.ps1` | 现役 | execution/scripts/Recover-ProtectedLogin.ps1:136 (ps-call) |
 | `execution/scripts/Prepare-NativeWafSession.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:289 (ps-call) |
 | `execution/scripts/Protect-PrivateRuntime.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `execution/scripts/Read-NativePtHeader.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:308 (ps-join) |
+| `execution/scripts/Read-NativePtHeader.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:318 (ps-join) |
 | `execution/scripts/Recover-NativeLogin.ps1` | 现役 | execution/src/index.mjs:798 (node-path) |
 | `execution/scripts/Recover-NativeOAuthLogin.ps1` | 现役 | execution/src/index.mjs:826 (node-path) |
-| `execution/scripts/Recover-NativePtTwoFactor.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:565 (ps-join) |
+| `execution/scripts/Recover-NativePtTwoFactor.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:575 (ps-join) |
 | `execution/scripts/Recover-ProtectedLogin.ps1` | 现役 | execution/src/index.mjs:807 (node-path) |
 | `execution/scripts/Remove-ScheduledTask.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Remove-UserScheduler.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
@@ -99,7 +99,7 @@
 | `execution/scripts/ResultIdentity.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:12 (ps-call) |
 | `execution/scripts/Run-Checkin.ps1` | 现役 | execution/scripts/Start-UserScheduler.ps1:638 (ps-join) |
 | `execution/scripts/Run-HiddenPowerShell.vbs` | 现役 | 生产入口（架构调用链） |
-| `execution/scripts/Run-NativePtApiCheckin.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:795 (ps-join) |
+| `execution/scripts/Run-NativePtApiCheckin.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:805 (ps-join) |
 | `execution/scripts/Run-PtSupplement.mjs` | 现役 | observation/src/pt-site-execution.mjs:65 (node-path) |
 | `execution/scripts/RunLock.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:21 (ps-call) |
 | `execution/scripts/Safe-UIAutomation.ps1` | 现役 | execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1:30 (ps-call) |

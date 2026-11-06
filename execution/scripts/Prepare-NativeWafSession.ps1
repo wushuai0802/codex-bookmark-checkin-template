@@ -196,13 +196,23 @@ foreach ($entryOrigin in @($mainFallbackByOrigin.Keys)) {
     }
 }
 
-if (-not $AllConfigured) {
-    $originSet = @{};
+# A resume passes the unfinished rows of its report, which can include an origin
+# paused after that report was written. Drop paused origins here, as the main
+# run's selectPreflightOrigins does, because the native gate only checks the
+# pause list for PT targets. Only an explicit -AllConfigured skips this scope.
+function Select-ScopedPreflightItems($Items, [string[]]$Origins, $DisabledOrigins) {
+    $originSet = @{}
     foreach ($origin in $Origins) { $originSet[([uri]$origin).GetLeftPart([System.UriPartial]::Authority)] = $true }
-    $items = @($items | Where-Object {
+    $paused = @{}
+    foreach ($value in @($DisabledOrigins)) { if (-not [string]::IsNullOrWhiteSpace([string]$value)) { $paused[([string]$value).Trim()] = $true } }
+    return @($Items | Where-Object {
         $itemOrigin = if ($_.sourceOrigin) { [string]$_.sourceOrigin } else { ([uri]$_.url).GetLeftPart([System.UriPartial]::Authority) }
-        $originSet.ContainsKey($itemOrigin)
+        $originSet.ContainsKey($itemOrigin) -and -not $paused.ContainsKey($itemOrigin)
     })
+}
+
+if (-not $AllConfigured) {
+    $items = @(Select-ScopedPreflightItems $items $Origins $config.disabledCheckinOrigins)
 }
 
 $knownNoCheckin = @{}

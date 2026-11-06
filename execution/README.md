@@ -57,7 +57,7 @@ pwsh -NoProfile -File .\scripts\Test-Environment.ps1 `
 - 可为共享 OAuth Profile 配置只读 `oauthSessionProbeRules`，使同一登录身份在签到前只体检一次；可为隔离账号配置 `oauthAccountProbeRules`，先访问同源页面，再通过同源只读接口核对权威账号 ID。体检只执行 HTTPS GET，不点击签到、不退出登录，也不输出 Cookie、Token 或页面正文；未配置规则时保持原有流程。
 - 已隔离账号中已经存在合格的上游 OAuth 会话时，可用 `oauthRecoveryAccountBindings` 将另一站的登录恢复显式绑定到该 `accountKey`。该映射只在内置 OAuth 恢复器中使用，并且只有站点的权威签到 API 返回 `signed` 或 `already_signed` 后才直接完成结果；普通保存密码登录不能借此冒充签到成功。
 - 若单站登录需要现有本机代理的 SOCKS4 本地解析，可在私有配置中用 `nativeLoginProxyByOrigin` 绑定 HTTPS 来源与 `socks4://127.0.0.1:端口`。仅在单一来源、已绑定账号的专用 Profile 窗口使用；代理作用于该窗口进程（包括它打开的上游 OAuth 页面），不修改全局代理，也不关闭 TLS 校验。
-- 原生 WAF/验证预热只处理已校验书签计划中的站点；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。若验证 Cookie 需要等待扩展下载，可在单个 `nativeChallengePreflight` 条目中设置 `reloadOnChallengeAfterSeconds`；脚本到时最多重载一次，且该值必须小于总等待时间。
+- 原生 WAF/验证预热只处理已校验书签计划中的站点，`disabledCheckinOrigins` 里的暂停站点不预热（续跑带入的也一样）；空范围会拒绝运行，只有人工显式使用 `-AllConfigured` 才允许全量预热。若验证 Cookie 需要等待扩展下载，可在单个 `nativeChallengePreflight` 条目中设置 `reloadOnChallengeAfterSeconds`；脚本到时最多重载一次，且该值必须小于总等待时间。
 - 单站重试、异常复查和任务级断点续跑只重新访问未确认目标。
 - 用户明确完成当次人工验证后，可通过 `Run-Checkin.ps1 -ManualConfirmedOrigins 'https://example.com'` 将结果以“用户已确认手动完成”写回当天续跑报告；该状态保留审计字段，不冒充自动签到。同一来源存在多个账号时会拒绝来源级人工确认，避免把其他账号误报为完成。
 - 限频站点会记录 `nextEligibleAt` 并按时间定向补跑；超时续跑只接受当天的新检查点，避免复用旧日报或重复整批执行。
