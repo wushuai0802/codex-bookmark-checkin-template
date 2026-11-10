@@ -43,6 +43,14 @@ site. Success still requires authoritative evidence.
 
 ## Unified execution-layer Harvest fallback
 
+A current main-run `deferred / site_maintenance` row with explicit
+`submissionAttempted=false` prevents another automatic fallback read for that
+same origin and account on that business day. Missing, stale, future or
+different-account rows do not suppress work, nor does a maintenance diagnosis
+attached to an unknown submission. The main run checks again the next day.
+This does not close a submission audit, assert completion, or change explicit
+dashboard verification requests and execution locks.
+
 In production, the shadow sync reads Harvest without its credentials and runs
 `scripts/harvest-fallback.mjs` against the fresh local report and the exact PT
 bookmark catalog. A current-day `failed` or `not_signed` record, a missing

@@ -1420,6 +1420,15 @@ async function processCandidateBody(page, target, candidateUrl, config, qaRules)
     if(observed&&!(observed.status==='not_signed'&&config.ptFallbackRecheck===true))return observed;
     if(passivePolicy.dailyHeader&&!(observed?.status==='not_signed'&&config.ptFallbackRecheck===true))return {status:'visited',reason:'账户首页尚未确认今日完成，继续原有签到流程',submissionAttempted:false,url:passivePolicy.url};
   }
+  // For a guarded PT target, check the loaded document before any adapter or
+  // control can submit. The submission guard still preserves uncertainty if
+  // this navigation itself was an attendance action. Other targets keep
+  // their adapter order: page copy such as a future maintenance announcement
+  // must not stop an API check-in that never reads the page.
+  if(config.beforePtSubmit){
+    const beforeActions=await snapshotState(page);
+    if(beforeActions.failureCode==='site_maintenance')return {...beforeActions,submissionAttempted:false,url:safeLogUrl(page.url())};
+  }
   if (useExtendedDiscovery) {
     await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
   }
@@ -1734,7 +1743,8 @@ export function isTransientNavigationFailure(error) {
 // context once, preserving the same profile and its login state.
 export function shouldRefreshAutomationContext(result) {
   return result?.status === "deferred" && result?.retryCause === "upstream_unavailable"
-    && result.failureCode !== "tls_certificate_invalid";
+    && !['tls_certificate_invalid','site_maintenance'].includes(result.failureCode)
+    && result.siteCondition !== 'site_maintenance';
 }
 
 export async function launchAutomationContext(config) {
@@ -1826,9 +1836,10 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         lastResult = preferCandidateResult(lastResult, result);
         // A logical bookmark target can contain multiple related URLs.  One
         // public/API URL may require login while another dedicated check-in
-        // URL already has a valid session, so only a completed result should
-        // prevent trying the remaining candidates.
-        if (isTerminalResult(result) || result?.submissionAttempted === true || bookmarkReviewRequired(result)) break;
+        // URL already has a valid session. Completion, a submission or an
+        // explicit stop condition prevents trying the remaining candidates.
+        if (isTerminalResult(result) || result?.submissionAttempted === true || bookmarkReviewRequired(result)
+          || result?.failureCode === 'site_maintenance' && isPtExecutionTarget(target,{root:rootDirectory})) break;
       }
 
       const effectiveResult = preferCandidateResult(lastResult, attemptResult);

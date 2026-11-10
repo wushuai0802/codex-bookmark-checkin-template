@@ -244,6 +244,14 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     if(prior?.status==='not_available'){
       block(origin,'v1_feature_or_task_unavailable');continue;
     }
+    const maintenanceAt=Date.parse(prior?.observedAt??'');
+    if(prior?.status==='deferred'&&prior.failureCode==='site_maintenance'&&prior.submissionAttempted===false&&
+      Number.isFinite(maintenanceAt)&&maintenanceAt<=now.getTime()&&dayAt(new Date(maintenanceAt))===businessDate){
+      // The current account's main run already observed maintenance without
+      // submitting. Its next-day retry must not become a passive fallback today.
+      blocked.push({origin,reason:'external_condition',external:true});
+      assessments.push({origin,state:'external_condition',reason:'external_condition'});continue;
+    }
     const supplement=fallbackReport?.sites?.find(item=>originOf(item.origin)===origin&&
       (item.accountKey??'site-default')===accountKey&&Number.isFinite(Date.parse(item.observedAt))&&
       dayAt(new Date(item.observedAt))===businessDate&&Date.parse(item.observedAt)<=now.getTime()+60_000);
