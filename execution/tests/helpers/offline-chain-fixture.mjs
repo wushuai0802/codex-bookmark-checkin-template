@@ -26,7 +26,9 @@ export async function runPowerShell(t, command, options = {}) {
 // Config, bookmarks, profiles, journals and reports are all synthetic and live
 // exclusively in this test's temporary root. No process-global lease is changed.
 export function chainFixture(t, names, {paused = [], now = new Date()} = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'checkin-chain-'));
+  // Resolve 8.3 short names (CI runners expose a short TEMP): PowerShell expands
+  // them, and the profile-containment check compares the two spellings.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'checkin-chain-')));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   for (const dir of ['config', 'data/profile', 'logs', 'tmp', 'scripts']) fs.mkdirSync(path.join(root, dir), {recursive: true});
   const profile = path.join(root, 'data/profile');
