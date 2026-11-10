@@ -121,7 +121,8 @@ function healthSnapshot(health, generatedAt, maxAgeHours = 26) {
  * Read and redact the legacy runner's latest state. This function performs no
  * writes and has no browser, network, or notification side effects.
  */
-export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26, healthReport, ptStatusReport, ptFallbackReport, ptRecoveryReport, ptStatusMaxAgeHours = 26, monitorCatalog, ptFallbackOnlyEnabled = false, identityReport, desiredPlan } = {}) {
+export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString(), maxHealthAgeHours = 26, healthReport, ptStatusReport, ptFallbackReport, ptRecoveryReport, ptStatusMaxAgeHours = 26, monitorCatalog, ptFallbackOnlyEnabled = false, identityReport, desiredPlan,
+  harvestObservation,harvestAvailable,harvestOverdueAt,harvestTakeoverReport } = {}) {
   if (!legacyRoot) throw new Error('legacyRoot is required');
   const root = path.resolve(legacyRoot);
   const engineIntegration=readJson(path.join(root,'data','v2-integration.json'),{required:false});
@@ -241,6 +242,7 @@ export function buildSnapshot({ legacyRoot, generatedAt = new Date().toISOString
     receipts,
     planTargets: expected,
     externalReport: ptStatusReport,
+    harvestObservation,harvestAvailable,overdueAt:harvestOverdueAt??null,takeoverReport:harvestTakeoverReport,
     fallbackReport: ptFallbackReport,
     recoveryReport: ptRecoveryReport,
     fallbackOnlyEnabled: ptFallbackOnlyEnabled,

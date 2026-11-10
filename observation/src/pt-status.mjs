@@ -5,8 +5,9 @@ import {projectPtDiagnostic} from './pt-site-execution.mjs';
 import {ptStatuses,siteFaultCodes} from './checkin-contract.generated.mjs';
 import {siteDisplayName} from './display-identity.mjs';
 import {canonicalPtOrigin,harvestSiteAssignment} from './pt-coordination.generated.mjs';
-import {projectHarvestWindow} from '../public/harvest-window.mjs';
+import {projectHarvestWindow,copyHarvestWindow} from '../public/harvest-window.mjs';
 import {ptCapabilities} from './pt-capabilities.mjs';
+import {currentHarvestReport,harvestOverdueAt} from '../public/harvest-overdue.mjs';
 import {classifyPtEvidenceState,currentBoundCompletion} from '../public/pt-evidence.mjs';
 export {classifyPtEvidenceState} from '../public/pt-evidence.mjs';
 export const PT_STATUS_VALUES=ptStatuses;
@@ -246,7 +247,7 @@ function mergeSiteObservations(observations, target) {
     fresh: item.freshness.fresh, authoritative: item.evidence.authoritative
   }));
   const distinctStatuses = new Set([...bySource.values()].filter((item) => item.evidence.authoritative&&item.freshness.fresh&&
-      !unsignedBeforeBoundCompletion(item,effective))
+      !ordered.some(completion=>unsignedBeforeBoundCompletion(item,completion)))
     .map((item) => item.status==='already_signed'?'signed':item.status));
   const supplementCandidate = distinctStatuses.size <= 1 && effective?.supplementCandidate === true;
   return {
@@ -282,7 +283,8 @@ function mergeSiteObservations(observations, target) {
 export function buildPtStatus({
   tasks = [], receipts = [], planTargets = [], externalReport = null, fallbackReport = null, monitorCatalog = null,
   fallbackOnlyEnabled = false, recoveryReport = null, disabledOrigins = [], disabledAccountKeys = [], readPolicies = {},
-  generatedAt = new Date().toISOString(), businessDate = null, maxAgeHours = 26
+  generatedAt = new Date().toISOString(), businessDate = null, maxAgeHours = 26,
+  harvestObservation = null, harvestAvailable, overdueAt = null, takeoverReport = null
 } = {}) {
   const report = externalReport
     ? normalizePtStatusReport(externalReport, { generatedAt, businessDate, maxAgeHours })
@@ -433,13 +435,27 @@ export function buildPtStatus({
         taskCompletion:{status:['completed','running','failed'].includes(externalReport.taskCompletion?.status)
           ?externalReport.taskCompletion.status:null}};
     }
+    const context=harvestObservation?.sites?.find(value=>value.origin===site.origin);
+    if(context){
+      site.harvestManaged=context.checkinEnabled===true;
+      site.harvestObservation={...site.harvestObservation,businessDate:harvestObservation.businessDate,
+        checkinEnabled:context.checkinEnabled===true,hasTodayReceipt:context.hasTodayReceipt===true,
+        lastReceiptDay:context.lastReceiptDay,observedAt:harvestObservation.observedAt,taskCompletion:{...context.taskCompletion}};
+    }
+    if(takeoverReport?.businessDate===businessDate){
+      const reads=(takeoverReport.verifications??[]).filter(item=>item.origin===site.origin&&item.overdueReason&&
+        !['deferred_busy','deferred_preflight'].includes(item.state));
+      if(reads.length)site.harvestTakeover={businessDate,startedAt:reads[0].startedAt};
+    }
   }
   return {
     schemaVersion: 1,
     generatedAt: new Date(generatedAt).toISOString(),
     businessDate,
     mode: 'status_observe_only',
-    harvestWindow:projectHarvestWindow(externalReport,Date.parse(generatedAt)),
+    harvestWindow:projectHarvestWindow(externalReport,Date.parse(generatedAt))??copyHarvestWindow(harvestObservation?.harvestWindow),
+    ...(overdueAt!==null?{harvestAvailability:{available:harvestAvailable??currentHarvestReport(externalReport,Date.parse(generatedAt)),
+      observedAt:externalReport?.generatedAt??null,overdueAt:harvestOverdueAt(overdueAt)}}:{}),
     sources: [...new Set(sites.flatMap((site) => site.sourceStatuses.map((item) => item.source)))].sort(),
     counts: {
       sites: sites.length,

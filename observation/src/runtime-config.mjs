@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {harvestOverdueAt} from '../public/harvest-overdue.mjs';
 
 export function loadRuntimeConfig(root=path.resolve('.')) {
   const file=path.join(path.resolve(root),'config','runtime.local.json');
@@ -13,6 +14,7 @@ export function loadRuntimeConfig(root=path.resolve('.')) {
   if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(canaryTime))throw Error('canaryTime must be HH:mm');
   const executionEngine=local.executionEngine??'v1';if(!['v1','v2'].includes(executionEngine))throw Error('executionEngine must be v1 or v2');
   return {file,legacyRoot:legacyRoot?path.resolve(legacyRoot):null,chromeExecutable:chromeExecutable?path.resolve(chromeExecutable):null,canaryTime,executionEngine,
+    harvestOverdueAt:harvestOverdueAt(local.harvestOverdueAt),
     ptFallbackOnlyEnabled:local.ptFallbackOnlyEnabled===true,powershellExecutable:local.powershellExecutable??null};
 }
 

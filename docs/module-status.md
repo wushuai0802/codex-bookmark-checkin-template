@@ -8,7 +8,7 @@
 
 | 类别 | 文件数 |
 | --- | ---: |
-| 现役 | 233 |
+| 现役 | 236 |
 | 运维手动 | 66 |
 | 历史审计 | 4 |
 | 待确认 | 47 |
@@ -231,6 +231,7 @@
 | `observation/public/day-verdict.mjs` | 现役 | observation/src/dashboard-server.mjs:29 (esm-static) |
 | `observation/public/glass-geometry.mjs` | 现役 | observation/public/liquid-glass.mjs:1 (esm-static) |
 | `observation/public/glass-preview.css` | 现役 | observation/public/preview-styles.js:3 (literal-script) |
+| `observation/public/harvest-overdue.mjs` | 现役 | observation/src/runtime-config.mjs:3 (esm-static) |
 | `observation/public/harvest-window.mjs` | 现役 | observation/src/dashboard-server.mjs:31 (esm-static) |
 | `observation/public/index.html` | 现役 | observation/src/dashboard-server.mjs:1 (dashboard-assets) |
 | `observation/public/ios26-glass.css` | 现役 | observation/public/preview-styles.js:3 (literal-script) |
@@ -243,7 +244,7 @@
 | `observation/public/overview-model.mjs` | 现役 | observation/public/app.js:1 (esm-static) |
 | `observation/public/overview.css` | 现役 | observation/public/index.html:12 (public-asset) |
 | `observation/public/preview-styles.js` | 现役 | observation/public/index.html:14 (public-asset) |
-| `observation/public/pt-evidence.mjs` | 现役 | observation/src/pt-status.mjs:10 (esm-static) |
+| `observation/public/pt-evidence.mjs` | 现役 | observation/src/pt-status.mjs:11 (esm-static) |
 | `observation/public/pt-status.css` | 现役 | observation/public/index.html:11 (public-asset) |
 | `observation/public/select-menu.mjs` | 现役 | observation/public/app.js:8 (esm-static) |
 | `observation/public/styles.css` | 现役 | observation/public/index.html:9 (public-asset) |
@@ -271,16 +272,16 @@
 | `observation/scripts/check-liquid-glass.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `observation/scripts/check-structure.mjs` | 运维手动 | npm 人工命令 observation/package.json:check:structure |
 | `observation/scripts/check-ui-navigation.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `observation/scripts/collect-desired-plan.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:215 (ps-join) |
-| `observation/scripts/collect-monitor-catalog.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:222 (ps-join) |
+| `observation/scripts/collect-desired-plan.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:216 (ps-join) |
+| `observation/scripts/collect-monitor-catalog.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:223 (ps-join) |
 | `observation/scripts/deploy-nas-code.ps1` | 运维手动 | 人工用法见 observation/docs/nas-deployment.md |
 | `observation/scripts/enroll-fresh-v2-profiles.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/enroll-v2-site-profile.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/export-dashboard-status.mjs` | 现役 | observation/scripts/sync-v2-status.ps1:45 (ps-join) |
 | `observation/scripts/export-nas-bundle.mjs` | 运维手动 | npm 人工命令 observation/package.json:export:nas |
 | `observation/scripts/flush-v2-notifications.mjs` | 运维手动 | npm 人工命令 observation/package.json:notifications:flush |
-| `observation/scripts/harvest-fallback.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:240 (ps-join) |
-| `observation/scripts/harvest-observe.py` | 现役 | observation/scripts/Sync-NasShadow.ps1:226 (ps-join) |
+| `observation/scripts/harvest-fallback.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:252 (ps-join) |
+| `observation/scripts/harvest-observe.py` | 现役 | observation/scripts/Sync-NasShadow.ps1:227 (ps-join) |
 | `observation/scripts/import-v1-runtime.mjs` | 历史审计 | 旧 V1→V2 运行目录导入；project-structure.md 保留旧迁移供审计，无现行入口。 |
 | `observation/scripts/install-v2-canary-task.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/live-smoke.mjs` | 运维手动 | npm 人工命令 observation/package.json:smoke:live |
@@ -290,6 +291,7 @@
 | `observation/scripts/notify-canary-result.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/open-v2-login.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/prepare-canary.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
+| `observation/scripts/prepare-harvest-context.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:245 (ps-join) |
 | `observation/scripts/preview-dashboard.mjs` | 运维手动 | npm 人工命令 observation/package.json:preview:ui |
 | `observation/scripts/process-dashboard-operations.mjs` | 现役 | observation/scripts/Invoke-DashboardOperations.ps1:9 (ps-join) |
 | `observation/scripts/reconcile-pt-evidence.mjs` | 现役 | observation/scripts/Invoke-PtEvidenceRepair.ps1:10 (ps-join) |
@@ -300,7 +302,7 @@
 | `observation/scripts/run-v2-canary.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/run-v2-daily.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/stage-account-migration.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/scripts/sync-v2-status.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:312 (ps-join) |
+| `observation/scripts/sync-v2-status.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:337 (ps-join) |
 | `observation/scripts/verify-open-cd.mjs` | 运维手动 | 人工用法见 observation/docs/reliability-operations.md |
 | `observation/scripts/verify-pt.mjs` | 运维手动 | 人工用法见 observation/docs/reliability-operations.md |
 | `observation/scripts/verify-v2-profile.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
@@ -347,6 +349,7 @@
 | `observation/src/freshness.mjs` | 现役 | observation/src/dashboard-server.mjs:11 (esm-static) |
 | `observation/src/gateway-error.mjs` | 现役 | observation/scripts/run-v1-engine.mjs:6 (esm-static) |
 | `observation/src/harvest-fallback.mjs` | 现役 | observation/scripts/harvest-fallback.mjs:8 (esm-static) |
+| `observation/src/harvest-observations.mjs` | 现役 | observation/scripts/prepare-harvest-context.mjs:4 (esm-static) |
 | `observation/src/history-archive.mjs` | 运维手动 | observation/scripts/archive-history.mjs:1 (esm-static) |
 | `observation/src/identity-observations.mjs` | 现役 | observation/src/bridge.mjs:15 (esm-static) |
 | `observation/src/isolated-browser-worker.mjs` | 运维手动 | observation/src/profile-verifier.mjs:3 (esm-static) |
@@ -412,8 +415,8 @@
 | `observation/scripts/Start-NasShadowScheduler.ps1:225` | ps-call | 是 | 仓库内无对应文件；不读取运行副本；`observation/scripts/Invoke-DryWorkerIfDue.ps1` |
 | `observation/src/captcha-solver.mjs:86` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/isolated-browser-worker.mjs:32` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
-| `observation/src/legacy-engine.mjs:151` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
-| `observation/src/pt-site-execution.mjs:86` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `observation/src/legacy-engine.mjs:155` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `observation/src/pt-site-execution.mjs:88` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/doctor.mjs:258` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/private-value-scan.mjs:138` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 

@@ -92,6 +92,7 @@ test('child receives the exact origin and lease; busy lock is retryable without 
     assert.match(argv[5],/^--worker-owner=[a-f0-9-]{36}$/);
     assert.equal(options.env.CHECKIN_V2_ENGINE_LEASE,'lease-fixture');
     assert.equal(options.env.CHECKIN_PT_FALLBACK_ATTEMPT_ID,undefined);
+    assert.equal(options.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER,undefined);
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
     setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'login_required',observedAt:'2026-09-20T01:00:00Z',evidence:{source:'none',authoritative:false}}));child.emit('exit',0,null);child.emit('close',0,null);});
     return child;
@@ -118,11 +119,12 @@ test('child receives the exact origin and lease; busy lock is retryable without 
   const guardedChild=(_node,argv,options)=>{
     assert.deepEqual(argv.slice(1,5),[args.origin,args.catalogFile,args.catalogHash,'--verify-before-submit']);
     assert.equal(options.env.CHECKIN_PT_FALLBACK_RECHECK,'1');
+    assert.equal(options.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER,'1');
     const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
     setImmediate(()=>{child.stdout.write(JSON.stringify({origin:args.origin,status:'already_signed',observedAt:'2026-09-20T01:00:00Z',submissionAttempted:true,evidence:{source:'page_text',authoritative:true}}));child.emit('exit',0,null);child.emit('close',0,null);});
     return child;
   };
-  assert.equal((await spawnPtSiteChild({...args,verifyBeforeSubmit:true,spawnChild:guardedChild})).status,'already_signed');
+  assert.equal((await spawnPtSiteChild({...args,verifyBeforeSubmit:true,overdueTakeover:true,spawnChild:guardedChild})).status,'already_signed');
   const busy=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};setImmediate(()=>{child.emit('exit',3,null);child.emit('close',3,null);});return child;};
   await assert.rejects(()=>spawnPtSiteChild({...args,spawnChild:busy}),/already active/);
   for(const diagnostic of [{error:'PT_PREFLIGHT',reason:'catalog_hash_changed'},

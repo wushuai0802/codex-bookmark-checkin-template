@@ -57,7 +57,28 @@ function Limit-DigestText([string]$Text) {
     ($lines -join "`n").TrimEnd() + "`n… 更多明细见面板"
 }
 
-function Invoke-DailyDigest {
+function Get-HarvestOutageEvent([string]$Prefix) {
+    $outage = $notificationView.harvestOutage
+    if ($null -eq $outage -or $outage.businessDate -cne $businessDate) { return $null }
+    $file = Join-Path $OutboxPath "state/harvest-$(Get-DigestHash $Prefix).json"
+    $previous = $null
+    if (Test-Path -LiteralPath $file) { $previous = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json }
+    $cycle = [int]$previous.cycle
+    # A site the executor can take over needs no human yet, and a single
+    # long-unavailable site would otherwise raise this notice every day.
+    # Notify when someone has to act or when Harvest itself cannot be read.
+    $active = ([int]$outage.needsHuman + [int]$outage.unavailable) -gt 0
+    $event = $null
+    if ($active -and $previous.active -ne $true) {
+        $cycle++
+        $text = "Harvest 当天逾期未结 $($outage.unresolved) 个`n读不到 [harvest_overdue_unavailable] $($outage.unavailable) · 未完成或缺回执 [harvest_overdue_incomplete] $($outage.incomplete)`n执行层已接手 $($outage.takenOver) · 无提交能力需人工处理 $($outage.needsHuman) · 待受守卫接手 $($outage.pendingTakeover)"
+        foreach ($origin in $outage.origins) { $text += "`n• $(Get-DigestSiteName ([pscustomobject]@{origin=$origin}))" }
+        $event = [pscustomobject]@{eventKey="$Prefix`:harvest_overdue:$cycle";status='needs_attention';summary=(Limit-DigestText $text);category='harvest_overdue'}
+    }
+    [pscustomobject]@{event=$event;file=$file;state=[ordered]@{schemaVersion=1;businessDate=$businessDate;cycle=$cycle;active=$active}}
+}
+
+function Invoke-DailyDigest([switch]$OutageOnly) {
     $digestAt = Get-DigestTime 'dailyDigestAt' '11:00'
     $missingAfter = Get-DigestTime 'runMissingAfter' '12:00'
     $finalToday = $isCompleteFinalReport -and $report.finishedAt -and
@@ -91,7 +112,9 @@ function Invoke-DailyDigest {
             $sites = @($item.notificationSites | Sort-Object -Unique)
             if ($sites.Count -and $item.eventKey -ceq "$prefix`:action_needed:$(Get-DigestHash ($sites -join '|'))") { $seenSites += $sites }
         }
-        if ($null -ne $verdict -and $verdict.businessDate -ceq $businessDate) {
+        $harvestEvent = Get-HarvestOutageEvent $prefix
+        if ($harvestEvent.event) { $events.Add($harvestEvent.event) }
+        if (-not $OutageOnly -and $null -ne $verdict -and $verdict.businessDate -ceq $businessDate) {
             $c = $verdict.counts
             $payload.status = if ($c.actionNeeded -gt 0) { 'needs_attention' } elseif ($c.verifying -gt 0) { 'unconfirmed' } else { 'success' }
             $payload.dayVerdict = $verdict
@@ -99,13 +122,14 @@ function Invoke-DailyDigest {
             $actionIds = @($verdict.items | Where-Object class -eq 'actionNeeded' | ForEach-Object taskId)
             $actionTasks = @($tasks | Where-Object { $actionIds -ccontains $_.taskId } | Sort-Object origin -Unique)
             $actionSites = @($actionTasks | ForEach-Object { Get-DigestHash ([string]$_.origin) } | Sort-Object -Unique)
-            $newSites = @($actionSites | Where-Object { $seenSites -cnotcontains $_ })
+            $outageSites = @($notificationView.harvestOutage.origins | ForEach-Object { Get-DigestHash ([string]$_) })
+            $newSites = @($actionSites | Where-Object { $seenSites -cnotcontains $_ -and $outageSites -cnotcontains $_ })
             if ($finalToday -and $newSites.Count) {
                 $allSites = @($seenSites + $actionSites | Sort-Object -Unique)
                 $text = "签到需处理 $($newSites.Count) 个站点"
                 foreach ($task in $actionTasks) {
                     if ($newSites -ccontains (Get-DigestHash ([string]$task.origin))) {
-                        $reason = if ($task.dayReasonCode -eq 'harvest_stalled') { $task.daySummary } else { '需要人工恢复，详见面板' }
+                        $reason = if ($task.dayReasonCode -in @('harvest_stalled','harvest_overdue_unavailable','harvest_overdue_incomplete')) { $task.daySummary } else { '需要人工恢复，详见面板' }
                         $text += "`n• $(Get-DigestSiteName $task)：$reason"
                     }
                 }
@@ -116,7 +140,7 @@ function Invoke-DailyDigest {
             if ($actionTasks.Count) {
                 $text += "`n`n需处理"
                 foreach ($task in $actionTasks) {
-                    $reason = if ($task.dayReasonCode -eq 'harvest_stalled') { $task.daySummary } elseif ($task.failureCode -eq 'two_factor_required') { '二次验证待重新授权' } elseif ($task.observedStatus -eq 'interactive_challenge') { '需要人工验证' } else { '登录或执行待人工恢复' }
+                    $reason = if ($task.dayReasonCode -in @('harvest_stalled','harvest_overdue_unavailable','harvest_overdue_incomplete')) { $task.daySummary } elseif ($task.failureCode -eq 'two_factor_required') { '二次验证待重新授权' } elseif ($task.observedStatus -eq 'interactive_challenge') { '需要人工验证' } else { '登录或执行待人工恢复' }
                     $text += "`n• $(Get-DigestSiteName $task)：$reason"
                 }
             }
@@ -141,13 +165,13 @@ function Invoke-DailyDigest {
         }
         $failed = $RunnerStatus -in @('failed','timeout') -or ($scheduler.lastAttemptDate -ceq $businessDate -and
             $scheduler.phase -eq 'finished' -and $null -ne $scheduler.lastExitCode -and [int]$scheduler.lastExitCode -notin @(0,2))
-        if ($failed -and $noRetry) {
+        if (-not $OutageOnly -and $failed -and $noRetry) {
             $events.Add([pscustomobject]@{eventKey="$prefix`:run_failed:once";status='failed';summary='签到主运行失败，今天没有后续自动重试，详见面板。';category='run_failed'})
         }
-        if ($notificationView.identityConflict -eq $true) {
+        if (-not $OutageOnly -and $notificationView.identityConflict -eq $true) {
             $events.Add([pscustomobject]@{eventKey="$prefix`:identity_conflict:once";status='needs_attention';summary='签到回执存在身份冲突，请核对账号与重复提交风险。';category='identity_conflict'})
         }
-        if ($CheckRunMissing -and $shanghaiNow.TimeOfDay -ge $missingAfter -and -not $finalToday) {
+        if (-not $OutageOnly -and $CheckRunMissing -and $shanghaiNow.TimeOfDay -ge $missingAfter -and -not $finalToday) {
             $events.Add([pscustomobject]@{eventKey="$prefix`:run_missing:once";status='needs_attention';summary='今天尚未收到签到最终报告，请检查主运行。';category='run_missing'})
         }
         $newEvents = @($events | Where-Object { $existingItems.eventKey -cnotcontains $_.eventKey })
@@ -160,6 +184,14 @@ function Invoke-DailyDigest {
             [IO.Directory]::CreateDirectory($OutboxPath) | Out-Null
             foreach ($event in $newEvents) { Write-DigestOutboxItem $event | Out-Null }
             $payload.enqueued=$true
+        }
+        if ($harvestEvent) {
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $harvestEvent.file)) | Out-Null
+            $temporary = "$($harvestEvent.file).$PID.tmp"
+            try {
+                [IO.File]::WriteAllText($temporary,($harvestEvent.state | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+                Move-Item -LiteralPath $temporary -Destination $harvestEvent.file -Force
+            } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
         }
         $payload
     } finally {

@@ -99,11 +99,13 @@ function extractHarvestReport(snapshot,businessDate){
 
 export function retainHarvestPresentation(snapshot,previous){
   if(snapshot.businessDate!==previous?.businessDate||!snapshot.ptStatus)return;
+  if(previous.ptStatus?.harvestAvailability)snapshot.ptStatus.harvestAvailability=structuredClone(previous.ptStatus.harvestAvailability);
   for(const site of snapshot.ptStatus.sites??[]){
     const matches=(previous.ptStatus?.sites??[]).filter(old=>old.origin===site.origin&&old.accountRef===site.accountRef);
     const old=matches.length===1?matches[0]:null;
     if(old?.harvestObservation?.businessDate!==snapshot.businessDate)continue;
     site.harvestObservation=structuredClone(old.harvestObservation);
+    if(old.harvestTakeover)site.harvestTakeover=structuredClone(old.harvestTakeover);
     if(old.harvestManaged===true)site.harvestManaged=true;
   }
   const window=copyHarvestWindow(previous.ptStatus?.harvestWindow);

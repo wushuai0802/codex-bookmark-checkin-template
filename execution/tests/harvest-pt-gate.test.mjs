@@ -29,6 +29,20 @@ test('fallback marker releases the mature V1 reader while the main schedule keep
   assert.equal(harvestPtDecision({report:{...report(),generatedAt:'2026-09-29T01:55:00Z'},target,now}),null);
 });
 
+test('fallback still defers a freshly running Harvest within its thirty minute window',t=>{
+  const previous=process.env.CHECKIN_PT_FALLBACK_RECHECK;
+  const previousOverdue=process.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER;
+  t.after(()=>{if(previous===undefined)delete process.env.CHECKIN_PT_FALLBACK_RECHECK;else process.env.CHECKIN_PT_FALLBACK_RECHECK=previous;
+    if(previousOverdue===undefined)delete process.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER;else process.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER=previousOverdue;});
+  process.env.CHECKIN_PT_FALLBACK_RECHECK='1';
+  const live={...report(),sites:[{...report().sites[0],checkinEnabled:true}],
+    taskCompletion:{status:'running',resultId:4,activeTaskCount:1,startedAt:'2026-09-29T01:59:00Z'}};
+  assert.equal(harvestPtDecision({report:live,target,now}),null,'ordinary pre-cutoff fallback keeps its existing policy');
+  process.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER='1';
+  assert.equal(harvestPtDecision({report:live,target,now}).retryCause,'harvest_waiting');
+  live.taskCompletion.startedAt='2026-09-29T01:00:00Z';assert.equal(harvestPtDecision({report:live,target,now}),null);
+});
+
 test('fallback marker does not trust an unverified Harvest success and releases V1 for its own read',t=>{
   const previous=process.env.CHECKIN_PT_FALLBACK_RECHECK;
   t.after(()=>{if(previous===undefined)delete process.env.CHECKIN_PT_FALLBACK_RECHECK;else process.env.CHECKIN_PT_FALLBACK_RECHECK=previous;});

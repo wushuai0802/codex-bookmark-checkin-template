@@ -115,7 +115,9 @@ exact parent/folder IDs and reads Harvest SQLite with `mode=ro` and `query_only`
 Only mirror origin, nickname, username, user ID and today's `sign_info` are read.
 No cookies, passkeys, session storage or credentials are selected or uploaded.
 Deleted bookmark-only sites disappear on the next sync. An unavailable Harvest
-source leaves the inventory visible with unknown status; no browser is launched.
+source leaves the inventory visible with unknown status. Before the daily overdue
+cutoff it cannot launch fallback; after that cutoff the bounded takeover below
+may enter the existing passive reader.
 Only an explicit positive daily receipt establishes success. Yesterday's
 evidence is stale at Shanghai midnight even when younger than 26 hours.
 
@@ -124,6 +126,62 @@ identity. Account IDs come from actual result metadata, never from old key
 names. The authenticated dashboard groups default accounts by origin so
 unrelated sites cannot collapse into a single hashed account. Metadata does not
 change plan hashes.
+
+## Same-day Harvest overdue handling
+
+`harvestOverdueAt` in the observation runtime's ignored `config/runtime.local.json`
+defaults to `12:00` Shanghai time. It accepts `HH:mm` from `00:00` through `18:00`;
+later or invalid settings fail closed. The public defaults and reason codes live
+in `shared/checkin-contract.json`. The setting does not change Harvest's schedule,
+the 30-minute Harvest waiting window, or the daily notification time.
+
+After the cutoff, an enabled, Harvest-owned site in the exact bookmark inventory
+with no daily Harvest result or authoritative executor completion is overdue.
+`harvest_overdue_unavailable` means the probe is missing, invalid or older than
+30 minutes; `harvest_overdue_incomplete` means a current Harvest observation still
+has no daily result. An active Harvest window takes precedence. Existing
+`harvest_stalled` classification keeps its established multi-day meaning.
+
+Only reviewed `read=true, guardedSubmit=true` capability, the existing private
+fallback opt-in, a ready daily execution plan and the exact catalog can admit a
+takeover. Unavailable Harvest may reuse the last retained observation's explicit
+ownership flags, never its old receipt or account identity. With no retained
+ownership facts, the dispatcher cannot invent a Harvest assignment. A missing
+live probe permits only the existing passive flow; a fresh, same-day,
+account/Profile-bound unsigned receipt is still required before one guarded
+submission. The write gate queries Harvest again; a fresh running window defers
+the write. A positive read ends without submission. An inconclusive read ends
+without submission. Actual overdue reads are admitted at most once per site per
+business day; a busy/pre-browser preflight deferral retains its existing cooldown.
+Unknown write results remain in the attempt journal and are not replayed.
+
+Read-only and unsupported sites become `actionNeeded` with the new reason code;
+the panel reuses its existing attention chip and summary. Paused sites, disabled
+features and external faults (including bound main-run maintenance) remain
+excluded. The 11:00-default digest stays immutable, including an installation
+that sends it at 11:05. The first notification refresh after the cutoff queues
+one `harvest_overdue` outbox event with fixed reason codes, counts and existing
+site-name sanitization/truncation. Changes do not resend it; a fully settled
+observation rearms a new cycle if overdue work later returns that day. Both
+notification policies use the same outbox and delivery retries never dispatch
+check-ins.
+
+`outputs/harvest-observations-YYYY-MM-DD.json` retains the day's latest valid
+observation only. Each site has origin, explicit check-in enablement (or null),
+daily-result presence, last result day, task completion status and observation
+time. No Harvest owner ID, username, response text, cookie or account credential
+is retained. The summary also retains the sanitized schedule/run window, so a
+failed probe cannot erase a still-valid 30-minute wait or extend it. Invalid or
+older observations cannot overwrite a valid later one.
+The date is Shanghai's business day. These files follow the existing monthly
+cutoff in `archive-history.mjs` alongside the other dated journals; no separate
+retention policy or deletion job is introduced.
+
+The observer recognizes Harvest's explicit "already signed elsewhere today"
+receipt (see `scripts/harvest-observe.py:classify`). This is evidence that the
+existing integration can reconcile such a site result; it does not prove that
+every Harvest site adapter reads the site's current signed state before a write.
+Verify that adapter behavior in Harvest before enabling production takeover.
 
 ## Bridge and shadow run
 

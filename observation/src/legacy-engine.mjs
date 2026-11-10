@@ -125,7 +125,7 @@ export function publishEngineReport({root,legacyRoot,exitCode=null,requireFreshS
   return report;
 }
 
-export async function runLegacyEngine({root=path.resolve('.'),mode='dry-run',accountKeys=[],origins=[],notify=false,fallbackRecheck=false,spawnChild=spawn}={}){
+export async function runLegacyEngine({root=path.resolve('.'),mode='dry-run',accountKeys=[],origins=[],notify=false,fallbackRecheck=false,overdueTakeover=false,spawnChild=spawn}={}){
   const runtime=loadRuntimeConfig(root),legacyRoot=runtime.legacyRoot;
   if(runtime.executionEngine!=='v1'||!legacyRoot)throw Error('V1 engine is not selected');
   const integration=read(path.join(legacyRoot,'data/v2-integration.json'));
@@ -147,8 +147,12 @@ export async function runLegacyEngine({root=path.resolve('.'),mode='dry-run',acc
     let previousRunId=null;try{previousRunId=read(path.join(legacyRoot,'logs/latest.json')).runId??null;}catch{}
     fs.mkdirSync(path.join(root,'logs'),{recursive:true});
     const logFile=path.join(root,'logs',`v1-engine-${Date.now()}.log`);output=fs.openSync(logFile,'a',0o600);
+    const childEnv={...process.env,CHECKIN_V2_ENGINE_ROOT:root,CHECKIN_V2_ENGINE_LEASE:lease.owner.nonce,
+      ...(fallbackRecheck?{CHECKIN_PT_FALLBACK_RECHECK:'1'}:{})};
+    delete childEnv.CHECKIN_HARVEST_OVERDUE_TAKEOVER;
+    if(overdueTakeover)childEnv.CHECKIN_HARVEST_OVERDUE_TAKEOVER='1';
     const exitCode=await new Promise((resolve,reject)=>{
-      const child=spawnChild(shell,args,{cwd:legacyRoot,windowsHide:true,shell:false,stdio:['ignore',output,output],env:{...process.env,CHECKIN_V2_ENGINE_ROOT:root,CHECKIN_V2_ENGINE_LEASE:lease.owner.nonce,...(fallbackRecheck?{CHECKIN_PT_FALLBACK_RECHECK:'1'}:{})}});
+      const child=spawnChild(shell,args,{cwd:legacyRoot,windowsHide:true,shell:false,stdio:['ignore',output,output],env:childEnv});
       child.once('error',reject);child.once('exit',(code,signal)=>signal?reject(Error('V1 engine child interrupted')):resolve(code??1));
     });
     if(mode==='dry-run')return {mode:'v2_v1_engine_dry_run',exitCode,logFile};

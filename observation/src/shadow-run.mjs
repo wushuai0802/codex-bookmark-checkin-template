@@ -21,6 +21,7 @@ function parseArgs(argv) {
     else if (token === '--health-file') args.healthFile = argv[++i];
     else if (token === '--pt-status-file') args.ptStatusFile = argv[++i];
     else if (token === '--pt-status-cache-file') args.ptStatusCacheFile = argv[++i];
+    else if (token === '--harvest-context-file') args.harvestContextFile = argv[++i];
     else if (token === '--pt-fallback-file') args.ptFallbackFile = argv[++i];
     else if (token === '--monitor-catalog') args.monitorCatalog = argv[++i];
     else if (token === '--identity-file') args.identityFile = argv[++i];
@@ -74,13 +75,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     const automaticFallbackFile=path.join(projectRoot,'outputs',`pt-fallback-results-${businessDate}.json`);
     const livePtReport = loadJsonReport(args.ptStatusFile, 'PT status report');
     const cachedPtReport = livePtReport ? undefined : loadSameDayHarvestCache(args.ptStatusCacheFile, new Date(args.generatedAt??Date.now()));
+    const harvestContext=loadJsonReport(args.harvestContextFile,'Harvest context');
+    const runtime=loadRuntimeConfig(projectRoot);
+    const takeoverFile=path.join(projectRoot,'outputs',`harvest-fallback-attempts-${businessDate}.json`);
     const snapshot = buildSnapshot({
       legacyRoot,
       generatedAt: args.generatedAt,
       healthReport: loadJsonReport(args.healthFile, 'health report'),
       ptStatusReport: livePtReport ?? cachedPtReport,
       ptFallbackReport: loadJsonReport(args.ptFallbackFile??(fs.existsSync(automaticFallbackFile)?automaticFallbackFile:null), 'PT fallback report'),
-      ptFallbackOnlyEnabled:loadRuntimeConfig(projectRoot).ptFallbackOnlyEnabled,
+      ptFallbackOnlyEnabled:runtime.ptFallbackOnlyEnabled,
+      harvestObservation:harvestContext?.observation,harvestAvailable:harvestContext?Boolean(harvestContext.report):undefined,
+      harvestOverdueAt:runtime.harvestOverdueAt,
+      harvestTakeoverReport:loadJsonReport(fs.existsSync(takeoverFile)?takeoverFile:null,'Harvest takeover audit'),
       ptRecoveryReport:loadPtRecoveryDiagnostics(projectRoot,businessDate),
       monitorCatalog: loadJsonReport(args.monitorCatalog, 'PT bookmark catalog'),
       identityReport: loadJsonReport(args.identityFile, 'display identity observations'),

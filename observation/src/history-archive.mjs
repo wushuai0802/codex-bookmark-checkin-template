@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 const hash=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
-const journal=/^(engine-daily|pt-fallback-results|pt-verifications|harvest-fallback-attempts)-(\d{4}-\d{2}-\d{2})\.(json|jsonl)$/;
+const journal=/^(engine-daily|pt-fallback-results|pt-verifications|harvest-fallback-attempts|harvest-observations)-(\d{4}-\d{2}-\d{2})\.(json|jsonl)$/;
 function directory(value){const root=path.resolve(value);if(root===path.parse(root).root||fs.lstatSync(root).isSymbolicLink())throw Error('history root must be an ordinary project directory');return root;}
 function ordinary(file){if(fs.lstatSync(file).isSymbolicLink()||!fs.statSync(file).isFile())throw Error('history item must be an ordinary file');}
 export function planHistoryArchive(dataDir,before,{now=new Date()}={}){

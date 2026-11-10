@@ -129,7 +129,7 @@ if ($null -ne $report -and $ReportPath) {
         . (Join-Path $PSScriptRoot 'Resolve-Runtime.ps1')
         $node = Resolve-CheckinNode $config
         $viewArguments = @((Join-Path $root 'src/notification-reconciliation.mjs'), '--report', $resolvedReport)
-        if ($policy -eq 'daily_digest') { $viewArguments += @('--verdict','--now',$NowUtc.ToString('o')) }
+        $viewArguments += @('--verdict','--now',$NowUtc.ToString('o'))
         if (-not $Preview -and [string]$config.notification.mode -eq 'command') { $viewArguments += '--persist' }
         $notificationView = (& $node @viewArguments 2>$null) | ConvertFrom-Json
         $effectiveResults = @($results | ForEach-Object {
@@ -408,6 +408,14 @@ if ($policy -eq 'daily_digest') {
     . (Join-Path $PSScriptRoot 'Notification-Digest.ps1')
     Invoke-DailyDigest | ConvertTo-Json -Depth 8 -Compress
     return
+}
+if ($notificationView.harvestOutage) {
+    . (Join-Path $PSScriptRoot 'Notification-Digest.ps1')
+    $originalPayload = [ordered]@{}
+    foreach ($key in $payload.Keys) { $originalPayload[$key] = $payload[$key] }
+    $harvestNotice = Invoke-DailyDigest -OutageOnly
+    $payload = $originalPayload
+    $payload.harvestOverdueEnqueued = [bool]$harvestNotice.enqueued
 }
 $waitingOnly=$isCompleteFinalReport -and $waitingProblems.Count -gt 0 -and $localProblems.Count -eq 0 -and
     $verificationProblems.Count -eq 0 -and $externalNeedsReview.Count -eq 0 -and $RunnerStatus -notin @('timeout','failed') -and $cleanupProblems.Count -eq 0

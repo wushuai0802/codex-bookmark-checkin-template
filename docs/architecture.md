@@ -37,7 +37,7 @@
 | 尝试记录 | fallback 读写观测根 `outputs/harvest-fallback-attempts-<day>.json`；native gate 读写执行根 `data/native-pt-attempts.json`；证据 worker 读写复核状态、追加审计，供预算/防重/复查（`observation/src/harvest-fallback.mjs:295`、`execution/src/native-pt-gate.mjs:175`、`observation/src/pt-evidence-repair.mjs:242,311`）。 |
 | 执行根 `data/notification-outbox/` | `Submit-UnifiedCheckinReport.ps1` 写 → `Invoke-CheckinNotificationOutbox.ps1` 读并更新投递状态；调度流程重试投递不授权重签（`execution/scripts/Submit-UnifiedCheckinReport.ps1:413`、`execution/scripts/Invoke-CheckinNotificationOutbox.ps1:138`）。 |
 
-NAS 先同步 `dashboard-runtime.json`，再暂存三件套，按 **ledger → snapshot → generation** 替换并保留 `dashboard-generation.previous.json`；成功后本机同序安装（`observation/scripts/sync-v2-status.ps1:37`、`observation/scripts/Sync-ShadowPublication.ps1:10,20`、`observation/scripts/Sync-NasShadow.ps1:300,322`）。
+本机先按 **ledger → snapshot → generation** 原子安装已校验的本地状态，再同步 NAS；两端均保留 `dashboard-generation.previous.json`。NAS 先同步 `dashboard-runtime.json`，再暂存并按同序替换三件套。远端失败仍保留同步失败与原退避，本机使用刚落盘的状态刷新原通知 outbox，使 Harvest 不可达时也能在截止后提醒（`observation/scripts/Sync-NasShadow.ps1`、`observation/scripts/Sync-ShadowPublication.ps1`）。
 
 原始事实取自执行器记录、Harvest 观测、PT 回执及尝试审计，须逐条验业务日、账号和权威证据；今天生成的报告不等于每行今天成功。`effective` 是归并后的生效状态，保留 `observations`/冲突；snapshot、ledger、generation、通知均属派生视图，不抹去未知提交历史（`observation/src/pt-status.mjs:275`、`execution/src/notification-reconciliation.mjs:139`）。
 

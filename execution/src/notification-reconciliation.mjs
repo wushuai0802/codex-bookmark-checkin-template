@@ -197,7 +197,7 @@ export async function notificationVerdict({root,report,now=new Date(),reconcilia
     bound=true;
   }catch(error){if(fs.existsSync(path.join(root,'data/v2-integration.json')))return {};}
   try{
-    const [{dayVerdict},{verdictSnapshot},{readDashboardGeneration}]=await Promise.all([
+    const [{dayVerdict},{verdictSnapshot,harvestOutage},{readDashboardGeneration}]=await Promise.all([
       import(pathToFileURL(path.join(controller,'public/day-verdict.mjs')).href),
       import(pathToFileURL(path.join(controller,'src/daily-reconciliation.mjs')).href),
       import(pathToFileURL(path.join(controller,'src/dashboard-generation.mjs')).href)
@@ -237,6 +237,7 @@ export async function notificationVerdict({root,report,now=new Date(),reconcilia
     const projected=verdictSnapshot(snapshot,{now}),verdict=dayVerdict(projected,{now});
     const ids=new Set(verdict.items.filter(item=>!['done','paused','noFeature'].includes(item.class)).map(item=>item.taskId));
     return {dayVerdict:verdict,verdictScope:scope,
+      harvestOutage:scope==='authorized_workload'&&typeof harvestOutage==='function'?harvestOutage(snapshot,{now}):null,
       verdictTasks:projected.tasks.map(task=>({taskId:task.taskId,origin:task.origin,
         failureCode:task.failureCode,observedStatus:task.observedStatus,
         ...((item=>item?.reasonCode?{dayReasonCode:item.reasonCode,daySummary:item.summary}:{})(verdict.items.find(item=>item.taskId===task.taskId)))})),

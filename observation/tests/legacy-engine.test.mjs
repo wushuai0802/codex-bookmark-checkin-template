@@ -41,6 +41,11 @@ test('fallback recheck propagates a bounded V1 marker without changing normal en
    const child=new EventEmitter();queueMicrotask(()=>child.emit('exit',0));return child;
  }});
  assert.equal(r.exitCode,0);assert.equal(fs.existsSync(path.join(f.root,'data/v2-run.lock')),false);assert.ok(captured.env.CHECKIN_V2_ENGINE_LEASE);assert.equal(captured.env.CHECKIN_PT_FALLBACK_RECHECK,'1');
+ assert.equal(captured.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER,undefined);
+ await runLegacyEngine({...f,mode:'dry-run',fallbackRecheck:true,overdueTakeover:true,spawnChild:(shell,args,options)=>{
+   assert.equal(options.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER,'1');validateEngineLease({...f,env:options.env});
+   const child=new EventEmitter();queueMicrotask(()=>child.emit('exit',0));return child;
+ }});
  await assert.rejects(()=>runLegacyEngine({...f,spawnChild:()=>{throw Error('spawn failed');}}),/spawn failed/);
  assert.equal(fs.existsSync(path.join(f.root,'data/v2-run.lock')),false);
 });

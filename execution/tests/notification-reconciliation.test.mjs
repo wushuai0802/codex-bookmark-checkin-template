@@ -39,6 +39,57 @@ function digestSandbox(t){
   return f;
 }
 
+test('overdue Harvest queues one redacted outage notice, freezes changes, rearms only after all settled and retries delivery alone',t=>{
+  const f=digestSandbox(t);
+  assert.equal(f.run('2026-10-31T03:05:00Z').events[0].category,'daily_digest');
+  const at='2026-10-31T04:05:00Z';f.snapshot.generatedAt=at;
+  const unknown={status:'unknown',observedAt:null,fresh:false,authoritative:false,evidence:{source:'none',authoritative:false}};
+  const managed=(origin,extra={})=>({origin,fallbackEnabled:true,harvestManaged:true,capabilities:{read:false,guardedSubmit:false},
+    harvestObservation:{businessDate:f.date,checkinEnabled:true,hasTodayReceipt:false,lastReceiptDay:null,taskCompletion:{status:null}},
+    effective:{...unknown},...extra});
+  f.snapshot.ptStatus.harvestAvailability={available:true,observedAt:at,overdueAt:'12:00'};
+  f.snapshot.ptStatus.sites.push(managed(f.snapshot.tasks[1].origin),managed('https://readonly.example',{capabilities:{read:true,guardedSubmit:false}}),
+    managed('https://taken-over.example',{capabilities:{read:true,guardedSubmit:true},harvestTakeover:{businessDate:f.date,startedAt:at}}),
+    managed('https://paused.example',{disabledByConfig:true}),
+    managed('https://feature.example',{effective:{...unknown,status:'not_available',fresh:true,authoritative:true,observedAt:at,
+      evidence:{source:'pt_page',authoritative:true,verification:'feature_unavailable'}}}),
+    managed('https://maintenance.example',{effective:{...unknown,status:'needs_attention',siteCondition:'site_maintenance',fresh:true,observedAt:at}}));
+  f.save();const reportBefore=fs.readFileSync(f.reportFile);
+  const first=f.run(at);assert.deepEqual(first.events.map(event=>event.category),['harvest_overdue']);
+  assert.match(first.events[0].summary,/逾期未结 3 个/);assert.match(first.events[0].summary,/未完成或缺回执 \[harvest_overdue_incomplete\] 3/);
+  assert.match(first.events[0].summary,/执行层已接手 1 · 无提交能力需人工处理 2/);
+  assert.doesNotMatch(first.events[0].summary,/paused|feature|maintenance|PRIVATE|@|https?:\/\//);
+  const frozen=f.items();f.snapshot.ptStatus.harvestAvailability.available=false;f.save();
+  assert.equal(f.run(at).events.length,0);assert.deepEqual(f.items(),frozen);
+  // A failed synthetic delivery only mutates the same outbox item.
+  fs.writeFileSync(f.configFile,JSON.stringify({nodeExecutable:process.execPath,notification:{...f.notification,
+    arguments:['-e','console.log(JSON.stringify({accepted:false,duplicate:false}))']}}));
+  execFileSync('pwsh.exe',['-NoProfile','-NonInteractive','-File',path.join(sourceRoot,'scripts/Invoke-CheckinNotificationOutbox.ps1'),
+    '-OutboxPath',f.outbox,'-ConfigPath',f.configFile,'-ForceDue','-MutexName',`Local\\SyntheticOutage${process.pid}`],
+    {encoding:'utf8',windowsHide:true,timeout:30_000,stdio:['ignore','pipe','pipe']});
+  assert.equal(f.run(at).events.length,0);assert.deepEqual(fs.readFileSync(f.reportFile),reportBefore);
+  const unresolved=f.snapshot.ptStatus.sites.filter(site=>['https://still-unknown.example','https://readonly.example','https://taken-over.example'].includes(site.origin));
+  const saved=unresolved.map(site=>site.effective);
+  for(const site of unresolved)site.effective={status:'signed',fresh:true,authoritative:true,source:'harvest',observedAt:at,
+    evidence:{source:'harvest',authoritative:true,businessDate:f.date,confirmedAt:at}};
+  f.save();assert.equal(f.run(at).events.length,0);
+  unresolved[0].effective=saved[0];f.save();
+  const recurrent=f.run(at);assert.equal(recurrent.events.length,1);assert.match(recurrent.events[0].eventKey,/:harvest_overdue:2$/);
+  assert.match(recurrent.events[0].summary,/读不到 \[harvest_overdue_unavailable\] 1/);
+  assert.equal(f.run(at).events.length,0);
+});
+
+test('overdue notice also uses the existing outbox under per_change without changing the daily digest schedule',t=>{
+  const f=digestSandbox(t),at='2026-10-31T04:00:00Z';f.snapshot.generatedAt=at;
+  f.snapshot.ptStatus.harvestAvailability={available:false,observedAt:null,overdueAt:'12:00'};
+  f.snapshot.ptStatus.sites.push({origin:f.snapshot.tasks[1].origin,harvestManaged:true,capabilities:{read:false,guardedSubmit:false},
+    harvestObservation:{businessDate:f.date,checkinEnabled:true,hasTodayReceipt:false},
+    effective:{status:'unknown',observedAt:null,fresh:false,authoritative:false}});
+  f.save();fs.writeFileSync(f.configFile,JSON.stringify({nodeExecutable:process.execPath,notification:{...f.notification,policy:'per_change'}}));
+  assert.equal(f.run(at).harvestOverdueEnqueued,true);assert.equal(f.run(at).harvestOverdueEnqueued,false);
+  assert.equal(f.items().filter(item=>item.eventKey.includes(':harvest_overdue:')).length,1);
+});
+
 test('stalled Harvest digest keeps tentative wording and reuses site-set exception deduplication',t=>{
   const f=digestSandbox(t),origin=f.snapshot.tasks[1].origin;
   f.snapshot.ptStatus.sites.push({origin,harvestManaged:true,capabilities:{read:false,guardedSubmit:false},
