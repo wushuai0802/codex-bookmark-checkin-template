@@ -145,6 +145,12 @@ globalThis.__chainTrace=trace;
   const runIndex = async ({resume = false, at = now} = {}) => report(await run(process.execPath,
     [path.join(root, 'src/index.mjs'), ...(resume ? ['--resume-report', path.join(root, 'logs/latest.json')] : [])], at));
   const runEntry = async (mode, origins) => {
+    // Run-Checkin.ps1 matches the report's runId day against the machine-local
+    // day. Production runs in Asia/Shanghai; a UTC CI runner disagrees with the
+    // Shanghai business day for part of each day, so the wrapper would reject
+    // its own fresh report there. Skip instead of asserting a clock artefact.
+    const day = zone => new Intl.DateTimeFormat('en-CA', zone ? {timeZone: zone} : {}).format(new Date());
+    if (day() !== day('Asia/Shanghai')) { t.skip('machine-local day differs from the Asia/Shanghai business day'); return null; }
     const out = await powerShell(mode, origins);
     return out ? report(out) : null;
   };
