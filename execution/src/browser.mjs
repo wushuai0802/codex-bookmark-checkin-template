@@ -7,7 +7,7 @@ import { classifyPageText, readPageTwoFactorStructure, formatDailyReason, isChec
 export { ptPageEvidence } from "./detector.mjs";
 import { assertBookmarkNavigation, safeErrorMessage, safeLogUrl } from "./security.mjs";
 import { newApiCaptchaCandidates, recognizeNewApiCaptcha, recognizeNexusCaptcha, recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
-import { solveU2VisualChallenge } from "./u2-vision.mjs";
+import { solveU2VisualChallenge, projectU2Diagnostics } from "./u2-vision.mjs";
 import { createU2ReferenceFetch } from "./u2-reference-fetch.mjs";
 import { resolveQaByWebSearch } from "./qa-solver.mjs";
 import { withRetrySchedule } from "./retry-policy.mjs";
@@ -21,7 +21,7 @@ import { applyOptionalBaiduSecondOpinion } from "./baidu-ocr.mjs";
 import { tryAnyRouterApiCheckin } from "./anyrouter-api-checkin.mjs";
 import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gate.mjs";
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
-import {ptReadPolicies,ptFailureMessages} from './checkin-contract.generated.mjs';
+import {ptReadPolicies,ptFailureMessages,u2QuestionPolicy} from './checkin-contract.generated.mjs';
 import {ptReadPolicy,readPtPassivePage,ptReadProxy} from './pt-read-policy.mjs';
 import {initialPtObservation} from './pt-initial-observation.mjs';
 import {readHddolbyHeader,hddolbyDailyProof,hddolbyDailyStatusProof} from './hddolby-readonly.mjs';
@@ -1328,64 +1328,148 @@ export async function tryNexusImageCaptcha(page, config = {}, {
   return { status: "interactive_challenge", reason: "NexusPHP 图片验证码未能完成" };
 }
 
-export async function tryU2Captcha(page, expectedOrigin, config, {solve=solveU2VisualChallenge}={}) {
+export async function tryU2Captcha(page, expectedOrigin, config, {
+  solve=solveU2VisualChallenge, createTransport=createU2ReferenceFetch, now=Date.now,
+}={}) {
   if (expectedOrigin !== "https://u2.dmhy.org") return null;
-  const unsubmitted=(failureCode,reason=ptFailureMessages[failureCode])=>({status:'interactive_challenge',failureCode,reason,submissionAttempted:false});
-  const openedAt=Date.now();
+  const retries=Number.isFinite(config.u2QuestionRetryCount)
+    ?Math.max(0,Math.min(u2QuestionPolicy.maxRetryCount,Math.floor(config.u2QuestionRetryCount))):u2QuestionPolicy.retryCount;
+  const budget=Number.isFinite(config.u2StepTimeoutMs)&&config.u2StepTimeoutMs>0
+    ?Math.max(1000,Math.min(u2QuestionPolicy.maxStepTimeoutMs,config.u2StepTimeoutMs)):u2QuestionPolicy.stepTimeoutMs;
+  const deadline=now()+budget, controller=new AbortController(), referenceCache=new Map();
+  const diagnostics={questionCount:0,questions:[],subreasons:[],stepTimedOut:false};
+  const retryCodes=new Set(['u2_reference_unavailable','u2_reference_timeout','u2_visual_ambiguous','u2_image_unavailable','u2_question_expired']);
+  const knownCodes=new Set([...retryCodes,'u2_challenge_changed','u2_solver_failed']);
+  const unsubmitted=(failureCode,reason=ptFailureMessages[failureCode])=>({status:retries===0?'interactive_challenge':'needs_attention',failureCode,reason,submissionAttempted:false});
+  const unknown=()=>({status:'needs_attention',reason:'U2 答案已提交，但页面未显示签到成功',
+    submissionAttempted:true,failureCode:'submission_outcome_unknown',retryable:false});
+  if(config.u2SubmissionStarted?.()||checkinClickStarted(page))return {...unknown(),u2Diagnostics:diagnostics};
+  let last=unsubmitted('u2_image_unavailable'), current, transport, previousFingerprint, submitted=false, stopped=false, timer;
+  const timeoutError=Object.assign(Error('U2 step deadline'),{u2StepTimeout:true});
+  const checkTime=()=>{if(stopped||now()>=deadline)throw timeoutError;};
+  const timeout=limit=>{checkTime();return Math.max(1,Math.min(limit,deadline-now()));};
+  const finish=result=>result?{...result,u2Diagnostics:projectU2Diagnostics(diagnostics)}:null;
+  const record=(result,detail={})=>{
+    Object.assign(current,projectU2Diagnostics(detail));
+    current.subreason=current.subreason??result.failureCode??'u2_answer_reliable';
+    diagnostics.subreasons[diagnostics.questions.length-1]=current.subreason;
+    last=result;
+    return result;
+  };
   const buttons = page.locator('input[type="submit"][name^="captcha_"]');
   if (await buttons.count() < 2) return null;
-  const image = page.locator('img[alt="captcha"]');
-  if (await image.count() !== 1) {
-    return unsubmitted('u2_image_unavailable','U2 验证题缺少题图');
+  const readQuestion=async openedAt=>{
+    if(await buttons.count()<2)return record(unsubmitted('u2_challenge_changed'));
+    const image=page.locator('img[alt="captcha"]');
+    if(await image.count()!==1)return record(unsubmitted('u2_image_unavailable','U2 验证题缺少题图'));
+    let screenshot;
+    try{
+      await page.waitForFunction(()=>{const element=document.querySelector('img[alt="captcha"]');
+        return Boolean(element?.complete&&element.naturalWidth>0&&element.naturalHeight>0);},null,{timeout:timeout(50000)});
+      screenshot=await image.screenshot({timeout:timeout(10000)});
+    }catch{checkTime();return record(unsubmitted('u2_image_unavailable','U2 验证题图片加载超时'),{timedOut:true});}
+    checkTime();
+    const options=await buttons.evaluateAll(elements=>elements.map(element=>({name:element.name,text:element.value})));
+    // Compare actual pixels and the option set, not changing image URLs or
+    // captcha field names. Neither the digest nor the option strings persist.
+    const fingerprint=createHash('sha256').update(screenshot).update(JSON.stringify(options.map(option=>option.text).sort())).digest('hex');
+    if(fingerprint===previousFingerprint){
+      diagnostics.stopCode='u2_question_unchanged';
+      record(last,{subreason:'u2_question_unchanged'});return last;
+    }
+    previousFingerprint=fingerprint;
+    if(now()-openedAt>100000)return record(unsubmitted('u2_question_expired'));
+    let solution;
+    last=unsubmitted('u2_reference_timeout');
+    transport=createTransport(config);
+    try{solution=await solve(screenshot,options,{fetchImpl:transport.fetchImpl,referenceCache,signal:controller.signal,
+      requestTimeoutMs:config.u2ReferenceRequestTimeoutMs,timeoutMs:timeout(60000)});}
+    catch{checkTime();return record(unsubmitted('u2_solver_failed'));}
+    finally{await transport.close().catch(()=>{});transport=null;}
+    checkTime();
+    if(!solution?.answer?.name){
+      const code=knownCodes.has(solution?.failureCode)?solution.failureCode:'u2_solver_failed';
+      return record(unsubmitted(code),{...projectU2Diagnostics(solution?.diagnostics),
+        ...(!knownCodes.has(solution?.failureCode)?{originalFailureCode:solution?.failureCode}:{})});
+    }
+    record(unsubmitted('u2_question_expired'),solution.diagnostics);
+    if(now()-openedAt>100000){current.subreason='u2_question_expired';return record(last);}
+    const message=page.locator('textarea[name="message"]');
+    const answer=options.find(option=>option.name===solution.answer.name);
+    if(await message.count()!==1||!answer||options.filter(option=>option.name===answer.name).length!==1)
+      return record(unsubmitted('u2_challenge_changed'),{subreason:'u2_challenge_changed'});
+    await message.fill(String(config.u2Message||'今日天气不错'),{timeout:timeout(5000)});
+    // Resolve the original option by position without interpolating a selector.
+    const selected=buttons.nth(options.indexOf(answer));
+    const actual=await buttons.evaluateAll(elements=>elements.map(element=>({name:element.name,text:element.value})));
+    if(JSON.stringify(actual)!==JSON.stringify(options)||await selected.count()!==1)
+      return record(unsubmitted('u2_challenge_changed'),{subreason:'u2_challenge_changed'});
+    checkTime();
+    if(now()-openedAt>100000)return record(unsubmitted('u2_question_expired'),{subreason:'u2_question_expired'});
+    current.subreason='u2_answer_reliable';record(last);
+    config.beforePtSubmit?.();
+    submitted=true;
+    await selected.click({timeout:timeout(15000)});
+    await page.waitForLoadState('domcontentloaded',{timeout:timeout(15000)}).catch(()=>{});
+    const policy=ptReadPolicy(expectedOrigin,config);
+    for(let read=0;read<3;read++){
+      if(read)await sleep(750);
+      checkTime();
+      const response=await page.goto(policy.url,{waitUntil:'domcontentloaded',timeout:timeout(15000)}).catch(()=>null);
+      if(!response)continue;
+      const observed=await readPtPassivePage(page,policy,{origin:expectedOrigin,httpStatus:response.status()});
+      checkTime();
+      if(observed.status==='already_signed'&&observed.evidence?.authoritative===true)
+        return {status:'signed',reason:'U2 答案已提交，当前账号每日首页确认签到完成',submissionAttempted:true,evidence:observed.evidence};
+    }
+    return unknown();
+  };
+  const run=async()=>{
+    for(let question=0;question<=retries;question++){
+      if(question){
+        await sleep(u2QuestionPolicy.retryDelayMs);checkTime();
+      }
+      const openedAt=now();
+      // Open this question's diagnostic entry first, so a failed reload is
+      // recorded against the new question and not the previous one.
+      current={};diagnostics.questions.push(current);diagnostics.questionCount++;
+      if(question){
+        // A reviewed question GET is not a submit. Never invoke beforePtSubmit
+        // here, reload a POST response, or replay a URL with answer parameters.
+        await page.goto(expectedOrigin+'/showup.php',{waitUntil:'domcontentloaded',timeout:timeout(config.navigationTimeoutMs||15000)});
+        checkTime();
+        if(page.url()!==expectedOrigin+'/showup.php')return record(unsubmitted('u2_challenge_changed'),{subreason:'u2_challenge_changed'});
+      }
+      const result=await readQuestion(openedAt);
+      if(submitted||diagnostics.stopCode||!retryCodes.has(result.failureCode))return result;
+    }
+    diagnostics.stopCode='u2_retry_limit';return last;
+  };
+  try{
+    return finish(await Promise.race([run(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(timeoutError),budget);})]));
+  }catch(error){
+    if(error.ptGateDecision)throw error;
+    if(error.u2StepTimeout){
+      diagnostics.stepTimedOut=true;diagnostics.stopCode='u2_step_timeout';
+      if(current&&!current.subreason)record(last,{subreason:last.failureCode,timedOut:true});
+    }else if(!submitted){record(unsubmitted('u2_solver_failed'),{subreason:'u2_solver_failed'});}
+    return finish(submitted?unknown():last);
+  }finally{
+    stopped=true;clearTimeout(timer);controller.abort();
+    await transport?.close().catch(()=>{});
+    if(diagnostics.stepTimedOut)await page.close().catch(()=>{});
+    referenceCache.clear();
   }
-  try {
-    await page.waitForFunction(() => {
-      const element = document.querySelector('img[alt="captcha"]');
-      return Boolean(element?.complete && element.naturalWidth > 0 && element.naturalHeight > 0);
-    }, null, { timeout: 50000 });
-  } catch {
-    return unsubmitted('u2_image_unavailable','U2 验证题图片加载超时');
-  }
-  const options = await buttons.evaluateAll((elements) => elements.map((element) => ({
-    name: element.name,
-    text: element.value,
-  })));
-  const screenshot = await image.screenshot();
-  const transport = createU2ReferenceFetch(config);
-  let solution;
-  try{solution=await solve(screenshot,options,{fetchImpl:transport.fetchImpl});}
-  catch{return unsubmitted('u2_solver_failed');}
-  finally{await transport.close().catch(()=>{});}
-  if (!solution?.answer?.name) {
-    const code=['u2_reference_unavailable','u2_reference_timeout','u2_visual_ambiguous','u2_image_unavailable','u2_challenge_changed']
-      .includes(solution?.failureCode)?solution.failureCode:'u2_visual_ambiguous';
-    return unsubmitted(code);
-  }
-  if(Date.now()-openedAt>100000)return unsubmitted('u2_question_expired');
-  const message = page.locator('textarea[name="message"]');
-  if (await message.count() !== 1) return unsubmitted('u2_challenge_changed');
-  await message.fill(String(config.u2Message || "今日天气不错"));
-  const chosen = page.locator(`input[type="submit"][name="${solution.answer.name}"]`);
-  if (await chosen.count() !== 1) return unsubmitted('u2_challenge_changed');
-  config.beforePtSubmit?.();
-  await chosen.click();
-  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-  const policy=ptReadPolicy(expectedOrigin,config);
-  for(let read=0;read<3;read++){
-    if(read)await sleep(750);
-    const response=await page.goto(policy.url,{waitUntil:'domcontentloaded',timeout:15000}).catch(()=>null);
-    if(!response)continue;
-    const observed=await readPtPassivePage(page,policy,{origin:expectedOrigin,httpStatus:response.status()});
-    if(observed.status==='already_signed'&&observed.evidence?.authoritative===true)
-      return {status:'signed',reason:'U2 答案已提交，当前账号每日首页确认签到完成',submissionAttempted:true,evidence:observed.evidence};
-  }
-  return { status: "needs_attention", reason: "U2 答案已提交，但页面未显示签到成功",
-    submissionAttempted: true, failureCode: 'submission_outcome_unknown', retryable: false };
 }
 
 async function processCandidate(page, target, candidateUrl, config, qaRules) {
   if(!isPtExecutionTarget(target,{root:rootDirectory}))return processCandidateBody(page,target,candidateUrl,config,qaRules);
-  return guardPtSubmission(beforePtSubmit=>processCandidateBody(page,target,candidateUrl,{...config,beforePtSubmit},qaRules),
+  return guardPtSubmission(beforePtSubmit=>{
+    if(target.origin!=='https://u2.dmhy.org')return processCandidateBody(page,target,candidateUrl,{...config,beforePtSubmit},qaRules);
+    let attempted=false;
+    return processCandidateBody(page,target,candidateUrl,{...config,
+      beforePtSubmit:()=>{beforePtSubmit();attempted=true;},u2SubmissionStarted:()=>attempted},qaRules);
+  },
     ()=>checkHarvestPtBeforeWrite(target,{root:rootDirectory}));
 }
 
@@ -1838,14 +1922,15 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         // public/API URL may require login while another dedicated check-in
         // URL already has a valid session. Completion, a submission or an
         // explicit stop condition prevents trying the remaining candidates.
-        if (isTerminalResult(result) || result?.submissionAttempted === true || bookmarkReviewRequired(result)
+        if (isTerminalResult(result) || result?.submissionAttempted === true || result?.u2Diagnostics || bookmarkReviewRequired(result)
           || result?.failureCode === 'site_maintenance' && isPtExecutionTarget(target,{root:rootDirectory})) break;
       }
 
       const effectiveResult = preferCandidateResult(lastResult, attemptResult);
       if (effectiveResult && !CHALLENGE.has(effectiveResult.status)
         && (!UNCONFIRMED.has(effectiveResult.status) || attempt === config.retryCount)) {
-        if (config.failureScreenshots && !isTerminalResult(effectiveResult) && effectiveResult.status !== "login_required") {
+        if (config.failureScreenshots && !isTerminalResult(effectiveResult) && effectiveResult.status !== "login_required"
+          && !(effectiveResult.u2Diagnostics && page.isClosed())) {
           effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
         }
         const completed={...effectiveResult,attempt:attempt+1,candidateHistory};
@@ -1862,7 +1947,7 @@ export async function processTarget(context, target, config, qaRules, logDirecto
         return completed;
       }
       if (effectiveResult?.status === "interactive_challenge") {
-        if (config.failureScreenshots) effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
+        if (config.failureScreenshots && !(effectiveResult.u2Diagnostics && page.isClosed())) effectiveResult.screenshot = await saveFailureScreenshot(page, logDirectory, target);
         return { ...effectiveResult, attempt: attempt + 1, candidateHistory };
       }
       if (effectiveResult && CHALLENGE.has(effectiveResult.status) && attempt === config.retryCount && config.failureScreenshots) {

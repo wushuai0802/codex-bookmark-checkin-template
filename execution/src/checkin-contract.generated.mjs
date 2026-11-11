@@ -144,6 +144,29 @@ export const ptFailureMessages = Object.freeze({
   "tls_certificate_invalid": "站点 TLS 证书无效，等待站点续证",
   "tls_handshake_failed": "站点 TLS 握手失败，等待站点恢复"
 });
+export const u2QuestionPolicy = Object.freeze({
+  "retryCount": 2,
+  "maxRetryCount": 4,
+  "retryDelayMs": 1500,
+  "stepTimeoutMs": 240000,
+  "maxStepTimeoutMs": 300000
+});
+export const u2DiagnosticCodes = Object.freeze([
+  "u2_match_gap_insufficient",
+  "u2_dot_side_unclear",
+  "u2_no_best_match",
+  "u2_answer_reliable",
+  "u2_question_unchanged",
+  "u2_step_timeout",
+  "u2_retry_limit",
+  "u2_reference_unavailable",
+  "u2_reference_timeout",
+  "u2_visual_ambiguous",
+  "u2_image_unavailable",
+  "u2_challenge_changed",
+  "u2_question_expired",
+  "u2_solver_failed"
+]);
 export const ptRetryCauses = Object.freeze([
   "upstream_unavailable",
   "rate_limit",
