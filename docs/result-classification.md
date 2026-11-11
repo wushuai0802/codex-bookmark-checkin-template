@@ -15,6 +15,20 @@ submission; unknown evidence does not qualify as disabled or successful.
 | Login, identity or local execution problem | Keep the specific attention/error result and the appropriate recovery path. |
 | Reported completion missing evidence | Perform a bounded passive recheck; do not submit again or invent a receipt. |
 
+The reviewed passive homepage preserves a maintenance diagnosis before the
+runner advances to another candidate. For guarded PT targets a loaded maintenance page also stops
+adapter actions, control clicks and shared-context recovery. An unsubmitted
+maintenance row remains `deferred / site_maintenance` with
+`submissionAttempted=false`; its next check is the next business day. A fresh
+same-account main-run row also suppresses that day's automatic Harvest fallback
+read. Missing, stale or unknown-submission rows do not qualify for this shortcut.
+If an attendance navigation or click already started before maintenance was
+observed, the existing `submission_outcome_unknown` guard still applies.
+
+External classification is a daily presentation rule, not execution success.
+The existing runner exit contract still returns code 2 for a deferred row;
+maintenance is not added to its successful/terminal states.
+
 The read-only `public/day-verdict.mjs` projection supplies the same daily counts
 to the dashboard, notifications and doctor. Its input inventory comes from
 `authorizedWorkload`; same-day, account-bound authoritative receipts come from
