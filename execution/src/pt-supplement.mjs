@@ -12,6 +12,7 @@ import {recoverPtLogin,runHddolbyNative as runNativeHddolby} from './pt-login-re
 import {readHhclubProfileState} from './hhclub-two-factor-login.mjs';
 import {validatePtLoginResume} from './pt-login-resume-guard.mjs';
 import {projectPtNativeDiagnostic} from './pt-native-diagnostic.mjs';
+import {projectU2Diagnostics} from './u2-vision.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
@@ -62,6 +63,7 @@ export function publicSupplementResult(origin,result,now=new Date()){
     ...(diagnostic.retryCause?{retryCause:diagnostic.retryCause,
       ...(Number.isFinite(Date.parse(result.nextEligibleAt))?{nextEligibleAt:new Date(result.nextEligibleAt).toISOString()}:{} )}:{}),
     ...(projectPtNativeDiagnostic(result?.nativeFlow)?{nativeFlow:projectPtNativeDiagnostic(result.nativeFlow)}:{}),
+    ...(origin==='https://u2.dmhy.org'&&projectU2Diagnostics(result?.u2Diagnostics)?{u2Diagnostics:projectU2Diagnostics(result.u2Diagnostics)}:{}),
     operationMode:result?.operationMode??'unknown',readSafety:result?.readSafety??'unknown',
     ...(result?.profileBinding?{profileBinding:result.profileBinding,accountKey:result.accountKey??'site-default'}:{}),
     businessDate:dayAt(now),...(result?.startedAt?{startedAt:result.startedAt}:{}),

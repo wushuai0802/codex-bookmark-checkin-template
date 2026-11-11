@@ -74,6 +74,7 @@ test("U2 homepage-to-question navigation runs the dedicated solver before generi
       folderNames: ["PT"],
     }, {
       retryCount: 0,
+      u2QuestionRetryCount: 0,
       failureScreenshots: false,
       navigationTimeoutMs: 5000,
       cloudflareWaitMs: 1000,

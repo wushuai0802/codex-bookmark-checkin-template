@@ -83,6 +83,8 @@
   "qaChangeButtonTexts": ["仅可换一题", "僅可換一題", "换一题", "換一題", "Change question"],
   "checkinMessage": "今日天气不错",
   "u2Message": "今日天气不错",
+  "u2QuestionRetryCount": 2,
+  "u2StepTimeoutMs": 240000,
   "headless": false,
   "backgroundWindowMode": "offscreen",
   "disableOptimizationGuideOnDeviceModel": true,

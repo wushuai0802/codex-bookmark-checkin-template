@@ -46,8 +46,8 @@ test('U2 solver diagnostics survive PT projection without a POST or a false logi
           '<input type="submit" name="captcha_a" value="A"><input type="submit" name="captcha_b" value="B"></form>'});
       });
       await page.goto('https://u2.dmhy.org/showup.php');
-      const expected=code==='missing_message'?'u2_challenge_changed':code==='untrusted_code'?'u2_visual_ambiguous':code;
-      const result=await tryU2Captcha(page,'https://u2.dmhy.org',{beforePtSubmit:()=>{intents++;}},
+      const expected=code==='missing_message'?'u2_challenge_changed':code==='untrusted_code'?'u2_solver_failed':code;
+      const result=await tryU2Captcha(page,'https://u2.dmhy.org',{u2QuestionRetryCount:0,beforePtSubmit:()=>{intents++;}},
         {solve:async()=>{
           if(code==='u2_solver_failed')throw Error('PRIVATE_PROVIDER_ERROR');
           if(code==='missing_message')return {answer:{name:'captcha_a',text:'A'}};
@@ -58,7 +58,8 @@ test('U2 solver diagnostics survive PT projection without a POST or a false logi
       const projected=publicSupplementResult('https://u2.dmhy.org',result);
       assert.equal(projected.failureCode,expected);assert.equal(projected.evidence.summary,ptFailureMessages[expected]);
       assert.equal(projected.evidence.authoritative,false);assert.equal(projected.submissionAttempted,false);
-      assert.doesNotMatch(JSON.stringify(projected),/PRIVATE_PROVIDER_ERROR|untrusted_code/);
+      assert.doesNotMatch(JSON.stringify(projected),/PRIVATE_PROVIDER_ERROR/);
+      if(code==='untrusted_code')assert.equal(projected.u2Diagnostics.questions[0].originalFailureCode,code);
       await context.close();
     }
   }finally{await browser.close();}
