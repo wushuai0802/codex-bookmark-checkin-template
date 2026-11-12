@@ -22,6 +22,9 @@ function Write-Log([string]$Message) {
     if ($script:LogPath) { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 }
 }
 
+# Sync-OperationsSupport.ps1 expects its caller to supply Write-SchedulerLog.
+function Write-SchedulerLog([string]$Message) { Write-Log $Message }
+
 function Assert-RemoteValue([string]$Value, [string]$Name) {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -notmatch '^[A-Za-z0-9._/-]+$' -or $Value.Contains('..')) {
         throw "$Name contains unsupported characters"
@@ -189,6 +192,7 @@ if (-not $mutex.WaitOne(0)) {
 }
 $publicationLease = $null
 $localPublished = $false
+$publicationCompleted = $false
 try {
     # Evidence rebuilds and this full sync share this lease. The existing
     # scheduler mutex only serializes two PowerShell sync processes; it cannot
@@ -345,13 +349,20 @@ try {
     Replace-File $temporarySnapshot $canonicalSnapshot
     Replace-File $temporaryGeneration $canonicalGeneration
     Write-Log "Sync complete: snapshot=$($snapshot.snapshotId), plan=$($snapshot.planHash.Substring(0, 12)), sites=$($snapshot.counts.logicalSites), units=$($snapshot.counts.executionUnits), uploaded=$(-not $NoUpload)."
+    $publicationCompleted = $true
 }
 catch {
     Write-Log "Sync failed: $($_.Exception.Message)"
     exit 1
 }
 finally {
-    if ($localPublished -and -not $NoUpload) { Update-SynchronizedCheckinNotification $resolvedLegacyRoot }
+    # After a completed publication the scheduler reconciles the daily receipt
+    # itself. Only a publication that failed after the local generation was
+    # installed is reconciled here, and it can never change the sync outcome.
+    if ($localPublished -and -not $publicationCompleted -and -not $NoUpload) {
+        try { Update-SynchronizedCheckinNotification $resolvedLegacyRoot }
+        catch { Write-Log 'Daily receipt refresh skipped after an incomplete publication.' }
+    }
     Remove-Item -LiteralPath $temporaryGeneration -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $temporarySnapshot,$temporaryLedger,$temporaryHealth,$temporaryHealthError -Force -ErrorAction SilentlyContinue
     Release-ShadowPublicationLease $publicationLease
