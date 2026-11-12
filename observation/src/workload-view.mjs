@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import {cancelledTask,ptStatusCondition} from '../public/dashboard-model.mjs';
 import {siteFaultCodes} from './checkin-contract.generated.mjs';
 import {siteHarvestWait,harvestWaitSummary} from '../public/harvest-window.mjs';
+import {harvestOverdue} from '../public/harvest-overdue.mjs';
 
 /** Presentation only: regular account tasks plus authorized, site-only PT work. */
 export function authorizedWorkload({tasks=[],ptStatus,businessDate,counts={},now=Date.now()}={}){
@@ -15,7 +16,7 @@ export function authorizedWorkload({tasks=[],ptStatus,businessDate,counts={},now
       }
       continue;
     }
-    if(!site.fallbackEnabled&&!site.disabledByConfig)continue;
+    if(!site.fallbackEnabled&&!site.disabledByConfig&&!harvestOverdue(site,ptStatus,now))continue;
     const values=supplemental.get(site.origin)??[];values.push(site);supplemental.set(site.origin,values);
   }
   for(const [origin,sites] of supplemental){

@@ -1,5 +1,7 @@
 import {siteFaultCodes,externalRetryCauses} from './checkin-contract.generated.mjs';
 import {confirmedPtByTask} from './pt-evidence.mjs';
+import {harvestOverdue} from './harvest-overdue.mjs';
+import {conditionLabels} from './checkin-contract.generated.mjs';
 
 export const shanghaiDay=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const signed=value=>['signed','already_signed'].includes(value);
@@ -52,6 +54,7 @@ export function dayVerdict(snapshot={}, {now=new Date()}={}){
       item.authoritative===true&&item.fresh===true&&dated(item.observedAt));
     let category='verifying';
     let reasonCode=null;
+    const overdue=harvestOverdue(site,snapshot.ptStatus,time);
     if(task.disabledByConfig===true||task.availabilityKind==='task_disabled'||task.condition==='task_disabled'||evidence.verification==='task_disabled')category='paused';
     else if(task.availabilityKind==='feature_disabled'||task.condition==='feature_disabled'||
       unavailable&&task.availabilityKind!=='temporary_unavailable'&&!externalCode)category='noFeature';
@@ -67,9 +70,11 @@ export function dayVerdict(snapshot={}, {now=new Date()}={}){
       harvest.taskCompletion?.status==='completed'&&missingDays>=2&&site.capabilities?.read===false&&!todayHarvestReceipt){
       category='actionNeeded';reasonCode='harvest_stalled';
     }
+    else if(current&&overdue&&!overdue.canTakeOver){category='actionNeeded';reasonCode=overdue.reasonCode;}
     else if(fresh&&!retrying&&(requiresHuman&&(manual||task.manualVerificationRequired===true||['interactive_challenge'].includes(status)||codes.includes('two_factor_required'))||
       manual&&!unknown&&!codes.includes('harvest_waiting')&&!signed(status)&&['needs_attention','deferred','login_required','failed','error','no_action','managed_challenge_timeout'].includes(status)))category='actionNeeded';
-    counts[category]++;items.push({taskId:task.taskId,class:category,...(reasonCode?{reasonCode,lastReceiptDay,missingDays,
+    counts[category]++;items.push({taskId:task.taskId,class:category,...(reasonCode&&reasonCode!=='harvest_stalled'?{
+      reasonCode,summary:conditionLabels[reasonCode]}:reasonCode?{reasonCode,lastReceiptDay,missingDays,
       summary:`Harvest 已 ${missingDays} 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能是站点已关闭或登录失效，请核对`}:{})});
   }
   return {businessDate,total:counts.done+counts.verifying+counts.actionNeeded,counts,items,

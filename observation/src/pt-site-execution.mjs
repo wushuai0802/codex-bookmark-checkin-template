@@ -59,7 +59,7 @@ export function projectPtSiteResult(value,origin){
 }
 
 export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHash,root,lease,readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,spawnChild=spawn,timeoutMs=600_000,
-  resolveScope=ptWorkerScope,cleanup=cleanupPtWorker,cleanupWaitMs=5000,cleanupTimeoutMs=25_000,signal}){
+  resolveScope=ptWorkerScope,cleanup=cleanupPtWorker,cleanupWaitMs=5000,cleanupTimeoutMs=25_000,signal,overdueTakeover=false}){
   const cancelled=()=>Object.assign(Error('PT batch cancellation requested'),{code:'PT_BATCH_CANCELLED'});
   if(signal?.aborted)throw cancelled();
   const script=path.join(legacyRoot,'scripts/Run-PtSupplement.mjs');
@@ -75,6 +75,8 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
     CHECKIN_PT_CHILD_OWNER:ownerId,CHECKIN_PT_EXPECTED_PROFILE_BINDING:scope.profileBinding,
     ...(verifyBeforeSubmit?{CHECKIN_PT_FALLBACK_RECHECK:'1'}:{})};
   delete childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID;
+  delete childEnv.CHECKIN_HARVEST_OVERDUE_TAKEOVER;
+  if(overdueTakeover&&!readOnly)childEnv.CHECKIN_HARVEST_OVERDUE_TAKEOVER='1';
   if(!readOnly&&fallbackAttemptId!==undefined)childEnv.CHECKIN_PT_FALLBACK_ATTEMPT_ID=fallbackAttemptId;
   if(signal?.aborted)throw cancelled();
   const lifecycle=beginPtWorker(root,{ownerId,origin,legacyRoot,...scope,startedAt:new Date().toISOString(),state:'running'});
@@ -125,7 +127,7 @@ export async function spawnPtSiteChild({legacyRoot,origin,catalogFile,catalogHas
 }
 
 export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catalogHash,
-  readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,signal,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
+  readOnly=false,verifyBeforeSubmit=false,loginRecoveryOnly=false,fallbackAttemptId,signal,overdueTakeover=false,acquire=acquireExecutionLock,release=releaseExecutionLock,execute=spawnPtSiteChild}={}){
   if(loginRecoveryOnly&&(readOnly||origin!=='https://www.uhddolby.com'))throw Error('Invalid login-only recovery target');
   if(fallbackAttemptId!==undefined&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(fallbackAttemptId)){
     const error=Error('PT fallback attempt is invalid');error.code='PT_PREFLIGHT';throw error;
@@ -143,7 +145,7 @@ export async function runPtSite({root=path.resolve('.'),origin,catalogFile,catal
   const lease=acquire(root);
   try {
     await reconcilePtWorker(root,{legacyRoot:runtime.legacyRoot});
-    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit:verifyBeforeSubmit||loginRecoveryOnly,
+    const value=await execute({legacyRoot:runtime.legacyRoot,origin,catalogFile:absoluteCatalog,catalogHash,root,lease,readOnly,verifyBeforeSubmit:verifyBeforeSubmit||loginRecoveryOnly,overdueTakeover,
       ...(loginRecoveryOnly?{loginRecoveryOnly:true}:{}),
       ...(fallbackAttemptId!==undefined?{fallbackAttemptId}:{}),...(signal?{signal}:{})});
     return projectPtSiteResult(value,origin);

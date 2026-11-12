@@ -18,6 +18,14 @@ export const externalRetryCauses = Object.freeze([
   "rate_limit",
   "harvest_waiting"
 ]);
+export const harvestOverdueDefaults = Object.freeze({
+  "at": "12:00",
+  "latestAt": "18:00"
+});
+export const harvestOverdueCodes = Object.freeze({
+  "unavailable": "harvest_overdue_unavailable",
+  "incomplete": "harvest_overdue_incomplete"
+});
 export const siteFaultCodes = Object.freeze([
   "tls_certificate_invalid",
   "tls_handshake_failed",
@@ -60,6 +68,8 @@ export const conditionLabels = Object.freeze({
   "upstream_unavailable": "等待站点恢复",
   "rate_limit": "等待限频恢复",
   "harvest_waiting": "等待 Harvest",
+  "harvest_overdue_unavailable": "Harvest 逾期且观察不可用，执行层无提交能力，请人工处理",
+  "harvest_overdue_incomplete": "Harvest 逾期未结，执行层无提交能力，请人工处理",
   "submission_outcome_unknown": "结果待核验",
   "entitlement_expired": "权益已失效",
   "site_migration": "站点已迁移",

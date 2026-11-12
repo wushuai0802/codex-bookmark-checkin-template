@@ -83,6 +83,20 @@ Daily notification reconciliation also runs after the scheduler commits its
 final synchronized generation, including a post-evidence publication. It uses
 the existing report outbox and deduplication; no browser execution is triggered.
 Delivery failures do not change the successful sync state.
+The verified local ledger, snapshot and generation are now installed before
+remote publication. A failed upload preserves that local view and refreshes the
+existing notification outbox, so unavailable Harvest can still produce the
+post-cutoff overdue notice. The sync still fails and retains its normal backoff;
+the NAS keeps its prior complete generation until a later upload succeeds.
+
+That backoff is intentional: consecutive failures wait 15, 30, 60, 120, then
+240 minutes (capped), measured from the finished attempt. At failure eight the
+next retry is the following day's configured `dailyTime`; success resets the
+counter. The 20-minute PT refresh condition does not override `nextRetryAt`.
+The scheduler checks once per minute and each sync can itself take up to five
+minutes, so wall-clock gaps also include the previous attempt and loop work.
+Notification delivery has its own 5-minute exponential retry capped at 240
+minutes and never changes this synchronization backoff.
 
 When a pre-deadline Harvest observation crosses its waiting deadline, the
 notification waits up to five minutes for the next publication. If publication

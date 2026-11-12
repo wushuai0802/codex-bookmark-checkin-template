@@ -56,6 +56,18 @@ events. Verification, external faults, waiting and cleanup warnings are quiet.
 `per_change` retains the prior state-change notification behavior. The outbox
 still retries delivery independently of check-in execution. Raw task reports,
 historical receipts and `businessComplete` are unchanged.
+After `harvestOverdueAt` (12:00 Shanghai by default, at most 18:00), enabled,
+unpaused Harvest-owned sites without a daily result become overdue. Missing,
+invalid or stale observations use `harvest_overdue_unavailable`; a current
+observation without a site result uses `harvest_overdue_incomplete`. Unsupported
+and read-only sites become action-needed with these fixed codes. Guarded sites
+keep the classification of their authoritative takeover result. Active Harvest
+windows, existing multi-day `harvest_stalled`, paused sites, disabled features
+and external-fault exclusions retain their existing priority.
+The original morning digest time is unchanged. Both notification policies add
+one immutable overdue outbox event per day, rearmed only by an observed return
+from fully settled to overdue. It contains counts, fixed reason codes and the
+existing bounded site-only labels; delivery failure never starts check-ins.
 Business incompleteness remains visible; reclassification never turns an outage,
 expired entitlement, or unknown submission into a successful check-in.
 

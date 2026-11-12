@@ -49,6 +49,11 @@ export function harvestPtDecision({report,target,now=new Date()}={}){
     reason:'Harvest 观察到站点外部条件，PT 复核延后'};
   if(assignment.owner==='unknown')return wait('Harvest 签到分工尚未确认，先只读核验');
   if(assignment.owner==='execution')return null;
+  const started=Date.parse(report.taskCompletion?.startedAt??'');
+  if(fallback&&process.env.CHECKIN_HARVEST_OVERDUE_TAKEOVER==='1'&&report.taskCompletion?.status==='running'&&Number.isInteger(report.taskCompletion.resultId)&&
+    report.taskCompletion.activeTaskCount>0&&Number.isFinite(started)&&dayAt(new Date(started))===businessDate&&
+    started<=now.getTime()+60_000&&now.getTime()<started+30*60_000)
+    return wait('Harvest 正在有效运行窗口内，PT 接手已暂缓');
   if(fallback)return null;
   if(!report.taskCompletion||!['completed','failed'].includes(report.taskCompletion.status))
     return wait('Harvest 当日任务未完成或正在重新执行，PT 提交已暂缓');

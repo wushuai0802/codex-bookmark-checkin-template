@@ -11,6 +11,9 @@ import {currentPassivePtResult,recordPtVerification} from './pt-verification.mjs
 import {ptCapabilities} from './pt-capabilities.mjs';
 import {canonicalPtOrigin,harvestSiteAssignment,harvestTaskCompleted,harvestTaskFailed} from './pt-coordination.generated.mjs';
 import {withCurrentPtCatalog} from './pt-catalog.mjs';
+import {currentHarvestReport,harvestDeadlinePassed,harvestOverdueAt} from '../public/harvest-overdue.mjs';
+import {projectHarvestWindow,harvestWindowActive} from '../public/harvest-window.mjs';
+import {harvestOverdueCodes} from './checkin-contract.generated.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
 const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?canonicalPtOrigin(u.origin):null;}catch{return null;}};
@@ -117,7 +120,7 @@ function interruptedBoundAttemptBeforeProof(attempt,candidate,checked,now,option
     verifiedGuardedRecovery(checked,candidate,now,options);
 }
 
-function confirmedSupplement(report,origin,businessDate,now){
+function confirmedSupplement(report,origin,businessDate,now,{accountKey=null,strict=false}={}){
   const site=report?.sites?.find(item=>originOf(item?.origin)===origin);
   const at=Date.parse(site?.observedAt??'');
   if(!site||!terminal.has(site.status)||site.evidence?.authoritative!==true||
@@ -131,12 +134,29 @@ function confirmedSupplement(report,origin,businessDate,now){
   const exactBinding=typeof site.accountKey==='string'&&/^[A-Za-z0-9._-]{1,80}$/.test(site.accountKey)&&
     /^[a-f0-9]{64}$/.test(site.profileBinding??'')&&site.businessDate===businessDate&&
     site.evidence?.businessDate===businessDate&&site.evidence?.evidenceScope==='site_account_day';
+  if(strict){
+    const confirmed=Date.parse(site.evidence?.confirmedAt??'');
+    return exactBinding&&site.accountKey===accountKey&&Number.isFinite(confirmed)&&confirmed<=now.getTime()+60_000&&
+      dayAt(new Date(confirmed))===businessDate;
+  }
   const legacyPassive=site.evidence?.source==='pt_page';
   return exactBinding||legacyPassive;
 }
 
-export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),fallbackOnlyEnabled=false,readOnlyOrigins=[]}={}) {
+export function planHarvestFallback({harvest,harvestObservation=null,harvestUnavailable=false,overdueAt,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),fallbackOnlyEnabled=false,readOnlyOrigins=[]}={}) {
   const businessDate=dayAt(now),eligible=[],blocked=[];let observedSuccess=0;
+  const cutoff=harvestOverdueAt(overdueAt),afterDeadline=harvestDeadlinePassed(now.getTime(),cutoff);
+  const unavailable=harvestUnavailable||!harvest||harvest.schemaVersion!==undefined&&harvest.schemaVersion!==1||
+    harvest.source!=='harvest'||harvest.businessDate!==businessDate||!Array.isArray(harvest.sites)||
+    !Number.isFinite(Date.parse(harvest.generatedAt))||Date.parse(harvest.generatedAt)>now.getTime()+60_000||
+    now.getTime()-Date.parse(harvest.generatedAt)>30*60_000;
+  if(unavailable){
+    if(!afterDeadline)throw Error('Harvest report is stale or invalid');
+    // Prior observations supply ownership only. They supply neither today's
+    // receipt, a running window, nor account identity or permission to submit.
+    harvest={source:'harvest',businessDate,generatedAt:now.toISOString(),sites:(harvestObservation?.sites??[]).map(site=>({
+      origin:site.origin,checkinEnabled:site.checkinEnabled,status:'unknown',observedAt:null}))};
+  }
   const reviewedOrigins=new Set(readOnlyOrigins.map(originOf).filter(Boolean));
   if(harvest?.source!=='harvest'||harvest.businessDate!==businessDate||!Array.isArray(harvest.sites)||
      !Number.isFinite(Date.parse(harvest.generatedAt))||Date.parse(harvest.generatedAt)>now.getTime()+60_000||
@@ -171,15 +191,19 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     if(!observations.has(origin))observations.set(origin,{origin,status:'unknown',missingFromHarvest:true});
   }
   for(const [origin,site] of observations){
-    if(confirmedSupplement(fallbackReport,origin,businessDate,now)){
+    const assignment=harvestSiteAssignment(harvest,origin);
+    const targets=registered.filter(t=>originOf(t.origin)===origin);
+    const dailyReceipt=site.lastReceiptDay===businessDate||['signed','already_signed','failed','not_signed'].includes(site.status)&&
+      Number.isFinite(Date.parse(site.observedAt??''))&&dayAt(new Date(site.observedAt))===businessDate;
+    const overdue=afterDeadline&&assignment.owner==='harvest'&&(unavailable||!dailyReceipt);
+    if(confirmedSupplement(fallbackReport,origin,businessDate,now,{strict:overdue,accountKey:targets[0]?.accountKey??'site-default'})){
       assessments.push({origin,state:'confirmed_by_executor_supplement'});continue;
     }
-    const assignment=harvestSiteAssignment(harvest,origin);
+    if(unavailable&&assignment.owner!=='harvest'){block(origin,'harvest_assignment_unverified');continue;}
     if(assignment.owner==='ambiguous'){
       if(!blocked.some(item=>item.origin===origin))block(origin,'harvest_assignment_unverified');
       continue;
     }
-    const targets=registered.filter(t=>originOf(t.origin)===origin);
     if(assignment.owner==='unknown'){
       if(!blocked.some(item=>item.origin===origin))block(origin,'harvest_assignment_unverified');
       continue;
@@ -199,6 +223,14 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     const unconfirmedStatuses=new Set([...failures,'unknown','pending','running','queued','started','progress','retry','in_progress']);
     if(!unconfirmedStatuses.has(status))continue;
     const registeredTarget=targets.length===1;
+    const capability=ptCapabilities(origin,config.ptReadOnlyPolicies?.[origin]);
+    if(overdue){
+      const window=unavailable?harvestObservation?.harvestWindow:projectHarvestWindow(harvest,now.getTime());
+      if(harvestWindowActive(window,now.getTime())){block(origin,'harvest_waiting');continue;}
+      if(!capability.guardedSubmit){block(origin,'harvest_overdue_capability_unavailable');continue;}
+      if(!fallbackOnlyEnabled){block(origin,'fallback_only_not_enabled');continue;}
+      if(!catalogOrigins.has(origin)){block(origin,'outside_confirmed_bookmark_scope');continue;}
+    }
     // A monitored fallback-only origin still waits for Harvest's completed or
     // failed task because it has no registered V1 execution owner. A precise
     // registered PT target is released immediately from any non-terminal
@@ -208,7 +240,7 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     // unsigned before the execution layer is allowed to submit. Without that
     // capability the mature fallback remains gated until Harvest finishes.
     if(!registeredTarget&&assignment.owner==='harvest'&&!harvestCompleted&&!harvestFailed&&
-       !reviewedOrigins.has(origin)){
+       !reviewedOrigins.has(origin)&&!overdue){
       // Keep catalog-only observations out of the Harvest waiting queue. A
       // private fallback opt-in without a reviewed passive reader remains a
       // safe capability block; a site outside that opt-in is monitor-only.
@@ -240,7 +272,12 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
       } catch {block(origin,'fallback_entry_missing_or_unsafe');continue;}
     }
     const prior=latest.results.find(r=>r.origin===origin&&(r.accountKey??'site-default')===accountKey);
-    if(prior&&terminal.has(prior.status)){assessments.push({origin,state:'confirmed_by_executor'});continue;}
+    const priorAt=Date.parse(prior?.observedAt??prior?.evidence?.confirmedAt??'');
+    if(prior&&terminal.has(prior.status)&&(!overdue||prior.evidence?.authoritative===true&&
+      Number.isFinite(priorAt)&&priorAt<=now.getTime()+60_000&&dayAt(new Date(priorAt))===businessDate&&
+      (!prior.evidence.businessDate||prior.evidence.businessDate===businessDate))){
+      assessments.push({origin,state:'confirmed_by_executor'});continue;
+    }
     if(prior?.status==='not_available'){
       block(origin,'v1_feature_or_task_unavailable');continue;
     }
@@ -277,6 +314,7 @@ export function planHarvestFallback({harvest,catalog,plan,latest,fallbackReport=
     }
     const guardedPassive=target?true:reviewedOrigins.has(origin);
     eligible.push({origin,accountKey,businessDate,kind:target?'registered_review':'fallback_only',
+      ...(overdue?{overdueReason:unavailable?harvestOverdueCodes.unavailable:harvestOverdueCodes.incomplete,readOnlyReview:true}:{}),
       ...(target?{guardedSubmit:true}:guardedPassive?{guardedSubmit:true,readOnlyReview:true}:{}),
       ...(entryUrl?{entryUrl}:{}),observedAt:new Date(at).toISOString(),
       trigger:target?(harvestFailed?'harvest_task_failed':'harvest_status_unconfirmed'):
@@ -373,6 +411,9 @@ function unsignedWakeupDue(state,candidate,now){
 }
 
 function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
+  if([...(state.verifications??[]),...state.attempts].some(item=>item.origin===candidate.origin&&
+    (item.accountKey??'site-default')===candidate.accountKey&&(candidate.overdueReason||item.overdueReason)&&
+    !['deferred_busy','deferred_preflight'].includes(item.state)))return false;
   const reviewOnly=candidate.readOnlyReview===true||candidate.guardedSubmit===true||
     (candidate.kind==='fallback_only'&&readOnlyOrigins.includes(candidate.origin));
   if(!reviewOnly)return false;
@@ -407,6 +448,7 @@ function claimWorker(root) {
 }
 
 export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),execute=false,
+  harvestObservation=null,harvestUnavailable=false,overdueAt,
   catalogFile=null,catalogHash=null,fallbackOnlyEnabled=false,runEngine=runLegacyEngine,runSite=runPtSite,
   clock=()=>new Date(),refreshHarvest=null,recoveredAtByAccount={},readOnlyOrigins=[],onlyOrigins=null,manualRecoveryId=null,
   deadline=null,minimumSiteBudgetMs=70_000,siteDeadline=deadline,signal}={}) {
@@ -417,7 +459,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   if(manualRecoveryId!==null&&(!execute||!Array.isArray(onlyOrigins)||onlyOrigins.length!==1||
     !/^(?:op_[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(manualRecoveryId)))
     throw Error('Manual recovery requires one explicit bound request');
-  let preview=planHarvestFallback({harvest,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled,
+  let preview=planHarvestFallback({harvest,harvestObservation,harvestUnavailable,overdueAt,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled,
     readOnlyOrigins:normalizedReadOnlyOrigins});
   if(onlyOrigins){
     const selected=Array.isArray(onlyOrigins)&&onlyOrigins.length===1?originOf(onlyOrigins[0]):null;
@@ -470,7 +512,8 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     // before passive cooldown/attempt guards are evaluated. Otherwise a
     // successful fallback is incorrectly reported as a new cooldown on the
     // next scheduler pass and the dashboard keeps it pending.
-    if(confirmedSupplement(currentSupplement,candidate.origin,preview.businessDate,candidateNow)){
+    if(confirmedSupplement(currentSupplement,candidate.origin,preview.businessDate,candidateNow,
+      {strict:Boolean(candidate.overdueReason),accountKey:candidate.accountKey})){
       outcomes.push({origin:candidate.origin,state:'already_confirmed'});continue;
     }
     const manualRecovery=manualRecoveryId!==null&&candidate.guardedSubmit===true&&normalizedReadOnlyOrigins.includes(candidate.origin);
@@ -491,10 +534,11 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
       let live;
       try{
         live=await refreshHarvest();
-        const livePreview=planHarvestFallback({harvest:live,catalog,plan,latest,
+        if(candidate.overdueReason&&!currentHarvestReport(live,clock().getTime()))throw Error('Harvest refresh unavailable');
+        const livePreview=planHarvestFallback({harvest:live,harvestObservation,overdueAt,catalog,plan,latest,
           fallbackReport:currentSupplement,config,now:clock(),fallbackOnlyEnabled,
           readOnlyOrigins:normalizedReadOnlyOrigins});
-        const previousOwner=harvestSiteAssignment(harvest,candidate.origin).owner;
+        const previousOwner=harvestSiteAssignment(harvestUnavailable||!harvest?harvestObservation:harvest,candidate.origin).owner;
         const currentOwner=harvestSiteAssignment(live,candidate.origin).owner;
         if(currentOwner!==previousOwner){outcomes.push({origin:candidate.origin,state:'harvest_assignment_changed'});continue;}
         if(currentOwner!=='execution'&&!candidate.guardedSubmit&&(live.taskCompletion?.resultId!==harvest.taskCompletion?.resultId||
@@ -508,15 +552,23 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
           continue;
         }
       }catch{
-        if(candidate.guardedSubmit===true)continue;
-        outcomes.push({origin:candidate.origin,state:'harvest_refresh_unavailable'});
-        break;
+        // Only a dated overdue candidate may continue to the existing passive
+        // reader when Harvest cannot be refreshed. No unsigned proof, no write.
+        // Every other candidate keeps the earlier behaviour: a guarded one is
+        // skipped quietly, anything else records the outcome and ends the batch
+        // so one unreachable Harvest does not cost a refresh timeout per site.
+        if(!candidate.overdueReason||currentHarvestReport(live,clock().getTime())){
+          if(candidate.guardedSubmit===true)continue;
+          outcomes.push({origin:candidate.origin,state:'harvest_refresh_unavailable'});
+          break;
+        }
       }
     }
     if(!budgetAvailable()){deferBudget(candidate);continue;}
     let recoveryEvidence=null,authenticationRecovery=false;
     if(canVerify){
       const verification={origin:candidate.origin,accountKey:candidate.accountKey,startedAt:clock().toISOString(),state:'in_progress'};
+      if(candidate.overdueReason)verification.overdueReason=candidate.overdueReason;
       if(unsignedWakeupDue(state,candidate,clock()))verification.unsignedWakeup=candidate.unsignedWakeup;
       if(manualRecovery)verification.manualRecoveryId=manualRecoveryId;
       state.verifications??=[];state.verifications.push(verification);writeAtomic(stateFile,state);
@@ -597,6 +649,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
     const attempt={attemptId:crypto.randomUUID(),origin:candidate.origin,accountKey:candidate.accountKey,businessDate:preview.businessDate,
        observedAt:candidate.observedAt,startedAt:clock().toISOString(),state:'in_progress',
        workerPid:workerLock.owner.pid,workerNonce:workerLock.owner.nonce};
+    if(candidate.overdueReason)attempt.overdueReason=candidate.overdueReason;
     if(harvestWakeup)attempt.harvestWakeup=true;
     if(recoveryEvidence)attempt.recoveryEvidence=recoveryEvidence;
     if(authenticationRecovery)attempt.authenticationRecovery=true;
@@ -626,7 +679,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
           // preflight cannot safely filter that field. Origin selection still
           // requires the exact current plan; validate the returned account below.
           const report=await runEngine({root,mode:'execute',origins:[candidate.origin],accountKeys:[],
-            notify:false,fallbackRecheck:true});
+            notify:false,fallbackRecheck:true,overdueTakeover:Boolean(candidate.overdueReason)});
           attempt.runId=report.runId??null;
           const matches=report.results?.filter(r=>r.origin===candidate.origin&&
             (r.accountKey??'site-default')===candidate.accountKey)??[];
@@ -635,7 +688,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
             observedAt:report.observedAt??report.sourceFinishedAt,businessDate:report.businessDate};
         }else{
           rawResult=await runSite({root,origin:candidate.origin,catalogFile,catalogHash,
-            verifyBeforeSubmit:Boolean(recoveryEvidence),fallbackAttemptId:attempt.attemptId});
+            verifyBeforeSubmit:Boolean(recoveryEvidence),overdueTakeover:Boolean(candidate.overdueReason),fallbackAttemptId:attempt.attemptId});
         }
         const result=projectPtSiteResult(rawResult,candidate.origin);
         const receivedAt=clock();
@@ -720,11 +773,14 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
 }
 
 export function loadHarvestFallbackInputs({root,reportFile,catalogFile}={}) {
-  const legacyRoot=loadRuntimeConfig(root).legacyRoot;
+  const runtime=loadRuntimeConfig(root),legacyRoot=runtime.legacyRoot;
   if(!legacyRoot)throw Error('legacy root is required');
   const day=dayAt(new Date());
   const supplementFile=path.join(root,'outputs',`pt-fallback-results-${day}.json`);
-  return {harvest:JSON.parse(fs.readFileSync(reportFile,'utf8')),
+  const input=JSON.parse(fs.readFileSync(reportFile,'utf8'));
+  const context=input?.source==='harvest-context';
+  return {harvest:context?input.report:input,harvestObservation:context?input.observation:null,
+    harvestUnavailable:context&&!input.report,overdueAt:runtime.harvestOverdueAt,
     catalog:JSON.parse(fs.readFileSync(catalogFile,'utf8')),
     plan:JSON.parse(fs.readFileSync(path.join(legacyRoot,'data/last-valid-bookmark-plan.json'),'utf8')),
     config:JSON.parse(fs.readFileSync(path.join(legacyRoot,'config/config.json'),'utf8')),

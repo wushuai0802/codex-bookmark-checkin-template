@@ -188,6 +188,7 @@ if (-not $mutex.WaitOne(0)) {
     exit 0
 }
 $publicationLease = $null
+$localPublished = $false
 try {
     # Evidence rebuilds and this full sync share this lease. The existing
     # scheduler mutex only serializes two PowerShell sync processes; it cannot
@@ -225,54 +226,63 @@ try {
         Assert-RemoteValue $monitorConfig.harvestDatabase 'HarvestDatabase'
         $harvestScript = Join-Path $resolvedProjectRoot 'scripts\harvest-observe.py'
         $harvestFile = Join-Path $syncRoot 'harvest-pt-status.json'
-        # Only shadow-run can use this same-day cache, for display continuity.
-        # The dispatcher below still requires a successful live Harvest read.
+        # A cached receipt stays display-only. The redacted daily summary may
+        # supply ownership for a strictly guarded, overdue passive takeover.
         $monitorArguments += @('--pt-status-cache-file', $harvestFile)
         $harvestProbe = Invoke-BoundedSyncProcess $sshCommand.Source @('-T','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','ServerAliveInterval=10','-o','ServerAliveCountMax=2',$SshTarget,"sudo -n python3 - '$($monitorConfig.harvestDatabase)'") 'harvest_read' $harvestScript 45
         $harvestOutput = $harvestProbe.output
+        $harvestCaptured = $false
         if ($harvestProbe.exitCode -eq 0) {
             try {
                 $harvestReport = ($harvestOutput -join [Environment]::NewLine) | ConvertFrom-Json
                 if ($harvestReport.source -ne 'harvest') { throw 'Invalid Harvest report' }
                 [System.IO.File]::WriteAllText($harvestFile, ($harvestReport | ConvertTo-Json -Depth 12), [System.Text.UTF8Encoding]::new($false))
-                $monitorArguments += @('--pt-status-file', $harvestFile)
+                $harvestCaptured = $true
                 Write-Log "Captured read-only Harvest observations ($($harvestReport.sites.Count) records)."
-                $fallbackScript = Join-Path $resolvedProjectRoot 'scripts\harvest-fallback.mjs'
-                if (-not $SkipHarvestFallback -and (Test-Path -LiteralPath $fallbackScript -PathType Leaf)) {
-                    try {
-                        $previewOutput = @(& $NodePath $fallbackScript '--report-file' $harvestFile '--catalog-file' $catalogFile 2>&1)
-                        if ($LASTEXITCODE -ne 0) { throw 'Harvest fallback preview failed' }
-                        $preview = ($previewOutput | Select-Object -Last 1) | ConvertFrom-Json
-                        if (-not $NoUpload -and [int]$preview.newAttempts -gt 0) {
-                            $started = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-                            $pendingDir = Join-Path $resolvedProjectRoot ('data\harvest-fallback-pending\' + $started + '-' + [guid]::NewGuid().ToString('N'))
-                            [System.IO.Directory]::CreateDirectory($pendingDir) | Out-Null
-                            $pendingFile = Join-Path $pendingDir 'harvest.json'
-                            $pendingCatalog = Join-Path $pendingDir 'catalog.json'
-                            Copy-Item -LiteralPath $harvestFile -Destination $pendingFile
-                            Copy-Item -LiteralPath $catalogFile -Destination $pendingCatalog
-                            $reportHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $pendingFile).Hash.ToLowerInvariant()
-                            $catalogHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $pendingCatalog).Hash.ToLowerInvariant()
-                            $fallbackLog = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.log"
-                            $fallbackError = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.err.log"
-                            $arguments = @($fallbackScript, '--apply', '--report-file', $pendingFile, '--catalog-file', $pendingCatalog, '--report-sha256', $reportHash, '--catalog-sha256', $catalogHash, '--harvest-ssh-target', $SshTarget, '--harvest-db-path', $monitorConfig.harvestDatabase)
-                            $fallbackTimeoutSeconds = 180
-                            $fallbackCleanupGraceSeconds = 35
-                            $fallbackMinimumSiteBudgetMs = 70000
-                            $fallbackBudgetMs = $fallbackTimeoutSeconds * 1000 - $fallbackCleanupGraceSeconds * 1000 - $fallbackMinimumSiteBudgetMs
-                            $arguments += @('--budget-ms', [string]$fallbackBudgetMs,
-                                '--minimum-site-budget-ms', [string]$fallbackMinimumSiteBudgetMs, '--cooperative-stop')
-                            $fallbackResult = Invoke-BoundedSyncProcess $NodePath $arguments 'harvest_fallback' '' $fallbackTimeoutSeconds -CooperativeStop -CleanupGraceSeconds $fallbackCleanupGraceSeconds
-                            if ($fallbackResult.exitCode -eq 0) {
-                                Write-Log "Execution-layer fallback completed for $([int]$preview.newAttempts) unattempted PT site(s)."
-                            } else {
-                                Write-Log 'Execution-layer fallback was bounded and deferred after a non-success result.'
-                            }
-                        }
-                    } catch { Write-Log "Harvest fallback unavailable; read-only PT status remains visible: $($_.Exception.Message)" }
-                }
             } catch { Write-Log 'Harvest report invalid; PT inventory remains visible with unconfirmed status.' }
-        } else { Write-Log 'Harvest unavailable; retain valid same-day cached observations for display only; do not queue fallback.' }
+        } else { Write-Log 'Harvest unavailable; only dated overdue candidates with reviewed capabilities may enter passive fallback.' }
+        $harvestContextFile = Join-Path $syncRoot 'harvest-context.json'
+        $contextArguments = @((Join-Path $resolvedProjectRoot 'scripts\prepare-harvest-context.mjs'),'--out',$harvestContextFile)
+        if ($harvestCaptured) { $contextArguments += @('--report-file',$harvestFile) }
+        $contextOutput = @(& $NodePath @contextArguments)
+        if ($LASTEXITCODE -ne 0) { throw 'Harvest context preparation failed' }
+        $contextStatus = ($contextOutput | Select-Object -Last 1) | ConvertFrom-Json
+        if ($contextStatus.available) { $monitorArguments += @('--pt-status-file', $harvestFile) }
+        $monitorArguments += @('--harvest-context-file',$harvestContextFile)
+        $fallbackScript = Join-Path $resolvedProjectRoot 'scripts\harvest-fallback.mjs'
+        if (-not $SkipHarvestFallback -and (Test-Path -LiteralPath $fallbackScript -PathType Leaf)) {
+            try {
+                $previewOutput = @(& $NodePath $fallbackScript '--report-file' $harvestContextFile '--catalog-file' $catalogFile 2>&1)
+                if ($LASTEXITCODE -ne 0) { throw 'Harvest fallback preview failed' }
+                $preview = ($previewOutput | Select-Object -Last 1) | ConvertFrom-Json
+                if (-not $NoUpload -and [int]$preview.newAttempts -gt 0) {
+                    $started = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+                    $pendingDir = Join-Path $resolvedProjectRoot ('data\harvest-fallback-pending\' + $started + '-' + [guid]::NewGuid().ToString('N'))
+                    [System.IO.Directory]::CreateDirectory($pendingDir) | Out-Null
+                    $pendingFile = Join-Path $pendingDir 'harvest.json'
+                    $pendingCatalog = Join-Path $pendingDir 'catalog.json'
+                    Copy-Item -LiteralPath $harvestContextFile -Destination $pendingFile
+                    Copy-Item -LiteralPath $catalogFile -Destination $pendingCatalog
+                    $reportHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $pendingFile).Hash.ToLowerInvariant()
+                    $catalogHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $pendingCatalog).Hash.ToLowerInvariant()
+                    $fallbackLog = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.log"
+                    $fallbackError = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.err.log"
+                    $arguments = @($fallbackScript, '--apply', '--report-file', $pendingFile, '--catalog-file', $pendingCatalog, '--report-sha256', $reportHash, '--catalog-sha256', $catalogHash, '--harvest-ssh-target', $SshTarget, '--harvest-db-path', $monitorConfig.harvestDatabase)
+                    $fallbackTimeoutSeconds = 180
+                    $fallbackCleanupGraceSeconds = 35
+                    $fallbackMinimumSiteBudgetMs = 70000
+                    $fallbackBudgetMs = $fallbackTimeoutSeconds * 1000 - $fallbackCleanupGraceSeconds * 1000 - $fallbackMinimumSiteBudgetMs
+                    $arguments += @('--budget-ms', [string]$fallbackBudgetMs,
+                        '--minimum-site-budget-ms', [string]$fallbackMinimumSiteBudgetMs, '--cooperative-stop')
+                    $fallbackResult = Invoke-BoundedSyncProcess $NodePath $arguments 'harvest_fallback' '' $fallbackTimeoutSeconds -CooperativeStop -CleanupGraceSeconds $fallbackCleanupGraceSeconds
+                    if ($fallbackResult.exitCode -eq 0) {
+                        Write-Log "Execution-layer fallback completed for $([int]$preview.newAttempts) unattempted PT site(s)."
+                    } else {
+                        Write-Log 'Execution-layer fallback was bounded and deferred after a non-success result.'
+                    }
+                }
+            } catch { Write-Log "Harvest fallback unavailable; read-only PT status remains visible: $($_.Exception.Message)" }
+        }
     }
     $arguments = @(
         $shadowScript, '--legacy-root', $resolvedLegacyRoot,
@@ -307,6 +317,21 @@ try {
     $ledgerText = Get-Content -Raw -Encoding UTF8 -LiteralPath $temporaryLedger
     if ($ledgerText -match '(?i)"(?:password|passwd|token|cookie|secret|profilepath|userdatadir|dpapi|screenshot)"\s*:') { throw 'ledger contains a sensitive field' }
 
+    # Keep the verified local generation available even if the NAS publication
+    # fails. Copy (rather than move) so the unchanged remote staging still has
+    # its complete generation. Upload failure retains the normal sync backoff.
+    $localLedger = "$canonicalLedger.$PID.tmp"
+    Copy-Item -LiteralPath $temporaryLedger -Destination $localLedger -Force
+    Replace-File $localLedger $canonicalLedger
+    $localSnapshot = "$canonicalSnapshot.$PID.tmp"
+    Copy-Item -LiteralPath $temporarySnapshot -Destination $localSnapshot -Force
+    Replace-File $localSnapshot $canonicalSnapshot
+    if (Test-Path -LiteralPath $canonicalGeneration) { Copy-Item -LiteralPath $canonicalGeneration -Destination (Join-Path $outputRoot 'dashboard-generation.previous.json') -Force }
+    $localGeneration = "$canonicalGeneration.$PID.tmp"
+    Copy-Item -LiteralPath $temporaryGeneration -Destination $localGeneration -Force
+    Replace-File $localGeneration $canonicalGeneration
+    $localPublished = $true
+
     if (-not $NoUpload) {
         Write-Log 'Starting dashboard status sync.'
         Invoke-BoundedDashboardStatusSync (Join-Path $resolvedProjectRoot 'scripts\sync-v2-status.ps1') $SshTarget $NasDataDir $syncRoot $NodePath
@@ -318,7 +343,6 @@ try {
 
     Replace-File $temporaryLedger $canonicalLedger
     Replace-File $temporarySnapshot $canonicalSnapshot
-    if (Test-Path -LiteralPath $canonicalGeneration) { Copy-Item -LiteralPath $canonicalGeneration -Destination (Join-Path $outputRoot 'dashboard-generation.previous.json') -Force }
     Replace-File $temporaryGeneration $canonicalGeneration
     Write-Log "Sync complete: snapshot=$($snapshot.snapshotId), plan=$($snapshot.planHash.Substring(0, 12)), sites=$($snapshot.counts.logicalSites), units=$($snapshot.counts.executionUnits), uploaded=$(-not $NoUpload)."
 }
@@ -327,6 +351,7 @@ catch {
     exit 1
 }
 finally {
+    if ($localPublished -and -not $NoUpload) { Update-SynchronizedCheckinNotification $resolvedLegacyRoot }
     Remove-Item -LiteralPath $temporaryGeneration -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $temporarySnapshot,$temporaryLedger,$temporaryHealth,$temporaryHealthError -Force -ErrorAction SilentlyContinue
     Release-ShadowPublicationLease $publicationLease
