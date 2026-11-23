@@ -107,12 +107,13 @@ test('stalled Harvest digest keeps tentative wording and reuses site-set excepti
 test('daily digest inherits defaults, defers before 11, freezes one daily event and resets next day',t=>{
   const f=digestSandbox(t),before=fs.readFileSync(f.configFile,'utf8');
   const early=f.run('2026-10-31T02:59:59Z');assert.equal(early.deferred,true);assert.equal(f.items().length,0);
-  const first=f.run();assert.equal(first.enqueued,true);assert.equal(first.events.length,1);
+  const first=f.run('2026-10-31T03:05:00Z');assert.equal(first.enqueued,true);assert.equal(first.events.length,1);
   assert.equal(first.events[0].category,'daily_digest');assert.equal(first.status,'unconfirmed');
   const saved=f.items()[0];assert.match(saved.eventKey,/:2026-10-31$/);
-  assert.equal(f.run().deferred,true);assert.deepEqual(f.items(),[saved]);
+  assert.match(saved.summary,/截至北京时间 11:05/);
+  assert.equal(f.run('2026-10-31T03:09:00Z').deferred,true);assert.deepEqual(f.items(),[saved]);
   f.mark(1,{status:'signed',evidence:{source:'pt_page',authoritative:true,businessDate:f.date,confirmedAt:'2026-10-31T02:50:00Z'}});
-  const changed=f.run();assert.equal(changed.status,'success');assert.equal(changed.events.length,0);assert.deepEqual(f.items(),[saved]);
+  const changed=f.run('2026-10-31T03:10:00Z');assert.equal(changed.status,'success');assert.equal(changed.events.length,0);assert.deepEqual(f.items(),[saved]);
   const next='2026-11-01',nextAt=next+'T03:00:00Z';
   f.report.runId=next.replaceAll('-','')+'-fixture';f.report.finishedAt=nextAt;
   f.snapshot.businessDate=next;f.snapshot.generatedAt=nextAt;f.snapshot.source.runId=f.report.runId;

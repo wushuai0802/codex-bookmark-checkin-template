@@ -10,6 +10,11 @@
     "recordedAt": {"type": "string", "format": "date-time"},
     "snapshotId": {"type": "string", "pattern": "^snap_[a-f0-9]{24}$"},
     "businessDate": {"type": "string", "format": "date"},
+    "observationBusinessDate": {"type": "string", "format": "date"},
+    "ptBusinessDate": {"type": ["string","null"], "format": "date"},
+    "workloadVerdict": {"type":"array","maxItems":700,"items":{"type":"object","required":["taskId","class"],"properties":{
+      "taskId":{"type":"string","pattern":"^(task_[a-f0-9]{24}|pt_[a-f0-9]{16})$"},"class":{"enum":["done","verifying","actionNeeded","external","paused","noFeature"]}
+    },"additionalProperties":false}},
     "planHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "sourceRunId": {"type": ["string", "null"]},
     "mode": {"const": "shadow_read_only"},

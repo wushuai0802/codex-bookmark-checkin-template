@@ -137,6 +137,7 @@ function Invoke-DailyDigest([switch]$OutageOnly) {
             }
             $text = "签到日报 $($shanghaiNow.ToString('MM-dd'))`n有效 $($verdict.total)：已完成 $($c.done)，核验中 $($c.verifying)，需处理 $($c.actionNeeded)`n外部阻断 $($c.external) · 已暂停 $($c.paused) · 无此功能 $($c.noFeature)"
             if ($notificationView.verdictScope -eq 'regular_tasks') { $text += "`n仅主任务口径，观测范围待同步" }
+            $text += "`n截至北京时间 $($shanghaiNow.ToString('HH:mm'))"
             if ($actionTasks.Count) {
                 $text += "`n`n需处理"
                 foreach ($task in $actionTasks) {

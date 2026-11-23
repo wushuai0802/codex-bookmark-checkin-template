@@ -4,7 +4,7 @@ import { createNavigation } from './navigation.mjs';
 import { installCompactTopbar, recentPages, recentLabels } from './topbar.mjs';
 import { playMotion, stopMotion, reducedMotion, MOTION } from './motion.mjs';
 import { createNoticeState, pausedNotices, attentionReason, overviewQueuePreview } from './notice-state.mjs';
-import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks} from './calendar-model.mjs';
+import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks,calendarReceiptVerdict} from './calendar-model.mjs';
 import { enhanceSelect, closeSelectMenu } from './select-menu.mjs';
 import {statusLabels as STATUS_LABELS} from './checkin-contract.generated.mjs';
 import {installAppearanceControls} from './appearance.mjs';
@@ -1011,7 +1011,9 @@ function renderCalendar(data) {
   for(const task of tasks){
     const row=el('div','calendar-receipt-row'),identity=el('div','calendar-receipt-identity');
     append(identity,el('strong',null,siteTitle(task)),el('span','subtext',identityTitle(task)));
-    append(row,identity,statusChip(task.observedStatus,task),el('span','calendar-receipt-evidence',
+    const verdict=calendarReceiptVerdict(task);
+    const chip=verdict?el('span','status-chip '+verdict.status,verdict.label):statusChip(task.observedStatus,task);
+    append(row,identity,chip,el('span','calendar-receipt-evidence',
       state.calendarFilter==='pending'?task.evidence?.summary||evidenceLabel(task):evidenceLabel(task)));
     list.append(row);
   }

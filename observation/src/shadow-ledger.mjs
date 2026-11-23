@@ -5,6 +5,9 @@ import { planHash, planUnitIdentity, assertUniqueTaskOwners, redactText } from '
 import { displayIdentity, shortLabel } from './display-identity.mjs';
 import {ptCalendarSummaries} from './calendar-records.mjs';
 import {shanghaiDate} from './freshness.mjs';
+import {verdictSnapshot} from './daily-reconciliation.mjs';
+import {dayVerdict} from '../public/day-verdict.mjs';
+import {calendarWorkloadVerdict} from '../public/calendar-model.mjs';
 
 const SENSITIVE_NAMES = new Set([
   'password', 'passwd', 'token', 'cookie', 'secret', 'authorization',
@@ -141,6 +144,13 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
       } : null };
   };
   const taskSummaries = snapshot.tasks.map(task => summarize(task, snapshot));
+  const sameDayPt=snapshot.ptStatus?.businessDate===snapshot.businessDate&&shanghaiDate(snapshot.generatedAt)===snapshot.businessDate;
+  let workloadVerdict;
+  if(sameDayPt&&snapshot.source?.executionComplete===true){
+    const now=new Date(snapshot.generatedAt),view=verdictSnapshot(snapshot,{now});
+    const classes=new Map(dayVerdict(view,{now}).items.map(item=>[item.taskId,item.class]));
+    workloadVerdict=calendarWorkloadVerdict(view.tasks,snapshot.ptStatus,task=>classes.get(task.taskId));
+  }
   const changes = drift.statusChanges.map(change => ({ kind: 'status', from: change.from, to: change.to,
     task: taskSummaries.find(task => task.taskId === change.taskId) }));
   for (const [kind, ids, source] of [['added', drift.addedTaskIds, snapshot], ['removed', drift.removedTaskIds, previousSnapshot], ['changed', drift.changedTaskIds, snapshot]]) {
@@ -160,8 +170,8 @@ export function createLedgerRecord(snapshot, { previousSnapshot = null, recorded
     mode: 'shadow_read_only',
     counts: snapshot.counts,
     taskSummaries,
-    ptSummaries:snapshot.ptStatus?.businessDate===snapshot.businessDate&&shanghaiDate(snapshot.generatedAt)===snapshot.businessDate
-      ?ptCalendarSummaries(snapshot.ptStatus):null,
+    ptSummaries:sameDayPt?ptCalendarSummaries(snapshot.ptStatus):null,
+    ...(workloadVerdict?{workloadVerdict}:{}),
     changes,
     drift,
     health: snapshot.health

@@ -7,6 +7,8 @@ import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {parseBaselineOptions,runSuccessBaseline,runBaselineCli,formatBaseline} from '../../tools/success-baseline.mjs';
 import {managed} from '../../tools/release-lib.mjs';
+import {commitDashboardGeneration} from '../src/dashboard-generation.mjs';
+import {planHash} from '../src/contracts.mjs';
 
 const project=fileURLToPath(new URL('../../',import.meta.url)),now=new Date('2026-11-11T04:00:00Z');
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -46,6 +48,15 @@ function report(f,date,results,extra={}){
   save(path.join(f.executionRoot,'logs',runId,'result.json'),value);return value;
 }
 const positive=date=>({status:'signed',observedAt:date+'T01:00:00Z',evidence:{source:'pt_page',authoritative:true,businessDate:date,confirmedAt:date+'T01:00:00Z'}});
+
+// Publish the test records under a next-day snapshot exactly as the dashboard would.
+function publishRows(directory,rows){
+  const day='2026-11-11',at=day+'T01:00:00Z',ledgerFile=path.join(directory,'shadow-ledger.jsonl');
+  const snapshot={schemaVersion:1,mode:'shadow_read_only',snapshotId:'snap_'+'1'.repeat(24),tasks:[],planHash:planHash([]),businessDate:day,generatedAt:at};
+  const anchor={schemaVersion:1,snapshotId:snapshot.snapshotId,planHash:snapshot.planHash,businessDate:day,recordedAt:at};
+  fs.writeFileSync(ledgerFile,[...rows,anchor].map(row=>JSON.stringify(row)).join('\n')+'\n');
+  commitDashboardGeneration({snapshot,snapshotFile:path.join(directory,'shadow-beta-snapshot.json'),ledgerFile});
+}
 
 test('complete seven-day baseline uses immutable digest counts and sums site-days',t=>{
   const f=fixture(t);
@@ -131,11 +142,73 @@ test('lossy ledger alone cannot reconstruct retry, availability or PT verdict fi
   assert.ok(row.missing.includes('ledger_verdict_fields_missing'));
 });
 
+test('dated closing ledger retains the sent digest and accepts only bound same-day progress from legacy summaries',t=>{
+  const f=fixture(t),date='2026-11-10',dir=path.join(f.observationRoot,'outputs'),file=path.join(dir,'shadow-ledger.jsonl');
+  fs.mkdirSync(dir);
+  const sent=daily(f,date,{done:0,verifying:1,actionNeeded:0,paused:0,external:0,noFeature:0});
+  const original=fs.readFileSync(sent.file);
+  const pt={taskId:'pt_'+'1'.repeat(16),origin:'https://supplement.example',businessDate:date,inLegacyPlan:false,
+    observedStatus:'unknown',accountRef:null,observedAt:null,evidence:null};
+  const morning={schemaVersion:1,mode:'shadow_read_only',businessDate:date,observationBusinessDate:date,ptBusinessDate:date,
+    recordedAt:date+'T02:00:00Z',sourceRunId:'20261110-example',snapshotId:'morning',planHash:'a'.repeat(64),
+    counts:{executionUnits:0},drift:{hashValid:true,ownerConflicts:[]},taskSummaries:[],ptSummaries:[pt]};
+  const closed={...morning,recordedAt:date+'T07:30:00Z',snapshotId:'closing',
+    ptSummaries:[{...pt,observedStatus:'already_signed',observedAt:date+'T07:29:00Z',evidence:{source:'pt_page',authoritative:true}}]};
+  const store=(...rows)=>publishRows(dir,rows);
+  const baseline=()=>runSuccessBaseline({...f.options,days:1},{now}).days[0];
+  store(morning,closed,{...closed,observationBusinessDate:'2026-11-11',recordedAt:'2026-11-11T01:00:00Z'});
+  const row=baseline();
+  assert.equal(row.source,'closing_ledger_legacy');assert.equal(row.counts.done,1);assert.equal(row.unresolved,0);
+  assert.equal(row.sentDigest.counts.done,0);assert.deepEqual(fs.readFileSync(sent.file),original);
+  store(morning);
+  fs.appendFileSync(file,JSON.stringify(closed)+'\n');
+  assert.equal(baseline().counts.done,0);
+  for(const change of [{accountRef:'changed'},{origin:'https://elsewhere.example'}]){
+    store(morning,{...closed,ptSummaries:[{...closed.ptSummaries[0],...change}]});
+    assert.equal(baseline().source,'daily_digest');assert.equal(baseline().counts.done,0);
+  }
+  for(const change of [{observedAt:'2026-11-11T02:00:00Z'},{evidence:{source:'none',authoritative:false}}]){
+    store(morning,{...closed,ptSummaries:[{...closed.ptSummaries[0],...change}]});
+    const unproven=baseline();assert.equal(unproven.counts.done,0);assert.equal(unproven.unresolved,1);
+    assert.equal(unproven.manualInterventions,null);
+  }
+  store(morning,{...closed,planHash:'c'.repeat(64)});assert.equal(baseline().source,'daily_digest');
+  store(morning,closed,{...closed,snapshotId:'conflict'});assert.equal(baseline().source,'daily_digest');
+});
+
+test('archived workload verdict retains manual escalation and excludes the observation-only inventory',t=>{
+  const f=fixture(t),date='2026-11-10',dir=path.join(f.observationRoot,'outputs');
+  fs.mkdirSync(dir);
+  const regularId='task_'+'a'.repeat(24),supplementId='pt_'+'b'.repeat(16),monitorId='pt_'+'c'.repeat(16);
+  const base={schemaVersion:1,mode:'shadow_read_only',businessDate:date,observationBusinessDate:date,ptBusinessDate:date,
+    recordedAt:date+'T10:00:00Z',sourceRunId:'20261110-example',planHash:'b'.repeat(64),
+    counts:{executionUnits:1},drift:{hashValid:true,ownerConflicts:[]},taskSummaries:[{taskId:regularId,origin:'https://regular.example',observedStatus:'needs_attention'}],
+    ptSummaries:[['supplement',supplementId],['monitor',monitorId]].map(([site,taskId])=>({taskId,origin:'https://'+site+'.example',businessDate:date,
+      inLegacyPlan:false,observedStatus:'unknown'}))};
+  const baseline=()=>runSuccessBaseline({...f.options,days:1,sites:true},{now}).days[0];
+  publishRows(dir,[{...base,workloadVerdict:[{taskId:regularId,class:'verifying'},{taskId:supplementId,class:'actionNeeded'}]}]);
+  const row=baseline();assert.equal(row.source,'closing_ledger');assert.equal(row.total,2);
+  assert.equal(row.manualInterventions,1);assert.equal(row.sitesComplete,true);
+  assert.deepEqual(row.sites,[{domain:'regular.example',status:'verifying'},{domain:'supplement.example',status:'actionNeeded'}]);
+  for(const invalid of [[],[{taskId:'missing',class:'done'}],[{taskId:regularId,class:'other'}],
+    [{taskId:regularId,class:'done'},{taskId:regularId,class:'done'}]]){
+    publishRows(dir,[{...base,workloadVerdict:invalid}]);
+    assert.equal(baseline().complete,false);
+  }
+});
+
 test('regular_tasks digest retains counts but is incomplete without authorized PT inventory',t=>{
   const f=fixture(t),date='2026-11-10',base=daily(f,date).item;
   daily(f,date,undefined,{summary:base.summary+'\n仅主任务口径，观测范围待同步'});
   const row=runSuccessBaseline({...f.options,days:1},{now}).days[0];
   assert.equal(row.total,5);assert.equal(row.complete,false);assert.ok(row.missing.includes('pt_verdict_inputs_missing'));
+});
+
+test('a later regular-only snapshot cannot displace a verified full morning workload',t=>{
+  const f=fixture(t),date='2026-11-10';
+  daily(f,date);snapshot(f,date,[{...positive(date),observedStatus:'signed'}],{source:{executionComplete:true}});
+  const row=runSuccessBaseline({...f.options,days:1},{now}).days[0];
+  assert.equal(row.source,'daily_digest');assert.equal(row.total,5);assert.equal(row.counts.done,3);
 });
 
 test('digest hash, dates and integer arithmetic are validated; ambiguity never produces complete data',t=>{

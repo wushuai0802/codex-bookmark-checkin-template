@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks,calendarTaskGroup} from '../public/calendar-model.mjs';
+import {dailyRecords, monthCells, moveMonth,moveCalendarDay,selectCalendarMonth, dayTotals,monthTotals,calendarTasks,calendarTaskGroup,calendarReceiptVerdict} from '../public/calendar-model.mjs';
 
 test('calendar uses latest daily execution summary and live snapshot, not historical canary receipts',()=>{
   const counts={executionUnits:3,status:{signed:2,not_available:1}};
@@ -24,6 +24,14 @@ test('calendar details put unresolved work first and keep filters disjoint',()=>
   assert.equal(calendarTasks({tasks},'completed').length,1);
   assert.equal(calendarTasks({tasks},'unavailable').length,1);
   assert.equal(calendarTaskGroup('unknown'),'pending');
+});
+
+test('a signed status lacking a verified receipt stays in the pending filter and shows a pending badge',()=>{
+  const task={observedStatus:'signed',calendarVerdict:'verifying',evidence:{authoritative:false}};
+  assert.equal(calendarReceiptVerdict(task).label,'待核验');
+  assert.deepEqual(calendarTasks({tasks:[task]},'pending'),[task]);
+  assert.equal(calendarTasks({tasks:[task]},'completed').length,0);
+  assert.equal(task.observedStatus,'signed');
 });
 
 test('calendar month navigation handles leap year and Monday offset',()=>{
