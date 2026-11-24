@@ -6,7 +6,7 @@
 
 日常先运行 node tools/doctor.mjs --config tools/release.local.json：只读检查三个运行根的版本、文件和依赖漂移、待发布文件、NAS 面板代码、调度、同步、健康、发布门槛和发布后核验，并仅展示今日结果计数。可加 --manifest 指定清单，否则从备份中寻找部署 revision 匹配的最新清单（没有匹配清单仅作提示）；--no-nas 跳过 NAS，--json 输出脱敏结构化结果。退出码 0 表示正常，1 表示需要关注，2 表示配置或体检工具不可用；门槛未通过、核验待定和源码更新只作信息提示。
 
-历史成功率用 `node tools/success-baseline.mjs --config tools/release.local.json --days 7 --until YYYY-MM-DD` 只读计算，默认截至上海昨天。已结束日期采用最后一份可验证的同日结论；日历全部任务与新账本共用逐项结论。已发送的早报保留生成时间，晚到回执只更新统计。加 `--json` 可查看对应早报的计数，加 `--sites` 可查看有记录的未完成域名。
+历史成功率用 `node tools/success-baseline.mjs --config tools/release.local.json --days 7 --until YYYY-MM-DD` 只读计算，默认截至上海昨天。已结束日期采用最后一份可验证的同日结论（新账本来源 `closing_ledger`，旧账本锚定来源 `closing_ledger_legacy`）；日历全部任务与新账本共用逐项结论（日历总计含全部行，基线“有效”仅计已完成、核验中与需处理）。已发送的早报保留生成时间，晚到回执只更新统计。加 `--json` 可查看对应早报的计数（`sentDigest`）、统计时点（`asOf`，账本取 `recordedAt`）与 `unresolved`，加 `--sites` 可查看有记录的未完成域名（旧账本未细分状态统一记为 `unconfirmed`，缺明细码记为 `legacy_unresolved_class_not_retained`）。
 
 历史统计与面板读取同一发布清单校验过的账本前缀。旧账本只有在早间逐项统计与当日完整日报一致、前后任务身份和计划一致、变化均为当日权威回执补证时，才更新历史完成数。旧记录未留存的人工处理和核验明细显示为未知，尚未确认合计仍可查。原始报告只算部分口径，合计只含分母完整的日期。退出码 0 表示覆盖完整，1 表示不完整，2 表示工具不可用。
 

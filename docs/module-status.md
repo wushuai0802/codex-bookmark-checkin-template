@@ -224,7 +224,7 @@
 | `observation/public/appearance.mjs` | 现役 | observation/public/app.js:10 (esm-static) |
 | `observation/public/article-glass.css` | 现役 | observation/public/preview-styles.js:3 (literal-script) |
 | `observation/public/business-day-history.mjs` | 现役 | observation/src/dashboard-server.mjs:30 (esm-static) |
-| `observation/public/calendar-model.mjs` | 现役 | observation/src/calendar-records.mjs:3 (esm-static) |
+| `observation/public/calendar-model.mjs` | 现役 | observation/src/dashboard-server.mjs:31 (esm-static) |
 | `observation/public/checkin-contract.generated.mjs` | 现役 | observation/public/dashboard-model.mjs:1 (esm-static) |
 | `observation/public/controls.css` | 现役 | observation/public/index.html:10 (public-asset) |
 | `observation/public/dashboard-model.mjs` | 现役 | observation/src/dashboard-server.mjs:24 (esm-static) |
@@ -232,7 +232,7 @@
 | `observation/public/glass-geometry.mjs` | 现役 | observation/public/liquid-glass.mjs:1 (esm-static) |
 | `observation/public/glass-preview.css` | 现役 | observation/public/preview-styles.js:3 (literal-script) |
 | `observation/public/harvest-overdue.mjs` | 现役 | observation/src/runtime-config.mjs:3 (esm-static) |
-| `observation/public/harvest-window.mjs` | 现役 | observation/src/dashboard-server.mjs:31 (esm-static) |
+| `observation/public/harvest-window.mjs` | 现役 | observation/src/dashboard-server.mjs:32 (esm-static) |
 | `observation/public/index.html` | 现役 | observation/src/dashboard-server.mjs:1 (dashboard-assets) |
 | `observation/public/ios26-glass.css` | 现役 | observation/public/preview-styles.js:3 (literal-script) |
 | `observation/public/ios26-v2.css` | 现役 | observation/public/preview-styles.js:3 (literal-script) |
@@ -258,7 +258,7 @@
 | `observation/scripts/Sync-NasShadow.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:11 (ps-join) |
 | `observation/scripts/Sync-OperationsSupport.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:86 (ps-call) |
 | `observation/scripts/Sync-PhaseTiming.ps1` | 现役 | observation/scripts/Sync-ShadowPublication.ps1:3 (ps-call) |
-| `observation/scripts/Sync-ShadowPublication.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:149 (ps-call) |
+| `observation/scripts/Sync-ShadowPublication.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:152 (ps-call) |
 | `observation/scripts/Sync-Transport.ps1` | 现役 | observation/scripts/Sync-OperationsSupport.ps1:3 (ps-join) |
 | `observation/scripts/adopt-v2-checkin.mjs` | 历史审计 | 旧 V2 adoption 一次性迁移；project-structure.md 的迁移保留边界，未见现行入口或人工命令。 |
 | `observation/scripts/archive-history.mjs` | 运维手动 | 人工用法见 docs/release-and-recovery.md |
@@ -272,16 +272,16 @@
 | `observation/scripts/check-liquid-glass.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `observation/scripts/check-structure.mjs` | 运维手动 | npm 人工命令 observation/package.json:check:structure |
 | `observation/scripts/check-ui-navigation.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `observation/scripts/collect-desired-plan.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:216 (ps-join) |
-| `observation/scripts/collect-monitor-catalog.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:223 (ps-join) |
+| `observation/scripts/collect-desired-plan.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:220 (ps-join) |
+| `observation/scripts/collect-monitor-catalog.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:227 (ps-join) |
 | `observation/scripts/deploy-nas-code.ps1` | 运维手动 | 人工用法见 observation/docs/nas-deployment.md |
 | `observation/scripts/enroll-fresh-v2-profiles.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/enroll-v2-site-profile.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/export-dashboard-status.mjs` | 现役 | observation/scripts/sync-v2-status.ps1:45 (ps-join) |
 | `observation/scripts/export-nas-bundle.mjs` | 运维手动 | npm 人工命令 observation/package.json:export:nas |
 | `observation/scripts/flush-v2-notifications.mjs` | 运维手动 | npm 人工命令 observation/package.json:notifications:flush |
-| `observation/scripts/harvest-fallback.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:252 (ps-join) |
-| `observation/scripts/harvest-observe.py` | 现役 | observation/scripts/Sync-NasShadow.ps1:227 (ps-join) |
+| `observation/scripts/harvest-fallback.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:256 (ps-join) |
+| `observation/scripts/harvest-observe.py` | 现役 | observation/scripts/Sync-NasShadow.ps1:231 (ps-join) |
 | `observation/scripts/import-v1-runtime.mjs` | 历史审计 | 旧 V1→V2 运行目录导入；project-structure.md 保留旧迁移供审计，无现行入口。 |
 | `observation/scripts/install-v2-canary-task.ps1` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/live-smoke.mjs` | 运维手动 | npm 人工命令 observation/package.json:smoke:live |
@@ -291,7 +291,7 @@
 | `observation/scripts/notify-canary-result.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/open-v2-login.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/prepare-canary.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/scripts/prepare-harvest-context.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:245 (ps-join) |
+| `observation/scripts/prepare-harvest-context.mjs` | 现役 | observation/scripts/Sync-NasShadow.ps1:249 (ps-join) |
 | `observation/scripts/preview-dashboard.mjs` | 运维手动 | npm 人工命令 observation/package.json:preview:ui |
 | `observation/scripts/process-dashboard-operations.mjs` | 现役 | observation/scripts/Invoke-DashboardOperations.ps1:9 (ps-join) |
 | `observation/scripts/reconcile-pt-evidence.mjs` | 现役 | observation/scripts/Invoke-PtEvidenceRepair.ps1:10 (ps-join) |
@@ -302,7 +302,7 @@
 | `observation/scripts/run-v2-canary.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/run-v2-daily.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
 | `observation/scripts/stage-account-migration.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/scripts/sync-v2-status.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:337 (ps-join) |
+| `observation/scripts/sync-v2-status.ps1` | 现役 | observation/scripts/Sync-NasShadow.ps1:341 (ps-join) |
 | `observation/scripts/verify-open-cd.mjs` | 运维手动 | 人工用法见 observation/docs/reliability-operations.md |
 | `observation/scripts/verify-pt.mjs` | 运维手动 | 人工用法见 observation/docs/reliability-operations.md |
 | `observation/scripts/verify-v2-profile.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |

@@ -24,8 +24,9 @@ const shiftDay=(date,offset)=>{
   requireValue(validDay(result));return result;
 };
 
-// Only local, ordinary files are read. No runtime imports, child processes,
-// writers, locks, notifier, login helper or network APIs are used by this tool.
+// Only local, ordinary files are read (including read-only manifest validation).
+// No runtime mutations, child processes, writers, locks, notifier, login helper
+// or network APIs are invoked by this tool.
 function ordinary(file,directory=false){
   const absolute=path.resolve(file),base=path.parse(absolute).root;
   requireValue(!absolute.startsWith('\\\\')&&!absolute.startsWith('//'));
@@ -280,11 +281,24 @@ function closingLedger(records,daily){
     const cohort=new Set(morning.tasks.map(key));
     if(closing.tasks.length!==cohort.size||closing.tasks.some(task=>!cohort.has(key(task))))return null;
     const old=new Map(morning.items.map(item=>[item.taskId,item.class]));
-    if(closing.items.some(item=>old.get(item.taskId)!==item.class&&!(old.get(item.taskId)==='verifying'&&item.class==='done')))return null;
+    const closingById=new Map(closing.tasks.map(task=>[task.taskId,task]));
+    const verifiedUpgrade=item=>{
+      const task=closingById.get(item.taskId);
+      return old.get(item.taskId)==='verifying'&&item.class==='done'&&
+        task?.evidence?.authoritative===true&&!['none','health_cache','configuration'].includes(task.evidence.source)&&
+        !/(?:account|identity)/i.test(String(task.condition??''));
+    };
+    if(closing.items.some(item=>old.get(item.taskId)!==item.class&&!verifiedUpgrade(item)))return null;
     const unresolved=closing.total-closing.counts.done;
+    const seenSites=new Set(),legacySites=[];
+    for(const site of closing.sites){
+      const mapped=site.status==='external'?site:{...site,status:'unconfirmed'};
+      const dedupeKey=mapped.domain+'|'+mapped.status;
+      if(!seenSites.has(dedupeKey)){seenSites.add(dedupeKey);legacySites.push(mapped);}
+    }
     return {...closing,source:'closing_ledger_legacy',unresolved,sitesComplete:unresolved===0,
       counts:{...closing.counts,...(unresolved?{verifying:null,actionNeeded:null}:{})},
-      sites:closing.sites.map(site=>site.status==='external'?site:{...site,status:'unconfirmed'})};
+      sites:legacySites.sort((a,b)=>a.domain.localeCompare(b.domain)||a.status.localeCompare(b.status))};
   }catch{return null;}
 }
 const blank=()=>({total:null,counts:Object.fromEntries(categories.map(key=>[key,null]))});

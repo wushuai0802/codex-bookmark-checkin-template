@@ -174,6 +174,30 @@ test('dated closing ledger retains the sent digest and accepts only bound same-d
   }
   store(morning,{...closed,planHash:'c'.repeat(64)});assert.equal(baseline().source,'daily_digest');
   store(morning,closed,{...closed,snapshotId:'conflict'});assert.equal(baseline().source,'daily_digest');
+  for(const badUpgrade of [{evidence:{source:'configuration',authoritative:true}},{evidence:{source:'health_cache',authoritative:true}},
+    {condition:'account_mismatch'}]){
+    store(morning,{...closed,ptSummaries:[{...closed.ptSummaries[0],...badUpgrade}]});
+    const rejected=baseline();assert.equal(rejected.counts.done,0);assert.equal(rejected.unresolved,1);
+    assert.equal(rejected.manualInterventions,null);
+  }
+});
+
+test('legacy closing ledger deduplicates unconfirmed domains across mixed account statuses',t=>{
+  const f=fixture(t),date='2026-11-10',dir=path.join(f.observationRoot,'outputs');
+  fs.mkdirSync(dir);
+  daily(f,date,{done:0,verifying:2,actionNeeded:1,external:0,paused:0,noFeature:0});
+  const t1={taskId:'task_'+'1'.repeat(24),origin:'https://multi.example',accountRef:'acct_a',observedStatus:'deferred',observedAt:date+'T01:00:00Z'};
+  const t2={taskId:'task_'+'2'.repeat(24),origin:'https://multi.example',accountRef:'acct_b',observedStatus:'interactive_challenge',observedAt:date+'T01:00:00Z'};
+  const t3={taskId:'task_'+'3'.repeat(24),origin:'https://other.example',accountRef:'acct_c',observedStatus:'deferred',observedAt:date+'T01:00:00Z'};
+  const morning={schemaVersion:1,mode:'shadow_read_only',businessDate:date,observationBusinessDate:date,ptBusinessDate:date,
+    recordedAt:date+'T02:00:00Z',sourceRunId:'20261110-example',snapshotId:'morning',planHash:'a'.repeat(64),
+    counts:{executionUnits:3},drift:{hashValid:true,ownerConflicts:[]},taskSummaries:[t1,t2,t3],ptSummaries:[]};
+  const closed={...morning,recordedAt:date+'T07:30:00Z',snapshotId:'closing',
+    taskSummaries:[t1,t2,{...t3,observedStatus:'signed',observedAt:date+'T07:29:00Z',evidence:{source:'page_text',authoritative:true}}]};
+  publishRows(dir,[morning,closed]);
+  const row=runSuccessBaseline({...f.options,days:1,sites:true},{now}).days[0];
+  assert.equal(row.source,'closing_ledger_legacy');assert.equal(row.counts.done,1);assert.equal(row.unresolved,2);
+  assert.deepEqual(row.sites,[{domain:'multi.example',status:'unconfirmed'}]);
 });
 
 test('archived workload verdict retains manual escalation and excludes the observation-only inventory',t=>{
