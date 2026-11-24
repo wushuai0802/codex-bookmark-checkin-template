@@ -214,7 +214,7 @@ $automaticRetryProblems = @($localProblems | Where-Object {
         -and $_.retryable -ne $false `
         -and $_.submissionAttempted -ne $true
 })
-$attentionProblems = @($localProblems | Where-Object { $_.status -notin $automaticRetryStatuses -or $_.retryable -eq $false })
+$attentionProblems = @($localProblems | Where-Object { ([string]$_.failureCode -cne 'daily_open_limit') -and ($_.status -notin $automaticRetryStatuses -or $_.retryable -eq $false) })
 
 if ($RunnerStatus -eq 'timeout') { $status = 'timeout' }
 elseif ($isPartialReport) { $status = 'unconfirmed' }
@@ -244,10 +244,12 @@ $summary = if ($reportingResults.Count -gt 0 -or ($null -ne $report -and $planne
     if ($waitingProblems.Count -gt 0) { $counts += "等待 Harvest $($waitingProblems.Count)" }
     if ($synchronizationProblems.Count -gt 0) { $counts += "等待状态同步 $($synchronizationProblems.Count)" }
     if ($verificationProblems.Count -gt 0) { $counts += "待复核 $($verificationProblems.Count)" }
+    $dailyOpenLimited = @($localProblems | Where-Object { [string]$_.failureCode -ceq 'daily_open_limit' }).Count
     $loginCount = @($localProblems | Where-Object { $_.status -eq 'login_required' -or $_.retryCause -eq 'login_required' }).Count
     if ($loginCount -gt 0) { $counts += "登录恢复 $loginCount" }
-    $otherLocalCount = $localProblems.Count - $loginCount
+    $otherLocalCount = [Math]::Max(0, $localProblems.Count - $loginCount - $dailyOpenLimited)
     if ($otherLocalCount -gt 0) { $counts += "待处理 $otherLocalCount" }
+    if ($dailyOpenLimited -gt 0) { $counts += "已达日上限 $dailyOpenLimited" }
     if ($externalProblems.Count -gt 0) { $counts += "上游异常 $($externalProblems.Count)" }
     if ($notAvailable -gt 0) { $counts += "未开放 $notAvailable" }
     if ($temporarilyUnavailable -gt 0) { $counts += "暂不可用 $temporarilyUnavailable（今日暂停）" }
@@ -264,6 +266,8 @@ if ($attentionProblems.Count -gt 0) {
         $hostName = Get-ResultDisplayName $problem
         $reason = if ([string]$problem.failureCode -eq 'two_factor_required') {
             '需完成一次二次验证以建立可信设备会话'
+        } elseif ([string]$problem.failureCode -eq 'notice_acknowledgement_required') {
+            '站点要求先阅读并确认公告，请在自己的浏览器里处理'
         } else { switch ([string]$problem.status) {
             'login_required' { '登录失效' }
             'interactive_challenge' { '需要验证' }

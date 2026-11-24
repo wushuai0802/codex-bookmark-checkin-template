@@ -1,4 +1,5 @@
 import {bounded,TIMED_OUT} from './bounded-wait.mjs';
+import {ptFailureMessages} from './checkin-contract.generated.mjs';
 // Reviewed PigGo SPA contract. No storage, cookie or token access belongs here.
 export const piggoOrigin='https://piggo.me';
 export const piggoCalendarUrl=piggoOrigin+'/calendar';
@@ -148,25 +149,129 @@ export async function readPiggoAccountIdInContext(context,{clock=()=>new Date()}
   finally{await bounded(page?.close(),5000).catch(()=>{});await bounded(cdp?.detach(),5000).catch(()=>{});}
 }
 
+const SAFE_ALPHA_PATH_RE=/^\/(?:[a-z][a-z0-9_-]{0,30}(?:\/[a-z][a-z0-9_-]{0,30}){0,7})?$/;
+export const piggoPageClasses=Object.freeze([
+  'calendar','root','locked','login','offline','denied','rules','other_same_origin','off_origin',
+]);
+
+export function piggoPageClass(value){
+  if(!value)return undefined;
+  let url;
+  try{url=new URL(String(value));}catch{return undefined;}
+  if(url.origin!==piggoOrigin)return 'off_origin';
+  const pathname=url.pathname;
+  if(pathname==='/calendar')return 'calendar';
+  if(pathname==='/')return 'root';
+  if(pathname==='/locked')return 'locked';
+  if(pathname==='/login')return 'login';
+  if(pathname==='/offline')return 'offline';
+  if(pathname==='/denied')return 'denied';
+  if(pathname==='/rules'||pathname.startsWith('/rules/')||pathname==='/wiki/rules-general'||pathname.startsWith('/wiki/rules'))return 'rules';
+  return 'other_same_origin';
+}
+
+export function safePiggoPath(value){
+  if(!value)return undefined;
+  let url;
+  try{url=new URL(String(value));}catch{return undefined;}
+  if(url.origin!==piggoOrigin||url.protocol!=='https:')return undefined;
+  return SAFE_ALPHA_PATH_RE.test(url.pathname)?url.pathname:undefined;
+}
+
+function hasNoticeGate(value){
+  if(!object(value))return false;
+  const data=piggoApiData(value);
+  const raw=data?.notice_gate??data?.user?.notice_gate??value?.notice_gate??value?.data?.notice_gate;
+  if(raw===undefined||raw===null||raw===false||raw===0||raw==='')return false;
+  return true;
+}
+
 /** Capture only requests made by the real page; never reconstruct its auth client. */
 export async function readPiggoCalendarInContext(context,state,clock,diagnostic={},keepPage=false){
   let page,retained=false;const started=clock(),today=piggoDay(started);
   const identity=state.identity;
-  const fail=code=>({result:{...identity,status:['login_required','idle_locked'].includes(code)?'login_required':'unconfirmed',
-    failureCode:code??'authoritative_status_unavailable',nativeGate:true,submissionAttempted:false,
-    reason:'猪猪日历尚未取得当日同账号权威回执',nativeReadback:{stage:'readback',code:'authoritative_evidence_rejected',
-      apiStage:diagnostic.apiStage,httpStatus:diagnostic.httpStatus}},accountId:null});
+  const recordUrl=()=>{
+    const currentUrl=page?.url?.();
+    const pageClass=piggoPageClass(currentUrl);
+    if(pageClass)diagnostic.pageClass=pageClass;
+    const pagePath=safePiggoPath(currentUrl);
+    if(pagePath)diagnostic.pagePath=pagePath;
+  };
+  const fail=code=>{
+    recordUrl();
+    const failureCode=code??'authoritative_status_unavailable';
+    const status=failureCode==='notice_acknowledgement_required'
+      ?'needs_attention'
+      :['login_required','idle_locked'].includes(failureCode)?'login_required':'unconfirmed';
+    return {
+      result:{
+        ...identity,
+        status,
+        failureCode,
+        nativeGate:true,
+        submissionAttempted:false,
+        reason:failureCode==='notice_acknowledgement_required'
+          ?ptFailureMessages.notice_acknowledgement_required
+          :'猪猪日历尚未取得当日同账号权威回执',
+        nativeReadback:{
+          stage:'readback',
+          code:'authoritative_evidence_rejected',
+          apiStage:diagnostic.apiStage,
+          httpStatus:diagnostic.httpStatus,
+          ...(diagnostic.pageClass?{pageClass:diagnostic.pageClass}:{}),
+          ...(diagnostic.pagePath?{pagePath:diagnostic.pagePath}:{}),
+          ...(Number.isInteger(diagnostic.meHttpStatus)?{meHttpStatus:diagnostic.meHttpStatus}:{}),
+          ...(Number.isInteger(diagnostic.calendarHttpStatus)?{calendarHttpStatus:diagnostic.calendarHttpStatus}:{}),
+          ...(typeof diagnostic.noticeGate==='boolean'?{noticeGate:diagnostic.noticeGate}:{}),
+        },
+      },
+      accountId:null,
+    };
+  };
   try{
     diagnostic.apiStage='request';
     page=await context.newPage();
     const meWait=page.waitForResponse(response=>response.url()===piggoOrigin+'/v1/web/me'&&response.request().method()==='GET',
       {timeout:15000}).catch(()=>null);
+    let calendarSettled=false;
     const calendarWait=page.waitForResponse(response=>piggoCalendarResponseUrl(response.url(),today)&&response.request().method()==='GET',
-      {timeout:15000}).catch(()=>null);
+      {timeout:15000}).catch(()=>null).then(res=>{calendarSettled=true;return res;});
     await page.goto(piggoCalendarUrl,{waitUntil:'domcontentloaded',timeout:15000});
+    recordUrl();
     if(sameOriginUrl(page.url())?.pathname==='/locked'){diagnostic.apiStage='idle_lock';return fail('idle_locked');}
     if(sameOriginUrl(page.url())?.pathname==='/login'){diagnostic.apiStage='authentication';return fail('login_required');}
-    const [me,calendar]=await Promise.all([meWait,calendarWait]);
+    const me=await meWait;
+    let mePayload=null;
+    if(me){
+      const status=me.status();
+      if(Number.isInteger(status)&&status>=100&&status<=599)diagnostic.meHttpStatus=status;
+      if(status===200){
+        try{
+          mePayload=await responseData(me);
+          diagnostic.noticeGate=hasNoticeGate(mePayload);
+        }catch{
+          diagnostic.noticeGate=false;
+        }
+      }else{
+        diagnostic.noticeGate=false;
+      }
+    }
+    if(me&&!calendarSettled&&(diagnostic.noticeGate===true||['rules','offline','denied','locked','login'].includes(piggoPageClass(page.url())))){
+      await Promise.race([
+        calendarWait,
+        page.waitForURL(url=>['rules','offline','denied','locked','login'].includes(piggoPageClass(url.href)),{timeout:1500}).catch(()=>null),
+        new Promise(resolve=>setTimeout(resolve,1500)),
+      ]);
+      recordUrl();
+    }
+    const calendar=calendarSettled||(!diagnostic.noticeGate&&!['rules','offline','denied'].includes(piggoPageClass(page.url())))
+      ?await calendarWait
+      :null;
+    if(calendar){
+      const status=calendar.status();
+      if(Number.isInteger(status)&&status>=100&&status<=599)diagnostic.calendarHttpStatus=status;
+    }
+    recordUrl();
     if(sameOriginUrl(page.url())?.pathname==='/locked'||await idleLocked(me)||await idleLocked(calendar)){
       diagnostic.apiStage='idle_lock';diagnostic.httpStatus=me?.status()===423||calendar?.status()===423?423:undefined;
       return fail('idle_locked');
@@ -175,12 +280,17 @@ export async function readPiggoCalendarInContext(context,state,clock,diagnostic=
     if(me?.status()===401||calendar?.status()===401||sameOriginUrl(page.url())?.pathname==='/login'){
       diagnostic.httpStatus=401;return fail('login_required');
     }
+    if(diagnostic.noticeGate===true&&diagnostic.pageClass==='rules'){
+      diagnostic.apiStage='http_status';
+      diagnostic.httpStatus=calendar?.status()??me?.status();
+      return fail('notice_acknowledgement_required');
+    }
     diagnostic.apiStage='http_status';diagnostic.httpStatus=calendar?.status()??me?.status();
     if(!me||!calendar||me.status()!==200||calendar.status()!==200||page.url()!==piggoCalendarUrl)return fail();
     const now=clock();diagnostic.apiStage='response_freshness';
     if(!piggoResponseFresh(me,now)||!piggoResponseFresh(calendar,now))return fail();
     diagnostic.apiStage='response_structure';
-    const account=piggoApiData(await responseData(me))?.user;
+    const account=piggoApiData(mePayload??await responseData(me))?.user;
     const accountId=Number.isSafeInteger(account?.id)&&account.id>0?String(account.id):null;
     diagnostic.apiStage='identity';
     if(!accountId||accountId!==state.expectedAccountId)return fail('account_mismatch');

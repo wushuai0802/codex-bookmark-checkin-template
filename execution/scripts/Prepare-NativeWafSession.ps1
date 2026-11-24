@@ -348,6 +348,9 @@ function Get-PiggoLoginRequiredResult([string]$Origin, $Read = $null) {
             $read = ($text | Select-Object -Last 1) | ConvertFrom-Json
         } catch { return $null }
     }
+    if ($null -ne $read -and [string]$read.failureCode -cin @('daily_open_limit', 'notice_acknowledgement_required') -and $read.submissionAttempted -eq $false) {
+        return $read
+    }
     if ([string]$read.status -cne 'login_required' -or $read.submissionAttempted -ne $false) { return $null }
     $result = [pscustomobject]@{origin=$Origin;url=($Origin + '/calendar');status='login_required';inspectionStatus='login_required';
         retryCause='login_required';nativeGate=$true;submissionAttempted=$false;reason='猪猪只读确认登录已失效，先恢复登录，签到仍由原生守卫决定'}
@@ -356,6 +359,49 @@ function Get-PiggoLoginRequiredResult([string]$Origin, $Read = $null) {
         $result | Add-Member -NotePropertyName nativeReadback -NotePropertyValue ([pscustomobject]@{apiStage='idle_lock'})
     }
     return $result
+}
+
+function Test-PiggoPasswordRecoveryReady([string]$Origin) {
+    if ($Origin -cne 'https://piggo.me' -or $null -eq $config.nativePtTwoFactorRecovery) { return $false }
+    $opt = $config.nativePtTwoFactorRecovery.PSObject.Properties[$Origin]
+    if ($null -eq $opt -or $opt.Value.enabled -ne $true -or $opt.Value.reviewed -ne $true -or
+        $opt.Value.provider -cne 'bitwarden' -or $opt.Value.allowPasswordLogin -ne $true -or
+        $opt.Value.loginSource -cne 'bitwarden' -or $opt.Value.spaPasswordFormReviewed -ne $true) {
+        return $false
+    }
+    $statePath = Join-Path $root 'data\bitwarden\recovery-state.json'
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        try {
+            $journal = Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json
+            $today = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([datetimeoffset]::UtcNow, 'China Standard Time').ToString('yyyy-MM-dd')
+            if (@($journal.attempts | Where-Object { $_.origin -ceq $Origin -and $_.businessDate -ceq $today -and $_.phase -ceq 'password_login' }).Count -gt 0) {
+                return $false
+            }
+        } catch {}
+    }
+    return $true
+}
+
+function Request-DailyOpenSlot([string]$Origin, [string]$Source) {
+    if ($null -eq $config.ptReadOnlyPolicies) { return [pscustomobject]@{ allowed = $true; openId = $null } }
+    $prop = $config.ptReadOnlyPolicies.PSObject.Properties[$Origin]
+    if ($null -eq $prop -or $null -eq $prop.Value.dailyOpenLimit) {
+        return [pscustomobject]@{ allowed = $true; openId = $null }
+    }
+    $raw = @(& $node (Join-Path $root 'src\pt-daily-open-limit.mjs') '--acquire' '--origin' $Origin '--source' $Source 2>$null)
+    $parsed = $null
+    try { $parsed = ($raw | Select-Object -Last 1) | ConvertFrom-Json -ErrorAction Stop } catch {}
+    if ($LASTEXITCODE -ne 0 -or $null -eq $parsed -or $parsed.allowed -ne $true) {
+        if ($null -ne $parsed -and $null -ne $parsed.decision) { return $parsed }
+        return [pscustomobject]@{
+            allowed = $false
+            decision = [pscustomobject]@{
+                origin = $Origin; status = 'deferred'; failureCode = 'daily_open_limit';
+                submissionAttempted = $false; nativeGate = $true; retryable = $false; retryExhaustedForDay = $true
+            }
+        }
+    }
+    return $parsed
 }
 
 function Convert-NativeChildReceipt([object[]]$Output) {
@@ -780,10 +826,13 @@ foreach ($item in $items) {
     $gateProfile = if ($item.nativeMainDirect) { Split-Path -Parent ([string]$config.bookmarksPath) } else { $profilePath }
     $decision = Initialize-NativePtGuard -Root $root -Origin $origin -Url $gateUrl -ProfilePath $gateProfile -MainProfile:([bool]$item.nativeMainDirect)
     if ($null -ne $decision) {
-        $loginRequired = Get-PiggoLoginRequiredResult $origin
-        if ($null -ne $loginRequired) {
-            $preflightResults += $loginRequired
-            continue
+        if ([string]$decision.status -cnotin @('signed','already_signed') -and
+            [string]$decision.failureCode -cnotin @('daily_open_limit','notice_acknowledgement_required')) {
+            $loginRequired = Get-PiggoLoginRequiredResult $origin
+            if ($null -ne $loginRequired) {
+                $preflightResults += $loginRequired
+                continue
+            }
         }
         $decision | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
         $preflightResults += $decision
@@ -795,6 +844,17 @@ foreach ($item in $items) {
             $apiProperty.Value.piggoCalendar -ne $true -or $apiProperty.Value.nativeApiExecution -ne $true)) {
         $preflightResults += [pscustomobject]@{origin=$origin;status='unconfirmed';failureCode='authoritative_status_unavailable';
             nativeGate=$true;submissionAttempted=$false;reason='猪猪日历正式执行尚未显式启用，已停止旧站流程'}
+        continue
+    }
+    if ($origin -ceq 'https://piggo.me' -and
+        $null -ne $apiProperty -and $null -ne $apiProperty.Value.dailyOpenLimit -and (Test-PiggoPasswordRecoveryReady $origin)) {
+        # Preserve the single daily open slot so the recovery browser session can
+        # read /calendar, unlock or log in if 423/401, and run passive/submit check-in in one launch.
+        $preflightResults += [pscustomobject]@{
+            origin=$origin;url=($origin + '/calendar');status='login_required';inspectionStatus='login_required';
+            retryCause='login_required';nativeGate=$true;submissionAttempted=$false;deferredToLoginRecovery=$true;
+            reason='已配置每日打开上限且启用同会话解锁/登录，交由单次浏览器会话统一完成读取与恢复'
+        }
         continue
     }
     if ($null -ne $apiProperty -and $apiProperty.Value.nativeApiExecution -eq $true) {
@@ -822,7 +882,12 @@ foreach ($item in $items) {
         $checkinInspection = $null
         $checkinText = $null; $checkinExitCode = $null; $checkinTransportStage = 'transport'
         $recoveryInfo=$null;$nativeSubmittedInThisItem=$false
+        $openBlocked = $null
         for ($nativeAttempt=0; $nativeAttempt -lt 2; $nativeAttempt++) {
+        if (Get-Command Request-DailyOpenSlot -ErrorAction SilentlyContinue) {
+            $slot = Request-DailyOpenSlot -Origin $origin -Source 'prepare_native_checkin'
+            if ($slot.allowed -ne $true) { $openBlocked = $slot.decision; break }
+        }
         $checkinText=$null;$checkinExitCode=$null;$checkinTransportStage='transport'
         try {
             $powershellExecutable = (Get-Process -Id $PID).Path
@@ -854,6 +919,12 @@ foreach ($item in $items) {
         if ($recoveryInfo) { $checkinInspection|Add-Member -NotePropertyName nativeTwoFactorRecovery -NotePropertyValue $recoveryInfo -Force }
         if ($nativeSubmittedInThisItem) { $checkinInspection|Add-Member -NotePropertyName submissionAttempted -NotePropertyValue $true -Force }
         break
+        }
+        if ($null -ne $openBlocked) {
+            $openBlocked | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
+            $openBlocked | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+            $preflightResults += $openBlocked
+            continue
         }
         Write-NativeSecurityDiagnostic $origin $checkinInspection
         $checkinInspection = Invoke-NativePostActionReadback -Child $checkinInspection -Origin $origin -Url $url -ProfilePath $profilePath -TimeoutSeconds ([int]$item.waitSeconds)
@@ -931,6 +1002,14 @@ foreach ($item in $items) {
             # before the automation browser is allowed to inspect the site.
             $powershellExecutable = (Get-Process -Id $PID).Path
             for ($plainAttempt = 1; $plainAttempt -le 2 -and -not $passivePrepared; $plainAttempt++) {
+                if (Get-Command Request-DailyOpenSlot -ErrorAction SilentlyContinue) {
+                    $slot = Request-DailyOpenSlot -Origin $origin -Source 'prepare_native_passive'
+                    if ($slot.allowed -ne $true) {
+                        $passiveInspection = $slot.decision
+                        $passiveInspection | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+                        break
+                    }
+                }
                 $plainArguments = @(
                     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                     (Join-Path $PSScriptRoot 'Invoke-PlainWafAccessibility.ps1'),
@@ -1089,7 +1168,12 @@ foreach ($item in $items) {
     $inspection = $null
     $inspectionMode = if ([string]$item.action -eq 'checkin') { 'native-checkin' } elseif ([bool]$item.trustAsSigned) { 'allow-endpoint' } else { 'require-confirmed' }
     $maximumInspectionAttempts = if ([string]$item.action -eq 'checkin') { 1 } else { 2 }
+    $openBlocked = $null
     for ($inspectionAttempt = 1; $inspectionAttempt -le $maximumInspectionAttempts -and $null -eq $inspection; $inspectionAttempt++) {
+        if (Get-Command Request-DailyOpenSlot -ErrorAction SilentlyContinue) {
+            $slot = Request-DailyOpenSlot -Origin $origin -Source 'prepare_native_inspect'
+            if ($slot.allowed -ne $true) { $openBlocked = $slot.decision; break }
+        }
         [void](Reset-NativeChromeDebugPort $profilePath)
         $debugPort = Get-NativeChromeDebugPort
         $openParameters = @{
@@ -1131,6 +1215,12 @@ foreach ($item in $items) {
             break
         }
         if ($null -eq $inspection -and $inspectionAttempt -lt $maximumInspectionAttempts) { Start-Sleep -Seconds 1 }
+    }
+    if ($null -ne $openBlocked) {
+        $openBlocked | Add-Member -NotePropertyName origin -NotePropertyValue $origin -Force
+        $openBlocked | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+        $preflightResults += $openBlocked
+        continue
     }
     $explicitlyConfirmed = $null -ne $inspection -and (
         [string]$inspection.status -in @('signed', 'already_signed') -or

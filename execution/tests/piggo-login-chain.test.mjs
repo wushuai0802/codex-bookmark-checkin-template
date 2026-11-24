@@ -69,7 +69,7 @@ test('an unavailable real passive probe reports its codes and never prepares cre
     const outcome=loginHelperOutcome(out.stdout);
     assert.equal(outcome.recoveryReason,'passive_proof_unavailable');assert.equal(outcome.passiveStatus,'unconfirmed');
     assert.equal(outcome.passiveFailure,'authoritative_status_unavailable');assert.equal(outcome.passiveStage,'http_status');
-    assert.equal(outcome.failureCode,'two_factor_required');assert.equal(outcome.retryable,false);
+    assert.equal(outcome.failureCode,'passive_proof_unavailable');assert.equal(outcome.retryable,false);
     assert.deepEqual(f.calls(),[]);assert.equal(f.requests.filter(row=>row.method!=='GET').length,0);
     assert.equal(fs.existsSync(path.join(f.root,'data/bitwarden/recovery-state.json')),false);
   });

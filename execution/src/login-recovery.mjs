@@ -1,11 +1,13 @@
 import { safeErrorMessage } from "./security.mjs";
 import { isCredentialLoginRoute } from "./url-routes.mjs";
+import { ptFailureMessages } from "./checkin-contract.generated.mjs";
 import {readOAuthProgress,oauthStageLabels} from './oauth-flow-diagnostics.mjs';
-import {piggoOrigin,piggoCalendarUrl,piggoCalendarEvidence,piggoDay} from './piggo-calendar.mjs';
+import {piggoOrigin,piggoCalendarUrl,piggoCalendarEvidence,piggoDay,piggoPageClasses} from './piggo-calendar.mjs';
 
 const LOGIN_HELPER_STATUSES = new Set([
   "logged_in",
   "needs_attention",
+  "deferred",
   "no_saved_credential",
   "credential_missing",
   "invalid_credential",
@@ -30,6 +32,19 @@ const LOGIN_FAILURE_CODES = new Set([
   "oauth_upstream_unavailable",
   "oauth_callback_rejected",
   "two_factor_required",
+  "notice_acknowledgement_required",
+  "daily_open_limit",
+  "daily_recovery_limit",
+  "passive_proof_unavailable",
+  "captcha_requires_manual",
+  "authentication_rejected",
+  "authentication_unknown",
+  "provider_unavailable",
+  "login_not_allowed",
+  "login_form_unreviewed",
+  "login_form_changed",
+  "readonly",
+  "recovery_unavailable",
 ]);
 
 const RETRYABLE_LOGIN_FAILURE_CODES = new Set([
@@ -179,6 +194,19 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
     oauth_upstream_unavailable: "OAuth 上游回调服务暂时不可用",
     oauth_callback_rejected: "站点拒绝 OAuth 回调，未取得有效登录会话",
     two_factor_required: "站点要求完成异地登录 2FA 验证",
+    notice_acknowledgement_required: ptFailureMessages.notice_acknowledgement_required,
+    daily_open_limit: ptFailureMessages.daily_open_limit,
+    daily_recovery_limit: "今日自动登录或解锁次数已用尽，请改日或人工核对",
+    passive_proof_unavailable: "只读日历核验未取得可用状态，已保留固定诊断码供核对",
+    captcha_requires_manual: "站点出现人工验证码，已停止自动登录等待人工处理",
+    authentication_rejected: "站点拒绝了本次登录或解锁提交，未重试",
+    authentication_unknown: "登录或解锁提交结果未确认，已保留证据且禁止重放",
+    provider_unavailable: "未取得可用受保护凭据，无法执行自动登录或解锁",
+    login_not_allowed: "当前站点未开启自动密码登录或缺少审阅授权",
+    login_form_unreviewed: "登录或解锁表单未通过审阅检查，已停止自动填充",
+    login_form_changed: "提交前登录表单或绑定状态已变化，已安全中止",
+    readonly: "只读模式禁止打开或提交登录流程",
+    recovery_unavailable: "登录或解锁恢复前提不满足，未继续执行",
   };
   const dailyCheckin = status === "logged_in" ? (value?.origin===piggoOrigin?
     safePiggoDailyCheckin(value?.dailyCheckin):safeTerminalDailyCheckin(value?.dailyCheckin)) : null;
@@ -198,10 +226,11 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   const recoveryMode=['idle_unlock','password_login'].includes(recovery?.recoveryMode)?recovery.recoveryMode:null;
   const recoveryCodes=Object.fromEntries(['passiveStatus','passiveFailure','passiveStage','submitStage','postLoginForm',
     'afterStatus','afterFailure','afterStage'].map(key=>[key,recoveryCode(recovery?.[key])]).filter(([,code])=>code));
+  if(piggoPageClasses.includes(recovery?.pageClass))recoveryCodes.pageClass=recovery.pageClass;
   if(recovery?.loginEnvelope==='unavailable')recoveryCodes.loginEnvelope='unavailable';
   // Bounded integers and same-origin API paths say where a submitted login stopped.
-  const recoveryNumbers=Object.fromEntries([['loginHttpStatus',100,599],['loginApiCode',-999_999_999,999_999_999],
-    ['loginPosts',0,9],['challengePosts',0,9]].filter(([key,min,max])=>Number.isSafeInteger(recovery?.[key])&&
+  const recoveryNumbers=Object.fromEntries([['loginHttpStatus',100,599],['meHttpStatus',100,599],['calendarHttpStatus',100,599],
+    ['loginApiCode',-999_999_999,999_999_999],['loginPosts',0,9],['challengePosts',0,9]].filter(([key,min,max])=>Number.isSafeInteger(recovery?.[key])&&
     recovery[key]>=min&&recovery[key]<=max).map(([key])=>[key,recovery[key]]));
   // Every segment starts with a letter, so numeric account IDs never pass.
   const recoveryPath=item=>typeof item==='string'&&/^\/(?:[a-z][a-z0-9_-]{0,30}(?:\/[a-z][a-z0-9_-]{0,30}){0,7})?$/.test(item);
@@ -213,8 +242,12 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
     ...(recoveryMode?{recoveryMode}:{}),
     ...recoveryCodes,
     ...recoveryNumbers,
+    ...(typeof recovery?.noticeGate==='boolean'?{noticeGate:recovery.noticeGate}:{}),
+    ...(recoveryPath(recovery?.pagePath)?{pagePath:recovery.pagePath}:{}),
     ...(recoveryPath(recovery?.loginPagePath)?{loginPagePath:recovery.loginPagePath}:{}),
     ...(blockedPosts?{blockedPosts}:{}),
+    ...(failureCode==='daily_open_limit'&&typeof value?.nextEligibleAt==='string'?{nextEligibleAt:value.nextEligibleAt}:{}),
+    ...(failureCode==='daily_open_limit'&&value?.retryExhaustedForDay===true?{retryExhaustedForDay:true}:{}),
     succeeded: status === "logged_in",
     status,
     diagnostic: (failureMessages[failureCode] ?? messages[status] ?? messages.failed)+

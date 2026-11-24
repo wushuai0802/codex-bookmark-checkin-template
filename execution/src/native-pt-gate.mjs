@@ -11,6 +11,7 @@ import {verifiedPtObservation,boundPtObservation} from './pt-observation-receipt
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {ptReadPolicies,nativePtHeaderOrigins} from './checkin-contract.generated.mjs';
 import {piggoOrigin,piggoCalendarUrl,piggoLockedUrl,piggoAttendanceUrl,piggoCalendarEvidence,acceptedPiggoCalendarReceipt} from './piggo-calendar.mjs';
+import {checkDailyOpenGate} from './pt-daily-open-limit.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const success=value=>['signed','already_signed'].includes(value?.status);
@@ -145,7 +146,7 @@ function writeJournal(file,value){
 // The short gate lock serializes intent updates. Production writes additionally
 // require the controller's live lease, inherited by the native subprocess.
 export async function runNativePtGate({root,origin,url,profile,mainProfile=false,phase='inspect',attemptId,action,status,evidence,receipt:readback,
-  recoveryMode,
+  recoveryMode,openId=process.env.CHECKIN_PT_OPEN_ID,
   now,clock=now?()=>new Date(now):()=>new Date(),readPlan=readBookmarkPlanWithBackup,harvest=checkHarvestPtBeforeWrite,
   verify=verifiedPtObservation,verifyHistorical=boundPtObservation}={}){
   now=clock();
@@ -324,6 +325,10 @@ export async function runNativePtGate({root,origin,url,profile,mainProfile=false
     if(owned&&owned.state==='confirmed')decision=unknown();
     if(owned&&(dayAt(owned.startedAt)!==dayAt(now)||now.getTime()-Date.parse(owned.startedAt)>10*60_000))decision=unknown();
     if(!decision)decision=harvest(target,{root,now});
+    if(!decision&&!owned){
+      const openGate=checkDailyOpenGate({root,origin:target.origin,config,openId,clock});
+      if(openGate.allowed!==true)decision=openGate.decision;
+    }
     if(dayAt(clock())!==dayAt(now))decision=owned?unknown():deferred(clock(),'业务日期已切换，先刷新当日原生核验');
     if(decision)return {managed:true,allow:false,...identity,decision:{...decision,nativeGate:true,...identity},
       ...(inactiveHistoricalIntentCount?{inactiveHistoricalIntentCount}: {})};

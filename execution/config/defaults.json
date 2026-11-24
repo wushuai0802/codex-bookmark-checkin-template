@@ -30,6 +30,7 @@
   "dynamicOriginRoutes": {},
   "anyRouterUserId": "",
   "nativeChallengePreflight": [],
+  "ptReadOnlyPolicies": {},
   "oauthRedirectOverrides": {},
   "oauthRecoveryTargetOrigins": {},
   "oauthLoginUrls": {},

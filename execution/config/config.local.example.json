@@ -83,5 +83,8 @@
   ],
   "nativeChallengePreflight": [
     { "url": "https://example.com/account/check-in", "waitSeconds": 90, "action": "checkin", "reloadOnChallengeAfterSeconds": 65 }
-  ]
+  ],
+  "ptReadOnlyPolicies": {
+    "https://example.com": { "dailyOpenLimit": 1 }
+  }
 }

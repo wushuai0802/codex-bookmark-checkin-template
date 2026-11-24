@@ -129,7 +129,7 @@ test('an unavailable passive proof retains only code diagnostics and never reach
       assert.equal(result.nativeTwoFactorRecovery.passiveFailure,before.failureCode);
       assert.equal(result.nativeTwoFactorRecovery.passiveStage,before.nativeReadback.apiStage);
     }
-    assert.equal(result.failureCode,'two_factor_required');
+    assert.equal(result.failureCode,'passive_proof_unavailable');
     assert.equal(f.reads,0);assert.equal(f.prepares,0);assert.equal(f.posts,0);assert.equal(fs.existsSync(f.file),false);
     assert.doesNotMatch(JSON.stringify(result),/PRIVATE|private\.example/);
   }

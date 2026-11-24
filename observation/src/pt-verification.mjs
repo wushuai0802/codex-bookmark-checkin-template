@@ -46,6 +46,7 @@ export function recordPtVerification(root,value,{now=new Date(),lockHeld=false,a
     if(previous&&Date.parse(previous.observedAt)>Date.parse(result.observedAt))return {recorded:false,result};
     if(previous?.evidence?.authoritative===true&&['signed','already_signed'].includes(previous.status)&&
        !['signed','already_signed'].includes(result.status))return {recorded:false,result};
+    if(previous?.failureCode==='notice_acknowledgement_required'&&result.failureCode==='daily_open_limit')return {recorded:false,result};
     report.generatedAt=now.toISOString();report.sites=report.sites.filter(s=>s.origin!==result.origin).concat(result);
     const temporary=file+'.'+process.pid+'.tmp';
     try{fs.writeFileSync(temporary,JSON.stringify(report,null,2),{mode:0o600});fs.renameSync(temporary,file);}

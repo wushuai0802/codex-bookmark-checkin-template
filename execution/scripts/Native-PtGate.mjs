@@ -5,7 +5,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 try{
   const args=process.argv.slice(2),options={root};
   for(let i=0;i<args.length;i+=2){
-    const name={'--origin':'origin','--url':'url','--profile':'profile','--phase':'phase','--attempt':'attemptId','--action':'action','--status':'status','--evidence64':'evidence','--receipt64':'receipt','--main-profile':'mainProfile'}[args[i]];
+    const name={'--origin':'origin','--url':'url','--profile':'profile','--phase':'phase','--attempt':'attemptId','--action':'action','--status':'status','--evidence64':'evidence','--receipt64':'receipt','--main-profile':'mainProfile','--open-id':'openId'}[args[i]];
     if(!name||args[i+1]===undefined||Object.hasOwn(options,name))throw Error('invalid native gate argument');
     options[name]=['evidence','receipt'].includes(name)?JSON.parse(Buffer.from(args[i+1],'base64').toString('utf8')):name==='mainProfile'?args[i+1]==='true':args[i+1];
   }

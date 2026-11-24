@@ -93,6 +93,33 @@ The mature submit guard therefore sees current evidence without relaxing its 30-
 HDDolby freshness rule. Native diagnostics carry only reviewed stages, error codes,
 HTTP status and booleans, never page bodies, query strings or credentials.
 
+## Daily per-site open limit and PigGo notice gate
+
+Optional `ptReadOnlyPolicies[origin].dailyOpenLimit` (integer `1..100`, unlimited
+by default) persists each automated open slot in `data/native-pt-opens.json`
+under `tmp/native-pt-opens.lock` for the current Asia/Shanghai business day
+before any browser/tab opens, so even an interrupted helper still consumes its
+open slot. When `dailyOpenLimit` is set for PigGo with approved password/unlock
+recovery, `Prepare-NativeWafSession.ps1` hands off to `Recover-NativeLogin.ps1`
+so reading `/calendar`, unlocking `423 idle_locked` (or logging in on `401`),
+and checking in occur within one browser session using a single open slot.
+Manual diagnostics (`scripts/Diagnose-Piggo.mjs`) remain excluded.
+
+Exhausted sites stop further same-day automated opens (`daily_open_limit`,
+`submissionAttempted=false`, next-day retry schedule) without erasing any
+same-day authoritative verdict or triggering `needs_attention` manual-recovery
+digests. Observation (`pt-evidence-repair.mjs`, `harvest-fallback.mjs`, and
+`tools/release-probe.ps1`) excludes exhausted sites from queued reads and pending
+budget blockers while continuing to block on active fallbacks and wakeups.
+
+PigGo `/calendar` read failures emit only fixed diagnostic codes (`pageClass`,
+`meHttpStatus`, `calendarHttpStatus`, boolean `noticeGate`, and safe alphabetic
+`pagePath`). When `noticeGate` is true on `/rules`, execution returns
+`needs_attention / notice_acknowledgement_required` with no automatic click,
+no same-day retry, no firewall relaxation, and at most one digest alert per
+business day. Non-2FA login-recovery outcomes keep their true fixed failure
+code rather than `two_factor_required`.
+
 Automatic daily budgets remain unchanged. An explicitly requested, single-site manual
 retry carries its own durable request ID, performs another passive check and may use
 the same guarded recovery path after the automatic budget is exhausted. One request

@@ -13,6 +13,7 @@ import {readHhclubProfileState} from './hhclub-two-factor-login.mjs';
 import {validatePtLoginResume} from './pt-login-resume-guard.mjs';
 import {projectPtNativeDiagnostic} from './pt-native-diagnostic.mjs';
 import {projectU2Diagnostics} from './u2-vision.mjs';
+import {acquireDailyOpen} from './pt-daily-open-limit.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const terminal=new Set(['signed','already_signed']);
@@ -155,6 +156,11 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     loginRecoveryUsed=true;
     return recoverLogin({root:legacyRoot,origin:target.origin,config,profile});
   };
+  const acquireOpen=async(source,openId)=>{
+    const opened=await acquireDailyOpen({root:legacyRoot,origin:target.origin,config,source,openId,clock});
+    if(opened.allowed!==true)return {blocked:opened.decision,openId:undefined};
+    return {blocked:null,openId:opened.openId??openId};
+  };
   const recoverAndRead=async original=>{
     if(!canRecoverLogin||original?.status!=='login_required')return original;
     await context.close();context=null;
@@ -166,6 +172,8 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       ...(login?.siteTwoFactorRecovery?{siteTwoFactorRecovery:login.siteTwoFactorRecovery}:{})};
     await validateScope();
     if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
+    const slot=await acquireOpen('pt_supplement_post_login');
+    if(slot.blocked)return {...slot.blocked,submissionAttempted:false};
     const readPolicy=ptReadPolicy(target.origin,config);
     context=await launch({...safeConfig,ptPassiveReadOnly:true,
       ...(readPolicy.proxyServer?{ptReadProxyServer:readPolicy.proxyServer}:{})});
@@ -193,7 +201,7 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
     await validateScope();
     if(nativeRead){
       const result=await inspectNative({root:legacyRoot,origin:target.origin,url:policy.url,
-        ...(policy.nativeIsolatedChrome===true?{isolated:true}:{})});
+        ...(policy.nativeIsolatedChrome===true?{isolated:true}:{}),clock});
       if(result.submissionAttempted!==false)throw Error('Native PT read did not prove submission was disabled');
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed during readback');
       return publicSupplementResult(target.origin,{...metadata,...result,submissionAttempted:false},clock());
@@ -203,12 +211,16 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       // Checkin performs its own fresh passive read in the same native session.
       // Do not launch an extra read-only browser between the parent's proof and it.
       const nativeMode=readOnly||loginRecoveryOnly?'ReadOnly':'Checkin';
+      const slot=await acquireOpen('pt_supplement_hddolby');
+      if(slot.blocked)return publicSupplementResult(target.origin,{...metadata,...slot.blocked,submissionAttempted:false},clock());
       mutationPossible=nativeMode==='Checkin';
       let result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:nativeMode,clock});
       if(result.submissionAttempted===false)mutationPossible=false;
       if(!readOnly&&result.status==='login_required'){
         const login=await recoverLoginOnce();
         if(login.status==='logged_in'){
+          const retrySlot=await acquireOpen('pt_supplement_hddolby_post_login');
+          if(retrySlot.blocked)return publicSupplementResult(target.origin,{...metadata,...retrySlot.blocked,submissionAttempted:false},clock());
           mutationPossible=nativeMode==='Checkin';result=await runHddolbyNative({root:legacyRoot,origin:target.origin,config,profile,mode:nativeMode,clock});
           if(result.submissionAttempted===false)mutationPossible=false;
         }else result=login;
@@ -223,6 +235,8 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       const allowed=await firstDispatch();
       if(allowed?.allowed!==true)return publicSupplementResult(target.origin,{...metadata,status:'unknown',
         failureCode:'authoritative_status_unavailable',submissionAttempted:false},clock());
+      const idSlot=await acquireOpen('pt_supplement_identity');
+      if(idSlot.blocked)return publicSupplementResult(target.origin,{...metadata,...idSlot.blocked,submissionAttempted:false},clock());
       const identityPolicy=ptReadPolicy(target.origin,config);
       context=await launch({...safeConfig,ptPassiveReadOnly:true,
         ...(identityPolicy.proxyServer?{ptReadProxyServer:identityPolicy.proxyServer}:{})});
@@ -239,6 +253,8 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
         if(login?.handled!==true||login.status!=='logged_in')
           return publicSupplementResult(target.origin,{...metadata,status:'needs_attention',failureCode:
             login?.failureCode==='two_factor_required'?'two_factor_required':'native_readback_unavailable',submissionAttempted:false},clock());
+        const postSlot=await acquireOpen('pt_supplement_identity_post_login');
+        if(postSlot.blocked)return publicSupplementResult(target.origin,{...metadata,...postSlot.blocked,submissionAttempted:false},clock());
         context=await launch({...safeConfig,ptPassiveReadOnly:true,
           ...(identityPolicy.proxyServer?{ptReadProxyServer:identityPolicy.proxyServer}:{})});
         identity=await readLoginProfile(context,{...identityArgs,now:clock()});
@@ -254,6 +270,9 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       // replay. HHCLUB's identity panel supplies no daily negative evidence.
       // Continue its original flow and keep the real formal receipt.
     }
+    const mainSlot=await acquireOpen('pt_supplement_main');
+    if(mainSlot.blocked)return publicSupplementResult(target.origin,{...metadata,...mainSlot.blocked,submissionAttempted:false},clock());
+    let activeOpenId=mainSlot.openId;
     context=await launch({...safeConfig,ptPassiveReadOnly:readOnly||verifyBeforeSubmit});
     await validateScope();
     let hddolbyVerified=false;
@@ -267,6 +286,9 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
         return publicSupplementResult(target.origin,{...metadata,...result},clock());
       await context.close();context=null;
       await validateScope();
+      const execSlot=await acquireOpen('pt_supplement_hddolby_execute');
+      if(execSlot.blocked)return publicSupplementResult(target.origin,{...metadata,...execSlot.blocked,submissionAttempted:false},clock());
+      activeOpenId=execSlot.openId;
       context=await launch({...safeConfig,ptPassiveReadOnly:false});
       metadata.operationMode='legacy_checkin';metadata.readSafety='attendance_page_risk';
       hddolbyVerified=true;
@@ -301,12 +323,15 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
       await context.close();context=null;
       await validateScope();
       if(dayAt(clock())!==dayAt(startedAt))throw Error('PT business day changed before submission');
+      const writeSlot=await acquireOpen('pt_supplement_execute');
+      if(writeSlot.blocked)return publicSupplementResult(target.origin,{...metadata,...writeSlot.blocked,submissionAttempted:false},clock());
+      activeOpenId=writeSlot.openId;
       context=await launch({...safeConfig,ptPassiveReadOnly:false});
       metadata.operationMode='legacy_checkin';metadata.readSafety='attendance_page_risk';
     }
     const before=await readReward(context,target.origin,safeConfig);
     mutationPossible=true;
-    let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+    let result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'),...(activeOpenId?[{openId:activeOpenId}]:[]));
     if(result?.submissionAttempted===false)mutationPossible=false;
     if(canRecoverLogin&&result?.status==='login_required'){
       result=await recoverAndRead(result);
@@ -314,8 +339,11 @@ export async function runPtSupplement({root,origin,catalogFile,catalogHash,now,c
         await context.close();context=null;
         await validateScope();
         if(dayAt(clock())!==dayAt(startedAt)||!unchangedConfig())throw Error('PT authentication scope changed');
+        const reExecSlot=await acquireOpen('pt_supplement_reexecute');
+        if(reExecSlot.blocked)return publicSupplementResult(target.origin,{...metadata,...reExecSlot.blocked,submissionAttempted:false},clock());
+        activeOpenId=reExecSlot.openId;
         context=await launch({...safeConfig,ptPassiveReadOnly:false});
-        mutationPossible=true;result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'));
+        mutationPossible=true;result=await runTarget(context,target,safeConfig,rules,path.join(legacyRoot,'tmp'),...(activeOpenId?[{openId:activeOpenId}]:[]));
         if(result?.submissionAttempted===false)mutationPossible=false;
       }
     }

@@ -68,7 +68,9 @@
     "accessibility_unavailable": "浏览器未提供可读网页正文，等待任务窗口重新核验",
     "site_server_error": "站点服务端返回故障，等待恢复后核验",
     "tls_certificate_invalid": "站点 TLS 证书无效，等待站点续证",
-    "tls_handshake_failed": "站点 TLS 握手失败，等待站点恢复"
+    "tls_handshake_failed": "站点 TLS 握手失败，等待站点恢复",
+    "daily_open_limit": "今日页面打开次数已达上限，不再打开站点",
+    "notice_acknowledgement_required": "站点要求先阅读并确认公告，请在自己的浏览器里处理"
   },
   "u2QuestionPolicy": {"retryCount": 2, "maxRetryCount": 4, "retryDelayMs": 1500, "stepTimeoutMs": 240000, "maxStepTimeoutMs": 300000},
   "u2DiagnosticCodes": ["u2_match_gap_insufficient", "u2_dot_side_unclear", "u2_no_best_match", "u2_answer_reliable", "u2_question_unchanged", "u2_step_timeout", "u2_retry_limit", "u2_reference_unavailable", "u2_reference_timeout", "u2_visual_ambiguous", "u2_image_unavailable", "u2_challenge_changed", "u2_question_expired", "u2_solver_failed"],

@@ -152,7 +152,9 @@ export const ptFailureMessages = Object.freeze({
   "accessibility_unavailable": "浏览器未提供可读网页正文，等待任务窗口重新核验",
   "site_server_error": "站点服务端返回故障，等待恢复后核验",
   "tls_certificate_invalid": "站点 TLS 证书无效，等待站点续证",
-  "tls_handshake_failed": "站点 TLS 握手失败，等待站点恢复"
+  "tls_handshake_failed": "站点 TLS 握手失败，等待站点恢复",
+  "daily_open_limit": "今日页面打开次数已达上限，不再打开站点",
+  "notice_acknowledgement_required": "站点要求先阅读并确认公告，请在自己的浏览器里处理"
 });
 export const u2QuestionPolicy = Object.freeze({
   "retryCount": 2,
