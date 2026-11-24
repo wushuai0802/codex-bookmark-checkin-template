@@ -5,6 +5,9 @@ import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {dayVerdict,shanghaiDay} from '../observation/public/day-verdict.mjs';
 import {verdictSnapshot} from '../observation/src/daily-reconciliation.mjs';
+import {dailyRecords} from '../observation/public/calendar-model.mjs';
+import {isBusinessDayRecord} from '../observation/public/business-day-history.mjs';
+import {validateDashboardGeneration} from '../observation/src/dashboard-generation.mjs';
 
 const categories=['done','verifying','actionNeeded','external','paused','noFeature'];
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -21,8 +24,9 @@ const shiftDay=(date,offset)=>{
   requireValue(validDay(result));return result;
 };
 
-// Only local, ordinary files are read. No runtime imports, child processes,
-// writers, locks, notifier, login helper or network APIs are used by this tool.
+// Only local, ordinary files are read (including read-only manifest validation).
+// No runtime mutations, child processes, writers, locks, notifier, login helper
+// or network APIs are invoked by this tool.
 function ordinary(file,directory=false){
   const absolute=path.resolve(file),base=path.parse(absolute).root;
   requireValue(!absolute.startsWith('\\\\')&&!absolute.startsWith('//'));
@@ -130,7 +134,7 @@ function digest(item,file,date){
     if(name&&!seen.has(name)){seen.add(name);sites.push({domain:name,status:'actionNeeded'});}
   }
   return {total,counts,sites:sites.sort((a,b)=>a.domain.localeCompare(b.domain)),at:time(item.createdAt),
-    source:'daily_digest',complete:!text.includes('\n仅主任务口径，观测范围待同步'),
+    source:'daily_digest',delivered:item.delivered===true,complete:!text.includes('\n仅主任务口径，观测范围待同步'),
     sitesComplete:counts.verifying===0&&counts.external===0&&sites.length===counts.actionNeeded};
 }
 
@@ -154,19 +158,36 @@ function loadDigests(root,dates,now){
   return {records,issues,code:listing.code==='unreadable'?'outbox_unreadable':readIssue};
 }
 function loadSnapshots(root,dates,now){
-  const records=new Map(),issues=new Map();
-  for(const file of ['shadow-beta-snapshot.json','dashboard-generation.json','dashboard-generation.previous.json']){
-    const loaded=readJson(path.join(root,'outputs',file));if(loaded.code)continue;
-    const snapshot=file==='shadow-beta-snapshot.json'?loaded.value:loaded.value?.snapshot,date=snapshot?.businessDate;
+  const records=new Map(),issues=new Map(),directory=path.join(root,'outputs'),candidates=[];
+  const manifests=['dashboard-generation.json','dashboard-generation.previous.json'].map(name=>{
+    const file=path.join(directory,name);return {file,...readJson(file)};
+  });
+  const anchored=manifests.some(entry=>entry.value?.ledger!==undefined||entry.code&&entry.code!=='missing');
+  let ledgerRecords=null;
+  if(anchored){
+    for(const {file,value} of manifests){
+      if(!value)continue;
+      try{
+        const published=validateDashboardGeneration(value,directory,file,target=>fs.readFileSync(ordinary(target)));
+        ledgerRecords??=published.ledger.records; // Current, or the previous complete publication.
+        candidates.push(published.current.snapshot);
+      }catch{if(dates.has(value.snapshot?.businessDate))issues.set(value.snapshot.businessDate,'snapshot_invalid');}
+    }
+  }else{
+    candidates.push(readJson(path.join(directory,'shadow-beta-snapshot.json')).value,...manifests.map(entry=>entry.value?.snapshot));
+  }
+  for(const snapshot of candidates){
+    const date=snapshot?.businessDate;
     if(!dates.has(date))continue;
     try{
       requireValue(snapshot.schemaVersion===1&&snapshot.mode==='shadow_read_only'&&onDay(snapshot.generatedAt,date)&&time(snapshot.generatedAt)<=now+60_000);
       const view=project(snapshot,snapshot.generatedAt);
       const complete=!snapshot.ptStatus||snapshot.ptStatus.businessDate===date;
-      records.set(date,[...(records.get(date)??[]),{...view,at:time(snapshot.generatedAt),source:'snapshot',complete,sitesComplete:complete}]);
+      const finalWorkload=snapshot.source?.executionComplete===true&&snapshot.ptStatus?.businessDate===date&&Array.isArray(snapshot.ptStatus.sites);
+      records.set(date,[...(records.get(date)??[]),{...view,at:time(snapshot.generatedAt),source:'snapshot',complete,finalWorkload,sitesComplete:complete}]);
     }catch{issues.set(date,'snapshot_invalid');}
   }
-  return {records,issues};
+  return {records,issues,ledgerRecords};
 }
 function reportView(report,date,engine=false){
   const finishedAt=engine?report.sourceFinishedAt:report.finishedAt;
@@ -204,16 +225,81 @@ function loadReports(executionRoot,observationRoot,dates,now){
   }
   return {records,issues};
 }
-function ledgerDates(root,dates){
-  const result=new Set(),loaded=readText(path.join(root,'outputs/shadow-ledger.jsonl'));
-  if(loaded.code)return result;
-  for(const line of loaded.value.split(/\r?\n/)){
-    try{
-      const item=JSON.parse(line);
-      if(item?.schemaVersion===1&&dates.has(item.businessDate)&&Array.isArray(item.taskSummaries))result.add(item.businessDate);
-    }catch{/* Lossy/malformed ledger rows are never used to invent verdict counts. */}
+function ledgerDays(root,dates,now,committed){
+  const result=new Map();
+  function include(item){
+    if(item?.schemaVersion!==1||!dates.has(item.businessDate)||!Array.isArray(item.taskSummaries))return;
+    if(!result.has(item.businessDate))result.set(item.businessDate,[]);
+    if(committed&&isBusinessDayRecord(item)&&time(item.recordedAt)<=now&&item.ptBusinessDate===item.businessDate)
+      result.get(item.businessDate).push(item);
+  }
+  if(committed){committed.forEach(include);return result;}
+  // Older, unanchored files can explain a partial date but cannot close it.
+  const loaded=readText(path.join(root,'outputs/shadow-ledger.jsonl'));
+  if(!loaded.code)for(const line of loaded.value.split(/\r?\n/)){
+    try{include(JSON.parse(line));}catch{/* ignore an incomplete line */}
   }
   return result;
+}
+function ledgerView(record){
+  requireValue(record.mode==='shadow_read_only'&&record.drift?.hashValid===true&&record.drift.ownerConflicts?.length===0&&
+    /^[a-f0-9]{64}$/.test(record.planHash)&&record.sourceRunId?.startsWith(record.businessDate.replaceAll('-','')+'-')&&
+    record.taskSummaries.length===record.counts?.executionUnits&&Array.isArray(record.ptSummaries));
+  const valid=task=>object(task)&&typeof task.taskId==='string'&&domain(task.origin);
+  requireValue(record.taskSummaries.every(valid)&&record.ptSummaries.every(task=>valid(task)&&task.businessDate===record.businessDate));
+  const entry=dailyRecords({ledger:[record]}).get(record.businessDate);
+  requireValue(entry?.ptRecorded&&(!Object.hasOwn(record,'workloadVerdict')||entry.verdictRecorded));
+  const ids=new Set(entry.tasks.map(task=>task.taskId));
+  requireValue(ids.size===entry.tasks.length&&record.taskSummaries.every(task=>ids.has(task.taskId)));
+  const date=record.businessDate,at=time(record.recordedAt);
+  const tasks=entry.tasks.map(task=>({...task,businessDate:date}));
+  const verdict=entry.verdictRecorded
+    ?{items:tasks.map(task=>({taskId:task.taskId,class:task.calendarVerdict}))}
+    :dayVerdict({businessDate:date,tasks},{now:at});
+  const counts=Object.fromEntries(categories.map(key=>[key,0]));
+  for(const item of verdict.items)counts[item.class]++;
+  return {tasks,items:verdict.items,exact:entry.verdictRecorded,counts,sites:siteRows(tasks,verdict),at,
+    total:counts.done+counts.verifying+counts.actionNeeded,complete:true,sitesComplete:true,source:'closing_ledger'};
+}
+function closingLedger(records,daily){
+  if(!records?.length)return null;
+  const sorted=[...records].sort((a,b)=>time(b.recordedAt)-time(a.recordedAt));
+  const last=sorted[0];
+  try{
+    if(sorted.some(row=>row.recordedAt===last.recordedAt&&row.snapshotId!==last.snapshotId))return null;
+    const closing=ledgerView(last);
+    if(closing.exact)return closing;
+    // Older ledgers include the entire monitored PT inventory and omit retry and
+    // Harvest escalation flags. Anchor their scope to the verified digest before
+    // using later positive receipts; leave the unresolved breakdown unclassified.
+    if(!daily?.complete||closing.at<=daily.at)return null;
+    const before=sorted.find(row=>time(row.recordedAt)<=daily.at);
+    if(!before||before.planHash!==last.planHash)return null;
+    const morning=ledgerView(before);
+    if(!categories.every(key=>morning.counts[key]===daily.counts[key]))return null;
+    const key=task=>JSON.stringify([task.taskId,task.origin,task.accountRef??null]);
+    const cohort=new Set(morning.tasks.map(key));
+    if(closing.tasks.length!==cohort.size||closing.tasks.some(task=>!cohort.has(key(task))))return null;
+    const old=new Map(morning.items.map(item=>[item.taskId,item.class]));
+    const closingById=new Map(closing.tasks.map(task=>[task.taskId,task]));
+    const verifiedUpgrade=item=>{
+      const task=closingById.get(item.taskId);
+      return old.get(item.taskId)==='verifying'&&item.class==='done'&&
+        task?.evidence?.authoritative===true&&!['none','health_cache','configuration'].includes(task.evidence.source)&&
+        !/(?:account|identity)/i.test(String(task.condition??''));
+    };
+    if(closing.items.some(item=>old.get(item.taskId)!==item.class&&!verifiedUpgrade(item)))return null;
+    const unresolved=closing.total-closing.counts.done;
+    const seenSites=new Set(),legacySites=[];
+    for(const site of closing.sites){
+      const mapped=site.status==='external'?site:{...site,status:'unconfirmed'};
+      const dedupeKey=mapped.domain+'|'+mapped.status;
+      if(!seenSites.has(dedupeKey)){seenSites.add(dedupeKey);legacySites.push(mapped);}
+    }
+    return {...closing,source:'closing_ledger_legacy',unresolved,sitesComplete:unresolved===0,
+      counts:{...closing.counts,...(unresolved?{verifying:null,actionNeeded:null}:{})},
+      sites:legacySites.sort((a,b)=>a.domain.localeCompare(b.domain)||a.status.localeCompare(b.status))};
+  }catch{return null;}
 }
 const blank=()=>({total:null,counts:Object.fromEntries(categories.map(key=>[key,null]))});
 const rate=value=>value.total>0?value.counts.done/value.total:null;
@@ -223,13 +309,19 @@ export function runSuccessBaseline(options,{now=new Date()}={}){
   requireValue(typeof options.executionRoot==='string'&&typeof options.observationRoot==='string'&&Number.isFinite(new Date(now).getTime()));
   const first=shiftDay(options.until,1-options.days),dates=new Set(Array.from({length:options.days},(_,i)=>shiftDay(first,i)));
   const digests=loadDigests(options.executionRoot,dates,new Date(now).getTime()),snapshots=loadSnapshots(options.observationRoot,dates,new Date(now).getTime());
-  const reports=loadReports(options.executionRoot,options.observationRoot,dates,new Date(now).getTime()),ledger=ledgerDates(options.observationRoot,dates);
+  const reports=loadReports(options.executionRoot,options.observationRoot,dates,new Date(now).getTime());
+  const ledger=ledgerDays(options.observationRoot,dates,new Date(now).getTime(),snapshots.ledgerRecords);
+  const today=shanghaiDay(now);
   const days=[];
   for(const businessDate of dates){
     const daily=digests.records.get(businessDate)??[],saved=(snapshots.records.get(businessDate)??[]).sort((a,b)=>b.at-a.at);
     const raw=(reports.records.get(businessDate)??[]).sort((a,b)=>Number(a.source==='engine_daily_partial')-Number(b.source==='engine_daily_partial')||b.at-a.at);
     const conflict=daily.length>1||saved.length>1&&saved[0].at===saved[1].at&&JSON.stringify(saved[0])!==JSON.stringify(saved[1]);
-    const selected=(daily.length===1&&daily[0].complete?daily[0]:null)??saved.find(item=>item.complete)??
+    const sent=daily.length===1&&daily[0].complete?daily[0]:null;
+    const closing=businessDate<today?closingLedger(ledger.get(businessDate),sent):null;
+    const snapshot=saved.find(item=>item.complete&&(!sent||item.finalWorkload));
+    const latest=[closing,snapshot,sent].filter(Boolean).sort((a,b)=>b.at-a.at)[0];
+    const selected=latest??
       (daily.length===1?daily[0]:null)??saved[0]??raw[0];
     const complete=Boolean(selected?.complete)&&!conflict&&!digests.issues.has(businessDate);
     const missing=[];
@@ -243,26 +335,32 @@ export function runSuccessBaseline(options,{now=new Date()}={}){
     }
     const view=selected??blank();
     const row={businessDate,total:view.total,counts:{...view.counts},completionRate:rate(view),
+      ...(selected?.at?{asOf:new Date(selected.at).toISOString()}:{}),
+      ...(view.total!==null?{unresolved:view.total-view.counts.done}:{}),
+      ...(sent?.delivered&&selected!==sent?{sentDigest:{asOf:new Date(sent.at).toISOString(),total:sent.total,counts:{...sent.counts}}}:{}),
       manualInterventions:view.counts.actionNeeded,source:selected?.source??(ledger.has(businessDate)?'shadow_ledger_partial':'missing'),
       complete,missing:[...new Set(missing.filter(Boolean))]};
     if(options.sites){
       row.sites=selected?.sites??[];row.sitesComplete=Boolean(selected?.sitesComplete)&&complete;
-      row.siteCodes=row.sitesComplete?[]:['unfinished_site_verdicts_not_retained'];
+      row.siteCodes=row.sitesComplete?[]:[selected?.source==='closing_ledger_legacy'?'legacy_unresolved_class_not_retained':'unfinished_site_verdicts_not_retained'];
     }
     days.push(row);
   }
   const completeDays=days.filter(day=>day.complete),totals=completeDays.length?{total:0,counts:Object.fromEntries(categories.map(key=>[key,0]))}:blank();
-  for(const row of completeDays){totals.total+=row.total;for(const key of categories)totals.counts[key]+=row.counts[key];}
-  requireValue(!completeDays.length||count(totals.total)&&Object.values(totals.counts).every(count));
+  for(const row of completeDays){
+    totals.total+=row.total;
+    for(const key of categories)totals.counts[key]=row.counts[key]===null||totals.counts[key]===null?null:totals.counts[key]+row.counts[key];
+  }
+  requireValue(!completeDays.length||count(totals.total)&&Object.values(totals.counts).every(value=>value===null||count(value)));
   return {schemaVersion:1,from:first,until:options.until,manualInterventionBasis:'action_needed_rows',days,
     totals:{scope:'complete_days_only',requestedDays:days.length,completeDays:completeDays.length,incompleteDays:days.length-completeDays.length,
-      ...totals,completionRate:rate(totals),manualInterventions:totals.counts.actionNeeded}};
+      ...totals,unresolved:totals.total===null?null:totals.total-totals.counts.done,completionRate:rate(totals),manualInterventions:totals.counts.actionNeeded}};
 }
 
 export function formatBaseline(result){
   const number=value=>value===null?'?':String(value),percent=value=>value===null?'?':(value*100).toFixed(2)+'%';
-  const cells=row=>[number(row.total),...categories.map(key=>number(row.counts[key])),percent(row.completionRate),number(row.manualInterventions)];
-  const lines=['日期 | 有效 | 已完成 | 核验中 | 需处理 | 外部阻断 | 已暂停 | 无此功能 | 完成率 | 人工干预需求 | 数据来源 | 完整性'];
+  const cells=row=>[number(row.total),...categories.map(key=>number(row.counts[key])),number(row.unresolved??null),percent(row.completionRate),number(row.manualInterventions)];
+  const lines=['日期 | 有效 | 已完成 | 核验中 | 需处理 | 外部阻断 | 已暂停 | 无此功能 | 尚未确认合计 | 完成率 | 人工干预需求 | 数据来源 | 完整性'];
   for(const row of result.days){
     lines.push([row.businessDate,...cells(row),row.source,row.complete?'完整':'不完整',...row.missing].join(' | '));
     if(row.sites){

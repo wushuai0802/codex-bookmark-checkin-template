@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import {calendarHistory} from '../src/dashboard-server.mjs';
-import {dailyRecords,dayTotals} from '../public/calendar-model.mjs';
+import {dailyRecords,dayTotals,calendarTasks} from '../public/calendar-model.mjs';
 import {businessDayHistory} from '../public/business-day-history.mjs';
 import {buildSnapshot} from '../src/bridge.mjs';
 import {createLedgerRecord} from '../src/shadow-ledger.mjs';
@@ -11,6 +11,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {evaluateShadowHistory} from '../src/shadow-acceptance.mjs';
+import {verdictSnapshot} from '../src/daily-reconciliation.mjs';
+import {dayVerdict} from '../public/day-verdict.mjs';
 
 const row=(day,at,status='signed')=>({schemaVersion:1,mode:'shadow_read_only',recordId:'ledger_'+day.replaceAll('-','')+'a'.repeat(16),
   businessDate:day,recordedAt:at,planHash:'a'.repeat(64),drift:{classification:'same_plan',hashValid:true},
@@ -57,6 +59,35 @@ test('mixed-day audit records explicitly keep source and observation dates witho
   const record=createLedgerRecord(snapshot,{recordedAt:snapshot.generatedAt});
   assert.equal(record.businessDate,'2026-09-02');assert.equal(record.observationBusinessDate,'2026-09-03');
   assert.equal(record.ptBusinessDate,'2026-09-03');assert.equal(record.ptSummaries,null);
+});
+
+test('the written ledger, history API and calendar preserve the authorized same-day verdict',()=>{
+  const at='2026-09-02T14:00:00Z',nextDay=new Date('2026-09-03T03:00:00Z');
+  const legacyRoot=fileURLToPath(new URL('./fixtures/legacy/',import.meta.url));
+  const snapshot=buildSnapshot({legacyRoot,generatedAt:at}),day=snapshot.businessDate;
+  const site=(name,id,enabled)=>({siteRef:'pt_'+id.repeat(16),origin:'https://'+name+'.example',displayName:name,
+    fallbackEnabled:enabled,inLegacyPlan:false,effective:{status:'already_signed',fresh:true,authoritative:true,
+      observedAt:at,evidence:{source:'pt_page',authoritative:true,businessDate:day,confirmedAt:at}}});
+  const extra=site('supplement','a',true),watch=site('monitor','b',false);
+  snapshot.ptStatus={businessDate:day,generatedAt:at,sites:[extra,watch]};
+  const view=verdictSnapshot(snapshot,{now:at}),verdict=dayVerdict(view,{now:at});
+  const record=createLedgerRecord(snapshot,{recordedAt:at});
+  const history=calendarHistory([record],{now:nextDay}).days;
+  assert.deepEqual(history[0].workloadVerdict,record.workloadVerdict);
+  assert.equal(record.workloadVerdict.length,snapshot.tasks.length+1);
+  assert.ok(record.workloadVerdict.some(item=>item.taskId===extra.siteRef&&item.class==='done'));
+  assert.ok(!record.workloadVerdict.some(item=>item.taskId===watch.siteRef));
+  assert.doesNotMatch(JSON.stringify(record.workloadVerdict),/https|example/);
+  const archived=dailyRecords({ledger:history,now:nextDay}).get(day),totals=dayTotals(archived);
+  assert.equal(archived.verdictRecorded,true);
+  assert.equal(totals.completed,verdict.counts.done);
+  assert.equal(totals.total-totals.external-totals.unavailable-totals.cancelled,verdict.total);
+  assert.equal(calendarTasks(archived,'completed').length,totals.completed);
+  assert.equal(dailyRecords({ledger:history,scope:'pt',now:nextDay}).get(day).tasks.length,2);
+  const byId=new Map(verdict.items.map(item=>[item.taskId,item.class]));
+  const live=dailyRecords({snapshot,tasks:view.tasks.map(task=>({...task,dayClass:byId.get(task.taskId)})),now:at}).get(day);
+  assert.deepEqual(dayTotals(live),totals);
+  assert.equal(createLedgerRecord({...snapshot,source:{...snapshot.source,executionComplete:false}},{recordedAt:at}).workloadVerdict,undefined);
 });
 
 test('next-day health for an old run does not poison the original daily health window',()=>{

@@ -11,7 +11,7 @@ function atomic(file,value){
   try{fs.writeFileSync(temporary,JSON.stringify(value),{mode:0o600});fs.renameSync(temporary,file);}
   finally{if(fs.existsSync(temporary))fs.rmSync(temporary);}
 }
-function validate(value,directory,file){
+export function validateDashboardGeneration(value,directory,file,readBytes=fs.readFileSync){
   const snapshot=value?.snapshot,anchor=value?.ledger;
   if(value?.schemaVersion!==1||snapshot?.schemaVersion!==1||snapshot.mode!=='shadow_read_only'||
      !Array.isArray(snapshot.tasks)||snapshot.planHash!==planHash(snapshot.tasks)||
@@ -19,7 +19,7 @@ function validate(value,directory,file){
      !anchor||!['shadow-ledger.jsonl','ledger.jsonl'].includes(anchor.file)||
      !Number.isSafeInteger(anchor.byteLength)||anchor.byteLength<1||anchor.byteLength>256*1024*1024||
      !/^[a-f0-9]{64}$/.test(anchor.sha256??''))throw Error('invalid generation manifest');
-  const ledgerFile=path.join(directory,anchor.file),bytes=fs.readFileSync(ledgerFile);
+  const ledgerFile=path.join(directory,anchor.file),bytes=readBytes(ledgerFile);
   if(bytes.length<anchor.byteLength||digest(bytes.subarray(0,anchor.byteLength))!==anchor.sha256)throw Error('generation ledger prefix mismatch');
   const records=bytes.subarray(0,anchor.byteLength).toString('utf8').split(String.fromCharCode(10)).filter(line=>line.trim()).map(line=>JSON.parse(line));
   const snapshotRecord=records.findLastIndex(record=>record.schemaVersion===1&&record.snapshotId===snapshot.snapshotId&&
@@ -38,9 +38,9 @@ export function commitDashboardGeneration({snapshot,snapshotFile,ledgerFile}){
     ledger:{file:path.basename(ledgerFile),byteLength:bytes.length,sha256:digest(bytes)},
     inputs:{planHash:snapshot.planHash,ptStatusDigest:digest(JSON.stringify(snapshot.ptStatus??{}))}};
   const destination=path.join(directory,name);
-  validate(value,directory,destination);
+  validateDashboardGeneration(value,directory,destination);
   if(fs.existsSync(destination)){
-    try{const previous=JSON.parse(fs.readFileSync(destination,'utf8'));validate(previous,directory,destination);atomic(path.join(directory,previousName),previous);}
+    try{const previous=JSON.parse(fs.readFileSync(destination,'utf8'));validateDashboardGeneration(previous,directory,destination);atomic(path.join(directory,previousName),previous);}
     catch{/* retain an existing valid previous manifest when the current one is damaged */}
   }
   // The manifest is the commit point. It embeds the snapshot and identifies
@@ -53,7 +53,7 @@ export function readDashboardGeneration(directory){
   const current=path.join(directory,name),previous=path.join(directory,previousName);
   if(!fs.existsSync(current)&&!fs.existsSync(previous))return null;
   for(const file of [current,previous]){
-    try{const result=validate(JSON.parse(fs.readFileSync(file,'utf8')),directory,file);
+    try{const result=validateDashboardGeneration(JSON.parse(fs.readFileSync(file,'utf8')),directory,file);
       return {...result,stale:file!==current};
     }catch{/* use only a complete validated generation */}
   }

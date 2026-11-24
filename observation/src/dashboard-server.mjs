@@ -28,6 +28,7 @@ import {authorizedWorkload} from './workload-view.mjs';
 import {verdictSnapshot} from './daily-reconciliation.mjs';
 import {dayVerdict} from '../public/day-verdict.mjs';
 import {businessDayHistory} from '../public/business-day-history.mjs';
+import {validWorkloadVerdict} from '../public/calendar-model.mjs';
 import {copyHarvestWindow,siteHarvestWait} from '../public/harvest-window.mjs';
 
 const MODULE_ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -207,6 +208,8 @@ export function calendarHistory(records, {limit=180,now=new Date()}={}) {
   return {days:recent.map(record=>({businessDate:record.businessDate,recordedAt:record.recordedAt,
     ...(record.observationBusinessDate?{observationBusinessDate:record.observationBusinessDate}:{}),
     ...(record.ptBusinessDate?{ptBusinessDate:record.ptBusinessDate}:{}),
+    ...(validWorkloadVerdict(record.workloadVerdict)
+      ?{workloadVerdict:record.workloadVerdict.map(({taskId,class:category})=>({taskId,class:category}))}:{}),
     counts:{executionUnits:record.counts.executionUnits,status:Object.fromEntries(statuses.map(key=>[
       key,Number.isInteger(record.counts.status?.[key])&&record.counts.status[key]>=0?record.counts.status[key]:0]))},
     taskSummaries:Array.isArray(record.taskSummaries)?record.taskSummaries.slice(0,200).map(task=>publicTask(task,task)):null,
