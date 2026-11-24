@@ -39,7 +39,7 @@ export function dayVerdict(snapshot={}, {now=new Date()}={}){
     const retrying=task.retryable!==false&&!manual&&(task.retryable===true||
       Number.isFinite(retryAt)&&shanghaiDay(retryAt)===businessDate);
     const requiresHuman=task.manualVerificationRequired===true||['login_required','interactive_challenge'].includes(status)||
-      codes.some(code=>['login_required','two_factor_required','login_recovery_failed','login_recovery_exhausted',
+      codes.some(code=>['login_required','two_factor_required','notice_acknowledgement_required','login_recovery_failed','login_recovery_exhausted',
         'native_security_verification_required','manual_verification_required'].includes(code));
     const unknown=codes.includes('submission_outcome_unknown')||task.submissionAttempted===true&&!signed(status);
     const externalCode=codes.some(code=>siteFaultCodes.includes(code)||code!=='harvest_waiting'&&externalRetryCauses.includes(code)||
@@ -71,8 +71,8 @@ export function dayVerdict(snapshot={}, {now=new Date()}={}){
       category='actionNeeded';reasonCode='harvest_stalled';
     }
     else if(current&&overdue&&!overdue.canTakeOver){category='actionNeeded';reasonCode=overdue.reasonCode;}
-    else if(fresh&&!retrying&&(requiresHuman&&(manual||task.manualVerificationRequired===true||['interactive_challenge'].includes(status)||codes.includes('two_factor_required'))||
-      manual&&!unknown&&!codes.includes('harvest_waiting')&&!signed(status)&&['needs_attention','deferred','login_required','failed','error','no_action','managed_challenge_timeout'].includes(status)))category='actionNeeded';
+    else if(fresh&&!retrying&&(requiresHuman&&(manual||task.manualVerificationRequired===true||['interactive_challenge'].includes(status)||codes.includes('two_factor_required')||codes.includes('notice_acknowledgement_required'))||
+      manual&&!unknown&&!codes.includes('harvest_waiting')&&!codes.includes('daily_open_limit')&&!signed(status)&&['needs_attention','deferred','login_required','failed','error','no_action','managed_challenge_timeout'].includes(status)))category='actionNeeded';
     counts[category]++;items.push({taskId:task.taskId,class:category,...(reasonCode&&reasonCode!=='harvest_stalled'?{
       reasonCode,summary:conditionLabels[reasonCode]}:reasonCode?{reasonCode,lastReceiptDay,missingDays,
       summary:`Harvest 已 ${missingDays} 天没有处理这个站点，最后一次回执在 ${lastReceiptDay.slice(5)}，可能是站点已关闭或登录失效，请核对`}:{})});

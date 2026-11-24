@@ -72,15 +72,68 @@ $profilePath = [System.IO.Path]::GetFullPath($(if ($UserDataDirOverride) { $User
 if (-not $profilePath.StartsWith($allowedDataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "机器人 Chrome 目录必须位于 $allowedDataRoot"
 }
-$existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like "*$profilePath*" })
-if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法恢复登录。' }
-
 $originValue = $originUri.GetLeftPart([System.UriPartial]::Authority)
 if ($Mode -cne 'Login') {
     if ($originValue -cne 'https://www.uhddolby.com' -and $originValue -cne 'https://piggo.me') { throw '原生只读或签到模式未审阅。' }
     if ($originValue -ceq 'https://www.uhddolby.com') { $targetUrl = [uri]::new($originUri, '/index.php') }
 }
+$hasDailyOpenRule = ($null -ne $config.ptReadOnlyPolicies -and
+    $null -ne $config.ptReadOnlyPolicies.PSObject.Properties[$originValue] -and
+    $null -ne $config.ptReadOnlyPolicies.PSObject.Properties[$originValue].Value -and
+    $null -ne $config.ptReadOnlyPolicies.PSObject.Properties[$originValue].Value.dailyOpenLimit) -or
+    (Test-Path -LiteralPath (Join-Path $root 'data\native-pt-opens.json') -PathType Leaf)
+if ($hasDailyOpenRule) {
+    $preGateRaw = @(& $node (Join-Path $root 'src\pt-daily-open-limit.mjs') '--check' '--origin' $originValue)
+    $preGateExit = $LASTEXITCODE
+    $preGateResult = $null
+    try { $preGateResult = ($preGateRaw | Select-Object -Last 1) | ConvertFrom-Json -ErrorAction Stop } catch {}
+    if ($preGateExit -ne 0 -or $null -eq $preGateResult -or $preGateResult.allowed -ne $true) {
+        $blockedDecision = if ($null -ne $preGateResult -and $null -ne $preGateResult.decision) { $preGateResult.decision } else {
+            [pscustomobject]@{ status = 'deferred'; failureCode = 'daily_open_limit'; submissionAttempted = $false; retryable = $false; retryExhaustedForDay = $true }
+        }
+        Write-Output ([pscustomobject]@{
+            origin = $originValue; handled = $true; status = [string]$blockedDecision.status;
+            failureCode = [string]$blockedDecision.failureCode; submissionAttempted = $false; retryable = $false;
+            retryExhaustedForDay = ($blockedDecision.retryExhaustedForDay -eq $true);
+            nextEligibleAt = $blockedDecision.nextEligibleAt; reason = $blockedDecision.reason
+        } | ConvertTo-Json -Compress)
+        throw '每日打开次数已达上限或受限于必读公告，已停止启动浏览器。'
+    }
+}
+
+$existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like "*$profilePath*" })
+if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法恢复登录。' }
+$previousOpenId = $env:CHECKIN_PT_OPEN_ID
+$openIdSet = $false
 try {
+    if ($hasDailyOpenRule) {
+        $openLimitRaw = @(& $node (Join-Path $root 'src\pt-daily-open-limit.mjs') '--acquire' '--origin' $originValue '--source' 'recover_native_login')
+        $openLimitExit = $LASTEXITCODE
+        $openLimitResult = $null
+        try { $openLimitResult = ($openLimitRaw | Select-Object -Last 1) | ConvertFrom-Json -ErrorAction Stop } catch {}
+        if ($openLimitExit -ne 0 -or $null -eq $openLimitResult -or $openLimitResult.allowed -ne $true) {
+            $blockedDecision = if ($null -ne $openLimitResult -and $null -ne $openLimitResult.decision) { $openLimitResult.decision } else {
+                [pscustomobject]@{ status = 'deferred'; failureCode = 'daily_open_limit'; submissionAttempted = $false; retryable = $false; retryExhaustedForDay = $true }
+            }
+            $blockedEnvelope = [pscustomobject]@{
+                origin = $originValue
+                handled = $true
+                status = [string]$blockedDecision.status
+                failureCode = [string]$blockedDecision.failureCode
+                submissionAttempted = $false
+                retryable = $false
+                retryExhaustedForDay = ($blockedDecision.retryExhaustedForDay -eq $true)
+                nextEligibleAt = $blockedDecision.nextEligibleAt
+                reason = $blockedDecision.reason
+            }
+            Write-Output ($blockedEnvelope | ConvertTo-Json -Compress)
+            throw '每日打开次数已达上限或受限于必读公告，已停止启动浏览器。'
+        }
+        if ($openLimitResult.openId) {
+            $env:CHECKIN_PT_OPEN_ID = [string]$openLimitResult.openId
+            $openIdSet = $true
+        }
+    }
     # Chrome stores synced/account passwords in "Login Data For Account".
     # Keeping --disable-sync on this native recovery window prevents that store
     # from participating in autofill even though the encrypted row is present.
@@ -127,6 +180,10 @@ try {
     if (-not $loginSucceeded) { throw '原生 Chrome 未能自动恢复登录。' }
 }
 finally {
+    if ($openIdSet) {
+        if ($null -eq $previousOpenId) { Remove-Item Env:CHECKIN_PT_OPEN_ID -ErrorAction SilentlyContinue }
+        else { $env:CHECKIN_PT_OPEN_ID = $previousOpenId }
+    }
     $targets = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
         $_.CommandLine -like "*$profilePath*"
     })

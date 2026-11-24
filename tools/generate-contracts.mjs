@@ -38,3 +38,9 @@ const diagnosticFile=path.join(root,'observation/src/pt-native-diagnostic.genera
 if(process.argv.includes('--check')){
   if(!fs.existsSync(diagnosticFile)||fs.readFileSync(diagnosticFile,'utf8').replaceAll('\r','')!==diagnosticText)throw Error('generated PT native diagnostic drift');
 }else fs.writeFileSync(diagnosticFile,diagnosticText);
+const openStateSource=fs.readFileSync(path.join(root,'execution/src/pt-daily-open-state.mjs'),'utf8').replaceAll('\r','');
+const openStateText='// Generated from execution/src/pt-daily-open-state.mjs. Run npm run contracts; do not edit.\n'+openStateSource;
+const openStateFile=path.join(root,'observation/src/pt-daily-open-state.generated.mjs');
+if(process.argv.includes('--check')){
+  if(!fs.existsSync(openStateFile)||fs.readFileSync(openStateFile,'utf8').replaceAll('\r','')!==openStateText)throw Error('generated PT daily open state drift');
+}else fs.writeFileSync(openStateFile,openStateText);

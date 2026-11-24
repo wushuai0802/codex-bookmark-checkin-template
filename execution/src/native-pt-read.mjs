@@ -3,8 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {nativePtHeaderOrigins} from './checkin-contract.generated.mjs';
-import {piggoOrigin,piggoCalendarUrl,acceptedPiggoCalendarReceipt} from './piggo-calendar.mjs';
+import * as contract from './checkin-contract.generated.mjs';
+import {piggoOrigin,piggoCalendarUrl,acceptedPiggoCalendarReceipt,piggoPageClasses} from './piggo-calendar.mjs';
+import {acquireDailyOpen} from './pt-daily-open-limit.mjs';
+
+const nativePtHeaderOrigins=contract.nativePtHeaderOrigins??[];
+const ptFailureMessages=contract.ptFailureMessages??{
+  daily_open_limit:'该站点今日自动打开次数已达上限，今日不再重试',
+  notice_acknowledgement_required:'站点要求先阅读并确认公告，请在自己的浏览器里处理',
+};
 
 const runFile=promisify(execFile);
 export function nativePtReadRoute(config,origin){
@@ -45,28 +52,34 @@ const successful=new Set(['signed','already_signed','not_signed']);
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const normalizeOrigin=value=>new URL(value).origin.replace(/^https:\/\/www\./,'https://');
 const failureCodes=new Set(['accessibility_unavailable','window_not_created','window_merged','target_not_loaded','login_required','browser_route_conflict','account_mismatch',
-  'two_factor_required','authoritative_status_unavailable','network_error','tls_certificate_invalid','tls_handshake_failed',
+  'two_factor_required','daily_open_limit','notice_acknowledgement_required','idle_locked','authoritative_status_unavailable','network_error','tls_certificate_invalid','tls_handshake_failed',
   'native_readback_unavailable']);
 const proxyPreflightCodes=new Set(['native_proxy_configuration_invalid','native_proxy_origin_not_registered','native_proxy_profile_conflict']);
 const boundedBytes=value=>Math.min(200_000,Buffer.byteLength(String(value??''),'utf8'));
 const diagnosticCodes=new Set(['request_rejected','profile_binding_unavailable','shell_rejected','scratch_unavailable',
   'process_deadline','output_limit','process_terminated','receipt_missing','invalid_json','invalid_receipt',
   'submission_reported','readonly_not_proven','receipt_accepted','waf_present','login_required','two_factor_required',
+  'daily_open_limit','notice_acknowledgement_required','idle_locked',
   'authoritative_evidence_rejected','readback_inconclusive','entrypoint_unavailable',...failureCodes]);
 const cleanupCodes=new Set(['closed','already_closed','window_unavailable','window_not_owned','window_close_timeout','helper_only','cleanup_unavailable']);
 const diagnosticFacts=['sameOrigin','authenticated','waf','loginRoute','siteBodyLoaded','pageContentAvailable','hasDailySignal','hasSignedControl'];
-const detailBooleans=['inspectionPresent','securityVerification','dailyTextPresent','audiencesDailyHeaderVerified'];
+const detailBooleans=['inspectionPresent','securityVerification','dailyTextPresent','audiencesDailyHeaderVerified','noticeGate'];
 const detailCounts=['signedControlCount','unsignedControlCount','dailyControlCandidateCount'];
 const apiStages=new Set(['configuration','binding','launch','request','response_freshness','redirect','http_status',
   'response_structure','day_boundary','authentication','idle_lock','profile_verification','daily_fields','identity','completed']);
+const SAFE_ALPHA_PATH_RE=/^\/(?:[a-z][a-z0-9_-]{0,30}(?:\/[a-z][a-z0-9_-]{0,30}){0,7})?$/;
 
 // Private diagnostics only. Never coerce arbitrary child values into facts.
 export function safeNativeReadDetails(value={}){
   return {...Object.fromEntries(detailBooleans.filter(key=>typeof value[key]==='boolean').map(key=>[key,value[key]])),
     ...Object.fromEntries(detailCounts.filter(key=>Number.isInteger(value[key])&&value[key]>=0&&value[key]<=1000).map(key=>[key,value[key]])),
     ...(['root','index','login','other','none'].includes(value.pathClass)?{pathClass:value.pathClass}:{}),
+    ...(piggoPageClasses.includes(value.pageClass)?{pageClass:value.pageClass}:{}),
+    ...(typeof value.pagePath==='string'&&SAFE_ALPHA_PATH_RE.test(value.pagePath)?{pagePath:value.pagePath}:{}),
     ...(apiStages.has(value.apiStage)?{apiStage:value.apiStage}:{}),
-    ...(Number.isInteger(value.httpStatus)&&value.httpStatus>=100&&value.httpStatus<=599?{httpStatus:value.httpStatus}:{})};
+    ...(Number.isInteger(value.httpStatus)&&value.httpStatus>=100&&value.httpStatus<=599?{httpStatus:value.httpStatus}:{}),
+    ...(Number.isInteger(value.meHttpStatus)&&value.meHttpStatus>=100&&value.meHttpStatus<=599?{meHttpStatus:value.meHttpStatus}:{}),
+    ...(Number.isInteger(value.calendarHttpStatus)&&value.calendarHttpStatus>=100&&value.calendarHttpStatus<=599?{calendarHttpStatus:value.calendarHttpStatus}:{})};
 }
 
 function readPathClass(value){
@@ -177,7 +190,7 @@ export function nativePtReadFailure(error){
     nativeReadback:safeNativeReadback(error?.nativeReadback)};
 }
 
-export async function inspectNativePtHeader({root,origin,url,isolated=false,execute=runNativeReadProcess,inspectApi,clock=()=>new Date()}={}){
+export async function inspectNativePtHeader({root,origin,url,isolated=false,execute=runNativeReadProcess,inspectApi,clock=()=>new Date(),openId}={}){
   const started=Date.now();let transport={};
   const diagnostic=(stage,code,extra={})=>({stage,code,exitCode:Number.isInteger(transport.exitCode)?transport.exitCode:null,
     durationMs:Math.min(600_000,Math.max(0,Date.now()-started)),stderrPresent:Boolean(transport.stderr),
@@ -199,9 +212,19 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
     let apiPolicy;
     if(isolated){try{const {ptReadPolicy}=await import('./pt-read-policy.mjs');apiPolicy=ptReadPolicy(origin,config);}catch{}}
     if(origin===piggoOrigin&&apiPolicy?.piggoCalendar!==true)fail('preflight','request_rejected');
+    const opened=await acquireDailyOpen({root,origin,config,source:isolated?'native_isolated_read':'native_main_read',openId,clock});
+    if(opened.allowed!==true){
+      const nativeReadback=diagnostic('preflight',opened.decision.failureCode);
+      const blocked={...opened.decision,origin,url,accountKey:binding.accountKey,profileBinding:binding.profileBinding,nativeReadback};
+      try{fs.mkdirSync(path.join(root,'logs'),{recursive:true});fs.appendFileSync(path.join(root,'logs/native-pt-readback.jsonl'),
+        JSON.stringify({origin,observedAt:clock().toISOString(),status:blocked.status,failureCode:blocked.failureCode,nativeReadback})+'\n',{mode:0o600});}
+      catch{}
+      return blocked;
+    }
+    const activeOpenId=opened.openId??openId;
     if(apiPolicy?.nativeApiHeaderFallback===true){
       const read=inspectApi??(await import('./native-pt-api.mjs')).readNativePtApiHeader;
-      const value=await read({root,origin,clock});
+      const value=await read({root,origin,clock,openId:activeOpenId});
       transport={stdout:JSON.stringify({...value,inspection:value.inspection??value.readbackReceipt?.inspection}),stderr:'',exitCode:0};
     }else try{transport=await execute(shell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,
       '-Origin',origin,'-Url',url,'-ReadOnly','-TimeoutSeconds','35',
@@ -236,30 +259,47 @@ export async function inspectNativePtHeader({root,origin,url,isolated=false,exec
       unsignedControlCount:inspected.unsignedControlCount,pathClass:readPathClass(inspected.currentUrl),
       dailyTextPresent:inspected.dailyTextPresent??value.nativeReadback?.dailyTextPresent,
       dailyControlCandidateCount:inspected.dailyControlCandidateCount??value.nativeReadback?.dailyControlCandidateCount,
-      apiStage:value.nativeReadback?.apiStage,httpStatus:value.nativeReadback?.httpStatus})};
-    let status=['signed','already_signed','not_signed','managed_challenge','login_required','unconfirmed','needs_attention'].includes(value.status)?value.status:'unconfirmed';
+      apiStage:value.nativeReadback?.apiStage,httpStatus:value.nativeReadback?.httpStatus,
+      pageClass:value.nativeReadback?.pageClass,pagePath:value.nativeReadback?.pagePath,
+      meHttpStatus:value.nativeReadback?.meHttpStatus,calendarHttpStatus:value.nativeReadback?.calendarHttpStatus,
+      noticeGate:value.nativeReadback?.noticeGate})};
+    let status=['signed','already_signed','not_signed','managed_challenge','login_required','unconfirmed','needs_attention','deferred'].includes(value.status)?value.status:'unconfirmed';
     const identityMatches=value.accountKey===binding.accountKey&&value.profileBinding===binding.profileBinding;
     const idleLock=origin===piggoOrigin&&identityMatches&&status==='login_required'&&
       value.failureCode==='idle_locked'&&facts.apiStage==='idle_lock';
     const evidence=successful.has(status)&&identityMatches?receiptEvidence(value,origin,url,inspected,clock()):null;
     const accepted=evidence!==null;
-    const code=proxyPreflight?'profile_binding_unavailable':accepted?'receipt_accepted':facts.waf||status==='managed_challenge'?'waf_present':facts.loginRoute||status==='login_required'?'login_required':
+    const code=proxyPreflight?'profile_binding_unavailable':accepted?'receipt_accepted':
+      value.failureCode==='daily_open_limit'?'daily_open_limit':
+      value.failureCode==='notice_acknowledgement_required'?'notice_acknowledgement_required':
+      idleLock?'idle_locked':
+      facts.waf||status==='managed_challenge'?'waf_present':facts.loginRoute||status==='login_required'?'login_required':
       value.failureCode==='two_factor_required'?'two_factor_required':successful.has(status)?'authoritative_evidence_rejected':
       failureCodes.has(value.failureCode)?value.failureCode:'readback_inconclusive';
     if(successful.has(status)&&!accepted)status='unconfirmed';
     const nativeReadback=diagnostic(proxyPreflight?'preflight':accepted?'completed':'readback',code,facts);
     const label=isolated?'执行 Profile':'主 Chrome';
+    const resolvedFailureCode=routeConflict?'browser_route_conflict':
+      code==='daily_open_limit'?'daily_open_limit':
+      code==='notice_acknowledgement_required'?'notice_acknowledgement_required':
+      idleLock?'idle_locked':code==='login_required'?'login_required':
+      failureCodes.has(value.failureCode)?value.failureCode:'authoritative_status_unavailable';
     const result={origin,url,accountKey:binding.accountKey,profileBinding:binding.profileBinding,status,
       reason:proxyPreflight?(value.nativeProxyFailureCode==='native_proxy_profile_conflict'
         ?'常用 Chrome 的现有代理与站点专用线路不一致，需要正常关闭后按站点线路重开'
         :'站点专用代理配置未通过验证，尚未启动浏览器或签到'):
         accepted?(status==='not_signed'?`${label} 只读首页确认今日尚未签到`:`${label} 只读首页确认今日已签到`):
+        code==='daily_open_limit'?ptFailureMessages.daily_open_limit:
+        code==='notice_acknowledgement_required'?ptFailureMessages.notice_acknowledgement_required:
+        idleLock?`${label} 只读回读触发站点休眠保护，需在浏览器完成解锁`:
         code==='waf_present'?`${label} 只读回读仍停留在安全验证页`:code==='login_required'?`${label} 只读回读需要登录`:
         code==='two_factor_required'?`${label} 只读回读需要二次验证`:code==='network_error'?'站点连接未能建立，尚未读取签到页面':
         code==='tls_certificate_invalid'?'站点证书验证未通过，尚未读取签到页面':
         code==='tls_handshake_failed'?'站点 TLS 连接未能建立，尚未读取签到页面':`${label} 只读回读未取得当日权威证据`,
-      ...(accepted?{evidence}:{failureCode:routeConflict?'browser_route_conflict':idleLock?'idle_locked':code==='login_required'?'login_required':
-        failureCodes.has(value.failureCode)?value.failureCode:'authoritative_status_unavailable'}),
+      ...(accepted?{evidence}:{failureCode:resolvedFailureCode}),
+      ...(resolvedFailureCode==='daily_open_limit'?{retryable:false,retryableLoginRecovery:false,retryExhaustedForDay:true,
+        ...(typeof value.nextEligibleAt==='string'?{nextEligibleAt:value.nextEligibleAt}:{})}:{}),
+      ...(resolvedFailureCode==='notice_acknowledgement_required'?{retryable:false,retryableLoginRecovery:false}:{}),
       submissionAttempted:false,nativeReadback};
     // Recovery consumes the verified child receipt from the same actual
     // profile. Keep this bounded projection separate from page diagnostics.

@@ -12,6 +12,7 @@ import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {classifyPageText} from './detector.mjs';
 import {piggoOrigin,piggoCalendarUrl,piggoAttendanceUrl,piggoDay,installPiggoCalendarFirewall,
   readPiggoCalendarInContext,submitPiggoCalendar} from './piggo-calendar.mjs';
+import {acquireDailyOpen,recordDailyNoticeGate} from './pt-daily-open-limit.mjs';
 
 const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const controlText=value=>String(value??'').replace(/^[\[【]|[\]】]$/g,'').trim();
@@ -288,17 +289,22 @@ async function launchBound(state,launch,clock=()=>new Date()){
   catch(error){await context.close().catch(()=>{});throw error;}
 }
 
-export async function readNativePtApiHeader({root,origin,launch=launchAutomationContext,clock=()=>new Date(),gate=runNativePtGate}={}){
+export async function readNativePtApiHeader({root,origin,launch=launchAutomationContext,clock=()=>new Date(),gate=runNativePtGate,openId}={}){
   let state,context;const diagnostic={apiStage:'configuration'};
   try{
     state=settings(root,origin);
     diagnostic.apiStage='binding';
-    const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock});
+    const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock,openId});
     if(bound.allow!==true||bound.accountKey!==state.identity.accountKey||bound.profileBinding!==state.identity.profileBinding)
       return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
+    const opened=await acquireDailyOpen({root:state.root,origin,config:state.config,source:'native_api_read',openId,clock});
+    if(opened.allowed!==true)return {...opened.decision,...state.identity,nativeGate:true};
     diagnostic.apiStage='launch';
     context=await launchBound(state,launch,clock);
     const result=(await readInContext(context,state,clock,diagnostic)).result;
+    if(result?.failureCode==='notice_acknowledgement_required'){
+      await recordDailyNoticeGate({root:state.root,origin,clock});
+    }
     if(origin===piggoOrigin&&piggoConfigHash(read(path.join(state.root,'config/config.json')))!==state.configHash)
       return unavailable(state.identity,'native_readback_unavailable',undefined,{apiStage:'binding'});
     return result;
@@ -308,18 +314,21 @@ export async function readNativePtApiHeader({root,origin,launch=launchAutomation
 }
 
 export async function readNativePtApiHeaderInContext({root,origin,context,expectedProfileBinding,profileProof,
-  clock=()=>new Date(),gate=runNativePtGate}={}){
+  clock=()=>new Date(),gate=runNativePtGate,openId}={}){
   let state,firewall;const diagnostic={apiStage:'configuration'};
   try{
     state=settings(root,origin);
     diagnostic.apiStage='binding';
     if(state.binding.profileBinding!==expectedProfileBinding||typeof profileProof!=='function'||!await profileProof())
       return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
-    const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock});
+    const bound=await gate({root:state.root,origin,url:state.policy.url,profile:state.binding.profile,mainProfile:false,phase:'bind',clock,openId});
     if(bound.allow!==true||bound.profileBinding!==state.identity.profileBinding||bound.accountKey!==state.identity.accountKey)
       return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
     if(origin===piggoOrigin)firewall=await installPiggoCalendarFirewall(context,{clock});
     const value=(await readInContext(context,state,clock,diagnostic)).result;
+    if(value?.failureCode==='notice_acknowledgement_required'){
+      await recordDailyNoticeGate({root:state.root,origin,clock});
+    }
     diagnostic.apiStage='profile_verification';
     if(origin===piggoOrigin&&piggoConfigHash(read(path.join(state.root,'config/config.json')))!==state.configHash)
       return unavailable(state.identity,'native_readback_unavailable',undefined,diagnostic);
@@ -350,14 +359,16 @@ function formalCompletion(text,now){
 }
 
 export async function runNativePtApiCheckin({root,origin,url,launch=launchAutomationContext,clock=()=>new Date(),
-  gate=runNativePtGate,validateLease=validateControllerLease,acquire=acquireRunLock,release=releaseRunLock}={}){
-  if(origin===piggoOrigin)return runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,validateLease,acquire,release});
+  gate=runNativePtGate,validateLease=validateControllerLease,acquire=acquireRunLock,release=releaseRunLock,openId}={}){
+  if(origin===piggoOrigin)return runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,validateLease,acquire,release,openId});
   let state,context,lock,attempted=false;
   try{
     state=settings(root,origin,{execution:true,url});
     await validateLease(state.root);
     lock=await acquire(path.join(state.root,'tmp/run.lock'));
-    const boundArgs={root:state.root,origin,url,profile:state.binding.profile,mainProfile:false,clock};
+    const opened=await acquireDailyOpen({root:state.root,origin,config:state.config,source:'native_api_checkin',openId,clock});
+    if(opened.allowed!==true)return {...opened.decision,...state.identity,nativeGate:true};
+    const boundArgs={root:state.root,origin,url,profile:state.binding.profile,mainProfile:false,clock,openId:opened.openId??openId};
     const bound=await gate({...boundArgs,phase:'bind'});
     if(bound.allow!==true||bound.accountKey!==state.identity.accountKey||bound.profileBinding!==state.identity.profileBinding)
       return {...(bound.decision??unavailable(state.identity)),...state.identity,nativeGate:true};
@@ -394,20 +405,23 @@ export async function runNativePtApiCheckin({root,origin,url,launch=launchAutoma
   finally{await context?.close().catch(()=>{});if(lock)await release(lock).catch(()=>{});}
 }
 
-async function runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,validateLease,acquire,release}){
+async function runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,validateLease,acquire,release,openId}){
   let state,context,lock;
   try{
     state=settings(root,origin,{execution:true,url});
     await validateLease(state.root);
     lock=await acquire(path.join(state.root,'tmp/run.lock'));
-    const args={root:state.root,origin,url,profile:state.binding.profile,mainProfile:false,clock};
+    const opened=await acquireDailyOpen({root:state.root,origin,config:state.config,source:'native_api_checkin',openId,clock});
+    if(opened.allowed!==true)return {...opened.decision,...state.identity,nativeGate:true};
+    const activeOpenId=opened.openId??openId;
+    const args={root:state.root,origin,url,profile:state.binding.profile,mainProfile:false,clock,openId:activeOpenId};
     const bound=await gate({...args,phase:'bind'});
     if(bound.allow!==true||bound.accountKey!==state.identity.accountKey||bound.profileBinding!==state.identity.profileBinding)
       return {...(bound.decision??unavailable(state.identity)),...state.identity,nativeGate:true};
     context=await launch({...state.config,automationUserDataDir:state.binding.profile,ptPassiveReadOnly:true,
       ptReadProxyServer:state.policy.proxyServer,nativePtReadOrigin:origin,failureScreenshots:false});
     return await runPiggoCalendarCheckinInContext({root:state.root,context,expectedProfileBinding:state.binding.profileBinding,
-      profileProof:async()=>true,clock,gate,validateLease,expectedConfigHash:state.configHash});
+      profileProof:async()=>true,clock,gate,validateLease,expectedConfigHash:state.configHash,openId:activeOpenId});
   }catch(error){return unavailable(state?.identity,error?.code==='account_mismatch'?'account_mismatch':'native_readback_unavailable');}
   finally{await context?.close().catch(()=>{});if(lock)await release(lock).catch(()=>{});}
 }
@@ -415,7 +429,7 @@ async function runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,valida
 // The caller owns the browser and execution lock. Login recovery calls this
 // before releasing its authenticated session; the standalone runner uses it too.
 export async function runPiggoCalendarCheckinInContext({root,context,expectedProfileBinding,profileProof,
-  clock=()=>new Date(),gate=runNativePtGate,validateLease=validateControllerLease,expectedConfigHash}={}){
+  clock=()=>new Date(),gate=runNativePtGate,validateLease=validateControllerLease,expectedConfigHash,openId}={}){
   let state,firewall,page,attempted=false;
   const unknownResult=()=>({...unknown(state?.identity),reason:'猪猪今日签到可能已提交，保留意图并先只读核验，禁止自动重放'});
   try{
@@ -429,7 +443,7 @@ export async function runPiggoCalendarCheckinInContext({root,context,expectedPro
       value?.url===piggoAttendanceUrl&&value.passiveOnly!==true);
     if(canSubmit)settings(root,piggoOrigin,{execution:true,url:piggoAttendanceUrl});
     const args={root:state.root,origin:piggoOrigin,url:canSubmit?piggoAttendanceUrl:piggoCalendarUrl,
-      profile:state.binding.profile,mainProfile:false,clock};
+      profile:state.binding.profile,mainProfile:false,clock,openId};
     await validateLease(state.root);
     const bound=await gate({...args,phase:'bind'});
     if(bound.managed!==true||bound.allow!==true||bound.accountKey!==state.identity.accountKey||
@@ -438,6 +452,10 @@ export async function runPiggoCalendarCheckinInContext({root,context,expectedPro
     const before=await readPiggoCalendarInContext(context,state,clock,{},true);
     page=before.page;
     if(!await unchanged())return unavailable(state.identity,'native_readback_unavailable');
+    if(before.result.failureCode==='notice_acknowledgement_required'){
+      await recordDailyNoticeGate({root:state.root,origin:piggoOrigin,clock});
+      return before.result;
+    }
     if(!['not_signed','already_signed'].includes(before.result.status))return before.result;
     const registered=await gate({...args,phase:'readback',receipt:before.result.readbackReceipt});
     if(registered.allow!==true||registered.receiptAccepted!==true)return registered.decision??unavailable(state.identity);

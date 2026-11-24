@@ -94,6 +94,14 @@ authenticated daily header may confirm the current day; arbitrary page text,
 cumulative counters, different origins, stale dates, and challenge/login pages do
 not. Passive reads that cross the business-day boundary are rejected.
 
+Configured `ptReadOnlyPolicies[origin].dailyOpenLimit` caps automated site opens
+per Shanghai business day (`daily_open_limit`, `submissionAttempted=false`,
+deferred until the next day without manual-recovery escalation). A mandatory
+notice gate (`notice_acknowledgement_required`) requires user confirmation in
+their own browser (`actionNeeded`, no same-day retry, at most one alert per day),
+and non-2FA PigGo login failures preserve their true failure code instead of
+being grouped under `two_factor_required`.
+
 Native readbacks retain the actual account and Profile binding in a separate
 durable receipt. A current negative receipt does not rewrite an older day's
 unknown submission as failed or successful. The preflight registers the receipt

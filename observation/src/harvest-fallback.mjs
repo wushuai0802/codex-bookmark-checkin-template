@@ -14,6 +14,7 @@ import {withCurrentPtCatalog} from './pt-catalog.mjs';
 import {currentHarvestReport,harvestDeadlinePassed,harvestOverdueAt} from '../public/harvest-overdue.mjs';
 import {projectHarvestWindow,harvestWindowActive} from '../public/harvest-window.mjs';
 import {harvestOverdueCodes} from './checkin-contract.generated.mjs';
+import {dailyOpenExhaustedOrigins} from './pt-daily-open-state.generated.mjs';
 
 const dayAt=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(date);
 const originOf=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?canonicalPtOrigin(u.origin):null;}catch{return null;}};
@@ -143,7 +144,18 @@ function confirmedSupplement(report,origin,businessDate,now,{accountKey=null,str
   return exactBinding||legacyPassive;
 }
 
-export function planHarvestFallback({harvest,harvestObservation=null,harvestUnavailable=false,overdueAt,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),fallbackOnlyEnabled=false,readOnlyOrigins=[]}={}) {
+function loadExhaustedOrigins(root,config={},now=new Date()){
+  try{
+    const runtime=loadRuntimeConfig(root);
+    if(!runtime.legacyRoot)return new Set();
+    const configFile=path.join(runtime.legacyRoot,'config','config.json');
+    const legacyConfig=fs.existsSync(configFile)?JSON.parse(fs.readFileSync(configFile,'utf8')):{};
+    const merged={...legacyConfig,ptReadOnlyPolicies:{...(legacyConfig.ptReadOnlyPolicies??{}),...(config.ptReadOnlyPolicies??{})}};
+    return dailyOpenExhaustedOrigins({root:runtime.legacyRoot,config:merged,now});
+  }catch{return new Set();}
+}
+
+export function planHarvestFallback({harvest,harvestObservation=null,harvestUnavailable=false,overdueAt,catalog,plan,latest,fallbackReport=null,config={},now=new Date(),fallbackOnlyEnabled=false,readOnlyOrigins=[],exhaustedOrigins=new Set()}={}) {
   const businessDate=dayAt(now),eligible=[],blocked=[];let observedSuccess=0;
   const cutoff=harvestOverdueAt(overdueAt),afterDeadline=harvestDeadlinePassed(now.getTime(),cutoff);
   const unavailable=harvestUnavailable||!harvest||harvest.schemaVersion!==undefined&&harvest.schemaVersion!==1||
@@ -297,6 +309,11 @@ export function planHarvestFallback({harvest,harvestObservation=null,harvestUnav
       blocked.push({origin,reason:'external_condition',external:true});
       assessments.push({origin,state:'external_condition',reason:'external_condition'});continue;
     }
+    const exhaustedCode=[prior?.failureCode,supplement?.failureCode]
+      .find(code=>['daily_open_limit','notice_acknowledgement_required'].includes(code));
+    if(exhaustedCode||exhaustedOrigins?.has?.(origin)){
+      block(origin,exhaustedCode??'daily_open_limit');continue;
+    }
     if(target&&prior?.failureCode==='submission_outcome_unknown'&&prior.submissionAttempted===true){
       // A registered PT whose write result is unknown must not be submitted
       // again by Harvest fallback. Queue a bounded passive review instead;
@@ -434,13 +451,14 @@ function passiveVerificationDue(state,candidate,readOnlyOrigins,now){
     :now.getTime()-Date.parse(probe.startedAt)>=30*60_000);
 }
 
-export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={},readOnlyOrigins=[],now=new Date()}={}){
+export function pendingHarvestFallbackAttempts(root,preview,{recoveredAtByAccount={},readOnlyOrigins=[],now=new Date(),exhaustedOrigins}={}){
   const {state}=readAttemptState(root,preview.businessDate);
+  const exhausted=exhaustedOrigins??loadExhaustedOrigins(root,{},now);
   const normalizedReadOnlyOrigins=[...new Set(readOnlyOrigins.map(originOf).filter(Boolean))];
-  return preview.eligible.filter(candidate=>candidate.readOnlyReview===true||
+  return preview.eligible.filter(candidate=>!exhausted.has(candidate.origin)&&(candidate.readOnlyReview===true||
     (candidate.kind==='fallback_only'&&normalizedReadOnlyOrigins.includes(candidate.origin))
     ?passiveVerificationDue(state,candidate,normalizedReadOnlyOrigins,now)
-    :!alreadyAttempted(state,candidate,recoveredAtByAccount,now)&&!unresolvedEarlierAttempt(root,candidate));
+    :!alreadyAttempted(state,candidate,recoveredAtByAccount,now)&&!unresolvedEarlierAttempt(root,candidate)));
 }
 
 function claimWorker(root) {
@@ -459,8 +477,9 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   if(manualRecoveryId!==null&&(!execute||!Array.isArray(onlyOrigins)||onlyOrigins.length!==1||
     !/^(?:op_[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(manualRecoveryId)))
     throw Error('Manual recovery requires one explicit bound request');
+  const exhaustedOrigins=loadExhaustedOrigins(root,config,now);
   let preview=planHarvestFallback({harvest,harvestObservation,harvestUnavailable,overdueAt,catalog,plan,latest,fallbackReport,config,now,fallbackOnlyEnabled,
-    readOnlyOrigins:normalizedReadOnlyOrigins});
+    readOnlyOrigins:normalizedReadOnlyOrigins,exhaustedOrigins});
   if(onlyOrigins){
     const selected=Array.isArray(onlyOrigins)&&onlyOrigins.length===1?originOf(onlyOrigins[0]):null;
     if(!selected||!catalog.sites.some(s=>originOf(s.origin)===selected))throw Error('invalid selected PT scope');

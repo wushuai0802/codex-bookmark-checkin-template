@@ -13,6 +13,8 @@ export function attentionReason(task){
   const condition=taskStatusCondition(task);
   if(taskResultBucket(task)==='proof')return {label:'回执待补证',filter:'proof',tone:'review',priority:2};
   if(externalTask(task))return {label:taskStatusLabelForWait(condition),filter:'external',tone:'waiting',priority:4};
+  if(condition==='notice_acknowledgement_required')return {label:'需确认公告',filter:'attention',tone:'urgent',priority:1};
+  if(condition==='daily_open_limit')return {label:'已达日上限',filter:'deferred',tone:'waiting',priority:3};
   if(task.observedStatus==='login_required'||['login_required','upstream_login_required','two_factor_required'].includes(condition))
     return {label:'需登录',filter:'login_required',tone:'urgent',priority:0};
   if(task.observedStatus==='failed')return {label:'执行异常',filter:'failed',tone:'urgent',priority:1};

@@ -291,6 +291,14 @@ export function withRetrySchedule(result, config = {}, now = new Date()) {
     nextEligibleAt: nextShanghaiTimeNextDay(config.schedule ?? "08:05", now),
     reason: "站点 TLS 证书无效，今日暂停重试，次日再核验",
   };
+  if (result.failureCode === "daily_open_limit") return {
+    ...result,
+    retryable: false,
+    retryableLoginRecovery: false,
+    retryExhaustedForDay: true,
+    nextEligibleAt: nextShanghaiTimeNextDay(config.schedule ?? "08:05", now),
+    reason: result.reason || "该站点今日自动打开次数已达上限，今日不再重试，次日再核验",
+  };
   if(result.siteCondition==='site_maintenance'||result.failureCode==='site_maintenance')return {
     ...result,siteCondition:'site_maintenance',retryExhaustedForDay:true,
     nextEligibleAt:nextShanghaiTimeNextDay(config.schedule??'08:05',now),
@@ -317,6 +325,13 @@ export function withRetrySchedule(result, config = {}, now = new Date()) {
 
 export function advanceDeferredRetry(result, previous, config = {}, now = new Date()) {
   if (result?.status !== "deferred") return result;
+  if (result.failureCode === "daily_open_limit") return {
+    ...result,
+    retryable: false,
+    retryableLoginRecovery: false,
+    retryExhaustedForDay: true,
+    nextEligibleAt: nextShanghaiTimeNextDay(config.schedule ?? "08:05", now),
+  };
   if (result.failureCode === "tls_certificate_invalid") return {
     ...withRetrySchedule(result, config, now),
     retrySequenceDate: localRunDate(now),
@@ -491,6 +506,7 @@ export function deferUnresolvedLogin(result, config = {}, now = new Date()) {
 
 export function isRetryEligible(result, now = new Date()) {
   if (result?.retryable === false || result?.submissionAttempted === true) return false;
+  if (result?.retryExhaustedForDay === true || ["daily_open_limit", "notice_acknowledgement_required"].includes(result?.failureCode)) return false;
   if (result?.status === "not_available" && !isTerminalResult(result)) return true;
   if (!RECOVERABLE_STATUSES.has(result?.status)) return false;
   if (result.status !== "deferred") return true;

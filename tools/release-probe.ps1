@@ -92,6 +92,33 @@ function Harvest-Confirmed($Snapshot, $Task) {
         $e.evidence.statusVerified -eq $true -and $e.evidence.businessDate -eq $Snapshot.businessDate -and
         $null -ne $e.observedAt -and (Day $e.observedAt) -eq $Snapshot.businessDate -and ([datetimeoffset]$e.observedAt) -le $captured.AddMinutes(1)
 }
+function DailyOpenExhaustedOrigins {
+    $exhausted = [System.Collections.Generic.List[string]]::new()
+    $opensFile = Join-Path $ExecutionRoot 'data/native-pt-opens.json'
+    if (-not (Exists $opensFile)) { return @() }
+    $journal = Read-Json $opensFile
+    if ((Has $journal 'notices') -and $null -ne $journal.notices) {
+        foreach ($notice in @($journal.notices)) {
+            if ($null -ne $notice -and $notice.businessDate -eq $today -and $notice.code -eq 'notice_acknowledgement_required' -and $notice.origin -is [string]) {
+                if ($exhausted -notcontains $notice.origin) { $exhausted.Add($notice.origin) }
+            }
+        }
+    }
+    $configFile = Join-Path $ExecutionRoot 'config/config.json'
+    if ((Exists $configFile) -and (Has $journal 'opens') -and $null -ne $journal.opens) {
+        $execConfig = Read-Json $configFile
+        if ((Has $execConfig 'ptReadOnlyPolicies') -and $null -ne $execConfig.ptReadOnlyPolicies) {
+            foreach ($prop in $execConfig.ptReadOnlyPolicies.PSObject.Properties) {
+                $limit = if ($null -ne $prop.Value) { $prop.Value.dailyOpenLimit } else { $null }
+                if (($limit -is [int] -or $limit -is [long]) -and $limit -ge 1 -and $limit -le 100) {
+                    $used = @($journal.opens | Where-Object { $null -ne $_ -and $_.origin -eq $prop.Name -and $_.businessDate -eq $today }).Count
+                    if ($used -ge $limit -and $exhausted -notcontains $prop.Name) { $exhausted.Add($prop.Name) }
+                }
+            }
+        }
+    }
+    return @($exhausted)
+}
 
 $tasks = Capture {
     $names = ConvertFrom-Json -InputObject $TaskNamesJson
@@ -186,10 +213,16 @@ $evidence = Capture {
     $catalog = Read-Json (Join-Path $OpsRoot 'tmp/nas-sync/pt-monitor-catalog.json')
     $state = Read-Json (Join-Path $ObservationRoot 'data/pt-evidence-repair.json')
     Require ($snapshot.tasks -is [array] -and $snapshot.receipts -is [array] -and $snapshot.ptStatus.sites -is [array] -and $catalog.sites -is [array] -and (Has $state 'sites'))
+    $exhausted = @(DailyOpenExhaustedOrigins)
+    $statusExhausted = @($snapshot.ptStatus.sites | Where-Object {
+        $_.origin -is [string] -and $_.effective.failureCode -cin @('daily_open_limit','notice_acknowledgement_required')
+    } | ForEach-Object { $_.origin })
     $candidates = @{}
     $origins = @($catalog.sites | ForEach-Object { Require ($_.origin -is [string]); $_.origin })
     foreach ($task in $snapshot.tasks) {
         Require ($task.origin -is [string] -and $task.observedStatus -is [string] -and $task.taskId -is [string])
+        if ($task.origin -cin $exhausted -or $task.origin -cin $statusExhausted -or
+            $task.failureCode -cin @('daily_open_limit','notice_acknowledgement_required')) { continue }
         $review = $task.observedStatus -eq 'needs_attention' -and $task.failureCode -eq 'submission_outcome_unknown' -and $task.submissionAttempted -eq $true
         $positive = $task.observedStatus -in @('signed','already_signed')
         $receipt = @($snapshot.receipts | Where-Object { $_.taskId -eq $task.taskId -and $_.evidence.authoritative -eq $true }).Count -gt 0
@@ -203,7 +236,8 @@ $evidence = Capture {
         Require ($site.origin -is [string] -and $site.capabilities.read -is [bool])
         $e = $site.effective
         $uncertain = $e.failureCode -eq 'submission_outcome_unknown' -or ($e.submissionAttempted -eq $true -and $e.status -notin @('signed','already_signed'))
-        if ($site.inLegacyPlan -or -not $site.fallbackEnabled -or $site.disabledByConfig -or $site.origin -notin $origins -or -not $site.capabilities.read -or
+        if ($site.origin -cin $exhausted -or $site.origin -cin $statusExhausted -or
+            $site.inLegacyPlan -or -not $site.fallbackEnabled -or $site.disabledByConfig -or $site.origin -notin $origins -or -not $site.capabilities.read -or
             $site.evidenceState -eq 'external_blocked' -or $e.fresh -ne $true -or -not $uncertain) { continue }
         Require ($null -ne $e.observedAt)
         if ((Day $e.observedAt) -ne $today -or $captured - ([datetimeoffset]$e.observedAt) -lt [timespan]::FromMinutes(1)) { continue }
@@ -227,6 +261,7 @@ $fallback = Capture {
     if (-not $monitor.enabled) { return @{ pending = @() } }
     $raw = Read-Json (Join-Path $ObservationRoot "outputs/harvest-fallback-attempts-$today.json")
     Require ($raw.businessDate -eq $today -and $raw.attempts -is [array])
+    $exhausted = @(DailyOpenExhaustedOrigins)
     # Audits are append-only: an old busy/preflight entry must not keep an
     # already completed attempt pending. Group only in memory; omit identities.
     $deferred = @('deferred_busy','deferred_preflight')
@@ -287,10 +322,13 @@ $fallback = Capture {
                         # its budget today. Only that budget closes here.
                         $paused = $matching[0].disabledByConfig -eq $true -and $matching[0].fallbackEnabled -ne $true
                         $effective = $matching[0].effective
+                        if ($effective.failureCode -in @('daily_open_limit','notice_acknowledgement_required')) { continue }
                         if ($effective.status -in @('signed','already_signed') -and $effective.authoritative -eq $true -and $effective.fresh -eq $true -and
                             $null -ne $effective.observedAt -and (Day $effective.observedAt) -eq $today) { continue }
                     }
                 }
+                if ($latest.origin -cin $exhausted -or
+                    $latest.outcome.failureCode -cin @('daily_open_limit','notice_acknowledgement_required')) { continue }
                 if ($latest.state -in $deferred) {
                     Require ($null -ne $latest.nextEligibleAt)
                     if ((Day $latest.nextEligibleAt) -le $today) { @{ kind = 'scheduled_fallback' } }

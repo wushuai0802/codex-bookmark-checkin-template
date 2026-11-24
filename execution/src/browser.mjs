@@ -23,6 +23,7 @@ import { checkHarvestPtBeforeWrite, isPtExecutionTarget } from "./harvest-pt-gat
 import { guardPtSubmission, knownPtDialogOpener } from './pt-submission-guard.mjs';
 import {ptReadPolicies,ptFailureMessages,u2QuestionPolicy} from './checkin-contract.generated.mjs';
 import {ptReadPolicy,readPtPassivePage,ptReadProxy} from './pt-read-policy.mjs';
+import {acquireDailyOpen} from './pt-daily-open-limit.mjs';
 import {initialPtObservation} from './pt-initial-observation.mjs';
 import {readHddolbyHeader,hddolbyDailyProof,hddolbyDailyStatusProof} from './hddolby-readonly.mjs';
 import {recoverHddolbyTwoFactor} from './hddolby-two-factor.mjs';
@@ -1883,6 +1884,7 @@ export async function launchAutomationContext(config) {
 
 export async function processTarget(context, target, config, qaRules, logDirectory, {
   runCandidate = processCandidate,
+  openId,
 } = {}) {
   const configuredSkip = configuredTargetSkip(target, config);
   if (configuredSkip) return { ...configuredSkip, attempt: 0, candidateHistory: [] };
@@ -1899,7 +1901,19 @@ export async function processTarget(context, target, config, qaRules, logDirecto
     (passivePolicy.dailyHeader||passivePolicy.openCdHeader||ptReadPolicies[target.origin]?.completionReadFirst)
     ? [...new Set([passivePolicy.url, ...target.candidates])]
     : target.candidates;
+  let activeOpenId = openId;
   for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
+    const opened = await acquireDailyOpen({
+      root: rootDirectory,
+      origin: target.origin,
+      config,
+      source: 'browser_process_target',
+      openId: attempt === 0 ? activeOpenId : undefined,
+    });
+    if (opened.allowed !== true) {
+      return { ...opened.decision, attempt, candidateHistory };
+    }
+    activeOpenId = opened.openId ?? activeOpenId;
     const page = await context.newPage();
     await awaitOffscreenWindow(page);
     let attemptResult = null;

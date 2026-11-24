@@ -64,6 +64,11 @@ function privateNativeHeaderProxy(config,proxy){
 }
 
 export function ptReadPolicy(origin,config={}){
+  if(config.ptReadOnlyPolicies?.[origin]?.dailyOpenLimit!==undefined&&config.ptReadOnlyPolicies?.[origin]?.dailyOpenLimit!==null){
+    const limit=config.ptReadOnlyPolicies[origin].dailyOpenLimit;
+    if(!Number.isSafeInteger(limit)||limit<1||limit>100)
+      throw Object.assign(Error('PT read-only dailyOpenLimit is invalid'),{code:'PT_READONLY_UNSAFE'});
+  }
   if(origin==='https://piggo.me'){
     const policy=config.ptReadOnlyPolicies?.[origin],route=nativePtReadRoute(config,origin);
     if(policy?.reviewed!==true||policy.piggoCalendar!==true||policy.mode!=='safe_history_page'||

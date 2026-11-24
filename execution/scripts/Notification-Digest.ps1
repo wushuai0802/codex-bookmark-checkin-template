@@ -1,4 +1,4 @@
-# Presentation and durable notification events only. Never invokes a notifier,
+﻿# Presentation and durable notification events only. Never invokes a notifier,
 # runner, login recovery, scheduler mutation or site action.
 function Get-DigestHash([string]$Text) {
     [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))).ToLowerInvariant()
@@ -129,7 +129,7 @@ function Invoke-DailyDigest([switch]$OutageOnly) {
                 $text = "签到需处理 $($newSites.Count) 个站点"
                 foreach ($task in $actionTasks) {
                     if ($newSites -ccontains (Get-DigestHash ([string]$task.origin))) {
-                        $reason = if ($task.dayReasonCode -in @('harvest_stalled','harvest_overdue_unavailable','harvest_overdue_incomplete')) { $task.daySummary } else { '需要人工恢复，详见面板' }
+                        $reason = if ($task.dayReasonCode -in @('harvest_stalled','harvest_overdue_unavailable','harvest_overdue_incomplete')) { $task.daySummary } elseif ($task.failureCode -eq 'notice_acknowledgement_required') { '站点要求先阅读并确认公告，请在自己的浏览器里处理' } else { '需要人工恢复，详见面板' }
                         $text += "`n• $(Get-DigestSiteName $task)：$reason"
                     }
                 }
@@ -141,7 +141,7 @@ function Invoke-DailyDigest([switch]$OutageOnly) {
             if ($actionTasks.Count) {
                 $text += "`n`n需处理"
                 foreach ($task in $actionTasks) {
-                    $reason = if ($task.dayReasonCode -in @('harvest_stalled','harvest_overdue_unavailable','harvest_overdue_incomplete')) { $task.daySummary } elseif ($task.failureCode -eq 'two_factor_required') { '二次验证待重新授权' } elseif ($task.observedStatus -eq 'interactive_challenge') { '需要人工验证' } else { '登录或执行待人工恢复' }
+                    $reason = if ($task.dayReasonCode -in @('harvest_stalled','harvest_overdue_unavailable','harvest_overdue_incomplete')) { $task.daySummary } elseif ($task.failureCode -eq 'notice_acknowledgement_required') { '站点要求先阅读并确认公告，请在自己的浏览器里处理' } elseif ($task.failureCode -eq 'two_factor_required') { '二次验证待重新授权' } elseif ($task.observedStatus -eq 'interactive_challenge') { '需要人工验证' } else { '登录或执行待人工恢复' }
                     $text += "`n• $(Get-DigestSiteName $task)：$reason"
                 }
             }

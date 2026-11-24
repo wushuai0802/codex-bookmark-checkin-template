@@ -111,7 +111,8 @@ function Test-HasImmediateRetry($Report, [datetime]$RetryAt, [string[]]$Selected
     $unresolved = @($results | Where-Object { -not (Test-TerminalCheckinResult $_) })
     if ($unresolved.Count -eq 0) { return $false }
     foreach ($result in $unresolved) {
-        if ([string]$result.status -eq 'needs_attention' -or [string]$result.retryCause -eq 'invalid_credential') { continue }
+        if ([string]$result.status -eq 'needs_attention' -or [string]$result.retryCause -eq 'invalid_credential' -or
+            [string]$result.failureCode -cin @('daily_open_limit', 'notice_acknowledgement_required') -or $result.retryExhaustedForDay -eq $true) { continue }
         if ([string]$result.status -ne 'deferred') { return $true }
         try {
             if (-not $result.nextEligibleAt -or [datetimeoffset]$result.nextEligibleAt -le $retryOffset) { return $true }
@@ -125,6 +126,7 @@ function Test-NeedsSavedLoginSync($ResumeCandidate, [datetime]$Now) {
     if ($null -eq $ResumeCandidate) { return $true }
     $nowOffset = [datetimeoffset]$Now
     foreach ($result in @($ResumeCandidate.Report.results)) {
+        if ([string]$result.failureCode -cin @('daily_open_limit', 'notice_acknowledgement_required') -or $result.retryExhaustedForDay -eq $true) { continue }
         $isLoginProblem = [string]$result.status -eq 'login_required' `
             -or ([string]$result.status -eq 'deferred' -and [string]$result.retryCause -eq 'login_required')
         if (-not $isLoginProblem) { continue }

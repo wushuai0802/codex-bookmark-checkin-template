@@ -194,6 +194,8 @@ function betterObservation(a, b) {
   if (b.status === 'unknown' && !b.evidence.authoritative && confirmedCompletion(a)) return a;
   if (confirmedCompletion(a) && unconfirmedObservation(b)) return a;
   if (confirmedCompletion(b) && unconfirmedObservation(a)) return b;
+  if (a.failureCode === 'daily_open_limit' && b.failureCode && b.failureCode !== 'daily_open_limit') return b;
+  if (b.failureCode === 'daily_open_limit' && a.failureCode && a.failureCode !== 'daily_open_limit') return a;
   // Rank equivalent authorities by source. Opposing signed/unsigned signals
   // remain a discrepancy and keep the newer observation; neither authorizes
   // a submission while the conflict is unresolved.

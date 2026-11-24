@@ -3,14 +3,16 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {bounded,TIMED_OUT} from './bounded-wait.mjs';
+import {ptFailureMessages} from './checkin-contract.generated.mjs';
 import {nativePtReadBinding} from './native-pt-read.mjs';
 import {ptReadPolicy} from './pt-read-policy.mjs';
+import {acquireDailyOpen,recordDailyNoticeGate} from './pt-daily-open-limit.mjs';
 import {runNativePtGate} from './native-pt-gate.mjs';
 import {readNativePtApiHeaderInContext,runPiggoCalendarCheckinInContext} from './native-pt-api.mjs';
 import {acquireRunLock,releaseRunLock} from './run-lock.mjs';
 import {readRecoveryState,attemptedToday,writeRecoveryState} from './native-pt-two-factor.mjs';
 import {piggoOrigin,piggoCalendarUrl,piggoLockedUrl,piggoDay,piggoApiData,piggoResponseFresh,
-  acceptedPiggoCalendarReceipt,installPiggoCalendarFirewall} from './piggo-calendar.mjs';
+  acceptedPiggoCalendarReceipt,installPiggoCalendarFirewall,piggoPageClasses} from './piggo-calendar.mjs';
 import {inspectPiggoSpaLogin,inspectPiggoIdleUnlock,usernameSelector,passwordSelector,submitSelector,
   unlockPasswordSelector,unlockSubmitSelector} from './piggo-login-form.mjs';
 export {inspectPiggoSpaLogin,inspectPiggoIdleUnlock} from './piggo-login-form.mjs';
@@ -20,6 +22,15 @@ const loginUrl=piggoOrigin+'/login';
 const safePath=/^\/(?:[a-z][a-z0-9_-]{0,30}(?:\/[a-z][a-z0-9_-]{0,30}){0,7})?$/;
 const apiPath=value=>safePath.test(value)&&value.startsWith('/v1/web/');
 const readbackCodes=values=>Object.fromEntries(Object.entries(values).filter(([,code])=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)));
+const readbackDiagnostics=readback=>{
+  const out={};
+  if(piggoPageClasses.includes(readback?.pageClass))out.pageClass=readback.pageClass;
+  if(typeof readback?.pagePath==='string'&&safePath.test(readback.pagePath))out.pagePath=readback.pagePath;
+  if(Number.isInteger(readback?.meHttpStatus)&&readback.meHttpStatus>=100&&readback.meHttpStatus<=599)out.meHttpStatus=readback.meHttpStatus;
+  if(Number.isInteger(readback?.calendarHttpStatus)&&readback.calendarHttpStatus>=100&&readback.calendarHttpStatus<=599)out.calendarHttpStatus=readback.calendarHttpStatus;
+  if(typeof readback?.noticeGate==='boolean')out.noticeGate=readback.noticeGate;
+  return out;
+};
 const pagePath=page=>{
   try{const url=new URL(page.url());return url.origin===piggoOrigin&&safePath.test(url.pathname)?url.pathname:undefined;}
   catch{return undefined;}
@@ -45,7 +56,7 @@ async function validateController(root){
   process.kill(runner.pid,0);
 }
 
-export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode='Login',clock=()=>new Date(),
+export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode='Login',openId=process.env.CHECKIN_PT_OPEN_ID,clock=()=>new Date(),
   gate=runNativePtGate,readHeader=readNativePtApiHeaderInContext,inspectForm=inspectPiggoSpaLogin,
   inspectUnlock=inspectPiggoIdleUnlock,checkinInContext=runPiggoCalendarCheckinInContext,
   prepare,withLogin,validateLease=validateController,acquire=acquireRunLock,release=releaseRunLock,timeouts={}}={}){
@@ -61,13 +72,24 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     if(result===TIMED_OUT||!remaining())throw Error('authentication_wait_expired');
     return result;
   };
-  let lock,firewall,route,attempted=false,accepted=false,reason='recovery_unavailable',providerReason,entry,journal,output;
+  let lock,firewall,route,attempted=false,accepted=false,reason='recovery_unavailable',providerReason,entry,journal,output,dailyLimitResult;
   let passiveDiagnostic={},submitDiagnostic={},recoveryMode='password_login',dailyCheckin,finalized=false;const blockedPosts=[];
-  const outcome=()=>output=({origin:piggoOrigin,handled:true,status:accepted?'logged_in':'needs_attention',
-    ...(dailyCheckin?{dailyCheckin}:{}),
-    ...(!accepted?{failureCode:'two_factor_required'}:{}),
-    nativeTwoFactorRecovery:{phase:'password_login',recoveryMode,attempted,accepted,reason,...(providerReason?{providerReason}:{}),...passiveDiagnostic,
-      ...submitDiagnostic,...(blockedPosts.length?{blockedPosts:[...blockedPosts]}:{})}});
+  const resolvedFailureCode=()=>{
+    if(accepted)return undefined;
+    if(reason==='two_factor_requires_manual')return 'two_factor_required';
+    return reason;
+  };
+  const outcome=()=>{
+    const failureCode=resolvedFailureCode();
+    const status=accepted?'logged_in':(failureCode==='daily_open_limit'?'deferred':'needs_attention');
+    return output=({origin:piggoOrigin,handled:true,status,
+      ...(dailyCheckin?{dailyCheckin}:{}),
+      ...(failureCode?{failureCode,retryable:false}:{}),
+      ...(failureCode==='daily_open_limit'&&dailyLimitResult?{retryExhaustedForDay:true,nextEligibleAt:dailyLimitResult.nextEligibleAt}:{}),
+      ...(failureCode==='notice_acknowledgement_required'?{reason:ptFailureMessages.notice_acknowledgement_required}:{}),
+      nativeTwoFactorRecovery:{phase:'password_login',recoveryMode,attempted,accepted,reason,...(providerReason?{providerReason}:{}),...passiveDiagnostic,
+        ...submitDiagnostic,...(blockedPosts.length?{blockedPosts:[...blockedPosts]}:{})}});
+  };
   try{
     // A read-only consumer must not even prepare the vault or navigate login.
     if(mode!=='Login'){reason='readonly';return outcome();}
@@ -91,7 +113,15 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     if(!await wait(bound,limits.binding))return outcome();
     journal=readRecoveryState(root);
     if(attemptedToday(journal,binding,today,'password_login')){reason='daily_recovery_limit';return outcome();}
-    const verify=()=>readHeader({root,origin:piggoOrigin,context:page.context(),expectedProfileBinding:binding.profileBinding,profileProof,clock,gate});
+    const opened=await acquireDailyOpen({root,origin:piggoOrigin,config,source:'piggo_login',openId,clock});
+    if(opened.allowed!==true){
+      if(opened.decision?.failureCode==='notice_acknowledgement_required'){reason='notice_acknowledgement_required';}
+      else{dailyLimitResult=opened.decision;reason='daily_open_limit';}
+      return outcome();
+    }
+    const activeOpenId=opened.openId??openId;
+    args.openId=activeOpenId;
+    const verify=()=>readHeader({root,origin:piggoOrigin,context:page.context(),expectedProfileBinding:binding.profileBinding,profileProof,clock,gate,openId:activeOpenId});
     const register=async result=>{
       if(!acceptedPiggoCalendarReceipt(result?.readbackReceipt,binding,clock()))return false;
       const saved=await gate({...args,phase:'readback',receipt:result.readbackReceipt});
@@ -102,15 +132,23 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
       // finalization leaves the daily guard and never opens the write path.
       if(entry){entry.finishedAt=clock().toISOString();entry.reason='authentication_accepted';writeRecoveryState(root,journal);finalized=true;}
       dailyCheckin=await checkinInContext({root,context:page.context(),expectedProfileBinding:binding.profileBinding,
-        profileProof:async()=>await bounded(bound(),limits.binding)===true,clock,gate,validateLease});
+        profileProof:async()=>await bounded(bound(),limits.binding)===true,clock,gate,validateLease,openId:activeOpenId});
       return outcome();
     };
     const before=await wait(verify,limits.verify);
     if(await wait(()=>register(before),limits.binding)){accepted=true;reason='already_authenticated';return await complete();}
+    if(before?.failureCode==='daily_open_limit'){dailyLimitResult=before;reason='daily_open_limit';return outcome();}
+    if(before?.failureCode==='notice_acknowledgement_required'){
+      await recordDailyNoticeGate({root,origin:piggoOrigin,clock});
+      reason='notice_acknowledgement_required';
+      passiveDiagnostic={...readbackCodes({passiveStatus:before.status,passiveFailure:before.failureCode,
+        passiveStage:before.nativeReadback?.apiStage}),...readbackDiagnostics(before.nativeReadback)};
+      return outcome();
+    }
     if(before?.status!=='login_required'){
       reason='passive_proof_unavailable';
-      passiveDiagnostic=readbackCodes({passiveStatus:before.status,passiveFailure:before.failureCode,
-        passiveStage:before.nativeReadback?.apiStage});
+      passiveDiagnostic={...readbackCodes({passiveStatus:before?.status,passiveFailure:before?.failureCode,
+        passiveStage:before?.nativeReadback?.apiStage}),...readbackDiagnostics(before?.nativeReadback)};
       return outcome();
     }
     const unlocking=before.failureCode==='idle_locked';
@@ -214,8 +252,13 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
         stage('post_login_readback');
         const after=await wait(verify,limits.verify);
         Object.assign(submitDiagnostic,readbackCodes({afterStatus:after?.status,afterFailure:after?.failureCode,
-          afterStage:after?.nativeReadback?.apiStage}));
+          afterStage:after?.nativeReadback?.apiStage}),readbackDiagnostics(after?.nativeReadback));
         const landed=pagePath(page);if(landed)submitDiagnostic.loginPagePath=landed;
+        if(after?.failureCode==='notice_acknowledgement_required'){
+          await recordDailyNoticeGate({root,origin:piggoOrigin,clock});
+          reason='notice_acknowledgement_required';
+          return;
+        }
         stage('post_login_binding');
         if(!await wait(bound,limits.binding))return;
         stage('post_login_receipt');
@@ -242,10 +285,12 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     if(entry&&!finalized){
       if(entry.state==='pending')entry.state='unknown';
       entry.finishedAt=clock().toISOString();entry.reason=accepted?'authentication_accepted':
+        reason==='notice_acknowledgement_required'?'notice_acknowledgement_required':
         entry.state==='rejected'?'authentication_rejected':'authentication_unknown';
       try{writeRecoveryState(root,journal);}catch{
-        accepted=false;reason='authentication_unknown';
-        if(output)Object.assign(output,{status:'needs_attention',failureCode:'two_factor_required',
+        accepted=false;
+        if(reason!=='notice_acknowledgement_required')reason='authentication_unknown';
+        if(output)Object.assign(output,{status:'needs_attention',failureCode:reason,
           nativeTwoFactorRecovery:{phase:'password_login',recoveryMode,attempted,accepted,reason}});
       }
     }

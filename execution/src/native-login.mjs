@@ -42,7 +42,8 @@ try {
   page ??= await waitForNativePasswordLoginPage(()=>browser.contexts().flatMap((context) => context.pages()),expectedOrigin);
   if (!page) throw new Error("原生 Chrome 中没有找到目标登录页");
   if(expectedOrigin==='https://piggo.me'){
-    const result=await recoverPiggoSpaLogin({root:rootDirectory,page,profile:actualProfile,mode:nativeMode,
+    const openId=process.env.CHECKIN_PT_OPEN_ID||undefined;
+    const result=await recoverPiggoSpaLogin({root:rootDirectory,page,profile:actualProfile,mode:nativeMode,openId,
       profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
     console.log(JSON.stringify(result));
     if(result.status!=='logged_in')process.exitCode=2;
@@ -237,7 +238,7 @@ try {
     status,
     ...(twoFactorRecovery?.siteTwoFactorRecovery ? { siteTwoFactorRecovery: twoFactorRecovery.siteTwoFactorRecovery } : {}),
     ...(twoFactorRecovery?.nativeTwoFactorRecovery ? { nativeTwoFactorRecovery: twoFactorRecovery.nativeTwoFactorRecovery } : {}),
-    ...(failureCode ? { failureCode, attentionKind: "trusted_device_initialization" } : {}),
+    ...(failureCode ? { failureCode, ...(failureCode === "two_factor_required" ? { attentionKind: "trusted_device_initialization" } : {}) } : {}),
     finalUrl: safeLogUrl(page.url()),
     title: await page.title(),
   }));

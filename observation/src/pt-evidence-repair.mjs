@@ -14,6 +14,7 @@ import {commitDashboardGeneration} from './dashboard-generation.mjs';
 import {loadPtRecoveryDiagnostics} from './pt-reconciliation.mjs';
 import {sitePtCapabilities} from './pt-capabilities.mjs';
 import {copyHarvestWindow} from '../public/harvest-window.mjs';
+import {dailyOpenExhaustedOrigins} from './pt-daily-open-state.generated.mjs';
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(value);
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''));
 const readOptional=file=>fs.existsSync(file)?read(file):null;
@@ -185,14 +186,29 @@ function confirmedHarvestCompletion(snapshot,task,now){
     at<=now.getTime()+60_000&&dayAt(new Date(at))===snapshot.businessDate;
 }
 
-function candidateRecords(snapshot,catalog,state,now=new Date()){
+function loadExhaustedOrigins(root,now=new Date()){
+  try{
+    const runtime=loadRuntimeConfig(root);
+    if(!runtime.legacyRoot)return new Set();
+    const configFile=path.join(runtime.legacyRoot,'config','config.json');
+    const config=fs.existsSync(configFile)?read(configFile):{};
+    return dailyOpenExhaustedOrigins({root:runtime.legacyRoot,config,now});
+  }catch{return new Set();}
+}
+
+function candidateRecords(snapshot,catalog,state,now=new Date(),exhaustedOrigins=new Set()){
   const today=dayAt(now);
   if(snapshot?.businessDate!==today)return [];
   const receipts=new Map((snapshot.receipts??[]).map(r=>[r.taskId,r]));
   const origins=new Set((catalog.sites??[]).map(s=>s.origin));
+  const statusExhausted=new Set((snapshot.ptStatus?.sites??[])
+    .filter(site=>['daily_open_limit','notice_acknowledgement_required'].includes(site?.effective?.failureCode))
+    .map(site=>site.origin));
   const unique=new Map();
   for(const task of snapshot.tasks??[]){
     const origin=task.origin,accountKey=task.accountKey??'site-default';
+    if(exhaustedOrigins.has(origin)||statusExhausted.has(origin)||
+      ['daily_open_limit','notice_acknowledgement_required'].includes(task.failureCode))continue;
     const readbackReview=task.observedStatus==='needs_attention'&&task.failureCode==='submission_outcome_unknown'&&task.submissionAttempted===true;
     const positiveWithoutEvidence=['signed','already_signed'].includes(task.observedStatus);
     if(!origins.has(origin)||(!positiveWithoutEvidence&&!readbackReview)||receipts.get(task.taskId)?.evidence?.authoritative===true||
@@ -203,7 +219,8 @@ function candidateRecords(snapshot,catalog,state,now=new Date()){
   for(const site of snapshot.ptStatus?.sites??[]){
     const value=site.effective??{},observed=Date.parse(value.observedAt??'');
     const uncertain=value.failureCode==='submission_outcome_unknown'||value.submissionAttempted===true&&!['signed','already_signed'].includes(value.status);
-    if(site.inLegacyPlan||!site.fallbackEnabled||site.disabledByConfig||!origins.has(site.origin)||!sitePtCapabilities(site).read||
+    if(exhaustedOrigins.has(site.origin)||statusExhausted.has(site.origin)||
+      site.inLegacyPlan||!site.fallbackEnabled||site.disabledByConfig||!origins.has(site.origin)||!sitePtCapabilities(site).read||
       site.evidenceState==='external_blocked'||value.fresh!==true||!uncertain||!Number.isFinite(observed)||
       dayAt(new Date(observed))!==today||now.getTime()-observed<60_000)continue;
     const key=identityKey(site.origin);
@@ -236,8 +253,8 @@ function candidateRecords(snapshot,catalog,state,now=new Date()){
   });
 }
 
-export function ptEvidenceCandidates(snapshot,catalog,state,now=new Date()){
-  return candidateRecords(snapshot,catalog,state,now).map(item=>item.origin)
+export function ptEvidenceCandidates(snapshot,catalog,state,now=new Date(),{exhaustedOrigins=new Set()}={}){
+  return candidateRecords(snapshot,catalog,state,now,exhaustedOrigins).map(item=>item.origin)
     .filter((origin,index,all)=>all.indexOf(origin)===index);
 }
 
@@ -253,7 +270,7 @@ export async function repairPtEvidence({root,catalogFile,maxSites=1,clock=()=>ne
     const state=loadedState&&typeof loadedState==='object'&&!Array.isArray(loadedState)
       ?loadedState:{schemaVersion:1,sites:{}};
     if(!state.sites||typeof state.sites!=='object'||Array.isArray(state.sites))state.sites={};
-    const now=clock(),candidates=candidateRecords(snapshot,catalog,state,now).slice(0,maxSites),results=[];
+    const now=clock(),exhaustedOrigins=loadExhaustedOrigins(root,now),candidates=candidateRecords(snapshot,catalog,state,now,exhaustedOrigins).slice(0,maxSites),results=[];
     for(const candidate of candidates){
       const origin=candidate.origin,accountKey=candidate.accountKey;
       if(dayAt(clock())!==snapshot.businessDate)break;

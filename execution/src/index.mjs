@@ -54,6 +54,7 @@ import { closeSharedContexts } from "./shared-context-lifecycle.mjs";
 import { nativePreflightFailure, nativeUnconfirmedSubmission } from "./native-preflight-result.mjs";
 import { currentNativePreflightResults, completedNativeRecovery } from "./native-preflight-receipt.mjs";
 import {piggoPasswordLoginEnabled} from './native-pt-two-factor.mjs';
+import { ptFailureMessages } from "./checkin-contract.generated.mjs";
 import {
   configuredOAuthAccounts,
   runOAuthAccount,
@@ -722,12 +723,18 @@ try {
             : isolatedOAuthSiteProfiles.has(target.origin)
               ? await runIsolatedOAuthSiteTarget(target)
             : await runGlobalTarget(target);
+        const resolvedTargetResult =
+          targetResult?.failureCode === "daily_open_limit"
+          && prior
+          && (isTerminalResult(prior) || prior.status === "needs_attention")
+            ? prior
+            : targetResult;
         results.push({
           origin: target.origin,
           title: target.title,
           folderNames: target.folderNames,
           ...accountMetadataForOrigin(target.origin, config),
-          ...resultForPlanTarget(target,targetResult),
+          ...resultForPlanTarget(target,resolvedTargetResult),
           ...(target.profileBinding?{profileBinding:target.profileBinding}:{}),
           ...(ptRecovery?{ptRecovery:{claimId:ptRecovery.claimId,businessDate:ptRecovery.businessDate,
             profileBinding:ptRecovery.profileBinding,proofConfirmedAt:ptRecovery.proofConfirmedAt}}:{}),
@@ -762,6 +769,21 @@ try {
         upstreamCircuitAttempts.set(group,
           (upstreamCircuitAttempts.get(group) ?? 0) + Math.max(1, Number(prior.retrySequence) || 1));
       }
+      const piggoTerminalLoginFailures = new Set([
+        "notice_acknowledgement_required",
+        "daily_open_limit",
+        "daily_recovery_limit",
+        "passive_proof_unavailable",
+        "captcha_requires_manual",
+        "authentication_rejected",
+        "authentication_unknown",
+        "provider_unavailable",
+        "login_not_allowed",
+        "login_form_unreviewed",
+        "login_form_changed",
+        "readonly",
+        "recovery_unavailable",
+      ]);
       for (const resultIndex of recoveryIndexes) {
         const current = results[resultIndex];
         if (current.status !== "login_required") continue;
@@ -869,6 +891,7 @@ try {
         let authoritativeDailyCheckin = null;
         let piggoDailyCheckin = null;
         let terminalLoginFailure = null;
+        let terminalLoginOutcome = null;
         const identityBoundMethods = current.origin==='https://piggo.me'
           ? methods.filter(method=>method.method==='native_saved_password'&&method.args.includes('-UserDataDirOverride'))
           : config.oauthExecutionAccountBindings?.[current.origin]
@@ -886,10 +909,20 @@ try {
             attempts.push({ method: method.method, ...outcome });
             if (outcome.status === "invalid_credential") {
               terminalLoginFailure = "invalid_credential";
+              terminalLoginOutcome = outcome;
               break;
             }
             if (outcome.failureCode === "two_factor_required") {
               terminalLoginFailure = "two_factor_required";
+              terminalLoginOutcome = outcome;
+              break;
+            }
+            if (["notice_acknowledgement_required", "daily_open_limit"].includes(outcome.failureCode)
+              || (current.origin === "https://piggo.me"
+                && (piggoTerminalLoginFailures.has(outcome.failureCode)
+                  || (outcome.status === "needs_attention" && typeof outcome.failureCode === "string" && outcome.failureCode.length > 0)))) {
+              terminalLoginFailure = outcome.failureCode;
+              terminalLoginOutcome = outcome;
               break;
             }
             if (outcome.succeeded) {
@@ -910,14 +943,25 @@ try {
             });
             if (failedOutcome.status === "invalid_credential") {
               terminalLoginFailure = "invalid_credential";
+              terminalLoginOutcome = failedOutcome;
               break;
             }
             if (failedOutcome.failureCode === "two_factor_required") {
               terminalLoginFailure = "two_factor_required";
+              terminalLoginOutcome = failedOutcome;
+              break;
+            }
+            if (["notice_acknowledgement_required", "daily_open_limit"].includes(failedOutcome.failureCode)
+              || (current.origin === "https://piggo.me"
+                && (piggoTerminalLoginFailures.has(failedOutcome.failureCode)
+                  || (failedOutcome.status === "needs_attention" && typeof failedOutcome.failureCode === "string" && failedOutcome.failureCode.length > 0)))) {
+              terminalLoginFailure = failedOutcome.failureCode;
+              terminalLoginOutcome = failedOutcome;
               break;
             }
             if (["oauth_rate_limited", "oauth_upstream_unavailable", "oauth_callback_rejected"].includes(failedOutcome.failureCode)) {
               terminalLoginFailure = failedOutcome.failureCode;
+              terminalLoginOutcome = failedOutcome;
               if (failedOutcome.failureCode === "oauth_upstream_unavailable" && oauthRetryGroup) {
                 upstreamCircuitAttempts.set(oauthRetryGroup, (upstreamCircuitAttempts.get(oauthRetryGroup) ?? 0) + 1);
               }
@@ -930,6 +974,7 @@ try {
           succeeded,
           attempts,
           ...(terminalLoginFailure ? { terminalLoginFailure } : {}),
+          ...(terminalLoginOutcome ? { terminalLoginOutcome } : {}),
           ...(oauthRetryGroup ? { retryGroup: oauthRetryGroup } : {}),
           ...(authoritativeDailyCheckin ? { authoritativeDailyCheckin } : {}),
           ...(piggoDailyCheckin ? { piggoDailyCheckin } : {}),
@@ -971,6 +1016,56 @@ try {
               attentionKind: "trusted_device_initialization",
               retryableLoginRecovery: false,
               url: initialResult.url,
+            };
+          } else if (loginRecovery?.terminalLoginFailure === "notice_acknowledgement_required") {
+            const detail = loginRecovery.terminalLoginOutcome ?? {};
+            recoveredResult = {
+              status: "needs_attention",
+              reason: detail.diagnostic || ptFailureMessages.notice_acknowledgement_required,
+              failureCode: "notice_acknowledgement_required",
+              submissionAttempted: false,
+              retryable: false,
+              retryableLoginRecovery: false,
+              url: initialResult.url,
+              ...(detail.pageClass ? { pageClass: detail.pageClass } : {}),
+              ...(detail.pagePath ? { pagePath: detail.pagePath } : {}),
+              ...(Number.isInteger(detail.meHttpStatus) ? { meHttpStatus: detail.meHttpStatus } : {}),
+              ...(Number.isInteger(detail.calendarHttpStatus) ? { calendarHttpStatus: detail.calendarHttpStatus } : {}),
+              ...(typeof detail.noticeGate === "boolean" ? { noticeGate: detail.noticeGate } : {}),
+            };
+          } else if (loginRecovery?.terminalLoginFailure === "daily_open_limit") {
+            const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
+            const detail = loginRecovery.terminalLoginOutcome ?? {};
+            recoveredResult = prior && (isTerminalResult(prior) || prior.status === "needs_attention")
+              ? prior
+              : withRetrySchedule({
+                status: "deferred",
+                failureCode: "daily_open_limit",
+                submissionAttempted: false,
+                retryable: false,
+                retryableLoginRecovery: false,
+                retryExhaustedForDay: true,
+                ...(detail.nextEligibleAt ? { nextEligibleAt: detail.nextEligibleAt } : {}),
+                reason: detail.diagnostic || ptFailureMessages.daily_open_limit,
+                url: initialResult.url,
+              }, config);
+          } else if (target.origin === "https://piggo.me"
+            && typeof loginRecovery?.terminalLoginFailure === "string"
+            && !["invalid_credential", "two_factor_required", "notice_acknowledgement_required", "daily_open_limit"].includes(loginRecovery.terminalLoginFailure)) {
+            const detail = loginRecovery.terminalLoginOutcome ?? {};
+            recoveredResult = {
+              status: "needs_attention",
+              reason: detail.diagnostic || "猪猪登录或解锁未完成，已保留真实故障码",
+              failureCode: loginRecovery.terminalLoginFailure,
+              submissionAttempted: false,
+              retryable: false,
+              retryableLoginRecovery: false,
+              url: initialResult.url,
+              ...(detail.pageClass ? { pageClass: detail.pageClass } : {}),
+              ...(detail.pagePath ? { pagePath: detail.pagePath } : {}),
+              ...(Number.isInteger(detail.meHttpStatus) ? { meHttpStatus: detail.meHttpStatus } : {}),
+              ...(Number.isInteger(detail.calendarHttpStatus) ? { calendarHttpStatus: detail.calendarHttpStatus } : {}),
+              ...(typeof detail.noticeGate === "boolean" ? { noticeGate: detail.noticeGate } : {}),
             };
           } else if (loginRecovery?.terminalLoginFailure === "invalid_credential") {
             recoveredResult = {
