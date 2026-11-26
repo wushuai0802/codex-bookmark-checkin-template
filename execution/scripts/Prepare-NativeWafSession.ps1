@@ -382,6 +382,69 @@ function Test-PiggoPasswordRecoveryReady([string]$Origin) {
     return $true
 }
 
+function Test-PiggoSameDaySubmittedIntent([string]$Origin) {
+    if ($Origin -cne 'https://piggo.me') { return $false }
+    $attemptsPath = Join-Path $root 'data\native-pt-attempts.json'
+    if (-not (Test-Path -LiteralPath $attemptsPath -PathType Leaf)) { return $false }
+    try {
+        $journal = Get-Content -Raw -Encoding UTF8 -LiteralPath $attemptsPath | ConvertFrom-Json
+        $today = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([datetimeoffset]::UtcNow, 'China Standard Time').ToString('yyyy-MM-dd')
+        return @($journal.attempts | Where-Object {
+            $_.origin -ceq $Origin -and $_.state -ceq 'submitted' -and $_.businessDate -ceq $today
+        }).Count -gt 0
+    } catch {
+        return $true
+    }
+}
+
+function Get-DailyOpenGateDecision([string]$Origin) {
+    if ($null -eq $config.ptReadOnlyPolicies) { return $null }
+    $prop = $config.ptReadOnlyPolicies.PSObject.Properties[$Origin]
+    if ($null -eq $prop -or $null -eq $prop.Value.dailyOpenLimit) { return $null }
+    $raw = @(& $node (Join-Path $root 'src\pt-daily-open-limit.mjs') '--check' '--origin' $Origin 2>$null)
+    $parsed = $null
+    try { $parsed = ($raw | Select-Object -Last 1) | ConvertFrom-Json -ErrorAction Stop } catch {}
+    if ($LASTEXITCODE -eq 0 -and $null -ne $parsed -and $parsed.allowed -eq $true) { return $null }
+    if ($null -ne $parsed -and $null -ne $parsed.decision) {
+        $gateDecision = $parsed.decision
+        $gateDecision | Add-Member -NotePropertyName origin -NotePropertyValue $Origin -Force
+        $gateDecision | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+        $gateDecision | Add-Member -NotePropertyName submissionAttempted -NotePropertyValue $false -Force
+        return $gateDecision
+    }
+    return [pscustomobject]@{
+        origin = $Origin; status = 'deferred'; failureCode = 'daily_open_limit';
+        submissionAttempted = $false; nativeGate = $true; retryable = $false; retryExhaustedForDay = $true
+    }
+}
+
+function Get-PiggoEligibilityHandoff([string]$Origin, [string]$Url, [bool]$UseMain, $Decision) {
+    if ($UseMain -or $Origin -cne 'https://piggo.me' -or $null -eq $config.ptReadOnlyPolicies) { return $null }
+    $prop = $config.ptReadOnlyPolicies.PSObject.Properties[$Origin]
+    if ($null -eq $prop -or $prop.Value.piggoCalendar -ne $true -or
+        $prop.Value.nativeApiExecution -ne $true -or $null -eq $prop.Value.dailyOpenLimit) { return $null }
+    $sameDayPending = Test-PiggoSameDaySubmittedIntent $Origin
+    $openGateBlocked = Get-DailyOpenGateDecision $Origin
+    if (-not $sameDayPending) {
+        if ($null -ne $openGateBlocked) { return $openGateBlocked }
+        if (Test-PiggoPasswordRecoveryReady $Origin) {
+            return [pscustomobject]@{
+                origin=$Origin;url=($Origin + '/calendar');status='login_required';inspectionStatus='login_required';
+                retryCause='login_required';nativeGate=$true;submissionAttempted=$false;deferredToLoginRecovery=$true;
+                reason='已配置每日打开上限且启用同会话解锁/登录，交由单次浏览器会话统一完成读取与恢复'
+            }
+        }
+        return $null
+    }
+    if ($null -ne $openGateBlocked) {
+        $Decision | Add-Member -NotePropertyName origin -NotePropertyValue $Origin -Force
+        $Decision | Add-Member -NotePropertyName url -NotePropertyValue $Url -Force
+        $Decision | Add-Member -NotePropertyName nativeGate -NotePropertyValue $true -Force
+        return $Decision
+    }
+    return $null
+}
+
 function Request-DailyOpenSlot([string]$Origin, [string]$Source) {
     if ($null -eq $config.ptReadOnlyPolicies) { return [pscustomobject]@{ allowed = $true; openId = $null } }
     $prop = $config.ptReadOnlyPolicies.PSObject.Properties[$Origin]
@@ -727,6 +790,8 @@ foreach ($candidate in $items) {
     $decision = Initialize-NativePtGuard -Root $root -Origin $candidateOrigin -Url $candidateUrl -ProfilePath $candidateProfile -MainProfile:$useMain
     if ($null -ne $decision) {
         if ([string]$decision.failureCode -eq 'submission_outcome_unknown') {
+            $piggoHandoff = Get-PiggoEligibilityHandoff $candidateOrigin $candidateUrl $useMain $decision
+            if ($null -ne $piggoHandoff) { $preflightResults += $piggoHandoff; continue }
             $readback = Invoke-MainChromeReadOnlyFallbackResult $candidateOrigin ([int]$candidate.waitSeconds) $useMain
             if ($null -ne $readback -and [string]$readback.status -in @('signed','already_signed','not_signed') -and
                 $readback.submissionAttempted -eq $false -and $readback.evidence.authoritative -eq $true -and
@@ -750,7 +815,7 @@ foreach ($candidate in $items) {
             }
             # An old intent stops PigGo here, before the per-item loop, so the
             # logged-out read has to reach login recovery from this branch.
-            if (-not $useMain -and $null -ne $readback) {
+            if (-not $useMain -and $null -ne $readback -and ($candidateOrigin -cne 'https://piggo.me' -or -not (Test-PiggoSameDaySubmittedIntent $candidateOrigin))) {
                 $loginRequired = Get-PiggoLoginRequiredResult $candidateOrigin $readback
                 if ($null -ne $loginRequired) {
                     $preflightResults += $loginRequired
@@ -847,15 +912,22 @@ foreach ($item in $items) {
         continue
     }
     if ($origin -ceq 'https://piggo.me' -and
-        $null -ne $apiProperty -and $null -ne $apiProperty.Value.dailyOpenLimit -and (Test-PiggoPasswordRecoveryReady $origin)) {
-        # Preserve the single daily open slot so the recovery browser session can
-        # read /calendar, unlock or log in if 423/401, and run passive/submit check-in in one launch.
-        $preflightResults += [pscustomobject]@{
-            origin=$origin;url=($origin + '/calendar');status='login_required';inspectionStatus='login_required';
-            retryCause='login_required';nativeGate=$true;submissionAttempted=$false;deferredToLoginRecovery=$true;
-            reason='已配置每日打开上限且启用同会话解锁/登录，交由单次浏览器会话统一完成读取与恢复'
+        $null -ne $apiProperty -and $null -ne $apiProperty.Value.dailyOpenLimit) {
+        $openGateBlocked = Get-DailyOpenGateDecision $origin
+        if ($null -ne $openGateBlocked) {
+            $preflightResults += $openGateBlocked
+            continue
         }
-        continue
+        if (Test-PiggoPasswordRecoveryReady $origin) {
+            # Preserve the single daily open slot so the recovery browser session can
+            # read /calendar, unlock or log in if 423/401, and run passive/submit check-in in one launch.
+            $preflightResults += [pscustomobject]@{
+                origin=$origin;url=($origin + '/calendar');status='login_required';inspectionStatus='login_required';
+                retryCause='login_required';nativeGate=$true;submissionAttempted=$false;deferredToLoginRecovery=$true;
+                reason='已配置每日打开上限且启用同会话解锁/登录，交由单次浏览器会话统一完成读取与恢复'
+            }
+            continue
+        }
     }
     if ($null -ne $apiProperty -and $apiProperty.Value.nativeApiExecution -eq $true) {
         try {

@@ -726,7 +726,9 @@ try {
         const resolvedTargetResult =
           targetResult?.failureCode === "daily_open_limit"
           && prior
-          && (isTerminalResult(prior) || prior.status === "needs_attention")
+          && (isTerminalResult(prior)
+            || prior.status === "needs_attention"
+            || (prior.status === "not_signed" && prior.submissionAttempted === false && prior.evidence?.authoritative === true))
             ? prior
             : targetResult;
         results.push({
@@ -1036,7 +1038,9 @@ try {
           } else if (loginRecovery?.terminalLoginFailure === "daily_open_limit") {
             const prior = compatiblePriorResult(target, resumeBase?.results ?? []);
             const detail = loginRecovery.terminalLoginOutcome ?? {};
-            recoveredResult = prior && (isTerminalResult(prior) || prior.status === "needs_attention")
+            recoveredResult = prior && (isTerminalResult(prior)
+              || prior.status === "needs_attention"
+              || (prior.status === "not_signed" && prior.submissionAttempted === false && prior.evidence?.authoritative === true))
               ? prior
               : withRetrySchedule({
                 status: "deferred",
