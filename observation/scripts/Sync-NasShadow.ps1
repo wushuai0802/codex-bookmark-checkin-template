@@ -272,7 +272,7 @@ try {
                     $fallbackLog = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.log"
                     $fallbackError = Join-Path $resolvedProjectRoot "logs\harvest-fallback-$started.err.log"
                     $arguments = @($fallbackScript, '--apply', '--report-file', $pendingFile, '--catalog-file', $pendingCatalog, '--report-sha256', $reportHash, '--catalog-sha256', $catalogHash, '--harvest-ssh-target', $SshTarget, '--harvest-db-path', $monitorConfig.harvestDatabase)
-                    $fallbackTimeoutSeconds = 180
+                    $fallbackTimeoutSeconds = 300
                     $fallbackCleanupGraceSeconds = 35
                     $fallbackMinimumSiteBudgetMs = 70000
                     $fallbackBudgetMs = $fallbackTimeoutSeconds * 1000 - $fallbackCleanupGraceSeconds * 1000 - $fallbackMinimumSiteBudgetMs

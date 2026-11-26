@@ -134,7 +134,7 @@ try {
                 $syncFailureCause = 'process_start_failed'
                 try {
                     $process = Start-Process -FilePath $wscript -ArgumentList $launcherArguments -WindowStyle Hidden -PassThru
-                    if (-not $process.WaitForExit(300000)) {
+                    if (-not $process.WaitForExit(480000)) {
                         try { $process.Kill($true) } catch {
                             try { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null } catch { try { $process.Kill() } catch { } }
                         }

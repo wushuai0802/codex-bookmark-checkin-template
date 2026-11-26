@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {acquireRunLock,releaseRunLock} from '../src/run-lock.mjs';
 import {ptObservationBinding,boundPtObservation,freshPtUnsignedObservation,verifiedPtObservation} from '../src/pt-observation-receipt.mjs';
-import {reconcilePendingPtObservations,claimPtUnsignedRecovery} from '../src/pt-submission-closure.mjs';
+import {reconcilePendingPtObservations,claimPtUnsignedRecovery,observePendingOpenCdPassiveState} from '../src/pt-submission-closure.mjs';
 import {pendingOpenCdSubmission} from '../src/quota-claim-guard.mjs';
 import {updateSiteState} from '../src/site-state.mjs';
 
@@ -273,4 +273,73 @@ test('a new business day supersedes the old active recovery before authorizing i
   assert.equal(final.sites[origin].openCdRecoveryAttempts[0].state,'superseded_for_new_business_day');
   assert.equal(final.sites[origin].openCdRecoveryAttempts[1].state,'confirmed_current_day');
   assert.equal(final.sites[origin].openCdSubmissionResolutions.at(-1).businessDate,'2026-10-08');
+});
+
+test('in-run passive read of legacy unbound OpenCD authorizes one recovery claim and closes quarantine on success',async t=>{
+  const args=await fixture(t,{legacy:true});
+  let launchedConfig=null,firewallInstalled=false,closed=false;
+  const observed=await observePendingOpenCdPassiveState({
+    ...args,
+    profileBinding:args.binding.profileBinding,
+    launch:async cfg=>{
+      launchedConfig=cfg;
+      return {
+        newPage:async()=>({
+          goto:async url=>{assert.equal(url,'https://open.cd/index.php');return {status:()=>200};},
+          close:async()=>{},
+        }),
+        close:async()=>{closed=true;},
+      };
+    },
+    installFirewall:async(_ctx,policy)=>{assert.equal(policy.url,'https://open.cd/index.php');firewallInstalled=true;},
+    readPassive:async()=>({status:'not_signed',evidence:{source:'pt_page',authoritative:true,
+      businessDate:'2026-10-07',confirmedAt:args.now.toISOString(),statusSignal:'open_cd_daily_unsigned',pagePath:'/index.php'}}),
+  });
+  assert.equal(launchedConfig?.ptPassiveReadOnly,true);
+  assert.equal(firewallInstalled,true);
+  assert.equal(closed,true);
+  assert.equal(observed?.kind,'not_signed');
+
+  const claimed=await claimPtUnsignedRecovery({...args,observedProof:observed.proof});
+  assert.equal(claimed.allowed,true);
+  const completedAt=new Date(args.now.getTime()+2000);
+  const completed={...receipt(args,completedAt.toISOString()),status:'signed',ptRecovery:claimed.recovery};
+  const final=updateSiteState(claimed.state,[completed],completedAt,args.config);
+  assert.equal(final.sites[origin].pendingOpenCdAt,null);
+  assert.equal(final.sites[origin].openCdRecoveryAttempts[0].state,'confirmed_current_day');
+  assert.equal(final.sites[origin].openCdSubmissionResolutions.at(-1).kind,'current_day_confirmed');
+  assert.equal(final.sites[origin].openCdPendingHistory[0].status,'resolved_current_day');
+});
+
+test('in-run passive read returns already_signed without write and rejects forged or corrupt states',async t=>{
+  const args=await fixture(t,{legacy:true});
+  const already=await observePendingOpenCdPassiveState({
+    ...args,
+    profileBinding:args.binding.profileBinding,
+    launch:async()=>({
+      newPage:async()=>({goto:async()=>({status:()=>200}),close:async()=>{}}),
+      close:async()=>{},
+    }),
+    installFirewall:async()=>{},
+    readPassive:async()=>({status:'already_signed',evidence:{source:'pt_page',authoritative:true,
+      businessDate:'2026-10-07',confirmedAt:args.now.toISOString(),statusSignal:'open_cd_daily_record_entry',pagePath:'/index.php'}}),
+  });
+  assert.equal(already?.kind,'already_signed');
+  assert.equal(already?.result?.submissionAttempted,false);
+
+  const forged={origin,status:'not_signed',accountKey:'site-default',profileBinding:'0'.repeat(64),
+    businessDate:'2026-10-07',operationMode:'safe_history_page',readSafety:'reviewed_passive',
+    submissionAttempted:false,observedAt:args.now.toISOString(),
+    evidence:{source:'pt_page',authoritative:true,businessDate:'2026-10-07',confirmedAt:args.now.toISOString(),
+      statusSignal:'open_cd_daily_unsigned',pagePath:'/index.php',evidenceScope:'site_account_day'}};
+  assert.equal((await claimPtUnsignedRecovery({...args,observedProof:forged})).allowed,false);
+
+  let launchedOnCorrupt=false;
+  const corruptState={...args.state,sites:{[origin]:{pendingOpenCdAt:'not-a-timestamp'}}};
+  const corruptResult=await observePendingOpenCdPassiveState({
+    ...args,state:corruptState,profileBinding:args.binding.profileBinding,
+    launch:async()=>{launchedOnCorrupt=true;throw Error('must not launch on corrupt state');},
+  });
+  assert.equal(corruptResult,null);
+  assert.equal(launchedOnCorrupt,false);
 });
