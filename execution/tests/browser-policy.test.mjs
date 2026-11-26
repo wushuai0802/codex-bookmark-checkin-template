@@ -8,6 +8,7 @@ import {
   configuredTargetSkip,
   dismissBlockingModal,
   isNexusCaptchaRejectedText,
+  isOpenCdCaptchaRejectedText,
   preferCandidateResult,
   resultFromPageFailure,
   shouldTryGenericNewApiCheckin,
@@ -15,6 +16,7 @@ import {
   turnstileWaitMs,
   tryBmapiCheckinStatus,
   tryNexusImageCaptcha,
+  tryOpenCdCaptcha,
   tryQuotaRequestFlow,
   waitForActiveQuotaBenefit,
   waitForQuotaRequestField,
@@ -475,4 +477,200 @@ test("额度申请弹窗延迟渲染时等待唯一理由输入框", async () =>
   const page = { locator: () => field };
   assert.equal(await waitForQuotaRequestField(page, 1000), field);
   assert.equal(checks, 2);
+});
+
+test("OpenCD 验证码拒绝文本匹配只放行明确拒绝提示", () => {
+  assert.equal(isOpenCdCaptchaRejectedText('{"state":"false","msg":"验证码错误"}'), true);
+  assert.equal(isOpenCdCaptchaRejectedText("图片代码无效，请重试"), true);
+  assert.equal(isOpenCdCaptchaRejectedText("Captcha invalid"), true);
+  assert.equal(isOpenCdCaptchaRejectedText('{"state":"success","msg":"签到成功"}'), false);
+  assert.equal(isOpenCdCaptchaRejectedText(""), false);
+  assert.equal(isOpenCdCaptchaRejectedText("502 Bad Gateway"), false);
+});
+
+function createOpenCdCaptchaFixture({ images, responses, reloadBody = "今日未签到", initialBody = "", throwOnSubmit = false }) {
+  let imageIndex = 0;
+  let submitIndex = 0;
+  let refreshed = 0;
+  let reloaded = 0;
+  let beforeSubmitCalls = 0;
+  let frameBodyText = initialBody;
+  const filledCodes = [];
+  const frame = {
+    locator(selector) {
+      if (selector === 'input[name="imagestring"]') {
+        return {
+          count: async () => 1,
+          fill: async (value) => { filledCodes.push(value); },
+        };
+      }
+      if (selector === "button#ok") {
+        return {
+          count: async () => 1,
+          click: async () => {
+            submitIndex += 1;
+            if (throwOnSubmit) throw new Error("frame detached after click");
+            frameBodyText = responses[Math.min(submitIndex - 1, responses.length - 1)] ?? "";
+          },
+        };
+      }
+      if (selector === "img") {
+        return {
+          count: async () => 1,
+          first() { return this; },
+          screenshot: async () => Buffer.from(images[Math.min(imageIndex, images.length - 1)]),
+        };
+      }
+      if (selector === "body") {
+        return {
+          innerText: async () => frameBodyText,
+        };
+      }
+      return { count: async () => 0 };
+    },
+  };
+  const page = {
+    url: () => "https://open.cd/index.php",
+    title: async () => "OpenCD",
+    frameLocator: () => frame,
+    reload: async () => { reloaded += 1; },
+    evaluate: async () => ({ bodyText: reloadBody, passwordInputs: false, challengeSelectors: false }),
+    locator: () => ({ innerText: async () => reloadBody }),
+  };
+  return {
+    page,
+    config: { beforePtSubmit: () => { beforeSubmitCalls += 1; } },
+    refreshCaptcha: async () => { refreshed += 1; imageIndex += 1; frameBodyText = ""; },
+    stats: () => ({ submitIndex, refreshed, reloaded, beforeSubmitCalls, filledCodes }),
+  };
+}
+
+test("OpenCD 提交前低置信度识别先换图再提交，不提交可疑答案", async () => {
+  const fixture = createOpenCdCaptchaFixture({
+    images: ["img-blurry", "img-clear"],
+    responses: ['{"state":"success","msg":"签到成功"}'],
+  });
+  const ocrResults = [
+    { code: "", rawCode: "AB", confidence: 20 },
+    { code: "AB12CD", rawCode: "AB12CD", confidence: 88 },
+  ];
+  let idx = 0;
+  const result = await tryOpenCdCaptcha(fixture.page, "https://open.cd", fixture.config, {
+    recognize: async () => ocrResults[idx++],
+    secondOpinion: async (_img, local) => local,
+    sleepFn: async () => {},
+    refreshCaptcha: fixture.refreshCaptcha,
+  });
+  assert.equal(result.status, "signed");
+  assert.deepEqual(fixture.stats().filledCodes, ["AB12CD"]);
+  assert.equal(fixture.stats().beforeSubmitCalls, 1);
+  assert.equal(fixture.stats().refreshed, 1);
+});
+
+test("OpenCD 明确验证码拒绝时换图重试一次并确认成功", async () => {
+  const fixture = createOpenCdCaptchaFixture({
+    images: ["img-1", "img-2"],
+    responses: ['{"state":"false","msg":"验证码错误"}', '{"state":"success","msg":"签到成功"}'],
+  });
+  const codes = ["WRONG1", "RIGHT2"];
+  let idx = 0;
+  const result = await tryOpenCdCaptcha(fixture.page, "https://open.cd", fixture.config, {
+    recognize: async () => ({ code: codes[idx++], confidence: 90 }),
+    secondOpinion: async (_img, local) => local,
+    sleepFn: async () => {},
+    refreshCaptcha: fixture.refreshCaptcha,
+  });
+  assert.equal(result.status, "signed");
+  assert.deepEqual(fixture.stats().filledCodes, ["WRONG1", "RIGHT2"]);
+  assert.equal(fixture.stats().submitIndex, 2);
+  assert.equal(fixture.stats().reloaded, 0);
+});
+
+test("OpenCD 连续明确拒绝达到提交上限时停止且不误标为结果不明", async () => {
+  const fixture = createOpenCdCaptchaFixture({
+    images: ["img-1", "img-2", "img-3"],
+    responses: ['{"state":"false","msg":"验证码错误"}', '{"state":"false","msg":"验证码错误"}'],
+  });
+  const result = await tryOpenCdCaptcha(fixture.page, "https://open.cd", fixture.config, {
+    recognize: async () => ({ code: "ABC123", confidence: 90 }),
+    secondOpinion: async (_img, local) => local,
+    sleepFn: async () => {},
+    refreshCaptcha: fixture.refreshCaptcha,
+  });
+  assert.equal(result.status, "needs_attention");
+  assert.equal(result.failureCode, "captcha_ocr_exhausted");
+  assert.equal(result.captchaRejected, true);
+  assert.equal(fixture.stats().submitIndex, 2);
+});
+
+test("OpenCD 提交后响应模糊时禁止重试并严格 fail-closed", async () => {
+  const fixture = createOpenCdCaptchaFixture({
+    images: ["img-1", "img-2"],
+    responses: [""],
+    reloadBody: "OpenCD 首页",
+  });
+  const result = await tryOpenCdCaptcha(fixture.page, "https://open.cd", fixture.config, {
+    recognize: async () => ({ code: "ABC123", confidence: 90 }),
+    secondOpinion: async (_img, local) => local,
+    sleepFn: async () => {},
+    refreshCaptcha: fixture.refreshCaptcha,
+  });
+  assert.equal(result.status, "needs_attention");
+  assert.equal(result.failureCode, "submission_outcome_unknown");
+  assert.equal(result.submissionAttempted, true);
+  assert.equal(result.retryable, false);
+  assert.equal(fixture.stats().submitIndex, 1);
+  assert.equal(fixture.stats().refreshed, 0);
+  assert.equal(fixture.stats().reloaded, 1);
+});
+
+test("OpenCD 验证码刷新后返回同一图片时阻止重复提交", async () => {
+  const fixture = createOpenCdCaptchaFixture({
+    images: ["same-img", "same-img", "same-img"],
+    responses: ['{"state":"false","msg":"验证码错误"}'],
+  });
+  const result = await tryOpenCdCaptcha(fixture.page, "https://open.cd", fixture.config, {
+    recognize: async () => ({ code: "ABC123", confidence: 90 }),
+    secondOpinion: async (_img, local) => local,
+    sleepFn: async () => {},
+    refreshCaptcha: fixture.refreshCaptcha,
+  });
+  assert.equal(result.status, "needs_attention");
+  assert.equal(result.failureCode, "captcha_not_refreshed");
+  assert.equal(fixture.stats().submitIndex, 1);
+});
+
+test("OpenCD 提交点击异常或陈旧拒绝文本均严格 fail-closed 不重试", async () => {
+  const crashFixture = createOpenCdCaptchaFixture({
+    images: ["img-1", "img-2"],
+    responses: [""],
+    throwOnSubmit: true,
+  });
+  const crashResult = await tryOpenCdCaptcha(crashFixture.page, "https://open.cd", crashFixture.config, {
+    recognize: async () => ({ code: "ABC123", confidence: 90 }),
+    secondOpinion: async (_img, local) => local,
+    sleepFn: async () => {},
+    refreshCaptcha: crashFixture.refreshCaptcha,
+  });
+  assert.equal(crashResult.status, "needs_attention");
+  assert.equal(crashResult.failureCode, "submission_outcome_unknown");
+  assert.equal(crashResult.submissionAttempted, true);
+  assert.equal(crashFixture.stats().submitIndex, 1);
+
+  const staleFixture = createOpenCdCaptchaFixture({
+    images: ["img-1", "img-2"],
+    initialBody: "验证码错误",
+    responses: ["验证码错误"],
+    reloadBody: "OpenCD 首页",
+  });
+  const staleResult = await tryOpenCdCaptcha(staleFixture.page, "https://open.cd", staleFixture.config, {
+    recognize: async () => ({ code: "ABC123", confidence: 90 }),
+    secondOpinion: async (_img, local) => local,
+    sleepFn: async () => {},
+    refreshCaptcha: staleFixture.refreshCaptcha,
+  });
+  assert.equal(staleResult.status, "needs_attention");
+  assert.equal(staleResult.failureCode, "submission_outcome_unknown");
+  assert.equal(staleFixture.stats().submitIndex, 1);
+  assert.equal(staleFixture.stats().refreshed, 0);
 });

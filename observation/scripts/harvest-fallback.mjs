@@ -24,7 +24,7 @@ function liveHarvestProbe(target,database){
 }
 try{
   const budget=value('--budget-ms')===null?null:Number(value('--budget-ms'));
-  if(budget!==null&&(!Number.isSafeInteger(budget)||budget<1||budget>180_000))throw Error('invalid batch budget');
+  if(budget!==null&&(!Number.isSafeInteger(budget)||budget<1||budget>360_000))throw Error('invalid batch budget');
   const minimumSiteBudgetMs=value('--minimum-site-budget-ms')===null?70_000:Number(value('--minimum-site-budget-ms'));
   if(!Number.isSafeInteger(minimumSiteBudgetMs)||minimumSiteBudgetMs<=0||minimumSiteBudgetMs>180_000)throw Error('invalid site budget');
   if(args.includes('--cooperative-stop')){

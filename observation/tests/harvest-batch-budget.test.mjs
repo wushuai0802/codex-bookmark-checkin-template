@@ -93,3 +93,48 @@ for(const cleanupCompletes of [true,false])test(`second-site cancellation uses c
   }});
   assert.deepEqual(JSON.parse(fs.readFileSync(f.file)).attempts[1],attempt);
 });
+
+test('admitted site whose passive read crosses inner cutoff still submits when site window remains',async t=>{
+  const f=fixture(t),started=f.now.getTime();let at=started,submits=0;
+  const minimumSiteBudgetMs=70_000,deadline=started+75_000,siteDeadline=deadline+minimumSiteBudgetMs;
+  const result=await runHarvestFallback({...f.args,readOnlyOrigins:f.origins,clock:()=>new Date(at),
+    deadline,siteDeadline,minimumSiteBudgetMs,runSite:async options=>{
+      if(options.origin===f.origins[0]){
+        if(options.readOnly){at=deadline-2_000;return receipt(options.origin,at,'already_signed');}
+        throw Error('already signed site must not submit');
+      }
+      if(options.readOnly){at+=18_000;return receipt(options.origin,at,'not_signed');}
+      submits++;at+=20_000;return receipt(options.origin,at,'signed');
+    }});
+  assert.equal(submits,1,JSON.stringify(result));
+  assert.ok(at<siteDeadline);
+  assert.equal(result.outcomes.at(-1).state,'completed');
+  const state=JSON.parse(fs.readFileSync(f.file));
+  assert.equal(state.attempts.length,1);
+  assert.equal((state.deferrals??[]).length,0);
+});
+
+test('slow passive read leaving less than submit reserve still defers cleanly before cleanup grace',async t=>{
+  const f=fixture(t),started=f.now.getTime();let at=started+73_000,submits=0;
+  const minimumSiteBudgetMs=70_000,deadline=started+75_000,siteDeadline=deadline+minimumSiteBudgetMs;
+  const result=await runHarvestFallback({...f.args,onlyOrigins:[f.origins[0]],readOnlyOrigins:f.origins,
+    clock:()=>new Date(at),deadline,siteDeadline,minimumSiteBudgetMs,runSite:async options=>{
+      if(options.readOnly){at+=40_000;return receipt(options.origin,at,'not_signed');}
+      submits++;return receipt(options.origin,at,'signed');
+    }});
+  assert.equal(submits,0);
+  assert.equal(result.outcomes.at(-1).state,'deferred_budget');
+  const state=JSON.parse(fs.readFileSync(f.file));
+  assert.equal(state.attempts.length,0);
+  assert.equal(state.deferrals[0].state,'deferred_budget');
+  assert.equal(state.deferrals[0].submissionAttempted,false);
+});
+
+test('shadow sync budget stays aligned with scheduler outer wait and CLI upper bound',()=>{
+  const syncSource=fs.readFileSync(new URL('../scripts/Sync-NasShadow.ps1',import.meta.url),'utf8');
+  const schedulerSource=fs.readFileSync(new URL('../scripts/Start-NasShadowScheduler.ps1',import.meta.url),'utf8');
+  const cliSource=fs.readFileSync(new URL('../scripts/harvest-fallback.mjs',import.meta.url),'utf8');
+  assert.match(syncSource,/\$fallbackTimeoutSeconds\s*=\s*300\b/);
+  assert.match(schedulerSource,/WaitForExit\(480000\)/);
+  assert.match(cliSource,/budget>360_000/);
+});

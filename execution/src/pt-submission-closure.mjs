@@ -4,10 +4,91 @@ import path from 'node:path';
 import {sameLockOwner} from './run-lock.mjs';
 import {pendingOpenCdSubmission} from './quota-claim-guard.mjs';
 import {boundPtObservation,freshPtUnsignedObservation,ptObservationBinding} from './pt-observation-receipt.mjs';
+import {ptExecutionBinding,ptReadPolicy,installPtReadFirewall,readPtPassivePage} from './pt-read-policy.mjs';
 
 const dayAt=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(value));
 const serialized=new Map();
 const fingerprint=parts=>crypto.createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+
+function validateObservedUnsignedProof(proof,{target,binding,now,after}){
+  if(!proof||target?.origin!=='https://open.cd'||proof.origin!=='https://open.cd')return null;
+  const day=dayAt(now);
+  const observed=Date.parse(proof.observedAt??''),confirmed=Date.parse(proof.evidence?.confirmedAt??'');
+  if(proof.status!=='not_signed'||proof.submissionAttempted!==false||proof.submissionOutcomeUnknown===true||
+     proof.operationMode!==binding.operationMode||proof.readSafety!=='reviewed_passive'||
+     proof.profileBinding!==binding.profileBinding||proof.accountKey!==binding.accountKey||
+     proof.businessDate!==day||proof.evidence?.authoritative!==true||
+     !['pt_page','page_text'].includes(proof.evidence.source)||proof.evidence.evidenceScope!=='site_account_day'||
+     proof.evidence.businessDate!==day||proof.evidence.pagePath!==binding.pagePath||
+     proof.evidence.statusSignal!=='open_cd_daily_unsigned'||
+     !Number.isFinite(observed)||!Number.isFinite(confirmed)||observed>now.getTime()||confirmed>now.getTime()||
+     Math.abs(confirmed-observed)>60_000||now.getTime()-confirmed>5*60_000||observed<=after||confirmed<=after||
+     dayAt(observed)!==day||dayAt(confirmed)!==day)return null;
+  return proof;
+}
+
+// Perform one strictly read-only, JS-disabled passive read of OpenCD's index
+// when a prior submission quarantine blocks the morning run and no fresh disk
+// receipt exists yet. Never submits or clicks any control.
+export async function observePendingOpenCdPassiveState({root,target,config,state,previousReport,now,
+  clock=()=>now!==undefined?new Date(now):new Date(),
+  profileBinding,launch,installFirewall=installPtReadFirewall,readPassive=readPtPassivePage}={}){
+  if(target?.origin!=='https://open.cd'||String(target.accountKey??'site-default')!=='site-default'||typeof launch!=='function')return null;
+  const startedAt=clock();
+  const blocked=pendingOpenCdSubmission(target,state,previousReport,{now:startedAt,profileBinding:profileBinding??target.profileBinding,allowInactiveRecovery:true});
+  if(!blocked||blocked.stateCorrupt===true)return null;
+  let policy,binding;
+  try{
+    policy=ptReadPolicy(target.origin,config);
+    binding=ptExecutionBinding(config,root,target);
+  }catch{return null;}
+  if(policy.mode!=='safe_history_page'||policy.openCdHeader!==true)return null;
+  if(profileBinding&&binding.profileBinding!==profileBinding)return null;
+  const passiveConfig={...binding.config,ptPassiveReadOnly:true,
+    ...(policy.proxyServer?{ptReadProxyServer:policy.proxyServer}:{})};
+  let context,page;
+  try{
+    context=await launch(passiveConfig);
+    await installFirewall(context,policy);
+    page=await context.newPage();
+    const response=await page.goto(policy.url,{waitUntil:'domcontentloaded',timeout:Math.min(15000,Number(config.navigationTimeoutMs)||15000)});
+    const observedAt=clock();
+    const outcome=await readPassive(page,policy,{origin:target.origin,now:observedAt,httpStatus:response?.status()??0});
+    const day=dayAt(observedAt),pagePath=new URL(policy.url).pathname;
+    if(typeof outcome?.evidence?.confirmedAt!=='string'||outcome?.evidence?.businessDate!==day)return null;
+    const confirmedMs=Date.parse(outcome.evidence.confirmedAt);
+    if(!Number.isFinite(confirmedMs)||confirmedMs>observedAt.getTime()||dayAt(confirmedMs)!==day)return null;
+    if(outcome?.status==='already_signed'&&outcome.evidence?.authoritative===true&&
+       outcome.evidence.statusSignal==='open_cd_daily_record_entry'){
+      return {kind:'already_signed',result:{
+        status:'already_signed',reason:'执行 Profile 的同日只读首页确认 OpenCD 今日已签到，无需重复提交',
+        submissionAttempted:false,profileBinding:binding.profileBinding,
+        operationMode:policy.mode,readSafety:'reviewed_passive',
+        ...(target.accountKey?{accountKey:target.accountKey}:{}),
+        evidence:{source:outcome.evidence.source,authoritative:true,businessDate:day,
+          confirmedAt:new Date(confirmedMs).toISOString(),
+          statusSignal:outcome.evidence.statusSignal,pagePath,evidenceScope:'site_account_day'},
+      }};
+    }
+    if(outcome?.status==='not_signed'&&outcome.evidence?.authoritative===true&&
+       outcome.evidence.statusSignal==='open_cd_daily_unsigned'){
+      return {kind:'not_signed',proof:{
+        origin:target.origin,status:'not_signed',accountKey:binding.accountKey,
+        profileBinding:binding.profileBinding,businessDate:day,
+        operationMode:policy.mode,readSafety:'reviewed_passive',submissionAttempted:false,
+        observedAt:observedAt.toISOString(),
+        evidence:{source:outcome.evidence.source,authoritative:true,businessDate:day,
+          confirmedAt:new Date(confirmedMs).toISOString(),
+          statusSignal:outcome.evidence.statusSignal,pagePath,evidenceScope:'site_account_day'},
+      }};
+    }
+    return null;
+  }catch{return null;}
+  finally{
+    await page?.close().catch(()=>{});
+    await context?.close().catch(()=>{});
+  }
+}
 
 function assertOwner(root,lease){
   const file=path.resolve(root,'tmp/run.lock');
@@ -121,7 +202,7 @@ export async function reconcilePendingPtObservations({root,targets=[],config,sta
 // Claim a fresh negative proof before any guarded browser action. The claim is
 // durable even if the runner crashes; the same proof cannot authorize replay.
 export async function claimPtUnsignedRecovery({root,target,config,state,previousReport,now=new Date(),lockLease,persist=saveState,
-  profileBinding,allowInactiveRecovery=false}={}){
+  profileBinding,allowInactiveRecovery=false,observedProof=null}={}){
   return heldOperation(root,lockLease,async()=>{
     const current=loadState(root,state),bindingHint=profileBinding??target?.profileBinding,
       blocked=pendingOpenCdSubmission(target,current,previousReport,{now,profileBinding:bindingHint,allowInactiveRecovery});
@@ -138,8 +219,9 @@ export async function claimPtUnsignedRecovery({root,target,config,state,previous
       previousReport?.finishedAt,...previousTimes,...(site.openCdPendingHistory??[]).flatMap(item=>[item.pendingAt,item.supersededAt]),
       ...attempts.flatMap(item=>[item.claimedAt,item.proofConfirmedAt,item.finishedAt])]
       .map(value=>Date.parse(value??'')).filter(Number.isFinite);
-    const proof=freshPtUnsignedObservation(root,target,config,{now,profileBinding:binding.profileBinding,
-      after:Math.max(-Infinity,...knownAfter)});
+    const after=Math.max(-Infinity,...knownAfter);
+    const proof=freshPtUnsignedObservation(root,target,config,{now,profileBinding:binding.profileBinding,after})
+      ??validateObservedUnsignedProof(observedProof,{target,binding,now,after});
     if(!proof)return {state:current,allowed:false,recovery:null};
     const claimId=fingerprint([target.origin,binding.accountKey,binding.profileBinding,proof.businessDate,proof.evidence.confirmedAt]);
     if(attempts.some(item=>item.claimId===claimId))return {state:current,allowed:false,recovery:null};

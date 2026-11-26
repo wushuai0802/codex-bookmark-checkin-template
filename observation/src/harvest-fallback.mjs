@@ -503,11 +503,21 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
   const outcomes=[];
   const originalRunSite=runSite;
   if(signal)runSite=request=>originalRunSite({...request,signal});
+  const minimumPostVerifySubmitMs=Math.min(minimumSiteBudgetMs,35_000);
   const budgetAvailable=()=>{
     if(signal?.aborted)return false;
     if(deadline===null&&siteDeadline===null)return true;
     const at=clock().getTime();
     return (deadline===null||at<deadline)&&(siteDeadline===null||siteDeadline-at>=minimumSiteBudgetMs);
+  };
+  // An already-admitted site that just completed its passive read only needs
+  // enough remaining site window to submit cleanly before the cleanup grace.
+  const submitBudgetAvailable=verified=>{
+    if(!verified)return budgetAvailable();
+    if(signal?.aborted)return false;
+    const effectiveSiteDeadline=siteDeadline??deadline;
+    if(effectiveSiteDeadline===null)return true;
+    return effectiveSiteDeadline-clock().getTime()>=minimumPostVerifySubmitMs;
   };
   const deferBudget=candidate=>{
     const entry={origin:candidate.origin,accountKey:candidate.accountKey,state:'deferred_budget',
@@ -653,7 +663,7 @@ export async function runHarvestFallback({root=path.resolve('.'),harvest,catalog
       }
     }
     if(canVerify&&dayAt(clock())!==preview.businessDate){outcomes.push({origin:candidate.origin,state:'business_day_changed'});break;}
-    if(!budgetAvailable()){deferBudget(candidate);continue;}
+    if(!submitBudgetAvailable(canVerify)){deferBudget(candidate);continue;}
     // Persist before executing. No uncertain attempt is retried without a new
     // authoritative read, followed by another read inside the executor lock.
     const harvestWaitingAttempt=state.attempts.find(item=>item.origin===candidate.origin&&

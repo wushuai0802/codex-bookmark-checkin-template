@@ -24,7 +24,7 @@ import { applyLogicalCompletionReuse, collectLogicalCompletions, logicalCompleti
 import { atomicWriteJson, ensurePrivateDirectory } from "./security.mjs";
 import { pendingOpenCdSubmission, pendingQuotaClaim } from "./quota-claim-guard.mjs";
 import {verifiedPtObservation,recoverablePtHomepage,ptObservationBinding} from './pt-observation-receipt.mjs';
-import {reconcilePendingPtObservations,claimPtUnsignedRecovery} from './pt-submission-closure.mjs';
+import {reconcilePendingPtObservations,claimPtUnsignedRecovery,observePendingOpenCdPassiveState} from './pt-submission-closure.mjs';
 import {observePendingVibeClaim} from './vibe-readonly.mjs';
 import { acquireRunLock, releaseRunLock } from "./run-lock.mjs";
 import {
@@ -696,10 +696,24 @@ try {
         if(guardedQuotaClaim?.failureCode==='submission_outcome_unknown'&&!target.closureBindingError&&piggoLoginPreflight(target))guardedQuotaClaim=null;
         let ptRecovery=null;
         if(target.origin==='https://open.cd'&&guardedQuotaClaim?.failureCode==='submission_outcome_unknown'){
-          const claimed=await claimPtUnsignedRecovery({root:rootDirectory,target,config,state:siteState,
+          let claimed=await claimPtUnsignedRecovery({root:rootDirectory,target,config,state:siteState,
             previousReport:previousFinalReport,now:new Date(),lockLease,profileBinding:target.profileBinding,
             allowInactiveRecovery:true});
           siteState=claimed.state;
+          if(!claimed.allowed&&!target.closureBindingError){
+            await closeSharedContexts(sharedContexts,activeContexts);
+            const passiveObserved=await observePendingOpenCdPassiveState({
+              root:rootDirectory,target,config,state:siteState,previousReport:previousFinalReport,
+              profileBinding:target.profileBinding,launch:launchAutomationContext});
+            if(passiveObserved?.kind==='already_signed'){
+              guardedQuotaClaim=passiveObserved.result;
+            }else if(passiveObserved?.kind==='not_signed'){
+              claimed=await claimPtUnsignedRecovery({root:rootDirectory,target,config,state:siteState,
+                previousReport:previousFinalReport,now:new Date(),lockLease,profileBinding:target.profileBinding,
+                allowInactiveRecovery:true,observedProof:passiveObserved.proof});
+              siteState=claimed.state;
+            }
+          }
           if(claimed.allowed){guardedQuotaClaim=null;ptRecovery=claimed.recovery;}
         }
         if(target.origin==='https://new.sharedchat.cc'&&guardedQuotaClaim?.failureCode==='submission_outcome_unknown'){

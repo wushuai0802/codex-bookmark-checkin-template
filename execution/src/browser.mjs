@@ -1059,63 +1059,288 @@ export async function tryNewApiCheckin(page) {
   });
 }
 
-async function tryOpenCdCaptcha(page, expectedOrigin, config) {
+export function isOpenCdCaptchaRejectedText(value) {
+  const text = String(value ?? "");
+  if (/"state"\s*:\s*"success"|签到成功|簽到成功|已签到|已簽到/i.test(text)) return false;
+  return /验证码(?:错误|錯誤|无效|無效|不正确|不正確|不匹配|已过期|已過期|有误|有誤)|驗證碼(?:錯誤|無效|不正確|不匹配|已過期|有誤)|图片代码无效|圖片代碼無效|image\s*code\s*(?:is\s*)?(?:wrong|invalid|incorrect|expired)|captcha\s*(?:is\s*)?(?:wrong|invalid|incorrect|expired)/i.test(text);
+}
+
+export async function tryOpenCdCaptcha(page, expectedOrigin, config = {}, {
+  maxAttempts = 3,
+  maxSubmits = 2,
+  recognize = recognizeOpenCdCaptcha,
+  secondOpinion = applyOptionalBaiduSecondOpinion,
+  sleepFn = sleep,
+  refreshCaptcha,
+} = {}) {
   if (expectedOrigin !== "https://open.cd") return null;
-  const frame = page.frameLocator("iframe#i_signin");
-  const input = frame.locator('input[name="imagestring"]');
-  const submit = frame.locator("button#ok");
-  const images = frame.locator("img");
-  if (await input.count() !== 1 || await submit.count() !== 1 || await images.count() !== 1) return null;
-  const screenshot = await images.first().screenshot();
-  let recognition = await recognizeOpenCdCaptcha(screenshot);
-  recognition = await applyOptionalBaiduSecondOpinion(screenshot, recognition, {
-    config,
-    origin: expectedOrigin,
-    length: 6,
-    alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-  });
-  // The original V1 OpenCD path submitted a complete six-character OCR
-  // candidate and relied on the server response plus the follow-up page
-  // check. The migrated path rejected candidates when Tesseract returned a
-  // usable raw code but no calibrated confidence value (confidence=0), which
-  // made otherwise valid OpenCD runs look like interactive challenges.
-  const candidateCode = /^[A-Z0-9]{6}$/.test(String(recognition.code ?? ""))
-    ? String(recognition.code)
-    : (/^[A-Z0-9]{6}$/.test(String(recognition.rawCode ?? "")) ? String(recognition.rawCode) : null);
-  if (!candidateCode || (Number(recognition.confidence) > 0 && Number(recognition.confidence) < 45)) {
-    return { status: "interactive_challenge", reason: "OpenCD 六位验证码本地识别置信度不足，未提交可疑答案" };
-  }
-  await input.fill(candidateCode);
-  config.beforePtSubmit?.();
-  await submit.click();
-  await sleep(2000);
-  const responseText = String(await frame.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-  if (/"state"\s*:\s*"success"|签到成功|簽到成功|已签到|已簽到/i.test(responseText)) {
-    const now=new Date();
-    return {
-      status: "signed",
-      reason: `OpenCD 图片验证码识别成功（置信度 ${Math.round(recognition.confidence)}）`,
-      evidence:{source:'page_text',authoritative:true,confirmedAt:now.toISOString(),
-        businessDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),statusSignal:'submitted_success_response'},
+  const seenChallenges = new Set();
+  let submittedCount = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const frame = page.frameLocator("iframe#i_signin");
+    const input = frame.locator('input[name="imagestring"]');
+    const submit = frame.locator("button#ok");
+    const images = frame.locator("img");
+    const imageHashInput = frame.locator('input[type="hidden"][name="imagehash"]');
+    if (await input.count() !== 1 || await submit.count() !== 1 || await images.count() !== 1) {
+      if (attempt === 1) return null;
+      if (submittedCount > 0) {
+        return {
+          status: "needs_attention",
+          reason: "OpenCD 验证码刷新后控件不可用，已停止本轮提交",
+          captchaRejected: true,
+          failureCode: "captcha_structure_changed",
+          submissionAttempted: true,
+          retryable: false,
+        };
+      }
+      return {
+        status: "interactive_challenge",
+        reason: "OpenCD 验证码刷新后控件不可用，未提交可疑答案",
+        submissionAttempted: false,
+      };
+    }
+
+    const readChallengeDescriptor = async () => {
+      const screenshot = await images.first().screenshot();
+      const imageHashValue = await imageHashInput.count().catch(() => 0) === 1
+        ? await imageHashInput.first().inputValue().catch(() => "")
+        : "";
+      const imageSrc = typeof images.first().getAttribute === "function"
+        ? String(await images.first().getAttribute("src").catch(() => "") ?? "")
+        : "";
+      const shotHash = createHash("sha256").update(screenshot).digest("hex");
+      return {
+        screenshot,
+        imageHashValue,
+        imageSrc,
+        challengeKey: `${imageHashValue}:${imageSrc}:${shotHash}`,
+      };
     };
-  }
-  // OpenCD 的 iframe 有时不返回可识别的成功文本，但服务器已经完成
-  // 签到。刷新主页面并检查“查看签到记录”这一权威状态，避免误报。
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
-  await sleep(1200);
-  const refreshedState = await snapshotState(page);
-  if (["signed", "already_signed"].includes(refreshedState.status)) {
-    const evidence=ptPageEvidence({origin:expectedOrigin,url:page.url(),
-      bodyText:await page.locator('body').innerText({timeout:3000}).catch(()=>''),status:refreshedState.status,
-      allowUndatedActionText:false});
-    return {
-      ...refreshedState,
-      reason: `OpenCD 图片验证码已提交并复查成功（置信度 ${Math.round(recognition.confidence)}）`,
-      ...(evidence?{evidence}:{}),
+
+    const refreshOpenCdChallenge = async ({ forceReloadFrame = false } = {}) => {
+      if (typeof refreshCaptcha === "function") {
+        await refreshCaptcha({ page, frame, attempt });
+        return;
+      }
+      const reloadSigninFrame = async () => {
+        const signinFrame = typeof page.frames === "function"
+          ? page.frames().find((candidate) => {
+            try {
+              const parsed = new URL(candidate.url());
+              return parsed.origin === "https://open.cd" && parsed.pathname === "/plugin_sign-in.php";
+            } catch {
+              return false;
+            }
+          })
+          : null;
+        if (signinFrame) {
+          // Reload only the clean GET form URL; never replay a cmd=signin URL.
+          await signinFrame.goto("https://open.cd/plugin_sign-in.php", { waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+          await sleepFn(750);
+          return true;
+        }
+        return false;
+      };
+      if (forceReloadFrame && await reloadSigninFrame()) return;
+      const refreshControl = frame.locator('a[onclick*="image"], img[onclick], a:has-text("换一张"), a:has-text("換一張"), a:has-text("看不清")');
+      if (await refreshControl.count().catch(() => 0) === 1) {
+        await refreshControl.first().click({ timeout: 5000 }).catch(() => {});
+        await sleepFn(750);
+        const refreshed = await readChallengeDescriptor().catch(() => null);
+        if (refreshed && !seenChallenges.has(refreshed.challengeKey)) return;
+      }
+      if (await images.count().catch(() => 0) === 1) {
+        await images.first().click({ timeout: 5000 }).catch(() => {});
+        await sleepFn(750);
+        const refreshed = await readChallengeDescriptor().catch(() => null);
+        if (refreshed && !seenChallenges.has(refreshed.challengeKey)) return;
+      }
+      await reloadSigninFrame();
     };
+
+    const descriptor = await readChallengeDescriptor();
+    if (seenChallenges.has(descriptor.challengeKey)) {
+      if (attempt === maxAttempts) {
+        if (submittedCount > 0) {
+          return {
+            status: "needs_attention",
+            reason: "OpenCD 验证码刷新后仍返回同一题目，已阻止重复提交",
+            captchaRejected: true,
+            failureCode: "captcha_not_refreshed",
+            submissionAttempted: true,
+            retryable: false,
+          };
+        }
+        return {
+          status: "interactive_challenge",
+          reason: "OpenCD 验证码刷新后仍返回同一题目，未提交可疑答案",
+          failureCode: "captcha_not_refreshed",
+          submissionAttempted: false,
+        };
+      }
+      await refreshOpenCdChallenge();
+      continue;
+    }
+    seenChallenges.add(descriptor.challengeKey);
+
+    let recognition = await recognize(descriptor.screenshot);
+    recognition = await secondOpinion(descriptor.screenshot, recognition, {
+      config,
+      origin: expectedOrigin,
+      length: 6,
+      alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    });
+    // The original V1 OpenCD path submitted a complete six-character OCR
+    // candidate and relied on the server response plus the follow-up page
+    // check. The migrated path rejected candidates when Tesseract returned a
+    // usable raw code but no calibrated confidence value (confidence=0), which
+    // made otherwise valid OpenCD runs look like interactive challenges.
+    const candidateCode = /^[A-Z0-9]{6}$/.test(String(recognition.code ?? ""))
+      ? String(recognition.code)
+      : (/^[A-Z0-9]{6}$/.test(String(recognition.rawCode ?? "")) ? String(recognition.rawCode) : null);
+    const confidence = Number(recognition?.confidence);
+    const confidenceInvalid = !Number.isFinite(confidence) || confidence < 0 || (confidence > 0 && confidence < 45);
+    if (!candidateCode || confidenceInvalid) {
+      if (attempt === maxAttempts) {
+        if (submittedCount > 0) {
+          return {
+            status: "needs_attention",
+            reason: "OpenCD 验证码重识置信度不足，已停止本轮提交",
+            captchaRejected: true,
+            failureCode: "captcha_ocr_exhausted",
+            submissionAttempted: true,
+            retryable: false,
+          };
+        }
+        return {
+          status: "interactive_challenge",
+          reason: "OpenCD 六位验证码本地识别置信度不足，未提交可疑答案",
+          submissionAttempted: false,
+        };
+      }
+      await refreshOpenCdChallenge();
+      continue;
+    }
+
+    if (submittedCount >= maxSubmits) {
+      return {
+        status: "needs_attention",
+        reason: "OpenCD 图片验证码连续被站点拒绝，已停止本轮提交",
+        captchaRejected: true,
+        failureCode: "captcha_ocr_exhausted",
+        submissionAttempted: true,
+        retryable: false,
+      };
+    }
+
+    // Confirm the challenge token/src did not rotate while OCR ran.
+    const currentHashValue = await imageHashInput.count().catch(() => 0) === 1
+      ? await imageHashInput.first().inputValue().catch(() => "")
+      : "";
+    const currentImageSrc = typeof images.first().getAttribute === "function"
+      ? String(await images.first().getAttribute("src").catch(() => "") ?? "")
+      : "";
+    if (currentHashValue !== descriptor.imageHashValue || currentImageSrc !== descriptor.imageSrc) {
+      if (attempt === maxAttempts) {
+        return {
+          status: submittedCount > 0 ? "needs_attention" : "interactive_challenge",
+          reason: "OpenCD 验证码在识别期间发生变化，已阻止提交过期答案",
+          ...(submittedCount > 0 ? { captchaRejected: true, failureCode: "captcha_not_refreshed", retryable: false } : {}),
+          submissionAttempted: submittedCount > 0,
+        };
+      }
+      continue;
+    }
+
+    let preSubmitReadable = true;
+    const preSubmitBodyText = String(await frame.locator("body").innerText().catch(() => {
+      preSubmitReadable = false;
+      return "";
+    })).replace(/\s+/g, " ").trim();
+    const openCdSuccessPattern = /"state"\s*:\s*"success"|(?<![未不没沒])签到成功|(?<![未不没沒])簽到成功|(?<![未不没沒])已签到|(?<![未不没沒])已簽到/i;
+    const staleRejectionVisible = !preSubmitReadable || isOpenCdCaptchaRejectedText(preSubmitBodyText);
+    const staleSuccessVisible = !preSubmitReadable || openCdSuccessPattern.test(preSubmitBodyText);
+    await input.fill(candidateCode);
+    submittedCount += 1;
+    let responseText = "";
+    try {
+      config.beforePtSubmit?.();
+      await submit.click();
+      await sleepFn(2000);
+      responseText = String(await frame.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    } catch {
+      return {
+        status: "needs_attention",
+        reason: "OpenCD 验证码已提交，但提交后页面异常，结果不明",
+        failureCode: "submission_outcome_unknown",
+        submissionAttempted: true,
+        retryable: false,
+      };
+    }
+    if (!staleSuccessVisible && openCdSuccessPattern.test(responseText)) {
+      const now=new Date();
+      return {
+        status: "signed",
+        reason: `OpenCD 图片验证码识别成功（置信度 ${Math.round(confidence)}，第 ${attempt} 次识别）`,
+        evidence:{source:'page_text',authoritative:true,confirmedAt:now.toISOString(),
+          businessDate:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(now),statusSignal:'submitted_success_response'},
+      };
+    }
+    // Only an explicit, freshly observed CAPTCHA rejection permits refreshing
+    // for a new image; stale rejection text or ambiguous responses stay fail-closed.
+    if (!staleRejectionVisible && isOpenCdCaptchaRejectedText(responseText)) {
+      if (attempt === maxAttempts || submittedCount >= maxSubmits) {
+        return {
+          status: "needs_attention",
+          reason: "OpenCD 图片验证码连续被站点拒绝，已停止本轮提交",
+          captchaRejected: true,
+          failureCode: "captcha_ocr_exhausted",
+          submissionAttempted: true,
+          retryable: false,
+        };
+      }
+      await refreshOpenCdChallenge({ forceReloadFrame: true });
+      continue;
+    }
+    // OpenCD 的 iframe 有时不返回可识别的成功文本，但服务器已经完成
+    // 签到。刷新主页面并检查“查看签到记录”这一权威状态，避免误报。
+    try {
+      const reloadResponse = await page.reload({ waitUntil: "domcontentloaded", timeout: 15000 });
+      if (reloadResponse && typeof reloadResponse.status === "function" && reloadResponse.status() !== 200) {
+        return { status: "needs_attention", reason: "OpenCD 验证码已提交，但未收到成功结果",
+          failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false };
+      }
+      await sleepFn(1200);
+      const refreshedState = await snapshotState(page);
+      if (["signed", "already_signed"].includes(refreshedState.status)) {
+        const evidence=ptPageEvidence({origin:expectedOrigin,url:page.url(),
+          bodyText:await page.locator('body').innerText({timeout:3000}).catch(()=>''),status:refreshedState.status,
+          allowUndatedActionText:false});
+        if (evidence?.authoritative === true) {
+          return {
+            ...refreshedState,
+            reason: `OpenCD 图片验证码已提交并复查成功（置信度 ${Math.round(confidence)}）`,
+            evidence,
+          };
+        }
+      }
+    } catch {
+      return { status: "needs_attention", reason: "OpenCD 验证码已提交，但未收到成功结果",
+        failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false };
+    }
+    return { status: "needs_attention", reason: "OpenCD 验证码已提交，但未收到成功结果",
+      failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false };
   }
-  return { status: "needs_attention", reason: "OpenCD 验证码已提交，但未收到成功结果",
-    failureCode: "submission_outcome_unknown", submissionAttempted: true, retryable: false };
+  return {
+    status: "needs_attention",
+    reason: "OpenCD 图片验证码连续被站点拒绝，已停止本轮提交",
+    captchaRejected: true,
+    failureCode: "captcha_ocr_exhausted",
+    submissionAttempted: submittedCount > 0,
+    retryable: false,
+  };
 }
 
 export async function tryHddolbyPostRedirectVerification(page, expectedOrigin, config,read=readHddolbyHeader,recover=recoverHddolbyTwoFactor) {
