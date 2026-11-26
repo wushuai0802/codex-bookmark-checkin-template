@@ -2,6 +2,7 @@ import {bounded,TIMED_OUT} from './bounded-wait.mjs';
 import {ptFailureMessages} from './checkin-contract.generated.mjs';
 // Reviewed PigGo SPA contract. No storage, cookie or token access belongs here.
 export const piggoOrigin='https://piggo.me';
+export const piggoAssetOrigin='https://origin.piggo.me';
 export const piggoCalendarUrl=piggoOrigin+'/calendar';
 export const piggoLockedUrl=piggoOrigin+'/locked';
 export const piggoAttendanceUrl=piggoOrigin+'/v1/web/calendar/attendance';
@@ -60,6 +61,10 @@ function sameOriginUrl(value){
   try{const url=new URL(value);return url.origin===piggoOrigin&&url.protocol==='https:'&&
     !url.username&&!url.password&&!url.hash?url:null;}catch{return null;}
 }
+function assetOriginUrl(value){
+  try{const url=new URL(value);return url.origin===piggoAssetOrigin&&url.protocol==='https:'&&
+    !url.username&&!url.password&&!url.hash?url:null;}catch{return null;}
+}
 function calendarQuery(url,today){
   const values={year:String(Number(today.slice(0,4))),month:String(Number(today.slice(5,7))),day:String(Number(today.slice(8,10)))};
   return [...url.searchParams].every(([key,value])=>key in values&&value===values[key]&&url.searchParams.getAll(key).length===1);
@@ -77,10 +82,17 @@ export function piggoResponseFresh(response,now){
 export async function installPiggoCalendarFirewall(context,{clock=()=>new Date(),allowPluginAssets=false,allowIdleUnlock=false,allowAuthLanding=false}={}){
   let armedDay=null,used=false;
   const route=async intercepted=>{
-    const request=intercepted.request(),raw=request.url(),url=sameOriginUrl(raw);
+    const request=intercepted.request(),raw=request.url(),sameOrigin=sameOriginUrl(raw),url=sameOrigin??assetOriginUrl(raw);
     if(!url)return intercepted.abort('blockedbyclient');
     // URL parsing normalizes dot segments before pathname can be inspected.
     if(/\.\.|\\|%(?:2e|2f|5c)/i.test(raw.split(/[?#]/)[0]))return intercepted.abort('blockedbyclient');
+    if(!sameOrigin){
+      const staticAsset=request.method()==='GET'&&!request.isNavigationRequest?.()&&request.resourceType?.()!=='document'&&!url.search&&
+        url.pathname.length<=512&&(
+          /^\/assets\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:js|css|woff2?|ttf|svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname)||
+          /^\/[A-Za-z0-9_.-]+\.(?:svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname));
+      return staticAsset?intercepted.continue():intercepted.abort('blockedbyclient');
+    }
     if(request.method()==='POST'){
       let body;try{body=request.postDataJSON();}catch{}
       if(!used&&armedDay&&piggoDay(clock())===armedDay&&url.href===piggoAttendanceUrl&&

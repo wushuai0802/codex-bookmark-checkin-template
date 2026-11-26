@@ -9,7 +9,7 @@ import net from 'node:net';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright-core';
-import {piggoOrigin as origin,piggoCalendarUrl,piggoAttendanceUrl,piggoDay} from '../../src/piggo-calendar.mjs';
+import {piggoOrigin as origin,piggoAssetOrigin as assetOrigin,piggoCalendarUrl,piggoAttendanceUrl,piggoDay} from '../../src/piggo-calendar.mjs';
 
 const execute=promisify(execFile);
 const execution=fileURLToPath(new URL('../../',import.meta.url));
@@ -35,13 +35,16 @@ $stream=$request.GetRequestStream();try{$stream.Write($bytes,0,$bytes.Length)}fi
 $response=$request.GetResponse();$response.Dispose()
 `;
 
-export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out',idleUnlock=false,calendarMode='passive',authLanding=false}={}){
+export async function loginChainFixture(t,{shell='pwsh.exe',passive='logged_out',idleUnlock=false,calendarMode='passive',authLanding=false,useAssetOrigin=false}={}){
   const root=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'piggo-login-chain-')));
   let context,fixtureServer;
   t.after(async()=>{
     await context?.close().catch(()=>{});
     if(fixtureServer){fixtureServer.closeAllConnections();await new Promise(resolve=>fixtureServer.close(resolve));}
-    fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});
+    for(let attempt=0;attempt<8;attempt++){
+      try{fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:150});break;}
+      catch(err){if(!['EPERM','EBUSY','EACCES','ENOTEMPTY'].includes(err?.code)||attempt===7)throw err;await new Promise(r=>setTimeout(r,250));}
+    }
   });
   const controller=path.join(root,'controller'),profile=path.join(root,'data','synthetic profile');
   for(const directory of ['scripts','config','tmp','data/bitwarden/client','tools/bitwarden-cli',
@@ -105,8 +108,47 @@ try{[IO.File]::WriteAllText(${quote(config.bitwardenTotp.sessionFile)},(@{schema
     {windowsHide:true,timeout:15000});
   fs.rmSync(payload);
   const requests=[],launches=[],errors=[];let authenticated=idleUnlock,unlocked=!idleUnlock,signed=calendarMode==='checked';
+  const calendarScript=`Promise.all([fetch('/v1/web/me'),fetch('/v1/web/calendar').then(r=>r.json())]).then(([,data])=>{
+ if(data.detail?.attendance?.status!=='today')return;
+ const button=document.createElement('button');button.className='cal-att-pill act';button.textContent='签到 · +10';
+ button.onclick=async()=>{await fetch('/v1/web/calendar/attendance',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({ymd:data.selected})});button.remove();};document.querySelector('.cal-att').append(button);
+});`;
+  const unlockScript=`document.querySelector('form').onsubmit=async event=>{event.preventDefault();
+ if(document.querySelector('[name=username]').value!=='synthetic-bound-user'||document.querySelector('[name=password]').value!==${JSON.stringify(loginFields.password)})throw Error('Synthetic fields changed');
+ await fetch('/v1/web/me/lab-unlock/srp/challenge',{method:'POST',body:'{}'});
+ await fetch('/v1/web/me/lab-unlock/srp',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({ticket:'synthetic-ticket',a:'synthetic-a',m1:'synthetic-proof'})});
+ ${authLanding?"location.href='/';return;":''}
+ await fetch('/v1/web/me/lab-lock',{method:'POST'}).catch(()=>{});
+};`;
+  const loginScript=`fetch('/v1/web/auth/guest-config').then(()=>{
+document.querySelector('#app').innerHTML='<h1>用账号登录</h1><form><input type="text" name="username" autocomplete="username webauthn"><input type="password" name="password" autocomplete="current-password webauthn"><button>登录</button></form>';
+document.querySelector('form').onsubmit=async event=>{event.preventDefault();
+await fetch('/v1/web/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+ username:document.querySelector('[name=username]').value,password:document.querySelector('[name=password]').value})});
+${authLanding?"location.href='/';return;":''}
+// A second POST must be stopped by the real login firewall.
+await fetch('/v1/web/login',{method:'POST',body:'{}'}).catch(()=>{});
+};});`;
+  const negativeAssetProbes=`fetch(${JSON.stringify(assetOrigin+'/v1/web/me')}).catch(()=>{});fetch(${JSON.stringify(assetOrigin+'/assets/js/calendar.js?x=1')}).catch(()=>{});fetch(${JSON.stringify(assetOrigin+'/assets/js/calendar.js')},{method:'POST'}).catch(()=>{});`;
   const serve=async intercepted=>{
     const request=intercepted.request(),url=new URL(request.url()),method=request.method();
+    if(useAssetOrigin&&url.origin===assetOrigin){
+      requests.push({method,path:'origin.piggo.me'+url.pathname});
+      assert.equal(method,'GET','assetOrigin must never receive non-GET');
+      assert.equal(url.search,'','assetOrigin must never receive query strings');
+      const assets={
+        '/assets/css/shell.css':['text/css','.username-a11y{display:none}'],
+        '/assets/js/calendar.js':['application/javascript',negativeAssetProbes+calendarScript],
+        '/assets/js/unlock.js':['application/javascript',negativeAssetProbes+unlockScript],
+        '/assets/js/login.js':['application/javascript',negativeAssetProbes+loginScript],
+      };
+      const hit=assets[url.pathname];
+      if(!hit)throw Error('Unexpected synthetic assetOrigin request: '+url.href);
+      await intercepted.fulfill({status:200,contentType:hit[0],headers:{date:new Date().toUTCString()},body:hit[1]});
+      return;
+    }
     requests.push({method,path:url.pathname});
     assert.equal(url.origin,origin,'the fixture never forwards a request');
     let status=200,contentType='application/json',body={};
@@ -115,38 +157,14 @@ try{[IO.File]::WriteAllText(${quote(config.bitwardenTotp.sessionFile)},(@{schema
       assert.equal(request.frame(),request.frame().page().mainFrame());contentType='text/html';body='<main>synthetic landing</main>';
     }else if(method==='GET'&&['/calendar','/login','/locked'].includes(url.pathname)){
       contentType='text/html';
+      const styleTag=useAssetOrigin?`<link rel="stylesheet" href="${assetOrigin}/assets/css/shell.css">`:'<style>.username-a11y{display:none}</style>';
       body='<meta charset="utf-8"><link rel="icon" href="data:,">'+(url.pathname==='/calendar'?
-        `<main class="cal-page"><div class="cal-att"></div></main><script>
-Promise.all([fetch('/v1/web/me'),fetch('/v1/web/calendar').then(r=>r.json())]).then(([,data])=>{
- if(data.detail?.attendance?.status!=='today')return;
- const button=document.createElement('button');button.className='cal-att-pill act';button.textContent='签到 · +10';
- button.onclick=async()=>{await fetch('/v1/web/calendar/attendance',{method:'POST',headers:{'Content-Type':'application/json'},
- body:JSON.stringify({ymd:data.selected})});button.remove();};document.querySelector('.cal-att').append(button);
-});
-</script>`:url.pathname==='/locked'?
-        `<style>.username-a11y{display:none}</style><h1>页面已锁定</h1><p>空闲过久，请验证是你本人。</p>
+        `<main class="cal-page"><div class="cal-att"></div></main>${useAssetOrigin?`${styleTag}<script src="${assetOrigin}/assets/js/calendar.js"></script>`:`<script>${calendarScript}</script>`}`:url.pathname==='/locked'?
+        `${styleTag}<h1>页面已锁定</h1><p>空闲过久，请验证是你本人。</p>
 <form class="step-up"><input class="username-a11y" type="text" name="username" autocomplete="username" readonly tabindex="-1" value="synthetic-bound-user">
 <p>验证后继续使用。</p><label>当前密码<input class="cell-input" type="password" name="password" autocomplete="current-password webauthn" required placeholder="当前密码"></label>
-<button class="passkey-btn" type="button">通行密钥</button><button class="btn" type="submit">解锁</button></form><script>
-document.querySelector('form').onsubmit=async event=>{event.preventDefault();
- if(document.querySelector('[name=username]').value!=='synthetic-bound-user'||document.querySelector('[name=password]').value!==${JSON.stringify(loginFields.password)})throw Error('Synthetic fields changed');
- await fetch('/v1/web/me/lab-unlock/srp/challenge',{method:'POST',body:'{}'});
- await fetch('/v1/web/me/lab-unlock/srp',{method:'POST',headers:{'Content-Type':'application/json'},
- body:JSON.stringify({ticket:'synthetic-ticket',a:'synthetic-a',m1:'synthetic-proof'})});
- ${authLanding?"location.href='/';return;":''}
- await fetch('/v1/web/me/lab-lock',{method:'POST'}).catch(()=>{});
-};</script>`:
-        `<main id="app"></main><script>
-fetch('/v1/web/auth/guest-config').then(()=>{
-document.querySelector('#app').innerHTML='<h1>用账号登录</h1><form><input type="text" name="username" autocomplete="username webauthn"><input type="password" name="password" autocomplete="current-password webauthn"><button>登录</button></form>';
-document.querySelector('form').onsubmit=async event=>{event.preventDefault();
-await fetch('/v1/web/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
- username:document.querySelector('[name=username]').value,password:document.querySelector('[name=password]').value})});
-${authLanding?"location.href='/';return;":''}
-// A second POST must be stopped by the real login firewall.
-await fetch('/v1/web/login',{method:'POST',body:'{}'}).catch(()=>{});
-};});
-</script>`);
+<button class="passkey-btn" type="button">通行密钥</button><button class="btn" type="submit">解锁</button></form>${useAssetOrigin?`<script src="${assetOrigin}/assets/js/unlock.js"></script>`:`<script>${unlockScript}</script>`}`:
+        `<main id="app"></main>${useAssetOrigin?`${styleTag}<script src="${assetOrigin}/assets/js/login.js"></script>`:`<script>${loginScript}</script>`}`);
     }else if(method==='GET'&&url.pathname==='/v1/web/auth/guest-config')body={captcha:false};
     else if(method==='GET'&&['/v1/web/me','/v1/web/calendar'].includes(url.pathname)){
       if(!authenticated){status=passive==='unavailable'?503:401;}

@@ -112,7 +112,8 @@ function Test-HasImmediateRetry($Report, [datetime]$RetryAt, [string[]]$Selected
     if ($unresolved.Count -eq 0) { return $false }
     foreach ($result in $unresolved) {
         if ([string]$result.status -eq 'needs_attention' -or [string]$result.retryCause -eq 'invalid_credential' -or
-            [string]$result.failureCode -cin @('daily_open_limit', 'notice_acknowledgement_required') -or $result.retryExhaustedForDay -eq $true) { continue }
+            [string]$result.failureCode -cin @('daily_open_limit', 'notice_acknowledgement_required') -or
+            $result.retryExhaustedForDay -eq $true -or $result.retryable -eq $false) { continue }
         if ([string]$result.status -ne 'deferred') { return $true }
         try {
             if (-not $result.nextEligibleAt -or [datetimeoffset]$result.nextEligibleAt -le $retryOffset) { return $true }
@@ -270,6 +271,12 @@ try {
                 if ($null -ne $resumeCandidate) {
                     $preflightResults = @($resumeCandidate.Report.results | Where-Object {
                         (-not (Test-TerminalCheckinResult $_)) `
+                            -and ($selectedOrigins.Count -gt 0 -or $selectedAccountKeys.Count -gt 0 -or (
+                                [string]$_.status -ne 'needs_attention' `
+                                -and $_.retryExhaustedForDay -ne $true `
+                                -and $_.retryable -ne $false `
+                                -and [string]$_.failureCode -cnotin @('daily_open_limit', 'notice_acknowledgement_required')
+                            )) `
                             -and ($manualConfirmed -notcontains [string]$_.origin) `
                             -and ($temporaryUnavailable -notcontains [string]$_.origin)
                     })

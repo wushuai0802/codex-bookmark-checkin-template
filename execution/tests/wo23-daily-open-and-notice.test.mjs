@@ -318,6 +318,155 @@ test('WO-23 T2: dailyOpenLimit=1 + Prepare-NativeWafSession hands off PigGo clea
   });
 });
 
+test('PigGo regression: historical unconfirmed submitted intent + dailyOpenLimit=1 + origin.piggo.me SPA assets complete passive readback and formal submit in 1 open', { skip: process.platform !== 'win32' ? 'Windows PowerShell required' : false, timeout: 150000 }, async t => {
+  for (const calendarMode of ['passive', 'submit']) {
+    await t.test(`mode=${calendarMode}`, async st => {
+      const f = await loginChainFixture(st, { shell: 'pwsh.exe', idleUnlock: true, calendarMode, useAssetOrigin: true });
+      const siteOrigin = piggoOrigin;
+      const cfgPath = path.join(f.root, 'config/config.json');
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      cfg.ptReadOnlyPolicies[siteOrigin].dailyOpenLimit = 1;
+      cfg.ptReadOnlyPolicies[siteOrigin].nativeApiExecution = true;
+      cfg.nativeWafPreflightUrls = [{
+        url: calendarMode === 'submit' ? `${siteOrigin}/v1/web/calendar/attendance` : `${siteOrigin}/calendar`,
+        waitSeconds: 20,
+        ...(calendarMode === 'submit' ? { action: 'checkin' } : { passiveOnly: true }),
+        automationUserDataDir: f.profile,
+      }];
+      cfg.nativeChallengePreflight = [];
+      cfg.mainChromeFallbackUrls = [];
+      cfg.autoClickTurnstileOrigins = [];
+      cfg.nativeAccessibilityCheckinOrigins = calendarMode === 'submit' ? [siteOrigin] : [];
+      cfg.powershellExecutable = 'pwsh.exe';
+      cfg.minimumBookmarkTargetCount = 1;
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+      for (const scriptName of [
+        'Prepare-NativeWafSession.ps1',
+        'Native-PtGuard.ps1',
+        'Native-PtGate.mjs',
+        'Read-NativePtHeader.mjs',
+        'Run-NativePtApiCheckin.mjs',
+        'ResultContract.ps1',
+        'CheckinContract.generated.ps1',
+      ]) {
+        fs.copyFileSync(path.join(executionRoot, 'scripts', scriptName), path.join(f.root, 'scripts', scriptName));
+      }
+      // Seed an unconfirmed October submitted entry matching production native-pt-attempts.json
+      fs.mkdirSync(path.join(f.root, 'data'), { recursive: true });
+      fs.writeFileSync(path.join(f.root, 'data/native-pt-attempts.json'), JSON.stringify({
+        schemaVersion: 1,
+        attempts: [{
+          attemptId: '00000000-0000-4000-8000-000000001008',
+          origin: siteOrigin,
+          accountKey: 'site-default',
+          profileBinding: f.profileBinding,
+          businessDate: '2026-10-08',
+          startedAt: '2026-10-08T00:06:25.088Z',
+          state: 'submitted',
+          actions: ['navigation'],
+        }],
+      }));
+
+      // Step 1: Prepare-NativeWafSession hits the historical submission_outcome_unknown in the eligibility loop,
+      // and hands off directly to single-session login recovery with 0 opens and 0 browser launches.
+      await execute('pwsh.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', path.join(f.root, 'scripts/Prepare-NativeWafSession.ps1'),
+        '-Origins', siteOrigin,
+      ], { cwd: f.root, env: f.env, windowsHide: true, timeout: 30000 });
+      const preflight = JSON.parse(fs.readFileSync(path.join(f.root, 'tmp/native-waf-preflight.json'), 'utf8'));
+      assert.equal(preflight.results.length, 1);
+      assert.equal(preflight.results[0].status, 'login_required');
+      assert.equal(preflight.results[0].deferredToLoginRecovery, true);
+      assert.equal(preflight.results[0].submissionAttempted, false);
+      assert.equal(f.launches.length, 0);
+      assert.equal(readDailyOpenJournal(f.root).opens.length, 0);
+
+      // Step 2: Single-session recoverPiggoSpaLogin loads origin.piggo.me/assets/* JS & CSS, unlocks 423,
+      // reads /calendar, and either stops passively (not_signed) or submits attendance (signed) in 1 open.
+      const coreOut = await f.runCore();
+      assert.equal(coreOut.code, 0, coreOut.stderr + coreOut.stdout);
+      assert.deepEqual(f.errors, []);
+      assert.equal(readDailyOpenJournal(f.root).opens.length, 1);
+      assert.equal(f.requests.some(r => r.path === 'origin.piggo.me/assets/js/calendar.js'), true);
+      assert.equal(f.requests.some(r => r.path === 'origin.piggo.me/assets/js/unlock.js'), true);
+      assert.equal(f.requests.some(r => r.path === 'origin.piggo.me/assets/css/shell.css'), true);
+      const parsed = loginHelperOutcome(coreOut.stdout);
+      assert.equal(parsed.status, 'logged_in');
+      if (calendarMode === 'passive') {
+        assert.deepEqual(f.requests.filter(r => r.method === 'POST').map(r => r.path), [
+          '/v1/web/me/lab-unlock/srp/challenge',
+          '/v1/web/me/lab-unlock/srp',
+        ]);
+        const rawResult = JSON.parse(coreOut.stdout.trim().split(/\r?\n/).at(-1));
+        assert.equal(rawResult.dailyCheckin?.status, 'not_signed');
+        assert.equal(rawResult.dailyCheckin?.receiptAccepted, true);
+        assert.equal(rawResult.dailyCheckin?.submissionAttempted, false);
+
+        // Step 3: Later same-day Prepare-NativeWafSession sees dailyOpenLimit already reached
+        // and emits daily_open_limit (NOT deferredToLoginRecovery), spending 0 opens.
+        await execute('pwsh.exe', [
+          '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+          '-File', path.join(f.root, 'scripts/Prepare-NativeWafSession.ps1'),
+          '-Origins', siteOrigin,
+        ], { cwd: f.root, env: f.env, windowsHide: true, timeout: 30000 });
+        const secondPreflight = JSON.parse(fs.readFileSync(path.join(f.root, 'tmp/native-waf-preflight.json'), 'utf8'));
+        assert.equal(secondPreflight.results[0].failureCode, 'daily_open_limit');
+        assert.notEqual(secondPreflight.results[0].deferredToLoginRecovery, true);
+        assert.equal(readDailyOpenJournal(f.root).opens.length, 1);
+      } else {
+        assert.deepEqual(f.requests.filter(r => r.method === 'POST').map(r => r.path), [
+          '/v1/web/me/lab-unlock/srp/challenge',
+          '/v1/web/me/lab-unlock/srp',
+          '/v1/web/calendar/attendance',
+        ]);
+        const rawResult = JSON.parse(coreOut.stdout.trim().split(/\r?\n/).at(-1));
+        assert.equal(rawResult.dailyCheckin?.status, 'signed');
+        assert.equal(rawResult.dailyCheckin?.confirmationState, 'confirmed');
+      }
+    });
+  }
+
+  // Step 4: Same-day unconfirmed submitted attempt stays fail-closed (never hands off to login recovery and never re-clicks)
+  await t.test('same-day submitted attempt stays fail-closed', async st => {
+    const f = await loginChainFixture(st, { shell: 'pwsh.exe', idleUnlock: true, calendarMode: 'submit', useAssetOrigin: true });
+    const siteOrigin = piggoOrigin;
+    const today = piggoDay(new Date());
+    const cfgPath = path.join(f.root, 'config/config.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    cfg.ptReadOnlyPolicies[siteOrigin].dailyOpenLimit = 2;
+    cfg.ptReadOnlyPolicies[siteOrigin].nativeApiExecution = true;
+    cfg.nativeWafPreflightUrls = [{ url: `${siteOrigin}/v1/web/calendar/attendance`, waitSeconds: 20, action: 'checkin', automationUserDataDir: f.profile }];
+    cfg.nativeChallengePreflight = [];
+    cfg.mainChromeFallbackUrls = [];
+    cfg.autoClickTurnstileOrigins = [];
+    cfg.nativeAccessibilityCheckinOrigins = [siteOrigin];
+    cfg.powershellExecutable = 'pwsh.exe';
+    cfg.minimumBookmarkTargetCount = 1;
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+    fs.mkdirSync(path.join(f.root, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(f.root, 'data/native-pt-attempts.json'), JSON.stringify({
+      schemaVersion: 1,
+      attempts: [{
+        attemptId: '00000000-0000-4000-8000-000000002026',
+        origin: siteOrigin,
+        accountKey: 'site-default',
+        profileBinding: f.profileBinding,
+        businessDate: today,
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        state: 'submitted',
+        actions: ['click'],
+      }],
+    }));
+    const coreOut = await f.runCore();
+    assert.equal(coreOut.code, 0, coreOut.stderr + coreOut.stdout);
+    const rawResult = JSON.parse(coreOut.stdout.trim().split(/\r?\n/).at(-1));
+    assert.equal(rawResult.dailyCheckin?.status, 'needs_attention');
+    assert.equal(rawResult.dailyCheckin?.failureCode, 'submission_outcome_unknown');
+    assert.equal(f.requests.some(r => r.method === 'POST' && r.path === '/v1/web/calendar/attendance'), false);
+  });
+});
+
 test('WO-23 T4: piggo-calendar detects notice_gate on /rules with only safe fixed codes and never clicks or relaxes firewall', async t => {
   const f = fixture(t);
   const routes = [];

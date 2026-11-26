@@ -459,10 +459,21 @@ export async function runPiggoCalendarCheckinInContext({root,context,expectedPro
     if(!['not_signed','already_signed'].includes(before.result.status))return before.result;
     const registered=await gate({...args,phase:'readback',receipt:before.result.readbackReceipt});
     if(registered.allow!==true||registered.receiptAccepted!==true)return registered.decision??unavailable(state.identity);
-    if(before.result.status==='already_signed'||!canSubmit)return {...before.result,receiptAccepted:true};
+    const today=piggoDay(clock());
+    let hasSameDayPending=false;
+    try{
+      const journal=read(path.join(state.root,'data/native-pt-attempts.json'));
+      hasSameDayPending=(journal?.attempts??[]).some(item=>item?.origin===piggoOrigin&&
+        item.accountKey===state.identity.accountKey&&item.state==='submitted'&&item.businessDate===today);
+    }catch(err){if(err?.code!=='ENOENT')hasSameDayPending=true;}
+    if(before.result.status==='already_signed'){
+      if(hasSameDayPending)await gate({...args,phase:'inspect'}).catch(()=>{});
+      return {...before.result,receiptAccepted:true};
+    }
+    if(!canSubmit)return {...before.result,receiptAccepted:true};
+    if(hasSameDayPending)return unknownResult();
     const decision=await gate({...args,phase:'inspect'});
     if(decision.allow!==true)return decision.decision??unavailable(state.identity);
-    const today=piggoDay(clock());
     if(!await unchanged()||before.result.businessDate!==today)return unavailable(state.identity);
     await validateLease(state.root);
     const attemptId=crypto.randomUUID();

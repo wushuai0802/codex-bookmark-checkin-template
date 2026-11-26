@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import {piggoOrigin,piggoCalendarUrl,installPiggoCalendarFirewall,readPiggoAccountIdInContext} from '../src/piggo-calendar.mjs';
+import {piggoOrigin,piggoAssetOrigin,piggoCalendarUrl,installPiggoCalendarFirewall,readPiggoAccountIdInContext} from '../src/piggo-calendar.mjs';
 import {readNativePtApiHeader,readNativePtApiHeaderInContext,runNativePtApiCheckin} from '../src/native-pt-api.mjs';
 import {diagnosticOptions,runPiggoDiagnostic} from '../scripts/Diagnose-Piggo.mjs';
 import {fixture,observedLoginRequests,response,now} from './helpers/piggo-spa-fixture.mjs';
@@ -61,6 +61,58 @@ test('asset shapes reject traversal before URL normalization, API lookalikes, un
   const credentialAsset=new URL(piggoOrigin+'/assets/js/main.js');credentialAsset.username='fixture';
   for(const url of ['https://foreign.example/assets/js/main.js',credentialAsset.href])
     assert.equal(await context.request('GET',url),false,url);
+});
+
+test('origin.piggo.me static asset firewall permits only queryless non-document GET assets and blocks APIs, writes, navigations and sibling subdomains',async t=>{
+  const f=fixture(t),context=f.createContext();
+  await installPiggoCalendarFirewall(context,{clock:f.clock,allowPluginAssets:true});
+  for(const route of [
+    '/assets/js/XpdqabQG.js',
+    '/assets/css/CXp83QQ8.css',
+    '/assets/fonts/C--c2faV.woff2',
+    '/assets/images/nested/banner.webp',
+    '/zhuzhu.png',
+    '/favicon.ico',
+  ]){
+    assert.equal(await context.request('GET',piggoAssetOrigin+route),true,route);
+  }
+  for(const route of [
+    '/',
+    '/login',
+    '/calendar',
+    '/locked',
+    '/v1/web/me',
+    '/v1/web/boot',
+    '/v1/web/auth/guest-config',
+    '/v1/web/calendar?year=2026&month=11&day=1',
+    '/v1/web/plugin-assets/iyuu/plugin.js',
+    '/v1/web/plugin-assets/iyuu/plugin.css',
+    '/assets/js/XpdqabQG.js?v=1',
+    '/assets/js/XpdqabQG.js#frag',
+    '/assets/js/../XpdqabQG.js',
+    '/assets/%2e%2e/zhuzhu.png',
+    '/assets/js\\XpdqabQG.js',
+    '/assets/js/a%2fb.js',
+    '/assets/js/page.html',
+    '/assets/js/page.php',
+    '/root.js',
+  ]){
+    assert.equal(await context.request('GET',piggoAssetOrigin+route),false,route);
+  }
+  assert.equal(await context.request('GET',piggoAssetOrigin+'/assets/js/XpdqabQG.js',undefined,{isNavigationRequest:()=>true}),false);
+  assert.equal(await context.request('GET',piggoAssetOrigin+'/assets/js/XpdqabQG.js',undefined,{resourceType:()=>'document'}),false);
+  for(const method of ['POST','PUT','PATCH','DELETE','HEAD','OPTIONS']){
+    assert.equal(await context.request(method,piggoAssetOrigin+'/assets/js/XpdqabQG.js'),false,method);
+  }
+  const credentialCdn=new URL(piggoAssetOrigin+'/assets/js/XpdqabQG.js');credentialCdn.username='fixture';
+  for(const badOriginUrl of [
+    'http://origin.piggo.me/assets/js/XpdqabQG.js',
+    'https://evil.piggo.me/assets/js/XpdqabQG.js',
+    'https://origin.piggo.me.evil.example/assets/js/XpdqabQG.js',
+    credentialCdn.href,
+  ]){
+    assert.equal(await context.request('GET',badOriginUrl),false,badOriginUrl);
+  }
 });
 
 function accountContext(record={}){

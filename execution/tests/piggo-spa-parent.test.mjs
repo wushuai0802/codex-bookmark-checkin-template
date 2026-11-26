@@ -46,8 +46,10 @@ const loginResult=(shell,reader,origin='https://piggo.me',calendar='$true')=>{
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('${quote(scripts+'Prepare-NativeWafSession.ps1')}',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'parse failed'}
-$fn=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PiggoLoginRequiredResult'},$true)[0]
-. ([scriptblock]::Create($fn.Extent.Text))
+foreach($fnName in @('Get-PiggoLoginRequiredResult','Get-PiggoEligibilityHandoff')){
+  $fn=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $fnName},$true)[0]
+  . ([scriptblock]::Create($fn.Extent.Text))
+}
 $script:calls=0
 function Invoke-FakeReader {$script:calls++;${reader}}
 function Join-Path {'Read-NativePtHeader.mjs'}
@@ -76,13 +78,19 @@ for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pw
 }
 
 // Runs the real eligibility loop: an old intent stops PigGo there, before the per-item loop.
-const eligibility=(shell,{origin='https://piggo.me',read,gate='unknown',useMain=false,policies=true})=>{
+const eligibility=(shell,{origin='https://piggo.me',read,gate='unknown',useMain=false,policies=true,dailyOpenLimit=null,nativeApiExecution=false,recoveryReady=false,passiveOnly=false,sameDayPending=false,openGateBlocked=null})=>{
+  const policyFields=['piggoCalendar=$true'];
+  if(nativeApiExecution)policyFields.push('nativeApiExecution=$true');
+  if(dailyOpenLimit!==null)policyFields.push(`dailyOpenLimit=${dailyOpenLimit}`);
+  const blockedExpr=openGateBlocked===null?'$null':`[pscustomobject]@{origin='${origin}';status='${openGateBlocked.status}';failureCode='${openGateBlocked.failureCode}';nativeGate=$true;submissionAttempted=$false}`;
   const command=`$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('${quote(scripts+'Prepare-NativeWafSession.ps1')}',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'parse failed'}
-$fn=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PiggoLoginRequiredResult'},$true)[0]
-. ([scriptblock]::Create($fn.Extent.Text))
+foreach($fnName in @('Get-PiggoLoginRequiredResult','Get-PiggoEligibilityHandoff')){
+  $fn=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $fnName},$true)[0]
+  . ([scriptblock]::Create($fn.Extent.Text))
+}
 $loop=$ast.FindAll({param($node)$node -is [Management.Automation.Language.ForEachStatementAst] -and $node.Variable.VariablePath.UserPath -eq 'candidate'},$true)
 if($loop.Count -ne 1){throw 'eligibility loop not found'}
 $script:guardCalls=0;$script:readCalls=0;$script:registerCalls=0
@@ -90,11 +98,14 @@ function Initialize-NativePtGuard {$script:guardCalls++;${gate==='unknown'?"[psc
 function Invoke-MainChromeReadOnlyFallbackResult {$script:readCalls++;${read}}
 function Register-NativePtReadback {$script:registerCalls++;[pscustomobject]@{allow=$false}}
 function Test-NativeTwoFactorRecoveryOptIn {$false}
+function Test-PiggoPasswordRecoveryReady {param([string]$Origin) ${recoveryReady?'$true':'$false'}}
+function Test-PiggoSameDaySubmittedIntent {param([string]$Origin) ${sameDayPending?'$true':'$false'}}
+function Get-DailyOpenGateDecision {param([string]$Origin) ${blockedExpr}}
 $node='must-not-run'
-$config=[pscustomobject]@{bookmarksPath='fixture\\Bookmarks'${policies?";ptReadOnlyPolicies=[pscustomobject]@{'https://piggo.me'=[pscustomobject]@{piggoCalendar=$true}}":''}}
+$config=[pscustomobject]@{bookmarksPath='fixture\\Bookmarks'${policies?`;ptReadOnlyPolicies=[pscustomobject]@{'https://piggo.me'=[pscustomobject]@{${policyFields.join(';')}}}`:''}}
 $mainFallbackByOrigin=@{};${useMain?"$mainFallbackByOrigin['"+origin+"']=[pscustomobject]@{url='"+origin+"/index.php'}":''}
 $preflightResults=@()
-$items=@([pscustomobject]@{url='${origin}/calendar';sourceOrigin='${origin}';action='preflight';passiveOnly=$false;profilePath='fixture\\profile';waitSeconds=120})
+$items=@([pscustomobject]@{url='${origin}/calendar';sourceOrigin='${origin}';action='preflight';passiveOnly=${passiveOnly?'$true':'$false'};profilePath='fixture\\profile';waitSeconds=120})
 $eligibleItems=@()
 . ([scriptblock]::Create($loop[0].Extent.Text))
 [pscustomobject]@{results=@($preflightResults);eligible=@($eligibleItems).Count;guardCalls=$script:guardCalls;readCalls=$script:readCalls;registerCalls=$script:registerCalls}|ConvertTo-Json -Depth 5 -Compress`;
@@ -130,6 +141,48 @@ for(const shell of process.platform==='win32'?['powershell.exe','pwsh.exe']:['pw
   test(`a guard that allows PigGo stays eligible without an extra read (${shell})`,()=>{
     const out=eligibility(shell,{gate:'allow',read:loggedOut});
     assert.equal(out.results.length,0);assert.equal(out.eligible,1);assert.equal(out.readCalls,0);
+  });
+  test(`an old intent with dailyOpenLimit hands off PigGo directly to single-session login recovery without spending a read (${shell})`,()=>{
+    for(const passiveOnly of [true,false]){
+      const out=eligibility(shell,{read:'throw "must not read in preflight"',dailyOpenLimit:1,nativeApiExecution:true,recoveryReady:true,passiveOnly});
+      assert.equal(out.readCalls,0);assert.equal(out.registerCalls,0);assert.equal(out.eligible,0);assert.equal(out.results.length,1);
+      const [row]=out.results;
+      assert.equal(row.origin,'https://piggo.me');assert.equal(row.url,'https://piggo.me/calendar');
+      assert.equal(row.status,'login_required');assert.equal(row.inspectionStatus,'login_required');
+      assert.equal(row.retryCause,'login_required');assert.equal(row.nativeGate,true);
+      assert.equal(row.submissionAttempted,false);assert.equal(row.deferredToLoginRecovery,true);
+    }
+    // Falls back to existing read path when recovery is unavailable, dailyOpenLimit is unset, nativeApiExecution is off, or origin is non-PigGo
+    for(const fallbackOpts of [
+      {read:loggedOut,dailyOpenLimit:1,nativeApiExecution:true,recoveryReady:false},
+      {read:loggedOut,dailyOpenLimit:1,nativeApiExecution:false,recoveryReady:true},
+      {read:loggedOut,dailyOpenLimit:null,nativeApiExecution:true,recoveryReady:true},
+      {origin:'https://tracker.example',read:loggedOut,dailyOpenLimit:1,nativeApiExecution:true,recoveryReady:true},
+    ]){
+      const out=eligibility(shell,fallbackOpts);
+      assert.equal(out.readCalls,1);
+      assert.notEqual(out.results[0].deferredToLoginRecovery,true);
+    }
+    // Historical intent respects exhausted dailyOpenLimit or notice_acknowledgement_required with zero reads
+    for(const blocked of [
+      {status:'deferred',failureCode:'daily_open_limit'},
+      {status:'needs_attention',failureCode:'notice_acknowledgement_required'},
+    ]){
+      const out=eligibility(shell,{read:'throw "must not read"',dailyOpenLimit:1,nativeApiExecution:true,recoveryReady:true,openGateBlocked:blocked});
+      assert.equal(out.readCalls,0);
+      assert.equal(out.results[0].failureCode,blocked.failureCode);
+      assert.notEqual(out.results[0].deferredToLoginRecovery,true);
+    }
+    // Same-day submitted intent stays fail-closed (never hands off to login recovery or downgrades to daily_open_limit)
+    const sameDayExhausted=eligibility(shell,{read:'throw "must not read"',dailyOpenLimit:1,nativeApiExecution:true,recoveryReady:true,sameDayPending:true,
+      openGateBlocked:{status:'deferred',failureCode:'daily_open_limit'}});
+    assert.equal(sameDayExhausted.readCalls,0);
+    assert.equal(sameDayExhausted.results[0].failureCode,'submission_outcome_unknown');
+    assert.equal(sameDayExhausted.results[0].submissionAttempted,true);
+    const sameDayLoggedOut=eligibility(shell,{read:loggedOut,dailyOpenLimit:2,nativeApiExecution:true,recoveryReady:true,sameDayPending:true});
+    assert.equal(sameDayLoggedOut.readCalls,1);
+    assert.equal(sameDayLoggedOut.results[0].failureCode,'submission_outcome_unknown');
+    assert.equal(sameDayLoggedOut.results[0].submissionAttempted,true);
   });
 }
 
