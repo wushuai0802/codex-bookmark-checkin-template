@@ -9,7 +9,7 @@ import {withBitwardenLogin} from '../src/bitwarden-totp.mjs';
 import {fixture,response,piggoLoginDom,observedLoginRequests,calendarData} from './helpers/piggo-spa-fixture.mjs';
 import {runOfflinePiggoIndex} from './helpers/piggo-index-fixture.mjs';
 import {readRecoveryState,attemptedToday,writeRecoveryState} from '../src/native-pt-two-factor.mjs';
-import {installPiggoCalendarFirewall} from '../src/piggo-calendar.mjs';
+import {installPiggoCalendarFirewall,clickPiggoAttendance} from '../src/piggo-calendar.mjs';
 
 function loginFixture(t,{status=200,captcha=false,otp=false,afterChallenge=false,srp=false,replay=false,unknown=false,body,
   blockedEndpoint,unlock=false,passiveOnly=true,network=[],post={},stale=false,noResponse=false,
@@ -469,3 +469,60 @@ test('real index times out a helper tree once and retains unknown login semantic
     const pids=JSON.parse(fs.readFileSync(path.join(f.f.root,'tmp/helper-pids.json')));
     for(const pid of pids)assert.throws(()=>process.kill(pid,0));
   });
+
+test('clickPiggoAttendance waits for delayed Vue button mount before checking count and clicking',async()=>{
+  let mounted=false,waited=false,clicked=false;
+  const button={
+    first(){return this;},
+    waitFor:async options=>{assert.equal(options.state,'visible');waited=true;mounted=true;},
+    count:async()=>mounted?1:0,
+    isVisible:async()=>mounted,
+    isEnabled:async()=>mounted,
+    innerText:async()=>'签到 · +10',
+    click:async()=>{clicked=true;},
+  };
+  const page={url:()=>'https://piggo.me/calendar',locator:selector=>{assert.equal(selector,'.cal-page .cal-att button.cal-att-pill.act');return button;}};
+  await clickPiggoAttendance(page);
+  assert.equal(waited,true);assert.equal(clicked,true);
+});
+
+test('same-session PigGo submission_outcome_unknown preserves only fixed sanitized stage diagnostics',async t=>{
+  const httpFail=loginFixture(t,{unlock:true,passiveOnly:false,post:{options:{status:502}}});
+  const res502=await recoverPiggoSpaLogin(httpFail.args);
+  assert.equal(res502.status,'logged_in');
+  assert.equal(res502.dailyCheckin.failureCode,'submission_outcome_unknown');
+  assert.equal(res502.dailyCheckin.checkinStage,'post_http_status');
+  assert.equal(res502.dailyCheckin.checkinHttpStatus,502);
+  assert.equal(res502.dailyCheckin.firewallUsed,true);
+  const out502=loginHelperOutcome(JSON.stringify(res502));
+  assert.equal(out502.dailyCheckin.checkinStage,'post_http_status');
+  assert.equal(out502.dailyCheckin.checkinHttpStatus,502);
+  assert.equal(out502.dailyCheckin.firewallUsed,true);
+
+  const blocked=loginFixture(t,{unlock:true,passiveOnly:false,post:{body:{ymd:'2026-11-01',extra:1}}});
+  const resBlocked=await recoverPiggoSpaLogin(blocked.args);
+  assert.equal(resBlocked.dailyCheckin.failureCode,'submission_outcome_unknown');
+  assert.equal(resBlocked.dailyCheckin.checkinStage,'post_blocked');
+  assert.equal(resBlocked.dailyCheckin.firewallUsed,false);
+
+  const dirty=loginHelperOutcome(JSON.stringify({
+    origin:'https://piggo.me',status:'logged_in',
+    dailyCheckin:{origin:'https://piggo.me',accountKey:'site-default',profileBinding:'a'.repeat(64),nativeGate:true,
+      status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,
+      checkinStage:'PRIVATE STAGE',checkinHttpStatus:999,firewallUsed:'yes'},
+  }));
+  assert.equal(dirty.dailyCheckin.checkinStage,undefined);
+  assert.equal(dirty.dailyCheckin.checkinHttpStatus,undefined);
+  assert.equal(dirty.dailyCheckin.firewallUsed,undefined);
+});
+
+test('Recover-NativeLogin finally cleanup guards HasExited and matches exact --user-data-dir profile',()=>{
+  const source=fs.readFileSync(new URL('../scripts/Recover-NativeLogin.ps1',import.meta.url),'utf8');
+  const finallyBlock=source.slice(source.lastIndexOf('finally {'));
+  assert.match(finallyBlock,/-not \$process\.HasExited/);
+  assert.match(finallyBlock,/try\s*\{[\s\S]*CloseMainWindow\(\)[\s\S]*\}\s*catch\s*\{\}/);
+  assert.match(finallyBlock,/if\s*\(\$targets\.Count -gt 0\)/);
+  assert.doesNotMatch(source,/CommandLine -like "\*\$profilePath\*"/);
+  assert.match(source,/function Test-ChromeProcessUsesProfile/);
+  assert.match(source,/\[regex\]::Escape/);
+});

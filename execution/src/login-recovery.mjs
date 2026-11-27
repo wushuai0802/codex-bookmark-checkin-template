@@ -125,9 +125,15 @@ function safePiggoDailyCheckin(value){
   if(value?.origin!==piggoOrigin||value.accountKey!=='site-default'||!/^[a-f0-9]{64}$/.test(value.profileBinding??'')||
     value.nativeGate!==true)return null;
   const identity={origin:piggoOrigin,url:piggoCalendarUrl,accountKey:'site-default',profileBinding:value.profileBinding,nativeGate:true};
-  if(value.status==='needs_attention'&&value.failureCode==='submission_outcome_unknown'&&value.submissionAttempted===true)
+  if(value.status==='needs_attention'&&value.failureCode==='submission_outcome_unknown'&&value.submissionAttempted===true){
+    const diag={};
+    if(typeof value.checkinStage==='string'&&/^[a-z][a-z_]{0,39}$/.test(value.checkinStage))diag.checkinStage=value.checkinStage;
+    if(Number.isInteger(value.checkinHttpStatus)&&value.checkinHttpStatus>=100&&value.checkinHttpStatus<=599)diag.checkinHttpStatus=value.checkinHttpStatus;
+    if(typeof value.firewallUsed==='boolean')diag.firewallUsed=value.firewallUsed;
     return {...identity,status:'needs_attention',failureCode:'submission_outcome_unknown',submissionAttempted:true,retryable:false,
+      ...diag,
       reason:'猪猪同会话签到结果不明，保留提交意图，禁止自动重放'};
+  }
   if(value.url!==piggoCalendarUrl||!['signed','already_signed','not_signed'].includes(value.status)||!piggoCalendarEvidence(value.evidence,value.status)||
     (value.status==='signed'?(value.submissionAttempted!==true||value.confirmationState!=='confirmed'):
       value.submissionAttempted!==false||value.receiptAccepted!==true))return null;

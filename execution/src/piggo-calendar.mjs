@@ -332,21 +332,36 @@ export async function readPiggoCalendarInContext(context,state,clock,diagnostic=
 export async function clickPiggoAttendance(page){
   if(page.url()!==piggoCalendarUrl)throw Error('Calendar page changed');
   const button=page.locator('.cal-page .cal-att button.cal-att-pill.act');
+  // Wait briefly for Vue to flush the button into DOM after GET /v1/web/calendar.
+  const target=typeof button.first==='function'?button.first():button;
+  if(typeof target?.waitFor==='function'){
+    await target.waitFor({state:'visible',timeout:5000}).catch(()=>{});
+  }
   if(await button.count()!==1||!await button.isVisible()||!await button.isEnabled()||
     !/^签到(?:\s*·\s*\+[0-9,.]+)?$/.test((await button.innerText()).trim()))throw Error('Calendar action unreviewed');
   await button.click({timeout:10000});
 }
 
-export async function submitPiggoCalendar(page,firewall,today,clock,readCurrent){
+export async function submitPiggoCalendar(page,firewall,today,clock,readCurrent,diagnostic={}){
   // Keep the actual pre-read page open while clicking. A new navigation here
   // could select another date; both the DOM and outgoing body are checked.
-  if(!page||piggoDay(clock())!==today)throw Error('Calendar action unavailable');
+  if(!page||piggoDay(clock())!==today){diagnostic.checkinStage='pre_click';throw Error('Calendar action unavailable');}
   const responseWait=page.waitForResponse(response=>response.url()===piggoAttendanceUrl&&response.request().method()==='POST',
     {timeout:15000}).catch(()=>null);
   firewall.arm(today);
+  diagnostic.checkinStage='click';
   await clickPiggoAttendance(page);
+  diagnostic.checkinStage='post_response';
   const response=await responseWait;
-  if(!firewall.used||!response||response.status()!==200||!piggoResponseFresh(response,clock())||
-    piggoDay(clock())!==today||piggoCalendarStatus(await responseData(response),today)!=='already_signed')return null;
+  diagnostic.firewallUsed=firewall.used===true;
+  if(!firewall.used){diagnostic.checkinStage='post_blocked';return null;}
+  if(!response){diagnostic.checkinStage='post_timeout';return null;}
+  const httpStatus=response.status();
+  if(Number.isInteger(httpStatus)&&httpStatus>=100&&httpStatus<=599)diagnostic.checkinHttpStatus=httpStatus;
+  if(httpStatus!==200){diagnostic.checkinStage='post_http_status';return null;}
+  if(!piggoResponseFresh(response,clock())){diagnostic.checkinStage='post_freshness';return null;}
+  if(piggoDay(clock())!==today){diagnostic.checkinStage='post_day_boundary';return null;}
+  if(piggoCalendarStatus(await responseData(response),today)!=='already_signed'){diagnostic.checkinStage='post_body_status';return null;}
+  diagnostic.checkinStage='post_readback';
   return readCurrent();
 }

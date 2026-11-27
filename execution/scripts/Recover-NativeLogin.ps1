@@ -101,7 +101,16 @@ if ($hasDailyOpenRule) {
     }
 }
 
-$existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like "*$profilePath*" })
+function Test-ChromeProcessUsesProfile {
+    param([string]$CommandLine, [string]$ProfilePath)
+    if ([string]::IsNullOrWhiteSpace($CommandLine) -or [string]::IsNullOrWhiteSpace($ProfilePath)) { return $false }
+    $normalized = $ProfilePath.TrimEnd('\', '/')
+    if ($CommandLine.Trim().Trim('"').TrimEnd('\', '/') -ieq $normalized) { return $true }
+    $escaped = [regex]::Escape($normalized)
+    return $CommandLine -match "(?i)(?:^|\s)--user-data-dir=(?:`"$escaped[\\/]?`"|$escaped[\\/]?(?=\s|$))"
+}
+
+$existing = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { Test-ChromeProcessUsesProfile $_.CommandLine $profilePath })
 if ($existing.Count -gt 0) { throw '机器人专用 Chrome 正被占用，无法恢复登录。' }
 $previousOpenId = $env:CHECKIN_PT_OPEN_ID
 $openIdSet = $false
@@ -184,17 +193,23 @@ finally {
         if ($null -eq $previousOpenId) { Remove-Item Env:CHECKIN_PT_OPEN_ID -ErrorAction SilentlyContinue }
         else { $env:CHECKIN_PT_OPEN_ID = $previousOpenId }
     }
-    $targets = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
-        $_.CommandLine -like "*$profilePath*"
-    })
-    $targetIds = @($targets.ProcessId)
-    $roots = @($targets | Where-Object { $targetIds -notcontains $_.ParentProcessId })
-    foreach ($processInfo in $roots) {
-        $process = Get-Process -Id $processInfo.ProcessId -ErrorAction SilentlyContinue
-        if ($process) { [void]$process.CloseMainWindow() }
-    }
-    Start-Sleep -Seconds 3
-    Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
-        $_.CommandLine -like "*$profilePath*"
-    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    try {
+        $targets = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
+            Test-ChromeProcessUsesProfile $_.CommandLine $profilePath
+        })
+        $targetIds = @($targets.ProcessId)
+        $roots = @($targets | Where-Object { $targetIds -notcontains $_.ParentProcessId })
+        foreach ($processInfo in $roots) {
+            try {
+                $process = Get-Process -Id $processInfo.ProcessId -ErrorAction SilentlyContinue
+                if ($process -and -not $process.HasExited) { [void]$process.CloseMainWindow() }
+            } catch {}
+        }
+        if ($targets.Count -gt 0) {
+            Start-Sleep -Seconds 3
+            Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object {
+                Test-ChromeProcessUsesProfile $_.CommandLine $profilePath
+            } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        }
+    } catch {}
 }
