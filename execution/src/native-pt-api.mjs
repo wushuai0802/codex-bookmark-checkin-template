@@ -431,7 +431,15 @@ async function runPiggoCalendarCheckin({root,origin,url,launch,clock,gate,valida
 export async function runPiggoCalendarCheckinInContext({root,context,expectedProfileBinding,profileProof,
   clock=()=>new Date(),gate=runNativePtGate,validateLease=validateControllerLease,expectedConfigHash,openId}={}){
   let state,firewall,page,attempted=false;
-  const unknownResult=()=>({...unknown(state?.identity),reason:'猪猪今日签到可能已提交，保留意图并先只读核验，禁止自动重放'});
+  const submitDiag={};
+  const safeSubmitDiag=()=>{
+    const out={};
+    if(typeof submitDiag.checkinStage==='string'&&/^[a-z][a-z_]{0,39}$/.test(submitDiag.checkinStage))out.checkinStage=submitDiag.checkinStage;
+    if(Number.isInteger(submitDiag.checkinHttpStatus)&&submitDiag.checkinHttpStatus>=100&&submitDiag.checkinHttpStatus<=599)out.checkinHttpStatus=submitDiag.checkinHttpStatus;
+    if(typeof submitDiag.firewallUsed==='boolean')out.firewallUsed=submitDiag.firewallUsed;
+    return out;
+  };
+  const unknownResult=()=>({...unknown(state?.identity),...safeSubmitDiag(),reason:'猪猪今日签到可能已提交，保留意图并先只读核验，禁止自动重放'});
   try{
     state=settings(root,piggoOrigin);
     const unchanged=async()=>piggoConfigHash(read(path.join(state.root,'config/config.json')))===state.configHash&&
@@ -480,15 +488,23 @@ export async function runPiggoCalendarCheckinInContext({root,context,expectedPro
     const begun=await gate({...args,phase:'begin',attemptId,action:'click'});
     if(begun.allow!==true)return begun.decision??unavailable(state.identity);
     attempted=true;
-    if(!await unchanged()||piggoDay(clock())!==today)return unknownResult();
+    if(!await unchanged()||piggoDay(clock())!==today){submitDiag.checkinStage='pre_submit_guard';return unknownResult();}
     const after=await submitPiggoCalendar(before.page,firewall,today,clock,
-      ()=>readPiggoCalendarInContext(context,state,clock));
+      ()=>readPiggoCalendarInContext(context,state,clock),submitDiag);
     if(!after||after.accountId!==before.accountId||after.result.status!=='already_signed'||
-      after.result.businessDate!==today||piggoDay(clock())!==today||!await unchanged())return unknownResult();
+      after.result.businessDate!==today||piggoDay(clock())!==today||!await unchanged()){
+      if(submitDiag.checkinStage==='post_readback'){
+        submitDiag.checkinStage=!after?'post_readback_empty':after.accountId!==before.accountId?'post_readback_account':
+          after.result.status!=='already_signed'?'post_readback_status':'post_readback_guard';
+      }
+      return unknownResult();
+    }
     const evidence=after.result.evidence;
     const saved=await gate({...args,phase:'finish',attemptId,status:'signed',evidence});
-    if(saved?.allow!==true||saved.confirmed!==true||saved.confirmationState!=='confirmed')
+    if(saved?.allow!==true||saved.confirmed!==true||saved.confirmationState!=='confirmed'){
+      submitDiag.checkinStage='finish_persist';
       return {...unknownResult(),confirmationState:'not_persisted'};
+    }
     return {...state.identity,url:piggoCalendarUrl,status:'signed',nativeGate:true,submissionAttempted:true,
       confirmationState:'confirmed',
       evidence,operationMode:'legacy_checkin',readSafety:'attendance_page_risk',attendanceRisk:true,
