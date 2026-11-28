@@ -3,7 +3,10 @@
   "private": true,
   "version": "1.1.85",
   "scripts": {
-    "test": "npm --prefix execution test && npm --prefix observation test",
+    "test": "node tools/test-runner.mjs --suite execution-all && npm --prefix observation test",
+    "test:fast": "node tools/test-runner.mjs --suite execution-unit && npm --prefix observation test",
+    "test:browser": "node tools/test-runner.mjs --suite execution-browser",
+    "test:execution": "node tools/test-runner.mjs --suite execution-all",
     "lint": "node tools/generate-contracts.mjs --check && npm --prefix observation run lint:all && npm --prefix observation run check:structure",
     "contracts": "node tools/generate-contracts.mjs",
     "release": "node tools/release.mjs"

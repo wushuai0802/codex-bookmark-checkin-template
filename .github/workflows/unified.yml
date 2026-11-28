@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  security-and-lint:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -22,6 +22,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            execution/package-lock.json
+            observation/package-lock.json
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
@@ -41,10 +45,11 @@ jobs:
         run: gitleaks git --config execution/.gitleaks.toml --redact --no-banner --exit-code 1 .
       - run: npm ci --prefix execution
       - run: npm ci --prefix observation
-      - run: npm test
+      - run: node tools/test-runner.mjs --check
+      - run: node tools/module-reachability.mjs --check
+      - run: npm run lint
       - name: Harvest evidence and concurrent-task tests
         run: python -m unittest discover -s observation/tests -p '*_test.py'
-      - run: npm run lint
       - name: Scan public files
         shell: pwsh
         run: ./execution/scripts/Scan-PublicSafety.ps1 -Root .
@@ -55,6 +60,72 @@ jobs:
         run: ../execution/scripts/Invoke-NpmAuditWithRetry.ps1
         working-directory: observation
 
+  observation-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            execution/package-lock.json
+            observation/package-lock.json
+      - run: npm ci --prefix execution
+      - run: npm ci --prefix observation
+      - run: npm --prefix observation test
+
+  execution-unit:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: execution/package-lock.json
+      - run: npm ci --prefix execution
+      - run: node tools/test-runner.mjs --suite execution-unit --shard ${{ matrix.shard }}/2
+
+  execution-browser:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: execution/package-lock.json
+      - run: npm ci --prefix execution
+      - run: node tools/test-runner.mjs --suite execution-browser --shard ${{ matrix.shard }}/2
+
+  test:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [security-and-lint, observation-test, execution-unit, execution-browser]
+    steps:
+      - name: Verify all required test jobs succeeded
+        shell: bash
+        run: |
+          for result in \
+            "${{ needs.security-and-lint.result }}" \
+            "${{ needs.observation-test.result }}" \
+            "${{ needs.execution-unit.result }}" \
+            "${{ needs.execution-browser.result }}"; do
+            if [ "$result" != "success" ]; then
+              echo "Upstream check did not succeed: $result"
+              exit 1
+            fi
+          done
+
   dashboard-ui:
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +133,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: observation/package-lock.json
       - run: npm ci --prefix observation
       - run: |
           node scripts/check-ui-navigation.mjs
