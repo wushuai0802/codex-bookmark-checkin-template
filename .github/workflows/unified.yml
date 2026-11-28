@@ -68,7 +68,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: observation/package-lock.json
+          cache-dependency-path: |
+            execution/package-lock.json
+            observation/package-lock.json
+      - run: npm ci --prefix execution
       - run: npm ci --prefix observation
       - run: npm --prefix observation test
 
