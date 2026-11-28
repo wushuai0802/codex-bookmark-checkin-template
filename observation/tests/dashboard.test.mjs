@@ -347,3 +347,131 @@ test('static modules cannot exhaust the API request budget', async () => {
     assert.equal((await fetch(`${base}/app.js`)).status, 200);
   } finally { await close(instance); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('auth and write endpoints enforce tighter rate limits and prune expired buckets', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-dashboard-tiered-limit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const snapshot = buildSnapshot({ legacyRoot, generatedAt: new Date().toISOString() });
+  fs.writeFileSync(path.join(root, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
+  let now = 1_700_000_000_000;
+  const { instance, base } = await start({
+    dataDir: root,
+    adminToken: 'test-token-1234567890',
+    rateLimitPerMinute: 40,
+    authRateLimitPerMinute: 3,
+    writeRateLimitPerMinute: 5,
+    maxRateLimitBuckets: 4,
+    clock: () => now,
+  });
+  t.after(() => close(instance));
+
+  // Tighter auth limit blocks after 3 attempts while GET API remains available
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`${base}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'wrong-token' }),
+    });
+    assert.equal(res.status, 401);
+  }
+  assert.equal((await fetch(`${base}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: 'test-token-1234567890' }),
+  })).status, 429);
+  assert.equal((await fetch(`${base}/api/overview`, { headers: { 'X-Fabric-Token': 'test-token-1234567890' } })).status, 200);
+
+  // Tighter write limit blocks after 5 writes while GET remains open
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(`${base}/api/controls/sites`, {
+      method: 'POST',
+      headers: { 'X-Fabric-Token': 'test-token-1234567890', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origin: 'https://example.com', policy: 'monitor' }),
+    });
+    assert.equal(res.status, 200);
+  }
+  assert.equal((await fetch(`${base}/api/controls/sites`, {
+    method: 'POST',
+    headers: { 'X-Fabric-Token': 'test-token-1234567890', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ origin: 'https://example.com', policy: 'monitor' }),
+  })).status, 429);
+  assert.ok(instance.getRateLimitBucketCount() <= 4);
+
+  // Advancing clock past 60s prunes expired buckets and restores quota
+  now += 61_000;
+  const recovered = await fetch(`${base}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: 'test-token-1234567890' }),
+  });
+  assert.equal(recovered.status, 200);
+  assert.equal(instance.getRateLimitBucketCount(), 2); // api + auth buckets only; stale write bucket pruned
+});
+
+test('cookie-authenticated write endpoints require same-origin headers and reject cross-origin requests', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabric-dashboard-csrf-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const snapshot = buildSnapshot({ legacyRoot, generatedAt: new Date().toISOString() });
+  fs.writeFileSync(path.join(root, 'shadow-beta-snapshot.json'), JSON.stringify(snapshot));
+  const { instance, base } = await start({ dataDir: root, adminToken: 'test-token-1234567890' });
+  t.after(() => close(instance));
+
+  // Cross-origin login & logout rejected
+  assert.equal((await fetch(`${base}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
+    body: JSON.stringify({ token: 'test-token-1234567890' }),
+  })).status, 403);
+  assert.equal((await fetch(`${base}/api/session/logout`, {
+    method: 'POST',
+    headers: { Origin: 'https://evil.example' },
+  })).status, 403);
+
+  const login = await fetch(`${base}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: base },
+    body: JSON.stringify({ token: 'test-token-1234567890' }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie').split(';', 1)[0];
+
+  // Cookie write without Origin or Sec-Fetch-Site: same-origin is rejected
+  const missingOrigin = await fetch(`${base}/api/controls/sites`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ origin: 'https://example.com', policy: 'pause', pauseHours: 24 }),
+  });
+  assert.equal(missingOrigin.status, 403);
+
+  // Cookie write with cross-origin Origin is rejected
+  const crossOrigin = await fetch(`${base}/api/controls/sites`, {
+    method: 'POST',
+    headers: { Cookie: cookie, Origin: 'https://evil.example', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ origin: 'https://example.com', policy: 'pause', pauseHours: 24 }),
+  });
+  assert.equal(crossOrigin.status, 403);
+
+  // Cookie write with same-origin Origin succeeds
+  const validOrigin = await fetch(`${base}/api/controls/sites`, {
+    method: 'POST',
+    headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ origin: 'https://example.com', policy: 'pause', pauseHours: 24 }),
+  });
+  assert.equal(validOrigin.status, 200);
+
+  // Cookie write with Sec-Fetch-Site: same-origin also succeeds
+  const validFetchSite = await fetch(`${base}/api/controls/sites`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ origin: 'https://example.com', policy: 'monitor' }),
+  });
+  assert.equal(validFetchSite.status, 200);
+
+  // Cookie write to /api/operations without Origin/Sec-Fetch-Site is also rejected (409)
+  const missingOriginOp = await fetch(`${base}/api/operations`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ origin: 'https://example.com', action: 'verify' }),
+  });
+  assert.equal(missingOriginOp.status, 409);
+});
