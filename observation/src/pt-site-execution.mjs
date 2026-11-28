@@ -4,12 +4,44 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {loadRuntimeConfig} from './runtime-config.mjs';
 import {acquireExecutionLock,releaseExecutionLock} from './execution-lock.mjs';
-import {ptFailureMessages,ptRetryCauses,ptResultStatuses} from './checkin-contract.generated.mjs';
+import {ptFailureMessages,ptRetryCauses,ptResultStatuses,u2DiagnosticCodes} from './checkin-contract.generated.mjs';
 import {projectPtNativeDiagnostic} from './pt-native-diagnostic.generated.mjs';
 import {beginPtWorker,cleanupPtWorker,ptWorkerScope,reconcilePtWorker,ptCleanupPendingError} from './pt-worker-lifecycle.mjs';
 
 const statuses=new Set(ptResultStatuses);
 const diagnosticCodes=new Set(Object.keys(ptFailureMessages));
+const u2Codes=new Set(u2DiagnosticCodes);
+const u2NumericKeys=['referenceCount','bestTotal','alternativeTotal','matchGap','distanceRatio','circleRatio',
+  'requests','failedRequests','timedOutRequests','questionCount'];
+const u2BoolKeys=['timedOut','referenceDeadlineReached','stepTimedOut'];
+
+function projectU2DiagnosticsRow(row){
+  if(!row||typeof row!=='object'||Array.isArray(row))return {};
+  const result={};
+  for(const key of u2NumericKeys)if(typeof row[key]==='number'&&Number.isFinite(row[key])&&row[key]>=0)result[key]=row[key];
+  for(const key of u2BoolKeys)if(typeof row[key]==='boolean')result[key]=row[key];
+  for(const key of ['subreason','stopCode'])if(u2Codes.has(row[key]))result[key]=row[key];
+  if(Array.isArray(row.optionReferenceCounts)&&row.optionReferenceCounts.length<=100
+    &&row.optionReferenceCounts.every(count=>Number.isSafeInteger(count)&&count>=0)){
+    result.optionReferenceCounts=row.optionReferenceCounts.slice();
+  }
+  return result;
+}
+
+export function projectU2Diagnostics(value){
+  if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
+  const base=projectU2DiagnosticsRow(value);
+  const questions=Array.isArray(value.questions)
+    ?value.questions.slice(0,5).map(projectU2DiagnosticsRow).filter(item=>Object.keys(item).length>0)
+    :[];
+  const subreasons=Array.isArray(value.subreasons)
+    ?value.subreasons.slice(0,5).filter(code=>u2Codes.has(code))
+    :[];
+  const projected={...base,
+    ...(questions.length>0?{questions}:{}),
+    ...(subreasons.length>0?{subreasons}:{})};
+  return Object.keys(projected).length>0?projected:undefined;
+}
 export function projectPtDiagnostic(value={}){
   return {...(diagnosticCodes.has(value.failureCode)?{failureCode:value.failureCode}:{}),
     ...(diagnosticCodes.has(value.underlyingFailureCode)?{underlyingFailureCode:value.underlyingFailureCode}:{}),
@@ -35,8 +67,10 @@ export function projectPtSiteResult(value,origin){
   const authoritative=!harvestWait&&evidence.authoritative===true&&dated&&sources.has(evidence.source)&&evidence.source!=='none'&&value.submissionOutcomeUnknown!==true;
   const status=harvestWait?'unknown':value.submissionOutcomeUnknown===true?'needs_attention':
     ['signed','already_signed','not_signed','not_available'].includes(value.status)&&!authoritative?'unknown':value.status;
+  const u2Diagnostics=origin==='https://u2.dmhy.org'?projectU2Diagnostics(value.u2Diagnostics):undefined;
   return {origin,status,observedAt:new Date(value.observedAt).toISOString(),
     ...projectPtDiagnostic(value),
+    ...(u2Diagnostics?{u2Diagnostics}:{}),
     ...(value.retryCause==='harvest_waiting'&&value.submissionAttempted===false?{retryCause:'harvest_waiting',
       ...(Number.isFinite(Date.parse(value.nextEligibleAt))?{nextEligibleAt:new Date(value.nextEligibleAt).toISOString()}:{})}:{}),
     ...(modes.has(value.operationMode)?{operationMode:value.operationMode}:{}),

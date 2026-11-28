@@ -622,6 +622,12 @@ try {
       return timed;
     };
     const runGlobalTarget = async (target) => {
+      const configuredSkip = configuredTargetSkip(target, config);
+      if (configuredSkip) {
+        const skipped = { ...configuredSkip, attempt: 0, candidateHistory: [], durationMs: 0 };
+        rememberLogicalCompletion(target, skipped);
+        return skipped;
+      }
       let result = await runOneTarget(await getSharedContext(target), target);
       if (!shouldRefreshAutomationContext(result)) return result;
       result = await runOneTarget(await refreshSharedContext(target), target, false);

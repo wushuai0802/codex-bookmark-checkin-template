@@ -162,7 +162,15 @@ finally{await context.close();}`);
   assert.ok(events.some(e=>e.kind==='context_close'&&e.pages===0),'processTarget closes its page before context shutdown');
   const projected=publicSupplementResult(origin,row);
   assert.deepEqual(projected.u2Diagnostics,row.u2Diagnostics);
-  assert.equal(projectPtSiteResult(projected,origin).u2Diagnostics,undefined,'observation currently drops new diagnostics');
+  const observedProjection=projectPtSiteResult(projected,origin);
+  assert.equal(observedProjection.u2Diagnostics?.questionCount,row.u2Diagnostics.questionCount,'observation retains sanitized U2 diagnostics on both success and failure paths');
+  if(row.u2Diagnostics.subreasons?.length)assert.deepEqual(observedProjection.u2Diagnostics.subreasons,row.u2Diagnostics.subreasons);
+  if(row.u2Diagnostics.stopCode)assert.equal(observedProjection.u2Diagnostics.stopCode,row.u2Diagnostics.stopCode);
+  assert.equal(projectPtSiteResult({...projected,origin:'https://tracker.example'},'https://tracker.example').u2Diagnostics,undefined,'non-U2 origins never retain u2Diagnostics');
+  const dirtyProjection=projectPtSiteResult({...projected,u2Diagnostics:{questionCount:1,subreasons:['u2_answer_reliable','PRIVATE_CODE'],
+    questions:[{subreason:'u2_answer_reliable',originalFailureCode:'arbitrary_private_tag',optionReferenceCounts:[1,'bad'],optionText:'SECRET',url:'https://private.example'},{optionText:'EMPTY_ROW'}]}},origin);
+  assert.deepEqual(dirtyProjection.u2Diagnostics,{questionCount:1,subreasons:['u2_answer_reliable'],questions:[{subreason:'u2_answer_reliable'}]});
+  assert.equal(projectPtSiteResult({...projected,u2Diagnostics:{questions:[{optionText:'ONLY_BAD'}],subreasons:['UNLISTED']}},origin).u2Diagnostics,undefined);
   for(const file of fs.readdirSync(path.join(root,'logs'),{recursive:true})){
     const full=path.join(root,'logs',file);if(fs.statSync(full).isFile())assert.doesNotMatch(fs.readFileSync(full,'utf8'),new RegExp(marker));
   }
