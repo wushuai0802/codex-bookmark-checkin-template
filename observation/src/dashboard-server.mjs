@@ -38,6 +38,8 @@ const MAX_BODY_BYTES = 16 * 1024;
 const SESSION_NAME = 'fabric_session';
 const SESSION_SECONDS = 12 * 60 * 60;
 const REMEMBER_SECONDS = 7 * 24 * 60 * 60;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const MAX_RATE_LIMIT_BUCKETS = 4096;
 const PT_STATUS_VALUES = new Set([
   'signed', 'already_signed', 'not_signed', 'unknown', 'login_required',
   'unreachable', 'needs_attention', 'not_available', 'failed'
@@ -562,6 +564,24 @@ function sendError(response, statusCode, code, message) {
   sendJson(response, statusCode, { error: code, message });
 }
 
+function sameOriginRequest(request, { requireExplicitOrigin = false } = {}) {
+  const host = String(request.headers.host ?? '').trim().toLowerCase();
+  const originHeader = request.headers.origin;
+  if (originHeader !== undefined) {
+    if (typeof originHeader !== 'string' || !originHeader.trim() || !host) return false;
+    try {
+      const parsed = new URL(originHeader);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+      return parsed.host.toLowerCase() === host;
+    } catch {
+      return false;
+    }
+  }
+  const fetchSite = String(request.headers['sec-fetch-site'] ?? '').trim().toLowerCase();
+  if (fetchSite) return fetchSite === 'same-origin';
+  return !requireExplicitOrigin;
+}
+
 export function createDashboardServer({
   dataDir = process.env.FABRIC_DATA_DIR ?? path.resolve(MODULE_ROOT, '..', 'outputs'),
   snapshotFile = process.env.FABRIC_SNAPSHOT_FILE ?? null,
@@ -571,35 +591,80 @@ export function createDashboardServer({
   port = envNumber(process.env.FABRIC_PORT, 8787, { min: 1, max: 65535 }),
   trustProxyTls = process.env.FABRIC_TRUST_PROXY_TLS === '1',
   rateLimitPerMinute = envNumber(process.env.FABRIC_RATE_LIMIT_PER_MINUTE, 120, { min: 10, max: 10000 }),
+  authRateLimitPerMinute = envNumber(process.env.FABRIC_AUTH_RATE_LIMIT_PER_MINUTE, 15, { min: 3, max: 1000 }),
+  writeRateLimitPerMinute = envNumber(process.env.FABRIC_WRITE_RATE_LIMIT_PER_MINUTE, 30, { min: 5, max: 1000 }),
+  maxRateLimitBuckets = MAX_RATE_LIMIT_BUCKETS,
+  clock = () => performance.now(),
   workerGateway = null
 } = {}) {
   const root = path.resolve(dataDir);
   const controlFile = safeResolve(root, process.env.FABRIC_CONTROL_FILE ?? 'control-state.json');
   const authRequired = Boolean(adminToken) || !['127.0.0.1', '::1', 'localhost'].includes(bind);
   if (authRequired && !adminToken) throw new Error('FABRIC_ADMIN_TOKEN is required when dashboard is not loopback-only');
+  const effectiveAuthLimit = Math.min(rateLimitPerMinute, authRateLimitPerMinute);
+  const effectiveWriteLimit = Math.min(rateLimitPerMinute, writeRateLimitPerMinute);
   const hits = new Map();
+  let lastSweepAt = clock();
   const headers = securityHeaders({ trustProxyTls });
   const release=releaseInfo();
 
-  function authorized(request, response) {
-    if (!authRequired) return true;
+  function authMethod(request) {
+    if (!authRequired) return 'loopback';
     const headerToken = request.headers['x-fabric-token']
       ?? (request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : '');
+    if (tokenMatches(headerToken, adminToken)) return 'token';
     const cookieToken = requestCookie(request, SESSION_NAME);
-    if (tokenMatches(headerToken, adminToken) || sessionTokenMatches(cookieToken, adminToken)) return true;
-    response.setHeader('WWW-Authenticate', 'Bearer realm="checkin-fabric"');
-    sendError(response, 401, 'unauthorized', 'dashboard authentication required');
-    return false;
+    if (sessionTokenMatches(cookieToken, adminToken)) return 'cookie';
+    return null;
   }
 
-  function rateLimited(request) {
-    const now = Date.now();
-    const key = clientAddress(request);
-    const previous = hits.get(key) ?? { startedAt: now, count: 0 };
-    if (now - previous.startedAt >= 60000) { previous.startedAt = now; previous.count = 0; }
-    previous.count += 1;
-    hits.set(key, previous);
-    return previous.count > rateLimitPerMinute;
+  function authorized(request, response) {
+    const method = authMethod(request);
+    if (method) return method;
+    response.setHeader('WWW-Authenticate', 'Bearer realm="checkin-fabric"');
+    sendError(response, 401, 'unauthorized', 'dashboard authentication required');
+    return null;
+  }
+
+  function sweepRateLimitBuckets(now) {
+    if (now >= lastSweepAt && now - lastSweepAt < RATE_LIMIT_WINDOW_MS && hits.size < maxRateLimitBuckets) return;
+    lastSweepAt = now;
+    for (const [key, entry] of hits) {
+      if (now < entry.startedAt || now - entry.startedAt >= RATE_LIMIT_WINDOW_MS) hits.delete(key);
+    }
+    while (hits.size >= maxRateLimitBuckets) {
+      const oldestKey = hits.keys().next().value;
+      if (oldestKey === undefined) break;
+      hits.delete(oldestKey);
+    }
+  }
+
+  function consumeRateLimit(request, scope, limit) {
+    const now = clock();
+    sweepRateLimitBuckets(now);
+    const key = `${scope}:${clientAddress(request)}`;
+    const previous = hits.get(key);
+    let entry;
+    if (!previous || now < previous.startedAt || now - previous.startedAt >= RATE_LIMIT_WINDOW_MS) {
+      entry = { startedAt: now, count: 1 };
+    } else {
+      entry = { startedAt: previous.startedAt, count: previous.count + 1 };
+    }
+    // Re-insert so Map iteration order approximates recency for bounded eviction.
+    hits.delete(key);
+    hits.set(key, entry);
+    return entry.count > limit;
+  }
+
+  function rateLimited(request, pathname) {
+    if (consumeRateLimit(request, 'api', rateLimitPerMinute)) return true;
+    if (request.method === 'POST' && pathname === '/api/session') {
+      return consumeRateLimit(request, 'auth', effectiveAuthLimit);
+    }
+    if (request.method === 'POST' && ['/api/controls/sites', '/api/operations'].includes(pathname)) {
+      return consumeRateLimit(request, 'write', effectiveWriteLimit);
+    }
+    return false;
   }
 
   let lastCompleteGeneration=null;
@@ -663,7 +728,7 @@ export function createDashboardServer({
       return;
     }
     const requestUrl = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-    if (requestUrl.pathname.startsWith('/api/') && rateLimited(request)) {
+    if (requestUrl.pathname.startsWith('/api/') && rateLimited(request, requestUrl.pathname)) {
       sendError(response, 429, 'rate_limited', 'too many requests'); return;
     }
     if (requestUrl.pathname === '/healthz') {
@@ -671,6 +736,10 @@ export function createDashboardServer({
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/session') {
+      if (!sameOriginRequest(request)) {
+        sendError(response, 403, 'forbidden_origin', 'cross-origin session requests are not allowed');
+        return;
+      }
       if (!String(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
         sendError(response, 415, 'unsupported_media_type', 'session creation requires application/json');
         return;
@@ -691,6 +760,10 @@ export function createDashboardServer({
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/session/logout') {
+      if (!sameOriginRequest(request)) {
+        sendError(response, 403, 'forbidden_origin', 'cross-origin logout requests are not allowed');
+        return;
+      }
       sendJson(response, 200, { ok: true }, {
         'Set-Cookie': sessionCookie('', { secure: trustProxyTls, clear: true })
       });
@@ -702,12 +775,13 @@ export function createDashboardServer({
       return;
     }
     if (requestUrl.pathname.startsWith('/api/')) {
-      if (!authorized(request, response)) return;
+      const authenticatedBy = authorized(request, response);
+      if (!authenticatedBy) return;
       if(requestUrl.pathname==='/api/operations'){
         if(request.method==='GET'){try{sendJson(response,200,operationView(root));}catch{sendError(response,503,'queue_unavailable','操作记录暂不可读，签到调度独立运行');}return;}
         if(request.method!=='POST'||!String(request.headers['content-type']??'').startsWith('application/json')){sendError(response,415,'invalid_body','operation requires JSON');return;}
         try{
-          if(request.headers.origin&&new URL(request.headers.origin).host!==request.headers.host)throw Error('origin mismatch');
+          if(!sameOriginRequest(request,{requireExplicitOrigin:authenticatedBy==='cookie'}))throw Error('origin mismatch');
           const body=await readRequestBody(request),generation=readGeneration();
           if(generation.stale)throw Error('published state is stale');
           sendJson(response,202,enqueueOperation(root,body,generation.current.snapshot));
@@ -748,6 +822,10 @@ export function createDashboardServer({
         const controls = readControlState(controlFile);
         sendJson(response, 200, { sites: activeSiteControls(controls.sites), audit: controls.audit.slice(-30) });
       } else if (requestUrl.pathname === '/api/controls/sites' && request.method === 'POST') {
+        if (!sameOriginRequest(request, { requireExplicitOrigin: authenticatedBy === 'cookie' })) {
+          sendError(response, 403, 'forbidden_origin', 'same-origin header is required for cookie-authenticated site controls');
+          return;
+        }
         if (!String(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
           sendError(response, 415, 'unsupported_media_type', 'control state requires application/json');
           return;
@@ -786,7 +864,7 @@ export function createDashboardServer({
     response.writeHead(200, { ...headers, 'Content-Type': MIME_TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream', 'Content-Length': content.length, 'Cache-Control': 'no-cache' });
     if (request.method === 'HEAD') response.end(); else response.end(content);
   });
-  return { server, bind, port, authRequired, dataDir: root };
+  return { server, bind, port, authRequired, dataDir: root, getRateLimitBucketCount: () => hits.size };
 }
 
 export function startDashboardServer(options = {}) {
