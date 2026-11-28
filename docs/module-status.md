@@ -75,7 +75,7 @@
 | `execution/scripts/Invoke-PlainSavedPasswordAccessibility.ps1` | 现役 | execution/src/index.mjs:898 (node-path) |
 | `execution/scripts/Invoke-PlainWafAccessibility.ps1` | 现役 | execution/src/native-pt-read.mjs:207 (node-path) |
 | `execution/scripts/Manage-BitwardenTotp.ps1` | 运维手动 | 人工用法见 execution/docs/bitwarden-totp.md |
-| `execution/scripts/Native-ChromeDebug.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:56 (ps-call) |
+| `execution/scripts/Native-ChromeDebug.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:89 (ps-call) |
 | `execution/scripts/Native-PtChromeProxy.ps1` | 现役 | execution/scripts/Invoke-MainChromeCheckinAccessibility.ps1:99 (ps-call) |
 | `execution/scripts/Native-PtGate.mjs` | 现役 | execution/scripts/Native-PtGuard.ps1:4 (ps-join) |
 | `execution/scripts/Native-PtGuard.ps1` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:83 (ps-call) |
@@ -83,7 +83,7 @@
 | `execution/scripts/OAuth-AccountConfig.ps1` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:19 (ps-call) |
 | `execution/scripts/Open-ManualLogin.ps1` | 运维手动 | 人工用法见 docs/quickstart.md |
 | `execution/scripts/Open-OAuthAccountLogin.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
-| `execution/scripts/Open-PlainLoginChrome.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:153 (ps-call) |
+| `execution/scripts/Open-PlainLoginChrome.ps1` | 现役 | execution/scripts/Recover-NativeLogin.ps1:186 (ps-call) |
 | `execution/scripts/Plain-CredentialLoginAccessibility.ps1` | 现役 | execution/scripts/Recover-ProtectedLogin.ps1:136 (ps-call) |
 | `execution/scripts/Prepare-NativeWafSession.ps1` | 现役 | execution/scripts/Run-Checkin.ps1:298 (ps-call) |
 | `execution/scripts/Protect-PrivateRuntime.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
@@ -138,7 +138,7 @@
 | `execution/src/detector.mjs` | 现役 | execution/src/browser.mjs:6 (esm-static) |
 | `execution/src/google-session-choice.mjs` | 现役 | execution/src/native-oauth-login.mjs:17 (esm-static) |
 | `execution/src/harvest-pt-gate.mjs` | 现役 | execution/src/index.mjs:91 (esm-static) |
-| `execution/src/hddolby-native-flow.mjs` | 现役 | execution/src/native-login.mjs:52 (esm-dynamic) |
+| `execution/src/hddolby-native-flow.mjs` | 现役 | execution/src/native-login.mjs:78 (esm-dynamic) |
 | `execution/src/hddolby-readonly.mjs` | 现役 | execution/src/browser.mjs:28 (esm-static) |
 | `execution/src/hddolby-two-factor.mjs` | 现役 | execution/src/browser.mjs:29 (esm-static) |
 | `execution/src/hhclub-two-factor-login.mjs` | 现役 | execution/src/saved-password-login.mjs:9 (esm-static) |
@@ -152,9 +152,9 @@
 | `execution/src/login-sync-origins.mjs` | 现役 | execution/scripts/Sync-ChromeSavedLogins.ps1:9 (ps-join) |
 | `execution/src/manual-session.mjs` | 运维手动 | execution/scripts/Open-ManualLogin.ps1:25 (ps-join) |
 | `execution/src/native-browser-inspect.mjs` | 现役 | execution/scripts/Prepare-NativeWafSession.ps1:85 (ps-join) |
-| `execution/src/native-cdp.mjs` | 现役 | execution/src/native-login.mjs:7 (esm-static) |
+| `execution/src/native-cdp.mjs` | 现役 | execution/src/native-login.mjs:8 (esm-static) |
 | `execution/src/native-credential-login.mjs` | 现役 | execution/scripts/Recover-ProtectedLogin.ps1:173 (ps-join) |
-| `execution/src/native-login.mjs` | 现役 | execution/scripts/Recover-NativeLogin.ps1:157 (ps-join) |
+| `execution/src/native-login.mjs` | 现役 | execution/scripts/Recover-NativeLogin.ps1:190 (ps-join) |
 | `execution/src/native-oauth-login.mjs` | 现役 | execution/scripts/Recover-NativeOAuthLogin.ps1:119 (ps-join) |
 | `execution/src/native-preflight-receipt.mjs` | 现役 | execution/src/index.mjs:55 (esm-static) |
 | `execution/src/native-preflight-result.mjs` | 现役 | execution/src/index.mjs:54 (esm-static) |
@@ -180,12 +180,12 @@
 | `execution/src/origin-routing.mjs` | 现役 | execution/src/anyrouter-api-checkin.mjs:4 (esm-static) |
 | `execution/src/piggo-calendar.mjs` | 现役 | execution/src/login-recovery.mjs:5 (esm-static) |
 | `execution/src/piggo-login-form.mjs` | 现役 | execution/src/piggo-login.mjs:16 (esm-static) |
-| `execution/src/piggo-login.mjs` | 现役 | execution/src/native-login.mjs:15 (esm-static) |
+| `execution/src/piggo-login.mjs` | 现役 | execution/src/native-login.mjs:16 (esm-static) |
 | `execution/src/powershell-runtime.mjs` | 现役 | execution/scripts/Test-CheckinHealth.ps1:491 (ps-join) |
 | `execution/src/preflight-policy.mjs` | 现役 | execution/src/index.mjs:38 (esm-static) |
 | `execution/src/preflight.mjs` | 运维手动 | npm 人工命令 execution/package.json:preflight |
 | `execution/src/protected-credential-api.mjs` | 现役 | execution/src/credential-api-login.mjs:8 (esm-static) |
-| `execution/src/protected-login-flow.mjs` | 现役 | execution/src/native-login.mjs:6 (esm-static) |
+| `execution/src/protected-login-flow.mjs` | 现役 | execution/src/native-login.mjs:7 (esm-static) |
 | `execution/src/pt-coordination.mjs` | 现役 | execution/src/harvest-pt-gate.mjs:4 (esm-static) |
 | `execution/src/pt-daily-open-limit.mjs` | 现役 | execution/src/browser.mjs:26 (esm-static) |
 | `execution/src/pt-daily-open-state.mjs` | 现役 | execution/src/pt-daily-open-limit.mjs:6 (esm-static) |

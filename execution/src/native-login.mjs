@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import crypto from 'node:crypto';
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,12 +30,37 @@ if(!['Login','ReadOnly','Checkin'].includes(nativeMode)||nativeMode!=='Login'&&!
   !(expectedOrigin==='https://piggo.me'&&nativeMode==='ReadOnly'))throw Error('Native login mode rejected');
 if (!Number.isInteger(port) || port <= 0) throw new Error("用法: node src/native-login.mjs <port> <origin>");
 
-const browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
+let piggoOutputEmitted = false;
+const emitPiggoJsonSync = payload => {
+  if (piggoOutputEmitted) return;
+  piggoOutputEmitted = true;
+  fsSync.writeSync(1, JSON.stringify(payload) + "\n");
+};
+const isBenignPlaywrightCloseError = error =>
+  error?.name === "TargetClosedError"
+  || /Target page, context or browser has been closed|Target closed|Session closed|Protocol error.*closed/i.test(String(error?.message ?? error ?? ""));
+if (expectedOrigin === "https://piggo.me") {
+  // Playwright's _onRoute/_onWebSocketRoute invoke callbacks without an outer
+  // catch; absorb only confirmed close-race rejections, and fail closed with
+  // immediate termination on any unexpected rejection/exception to stop writes.
+  process.on("unhandledRejection", error => {
+    if (isBenignPlaywrightCloseError(error)) return;
+    emitPiggoJsonSync({ origin: expectedOrigin, status: "failed", helperStage: "unhandled_rejection" });
+    process.exit(2);
+  });
+  process.on("uncaughtException", () => {
+    emitPiggoJsonSync({ origin: expectedOrigin, status: "failed", helperStage: "uncaught_exception" });
+    process.exit(2);
+  });
+}
+
+let browser = null;
 let status = "needs_attention";
 let failureCode = null;
 let page = null;
 let twoFactorRecovery = null;
 try {
+  browser = await connectOverCdpWithRetry(chromium, port, { timeoutMs: 20000 });
   if(expectedOrigin==='https://piggo.me'&&browser.contexts().length===1){
     const blank=browser.contexts()[0].pages().filter(candidate=>candidate.url()==='about:blank');
     if(blank.length===1)page=blank[0];
@@ -45,7 +71,7 @@ try {
     const openId=process.env.CHECKIN_PT_OPEN_ID||undefined;
     const result=await recoverPiggoSpaLogin({root:rootDirectory,page,profile:actualProfile,mode:nativeMode,openId,
       profileProof:()=>verifyHhclubNativeProfile(actualProfile,port)});
-    console.log(JSON.stringify(result));
+    emitPiggoJsonSync(result);
     if(result.status!=='logged_in')process.exitCode=2;
   }else if(nativeMode!=='Login'){
     await page.waitForLoadState('domcontentloaded',{timeout:15000}).catch(()=>{});
@@ -246,10 +272,11 @@ try {
   }
 } catch(error){
   if(expectedOrigin==='https://piggo.me'){
-    console.log(JSON.stringify({origin:expectedOrigin,status:'needs_attention',failureCode:'browser_startup'}));
+    const stage=!browser?'cdp_connect':page?'recover_throw':'target_page';
+    emitPiggoJsonSync({origin:expectedOrigin,status:'needs_attention',failureCode:'browser_startup',helperStage:stage});
     process.exitCode=2;
   }else{
-  if(page)throw error;
+  if(!browser||page)throw error;
   const pageKinds=browser.contexts().flatMap(context=>context.pages()).map(candidate=>{
     try{const url=new URL(candidate.url());return url.origin===expectedOrigin?'site':url.protocol==='about:'?'blank':
       url.protocol==='chrome-error:'?'network_error':'other';}catch{return 'unavailable';}
@@ -259,8 +286,8 @@ try {
   }
 } finally {
   if(expectedOrigin==='https://piggo.me'){
-    await bounded(browser.close(),5000).catch(()=>{});
+    if(browser)await bounded(browser.close(),5000).catch(()=>{});
     await bounded(new Promise(resolve=>process.stdout.write('',resolve)),1000).catch(()=>{});
     process.exit(process.exitCode??0);
-  }else await browser.close().catch(() => {});
+  }else if(browser)await browser.close().catch(() => {});
 }

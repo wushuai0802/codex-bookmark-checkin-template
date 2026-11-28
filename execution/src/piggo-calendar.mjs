@@ -81,46 +81,63 @@ export function piggoResponseFresh(response,now){
 /** All writes and legacy endpoints are blocked until one dated intent is armed. */
 export async function installPiggoCalendarFirewall(context,{clock=()=>new Date(),allowPluginAssets=false,allowIdleUnlock=false,allowAuthLanding=false}={}){
   let armedDay=null,used=false;
+  const safeAbort=intercepted=>Promise.resolve().then(()=>intercepted.abort('blockedbyclient')).catch(()=>{});
+  const safeContinue=intercepted=>Promise.resolve().then(()=>intercepted.continue()).catch(()=>{});
+  const isMainDocumentFrame=request=>{
+    try{
+      const frame=request.frame?.();
+      return Boolean(frame&&frame===frame.page?.()?.mainFrame?.());
+    }catch{return false;}
+  };
   const route=async intercepted=>{
-    const request=intercepted.request(),raw=request.url(),sameOrigin=sameOriginUrl(raw),url=sameOrigin??assetOriginUrl(raw);
-    if(!url)return intercepted.abort('blockedbyclient');
-    // URL parsing normalizes dot segments before pathname can be inspected.
-    if(/\.\.|\\|%(?:2e|2f|5c)/i.test(raw.split(/[?#]/)[0]))return intercepted.abort('blockedbyclient');
-    if(!sameOrigin){
-      const staticAsset=request.method()==='GET'&&!request.isNavigationRequest?.()&&request.resourceType?.()!=='document'&&!url.search&&
-        url.pathname.length<=512&&(
-          /^\/assets\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:js|css|woff2?|ttf|svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname)||
-          /^\/[A-Za-z0-9_.-]+\.(?:svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname));
-      return staticAsset?intercepted.continue():intercepted.abort('blockedbyclient');
-    }
-    if(request.method()==='POST'){
-      let body;try{body=request.postDataJSON();}catch{}
-      if(!used&&armedDay&&piggoDay(clock())===armedDay&&url.href===piggoAttendanceUrl&&
-        object(body)&&Object.keys(body).length===1&&body.ymd===armedDay){
-        used=true;return intercepted.continue();
+    try{
+      const request=intercepted.request(),raw=request.url(),sameOrigin=sameOriginUrl(raw),url=sameOrigin??assetOriginUrl(raw);
+      if(!url)return await safeAbort(intercepted);
+      // URL parsing normalizes dot segments before pathname can be inspected.
+      if(/\.\.|\\|%(?:2e|2f|5c)/i.test(raw.split(/[?#]/)[0]))return await safeAbort(intercepted);
+      if(!sameOrigin){
+        const staticAsset=request.method()==='GET'&&!request.isNavigationRequest?.()&&request.resourceType?.()!=='document'&&!url.search&&
+          url.pathname.length<=512&&(
+            /^\/assets\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:js|css|woff2?|ttf|svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname)||
+            /^\/[A-Za-z0-9_.-]+\.(?:svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname));
+        return staticAsset?await safeContinue(intercepted):await safeAbort(intercepted);
       }
-      return intercepted.abort('blockedbyclient');
+      if(request.method()==='POST'){
+        let body;try{body=request.postDataJSON();}catch{}
+        if(!used&&armedDay&&piggoDay(clock())===armedDay&&url.href===piggoAttendanceUrl&&
+          object(body)&&Object.keys(body).length===1&&body.ymd===armedDay){
+          used=true;return await safeContinue(intercepted);
+        }
+        return await safeAbort(intercepted);
+      }
+      if(request.method()!=='GET')return await safeAbort(intercepted);
+      const api=['/v1/web/me','/v1/web/boot','/v1/web/auth/sign','/v1/web/auth/guest-config'];
+      // Shape-based assets survive frontend releases without accepting arbitrary
+      // API routes. Optional passkey, OAuth and WS bootstrap APIs stay blocked.
+      const asset=url.pathname.length<=512&&(
+        /^\/assets\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:js|css|woff2?|ttf|svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname)||
+        /^\/cdn-cgi\/scripts\/[a-f0-9]{8,64}\/cloudflare-static\/rocket-loader\.min\.js$/.test(url.pathname)||
+        allowPluginAssets&&/^\/v1\/web\/plugin-assets\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\.(?:js|css)$/.test(url.pathname)||
+        /^\/[A-Za-z0-9_.-]+\.(?:svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname));
+      const authLanding=allowAuthLanding&&raw===piggoOrigin+'/'&&request.isNavigationRequest?.()&&
+        request.resourceType?.()==='document'&&isMainDocumentFrame(request);
+      const safe=authLanding||(!url.search&&(['/calendar','/login'].includes(url.pathname)||allowIdleUnlock&&url.href===piggoLockedUrl||api.includes(url.pathname)||asset))||
+        piggoCalendarResponseUrl(url.href,piggoDay(clock()));
+      return safe?await safeContinue(intercepted):await safeAbort(intercepted);
+    }catch{
+      return await safeAbort(intercepted);
     }
-    if(request.method()!=='GET')return intercepted.abort('blockedbyclient');
-    const api=['/v1/web/me','/v1/web/boot','/v1/web/auth/sign','/v1/web/auth/guest-config'];
-    // Shape-based assets survive frontend releases without accepting arbitrary
-    // API routes. Optional passkey, OAuth and WS bootstrap APIs stay blocked.
-    const asset=url.pathname.length<=512&&(
-      /^\/assets\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:js|css|woff2?|ttf|svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname)||
-      /^\/cdn-cgi\/scripts\/[a-f0-9]{8,64}\/cloudflare-static\/rocket-loader\.min\.js$/.test(url.pathname)||
-      allowPluginAssets&&/^\/v1\/web\/plugin-assets\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\.(?:js|css)$/.test(url.pathname)||
-      /^\/[A-Za-z0-9_.-]+\.(?:svg|png|webp|ico|jpe?g|gif|avif)$/.test(url.pathname));
-    const authLanding=allowAuthLanding&&raw===piggoOrigin+'/'&&request.isNavigationRequest()&&
-      request.resourceType()==='document'&&request.frame()===request.frame().page().mainFrame();
-    const safe=authLanding||(!url.search&&(['/calendar','/login'].includes(url.pathname)||allowIdleUnlock&&url.href===piggoLockedUrl||api.includes(url.pathname)||asset))||
-      piggoCalendarResponseUrl(url.href,piggoDay(clock()));
-    return safe?intercepted.continue():intercepted.abort('blockedbyclient');
   };
   await context.route('**/*',route);
   // WebSocket messages bypass HTTP request routing and are unnecessary here.
-  await context.routeWebSocket('**/*',socket=>socket.close());
+  try{
+    await context.routeWebSocket('**/*',async socket=>{try{await socket.close();}catch{}});
+  }catch(error){
+    await Promise.resolve(context.unroute('**/*',route)).catch(()=>{});
+    throw error;
+  }
   return {arm:today=>{if(armedDay||used||today!==piggoDay(clock()))throw Error('Calendar intent rejected');armedDay=today;},
-    get used(){return used;},dispose:()=>context.unroute('**/*',route)};
+    get used(){return used;},dispose:()=>Promise.resolve(context.unroute('**/*',route)).catch(()=>{})};
 }
 
 async function responseData(response){

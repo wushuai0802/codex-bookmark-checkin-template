@@ -164,20 +164,25 @@ export async function recoverPiggoSpaLogin({root,page,profile,profileProof,mode=
     }
     firewall=await installPiggoCalendarFirewall(page.context(),{clock,allowIdleUnlock:unlocking,allowAuthLanding:true});
     let challengePosts=0,loginPosts=0,armed=false,clicked=false;
+    const safeRouteCall=op=>Promise.resolve().then(op).catch(()=>{});
     route=async intercepted=>{
-      const request=intercepted.request();let target;try{target=new URL(request.url());}catch{return intercepted.abort('blockedbyclient');}
-      if(request.method()==='GET')return intercepted.fallback();
-      const block=()=>{
-        // After the click, a blocked same-origin API path says which request the page still needed.
-        if(clicked&&blockedPosts.length<4&&target.origin===piggoOrigin&&apiPath(target.pathname))blockedPosts.push(target.pathname);
-        return intercepted.abort('blockedbyclient');
-      };
-      if(!armed||target.origin!==piggoOrigin||target.search||target.hash||target.username||target.password||request.method()!=='POST'||
-        /\.\.|\\|%(?:2e|2f|5c)/i.test(request.url().split(/[?#]/)[0]))
-        return block();
-      if(target.pathname===challengePath&&challengePosts===0&&loginPosts===0){challengePosts++;return intercepted.continue();}
-      if(submitPaths.includes(target.pathname)&&loginPosts===0&&(!unlocking||challengePosts===1)){loginPosts++;return intercepted.continue();}
-      return block();
+      try{
+        const request=intercepted.request();let target;try{target=new URL(request.url());}catch{return await safeRouteCall(()=>intercepted.abort('blockedbyclient'));}
+        if(request.method()==='GET')return await safeRouteCall(()=>intercepted.fallback());
+        const block=()=>{
+          // After the click, a blocked same-origin API path says which request the page still needed.
+          if(clicked&&blockedPosts.length<4&&target.origin===piggoOrigin&&apiPath(target.pathname))blockedPosts.push(target.pathname);
+          return safeRouteCall(()=>intercepted.abort('blockedbyclient'));
+        };
+        if(!armed||target.origin!==piggoOrigin||target.search||target.hash||target.username||target.password||request.method()!=='POST'||
+          /\.\.|\\|%(?:2e|2f|5c)/i.test(request.url().split(/[?#]/)[0]))
+          return await block();
+        if(target.pathname===challengePath&&challengePosts===0&&loginPosts===0){challengePosts++;return await safeRouteCall(()=>intercepted.continue());}
+        if(submitPaths.includes(target.pathname)&&loginPosts===0&&(!unlocking||challengePosts===1)){loginPosts++;return await safeRouteCall(()=>intercepted.continue());}
+        return await block();
+      }catch{
+        return await safeRouteCall(()=>intercepted.abort('blockedbyclient'));
+      }
     };
     await page.route('**/*',route);
     const guestWait=unlocking?null:page.waitForResponse(response=>response.url()===piggoOrigin+'/v1/web/auth/guest-config'&&
