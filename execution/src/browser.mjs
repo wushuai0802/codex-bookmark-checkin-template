@@ -3,14 +3,22 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { classifyPageText, readPageTwoFactorStructure, formatDailyReason, isCheckinSingleChoiceChallenge, normalizeText, scoreActionText, ptPageEvidence } from "./detector.mjs";
+import { classifyPageText, readPageTwoFactorStructure, scoreActionText, ptPageEvidence } from "./detector.mjs";
 export { ptPageEvidence } from "./detector.mjs";
 import { assertBookmarkNavigation, safeErrorMessage, safeLogUrl } from "./security.mjs";
 import { newApiCaptchaCandidates, recognizeNewApiCaptcha, recognizeNexusCaptcha, recognizeOpenCdCaptcha } from "./captcha-ocr.mjs";
 import { solveU2VisualChallenge, projectU2Diagnostics } from "./u2-vision.mjs";
 import { createU2ReferenceFetch } from "./u2-reference-fetch.mjs";
-import { resolveQaByWebSearch } from "./qa-solver.mjs";
 import { withRetrySchedule } from "./retry-policy.mjs";
+import {
+  detectActiveQuotaBenefit,
+  waitForActiveQuotaBenefit,
+  waitForQuotaRequestField,
+  classifyVibeClaimResponse,
+  tryQuotaRequestFlow as runQuotaRequestFlow,
+} from "./vibe-quota-flow.mjs";
+export { waitForActiveQuotaBenefit, waitForQuotaRequestField, classifyVibeClaimResponse } from "./vibe-quota-flow.mjs";
+import { tryQaFlow as runQaFlow } from "./qa-challenge-flow.mjs";
 import { tryOAuthReloginCheckinStatus } from "./oauth-relogin-checkin.mjs";
 import { tryOAuthApiCheckin } from "./oauth-api-checkin.mjs";
 import { clickCheckinCandidate,checkinClickStarted } from "./checkin-click.mjs";
@@ -35,8 +43,6 @@ const rootDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
 const CHALLENGE = new Set(["interactive_challenge", "managed_challenge_timeout"]);
 const UNCONFIRMED = new Set(["visited", "clicked"]);
-const VIBE_CLAIM_ORIGIN = "https://new.sharedchat.cc";
-const VIBE_CLAIM_PATH = "/frontend-api/vibe-code/codex/claim";
 const CANDIDATE_STATUS_PRIORITY = new Map([
   ["signed", 100],
   ["already_signed", 100],
@@ -463,161 +469,11 @@ async function findCheckinAction(page, allowedOrigins, excludedAction = null) {
     .sort((a, b) => b.score - a.score)[0] ?? null;
 }
 
-async function detectActiveQuotaBenefit(page, activeOrigin, config, status = "already_signed") {
-  if (!config.quotaRequestRules?.[activeOrigin]) return null;
-  const bodyText = String(await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-  const claimButton = page.getByRole("button", { name: "领取 Codex 权益", exact: true });
-  const claimButtonVisible = await claimButton.count() === 1 && await claimButton.isVisible().catch(() => false);
-  if (!claimButtonVisible
-    && /当前套餐\s*[-—:]?\s*Codex/i.test(bodyText)
-    && /剩余(?:额度|額度)|下次重置|有效期/i.test(bodyText)
-    && !/已过期|已過期/i.test(bodyText)) {
-    return { status, reason: "Codex 权益已领取，页面显示有效套餐" };
-  }
-  return null;
-}
-
-export async function waitForActiveQuotaBenefit(page, activeOrigin, config, status = "already_signed", timeoutMs = 0) {
-  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
-  do {
-    const result = await detectActiveQuotaBenefit(page, activeOrigin, config, status);
-    if (result) return result;
-    if (Date.now() >= deadline) return null;
-    await sleep(Math.min(500, deadline - Date.now()));
-  } while (true);
-}
-
-export async function waitForQuotaRequestField(page, timeoutMs = 10000) {
-  const selector = [
-    'textarea:visible',
-    'input[name*="reason" i]:visible',
-    'input[name*="remark" i]:visible',
-    'input[name*="message" i]:visible',
-    'input[placeholder*="理由" i]:visible',
-    'input[placeholder*="原因" i]:visible',
-  ].join(", ");
-  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
-  do {
-    const fields = page.locator(selector);
-    const count = await fields.count();
-    if (count === 1) return fields;
-    if (count > 1 || Date.now() >= deadline) return null;
-    await sleep(Math.min(500, deadline - Date.now()));
-  } while (true);
-}
-
-// The Vibe frontend confirms a claim only when code=1 and data.claimed=true.
-// HTTP success or a visible "领取" button is not a claim receipt.
-export function classifyVibeClaimResponse(value, httpStatus = 200, now = new Date(), {expectedAccountId} = {}) {
-  if (httpStatus !== 200 || value?.code !== 1) return null;
-  if (value?.data?.claimed === true) {
-    const businessDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now);
-    const accountId = value?.data?.accountId ?? value?.data?.userId;
-    if(expectedAccountId!=null&&accountId!=null&&String(expectedAccountId)!==String(accountId))
-      return {status:'needs_attention',reason:'权益响应账号与执行账号不一致',failureCode:'account_mismatch',submissionAttempted:true,retryable:false};
-    return {
-      status: "signed",
-      reason: "Codex 权益接口确认今日领取成功",
-      submissionAttempted: true,
-      evidence: {
-        source: "vibe_claim_response",
-        authoritative: accountId!=null&&/^[0-9]{1,32}$/.test(String(accountId)),
-        endpoint: VIBE_CLAIM_PATH,
-        requestMethod: 'POST',
-        actionType: 'daily_entitlement_claim',
-        businessDate,
-        statusSignal: "claimed_true",
-        confirmedAt: now.toISOString(),
-        ...(accountId == null ? {} : { accountId: String(accountId).slice(0, 120) }),
-      },
-    };
-  }
-  if (value?.data?.claimed === false) {
-    return {
-      status: "needs_attention",
-      reason: "权益接口明确未批准本次领取；需检查站点限制",
-      failureCode: "claim_not_granted",
-      submissionAttempted: true,
-      retryable: false,
-    };
-  }
-  return null;
-}
-
-export async function tryQuotaRequestFlow(page, activeOrigin, config, { waitForField = waitForQuotaRequestField } = {}) {
-  const rule = config.quotaRequestRules?.[activeOrigin];
-  if (!rule) return null;
-  const reason = formatDailyReason(String(rule.reason || "{date}正常使用服务，申请额度用于开发测试和日常体验，谢谢。"));
-  const minimumLength = Math.max(10, Number(rule.minimumReasonLength) || 10);
-  if ([...reason].length < minimumLength) throw new Error(`额度申请理由少于 ${minimumLength} 个字符`);
-  let reasonFields = await waitForField(page);
-  if (!reasonFields) {
-    // A server-rendered claim button can precede its event handler. Only retry
-    // opening the dialog, never a form submission with an unknown outcome.
-    const claim = page.getByRole("button", { name: "领取 Codex 权益", exact: true });
-    if (await claim.count() === 1 && await claim.isVisible().catch(() => false)) {
-      await claim.click({ timeout: 10000 });
-      reasonFields = await waitForField(page);
-    }
-  }
-  if (!reasonFields) return null;
-  await reasonFields.fill(reason);
-  let submit = null;
-  for (const label of ["领取", "領取", "提交申请", "确认申请", "确认提交", "提交", "确认"]) {
-    const candidate = page.getByRole("button", { name: label, exact: true });
-    if (await candidate.count() === 1 && await candidate.isVisible().catch(() => false)) { submit = candidate; break; }
-    const input = page.locator(`input[type="submit"][value="${label}"], input[type="button"][value="${label}"]`);
-    if (await input.count() === 1 && await input.isVisible().catch(() => false)) { submit = input; break; }
-  }
-  if (!submit) return { status: "needs_attention", reason: "已填写额度申请理由，但未找到提交按钮" };
-  // Register before the click: the Vibe API response can arrive before the
-  // page's toast is rendered. Observe only the exact same-origin claim call.
-  const claimResponse = activeOrigin === VIBE_CLAIM_ORIGIN && typeof page.waitForResponse === "function"
-    ? page.waitForResponse((response) => {
-      try {
-        const url = new URL(response.url());
-        return url.origin === activeOrigin && url.pathname === VIBE_CLAIM_PATH
-          && response.request().method() === "POST";
-      } catch { return false; }
-    }, { timeout: 12000 }).catch(() => null)
-    : null;
-  // A click timeout can occur after the browser has sent the request. Treat it
-  // as an unknown submission unless the exact claim response proves otherwise.
-  const clickFailed = await submit.click({ timeout: 10000 }).then(() => false, () => true);
-  let claimResult = null;
-  if (claimResponse) {
-    const response = await claimResponse;
-    if (response) {
-      const payload = await response.json().catch(() => null);
-      claimResult = classifyVibeClaimResponse(payload, response.status(),new Date(),
-        {expectedAccountId:config.oauthAccountIdentities?.[activeOrigin]?.accountId});
-    }
-  }
-  if (claimResult) return claimResult;
-  if (clickFailed) {
-    return {
-      status: "needs_attention",
-      reason: "额度申请提交动作结果不明，已停止重复提交",
-      failureCode: "submission_outcome_unknown",
-      submissionAttempted: true,
-      retryable: false,
-    };
-  }
-  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
-  await sleep(Math.max(1000, Number(config.actionWaitMs) || 0));
-  const state = await waitForManagedChallenge(page, config);
-  if (["signed", "already_signed"].includes(state.status)) return state;
-  const bodyText = String(await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-  if (/(额度申请已提交|申请额度成功|额度已发放|额度申请成功|申请成功.*额度|今日已申请|今天已申请|codex\s*(?:权益|權益)\s*已(?:领取|領取)|(?:领取|領取)\s*codex\s*(?:权益|權益)\s*成功)/i.test(bodyText)) return { status: "signed", reason: "额度申请已提交并获得页面确认" };
-  const activeBenefit = await detectActiveQuotaBenefit(page, activeOrigin, config, "signed");
-  if (activeBenefit) return activeBenefit;
-  return {
-    status: "needs_attention",
-    reason: "额度申请已提交，但站点未提供可确认的结果",
-    failureCode: "submission_outcome_unknown",
-    submissionAttempted: true,
-    retryable: false,
-  };
+export async function tryQuotaRequestFlow(page, activeOrigin, config, options = {}) {
+  return runQuotaRequestFlow(page, activeOrigin, config, {
+    ...options,
+    waitForManagedChallenge: options.waitForManagedChallenge ?? waitForManagedChallenge,
+  });
 }
 
 async function findCheckinDiscoveryUrls(page, expectedOrigin) {
@@ -679,161 +535,8 @@ async function navigateDiscoveryUrl(page, candidateUrl, allowedOrigins, config) 
   }
 }
 
-async function findMatchingQaRule(page, rules, origin) {
-  const bodyText = normalizeText(await page.locator("body").innerText({ timeout: 5000 })).slice(0, 30000);
-  return rules.find((rule) => {
-    if (!rule || rule.origin !== origin || !rule.questionIncludes) return false;
-    return bodyText.includes(String(rule.questionIncludes));
-  }) ?? null;
-}
-
-async function applyQaRule(page, rule, config = {}) {
-  if (!rule?.answerText || !rule?.submitText) return false;
-  const answerText = normalizeText(rule.answerText);
-  const radioOptions = await page.locator('input[type="radio"]').evaluateAll((elements) => elements.map((element, index) => {
-    let siblingText = "";
-    let sibling = element.nextSibling;
-    while (sibling && sibling.nodeName !== "BR" && !(sibling instanceof HTMLInputElement)) {
-      siblingText += ` ${sibling.textContent || ""}`;
-      sibling = sibling.nextSibling;
-    }
-    return { index, text: String(siblingText).replace(/\s+/g, " ").trim() };
-  }));
-  const matchingRadios = radioOptions.filter((option) => option.text === answerText);
-  if (matchingRadios.length === 1) {
-    await page.locator('input[type="radio"]').nth(matchingRadios[0].index).check();
-  } else {
-    const answer = page.getByText(answerText, { exact: true });
-    if (await answer.count() !== 1) return false;
-    await answer.click();
-  }
-
-  const submitText = normalizeText(rule.submitText);
-  const submitInputs = await page.locator('input[type="submit"], button[type="submit"]').evaluateAll((elements) => elements.map((element, index) => ({
-    index,
-    text: String(element.value || element.innerText || "").replace(/\s+/g, " ").trim(),
-  })));
-  const matchingSubmits = submitInputs.filter((option) => option.text === submitText);
-  if (matchingSubmits.length === 1) {
-    config.beforePtSubmit?.();
-    await page.locator('input[type="submit"], button[type="submit"]').nth(matchingSubmits[0].index).click();
-  } else {
-    const submit = page.getByText(submitText, { exact: true });
-    if (await submit.count() !== 1) return false;
-    config.beforePtSubmit?.();
-    await submit.click();
-  }
-  return true;
-}
-
-async function readSingleChoiceChallenge(page) {
-  const radios = page.locator('input[type="radio"]');
-  if (await radios.count() < 2) return null;
-  const groups = await radios.evaluateAll((elements) => {
-    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
-    const grouped = new Map();
-    for (const [index, element] of elements.entries()) {
-      const container = element.closest("form") || element.closest("table") || element.parentElement;
-      if (!container) continue;
-      if (!grouped.has(container)) grouped.set(container, []);
-      grouped.get(container).push({ element, index });
-    }
-    return [...grouped.entries()].map(([container, entries]) => {
-      const options = entries.map(({ element, index }) => {
-        let text = "";
-        const label = element.closest("label")
-          || (element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`) : null);
-        if (label) text = label.innerText || label.textContent || "";
-        if (!normalize(text)) {
-          let sibling = element.nextSibling;
-          while (sibling && sibling.nodeName !== "BR" && !(sibling instanceof HTMLInputElement)) {
-            text += ` ${sibling.textContent || ""}`;
-            sibling = sibling.nextSibling;
-          }
-        }
-        return { index, text: normalize(text) };
-      }).filter((option) => option.text);
-      if (options.length < 2) return null;
-      const contextText = normalize(container.innerText || container.textContent || "");
-      const submitTexts = [...container.querySelectorAll('input[type="submit"], button[type="submit"], button')]
-        .map((element) => normalize(element.value || element.innerText || element.textContent || ""))
-        .filter(Boolean);
-      let question = contextText;
-      const firstOptionIndex = question.indexOf(options[0].text);
-      if (firstOptionIndex > 0) question = question.slice(0, firstOptionIndex);
-      const markers = [question.lastIndexOf("请问"), question.lastIndexOf("請問"), question.lastIndexOf("[单选]"), question.lastIndexOf("[單選]")];
-      const marker = Math.max(...markers);
-      if (marker >= 0) question = question.slice(marker);
-      return {
-        question: normalize(question).slice(-320),
-        options: options.map((option) => option.text),
-        contextText: contextText.slice(0, 2000),
-        submitTexts,
-      };
-    }).filter(Boolean);
-  });
-  return groups.find(isCheckinSingleChoiceChallenge) ?? null;
-}
-
-async function clickQaChange(page, config) {
-  const labels = config.qaChangeButtonTexts ?? ["仅可换一题", "僅可換一題", "换一题", "換一題"];
-  const controls = page.locator('input[type="submit"], button');
-  const values = await controls.evaluateAll((elements) => elements.map((element, index) => ({
-    index,
-    text: String(element.value || element.innerText || "").replace(/\s+/g, " ").trim(),
-  })));
-  const matches = values.filter((item) => labels.includes(item.text));
-  if (matches.length !== 1) return false;
-  await controls.nth(matches[0].index).click();
-  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-  await sleep(1000);
-  return true;
-}
-
 async function tryQaFlow(page, rules, origin, config) {
-  const configuredChanges = Number(config.qaMaxQuestionChanges);
-  const maxChanges = Math.max(0, Math.min(2, Number.isFinite(configuredChanges) ? configuredChanges : 1));
-  for (let changeIndex = 0; changeIndex <= maxChanges; changeIndex += 1) {
-    const challenge = await readSingleChoiceChallenge(page);
-    if (!challenge) return null;
-
-    let rule = await findMatchingQaRule(page, rules, origin);
-    let source = rule ? (rule.source || "configured") : null;
-    if (!rule) {
-      const searched = await resolveQaByWebSearch(page, challenge.question, challenge.options, config);
-      if (searched?.answer) {
-        rule = { answerText: searched.answer, submitText: "提交" };
-        source = searched.source;
-      }
-    }
-
-    if (rule) {
-      const applied = await applyQaRule(page, rule, config);
-      if (!applied) {
-        return { status: "interactive_challenge", reason: "已找到问答答案，但页面选项结构无法安全提交" };
-      }
-      await sleep(config.actionWaitMs);
-      const state = await waitForManagedChallenge(page, config);
-      const verified = ["signed", "already_signed"].includes(state.status);
-      return {
-        ...(verified ? state : { status: "interactive_challenge", reason: "问答答案已提交，但页面未确认签到成功" }),
-        qa: {
-          question: challenge.question,
-          answer: String(rule.answerText),
-          submitText: String(rule.submitText || "提交"),
-          source,
-          verified,
-        },
-      };
-    }
-
-    if (changeIndex < maxChanges && await clickQaChange(page, config)) continue;
-    return {
-      status: "interactive_challenge",
-      reason: `遇到未知站内问答：${challenge.question.slice(0, 120)}`,
-    };
-  }
-  return null;
+  return runQaFlow(page, rules, origin, config, { waitForManagedChallenge });
 }
 
 export async function tryNewApiCheckin(page) {
