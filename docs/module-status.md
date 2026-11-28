@@ -8,10 +8,10 @@
 
 | 类别 | 文件数 |
 | --- | ---: |
-| 现役 | 239 |
-| 运维手动 | 66 |
+| 现役 | 243 |
+| 运维手动 | 67 |
 | 历史审计 | 4 |
-| 待确认 | 47 |
+| 待确认 | 45 |
 
 ## 四个基准模块核对
 
@@ -46,6 +46,7 @@
 
 | 文件 | 类别 | 依据 |
 | --- | --- | --- |
+| `execution/scripts/Backup-CheckinProfiles.ps1` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/Backup-Sqlite.py` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `execution/scripts/CheckinContract.generated.ps1` | 现役 | execution/scripts/ResultContract.ps1:1 (ps-call) |
 | `execution/scripts/Cleanup-NativePtRead.ps1` | 现役 | execution/src/native-pt-read.mjs:119 (node-path) |
@@ -255,7 +256,9 @@
 | `observation/public/topbar.mjs` | 现役 | observation/public/app.js:4 (esm-static) |
 | `observation/public/workspace.css` | 现役 | observation/public/index.html:15 (public-asset) |
 | `observation/scripts/Invoke-DashboardOperations.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:168 (ps-join) |
+| `observation/scripts/Invoke-DryWorkerIfDue.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:173 (ps-join) |
 | `observation/scripts/Invoke-PtEvidenceRepair.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:174 (ps-join) |
+| `observation/scripts/Run-DryWorker.ps1` | 现役 | observation/scripts/Invoke-DryWorkerIfDue.ps1:40 (ps-join) |
 | `observation/scripts/Start-NasShadowScheduler.ps1` | 现役 | 生产入口（架构调用链） |
 | `observation/scripts/Sync-NasShadow.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:11 (ps-join) |
 | `observation/scripts/Sync-OperationsSupport.ps1` | 现役 | observation/scripts/Start-NasShadowScheduler.ps1:86 (ps-call) |
@@ -309,7 +312,7 @@
 | `observation/scripts/verify-pt.mjs` | 运维手动 | 人工用法见 observation/docs/reliability-operations.md |
 | `observation/scripts/verify-v2-profile.mjs` | 运维手动 | 安装/恢复/诊断人工工具；用途由文件入口实现确认。 |
 | `observation/scripts/worker-dry-smoke.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
-| `observation/scripts/worker-once.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
+| `observation/scripts/worker-once.mjs` | 现役 | observation/scripts/Run-DryWorker.ps1:35 (ps-join) |
 | `observation/src/adapter-contract.mjs` | 运维手动 | observation/src/new-api-execution-adapter.mjs:1 (esm-static) |
 | `observation/src/adapter-observations.mjs` | 现役 | observation/src/dashboard-server.mjs:15 (esm-static) |
 | `observation/src/adapter-registry.mjs` | 现役 | observation/src/dashboard-server.mjs:16 (esm-static) |
@@ -341,7 +344,7 @@
 | `observation/src/display-identity.mjs` | 现役 | observation/src/dashboard-server.mjs:13 (esm-static) |
 | `observation/src/dry-run-worker.mjs` | 运维手动 | npm 人工命令 observation/package.json:worker:dry-run |
 | `observation/src/dry-transport-server.mjs` | 现役 | observation/src/worker-gateway.mjs:3 (esm-static) |
-| `observation/src/dry-transport-worker.mjs` | 待确认 | 未见生产可达或明确人工用途；缺少足够的退役依据。 |
+| `observation/src/dry-transport-worker.mjs` | 现役 | observation/scripts/worker-once.mjs:3 (esm-static) |
 | `observation/src/effective-config.mjs` | 现役 | observation/src/bridge.mjs:16 (esm-static) |
 | `observation/src/engine-row-provenance.mjs` | 现役 | observation/src/legacy-engine.mjs:10 (esm-static) |
 | `observation/src/evidence-contract.mjs` | 现役 | observation/src/legacy-engine.mjs:9 (esm-static) |
@@ -414,13 +417,11 @@
 | `observation/scripts/deploy-nas-code.ps1:146` | ps-join | 否 | 仓库内无对应文件；不读取运行副本；`observation/outputs/nas-bundle-deploy/nas-code-release.sh` |
 | `observation/scripts/m2-nas-client-smoke.mjs:14` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/scripts/m2-nas-client-smoke.mjs:30` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
-| `observation/scripts/Start-NasShadowScheduler.ps1:173` | ps-join | 是 | 仓库内无对应文件；不读取运行副本；`observation/scripts/Invoke-DryWorkerIfDue.ps1` |
-| `observation/scripts/Start-NasShadowScheduler.ps1:225` | ps-call | 是 | 仓库内无对应文件；不读取运行副本；`observation/scripts/Invoke-DryWorkerIfDue.ps1` |
 | `observation/src/captcha-solver.mjs:86` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/isolated-browser-worker.mjs:32` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/legacy-engine.mjs:155` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `observation/src/pt-site-execution.mjs:122` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
-| `tools/doctor.mjs:258` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `tools/doctor.mjs:294` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/private-value-scan.mjs:138` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/test-runner.mjs:15` | literal-script | 否 | 路径根或目标不唯一 |
 | `tools/test-runner.mjs:16` | literal-script | 否 | 路径根或目标不唯一 |

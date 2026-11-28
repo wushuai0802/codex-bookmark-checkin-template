@@ -80,7 +80,7 @@ function fixture(t){
   const calls={probe:0,health:0,ssh:[],git:[],delays:[]};
   const f={root,roots,options,snapshot,plan,stateFile,operationsConfig,dailyFile,ptFile,manifestFile,dependencyFile,
     privateValues,privateFields,calls,head:revision,pendingFiles:[],nasFiles:[],nas:{version:'1.2.3',revision,...privateFields},
-    sources:{[revision]:nasSources(),[olderRevision]:nasSources()},health:{healthy:true,failedChecks:[],...privateFields}};
+    worktreeCount:1,sources:{[revision]:nasSources(),[olderRevision]:nasSources()},health:{healthy:true,failedChecks:[],...privateFields}};
   f.dependencies={
     projectSource:project,clock:()=>now,
     probe:current=>{calls.probe++;assert.deepEqual(current.roots,roots);return f.snapshot;},
@@ -101,6 +101,10 @@ function fixture(t){
       calls.git.push(args);assert.equal(file,'git');assert.equal(settings.env.GIT_OPTIONAL_LOCKS,'0');
       assert.equal(settings.stdio[2],'ignore');
       if(args[0]==='rev-parse'){assert.deepEqual(args,['rev-parse','HEAD']);return f.head+'\n';}
+      if(args[0]==='worktree'){
+        assert.deepEqual(args,['worktree','list','--porcelain']);
+        return Array.from({length:f.worktreeCount},(_,i)=>`worktree ${path.join(f.root,'private-wt-'+i)}\nHEAD ${revision}\n`).join('\n');
+      }
       if(args[0]==='show'){
         assert.equal(args.length,2);
         const [at,file]=args[1].split(':');
@@ -492,7 +496,7 @@ const unavailableCases=[
 ];
 for(const [section,mutate] of unavailableCases)test(section+' read failure preserves independent sections',async t=>{
   const f=fixture(t);mutate(f);const result=await run(f);
-  assert.equal(result.exitCode,1);assert.equal(Object.keys(result.sections).length,12);
+  assert.equal(result.exitCode,1);assert.equal(Object.keys(result.sections).length,13);
   assert.ok(result.errors.some(item=>item.section===section||item.section.startsWith(section+'.')));
   assert.ok(result.attention.some(item=>item.section===section));
   assert.ok(result.sections.nas.summary.length>0);
@@ -577,4 +581,29 @@ test('JSON, summaries and failures omit synthetic identities, sites, paths and c
   for(const text of [JSON.stringify(result),formatDoctor(result)])
     for(const value of f.privateValues)assert.ok(!text.includes(value),'private failure value leaked');
   assert.ok(result.sections.health.failedChecks.every(code=>code==='unrecognizedCheck'));
+});
+
+test('hygiene advisories report extra worktrees and profile backup freshness without changing exitCode or leaking paths',async t=>{
+  const f=fixture(t);
+  f.worktreeCount=4;
+  let result=await run(f);
+  assert.equal(result.exitCode,0);
+  assert.deepEqual(result.attention,[]);
+  assert.equal(result.sections.hygiene.status,'info');
+  assert.equal(result.sections.hygiene.extraWorktrees,3);
+  assert.equal(result.sections.hygiene.profileBackup,null);
+  assert.match(formatDoctor(result),/运维卫生：额外 worktree 3 个（建议清理已合并副本）；Profile 备份 尚无记录/);
+  assert.ok(!JSON.stringify(result).includes('private-wt-'));
+
+  f.worktreeCount=2;
+  const manifestPath=path.join(f.options.backupRoot,'profiles/profiles-20261031-030000/manifest.json');
+  save(manifestPath,{schemaVersion:1,kind:'chrome_profile_backup',createdAt:finishedAt,verifiedAt:finishedAt,profileCount:12,
+    profiles:[{relativePath:f.privateValues[0]}]});
+  result=await run(f);
+  assert.equal(result.exitCode,0);
+  assert.equal(result.sections.hygiene.status,'ok');
+  assert.equal(result.sections.hygiene.extraWorktrees,1);
+  assert.deepEqual(result.sections.hygiene.profileBackup,{createdAt:new Date(finishedAt).toISOString(),ageDays:0,profileCount:12,verified:true});
+  assert.match(formatDoctor(result),/运维卫生：额外 worktree 1 个；Profile 备份 0 天前（含 12 个 Profile，清单标记已校验）/);
+  assert.ok(!JSON.stringify(result).includes(f.privateValues[0]));
 });
