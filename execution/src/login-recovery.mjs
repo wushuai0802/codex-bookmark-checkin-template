@@ -58,6 +58,17 @@ const RETRYABLE_LOGIN_FAILURE_CODES = new Set([
 ]);
 
 const TERMINAL_DAILY_CHECKIN_STATUSES = new Set(["signed", "already_signed"]);
+const HELPER_STAGES = new Set([
+  "piggo_helper_timeout",
+  "piggo_stdout_timeout",
+  "piggo_helper_nonzero",
+  "piggo_stdout_empty",
+  "unhandled_rejection",
+  "uncaught_exception",
+  "cdp_connect",
+  "target_page",
+  "recover_throw",
+]);
 
 export function nativePasswordLoginPage(pages,origin){
   const candidates=pages.filter(page=>{try{const url=new URL(page.url());return url.origin===origin&&!url.username&&!url.password;}catch{return false;}});
@@ -226,6 +237,10 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
   const diagnostic=readOAuthProgress(progress);
   // Fixed lowercase codes only, so the report can say why without carrying helper text.
   const recoveryCode=code=>typeof code==='string'&&/^[a-z][a-z_]{0,39}$/.test(code)?code:null;
+  const helperStage=typeof value?.helperStage==='string'&&HELPER_STAGES.has(value.helperStage)?value.helperStage:null;
+  const helperExitCode=status!=='logged_in'&&Number.isSafeInteger(value?.helperExitCode)
+    &&value.helperExitCode>=-2147483648&&value.helperExitCode<=2147483647
+    ?value.helperExitCode:null;
   const recovery=value?.nativeTwoFactorRecovery;
   const recoveryReason=recoveryCode(recovery?.reason);
   const providerReason=recoveryCode(recovery?.providerReason);
@@ -246,6 +261,8 @@ export function loginHelperOutcome(text, fallback = "failed", progress = "") {
     ...(recoveryReason?{recoveryReason}:{}),
     ...(providerReason?{providerReason}:{}),
     ...(recoveryMode?{recoveryMode}:{}),
+    ...(helperStage?{helperStage}:{}),
+    ...(helperExitCode!==null?{helperExitCode}:{}),
     ...recoveryCodes,
     ...recoveryNumbers,
     ...(typeof recovery?.noticeGate==='boolean'?{noticeGate:recovery.noticeGate}:{}),

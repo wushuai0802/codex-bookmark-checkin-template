@@ -61,6 +61,47 @@ registerHooks({load(url,context,next){
   assert.equal(JSON.parse(output.stdout).status,'logged_in');assert.equal(output.stderr,'');
 });
 
+test('native PigGo entrypoint absorbs benign close-race unhandledRejection and emits sanitized stage on unexpected rejection',async t=>{
+  const root=temporary(t),execution=fileURLToPath(new URL('../',import.meta.url));
+  fs.cpSync(path.join(execution,'src'),path.join(root,'src'),{recursive:true});
+  fs.symlinkSync(path.join(execution,'node_modules'),path.join(root,'node_modules'),'junction');
+  fs.mkdirSync(path.join(root,'config'));fs.writeFileSync(path.join(root,'config/config.json'),'{}');
+
+  const benignHooks=path.join(root,'benign-hooks.mjs');
+  fs.writeFileSync(benignHooks,`import {registerHooks} from 'node:module';
+registerHooks({load(url,context,next){
+ if(url===new URL('./src/native-cdp.mjs',import.meta.url).href)return {format:'module',shortCircuit:true,source:
+  'export async function connectOverCdpWithRetry(){return {contexts:()=>[{pages:()=>[{url:()=>"about:blank"}]}],close:async()=>{}};}'};
+ if(url===new URL('./src/piggo-login.mjs',import.meta.url).href)return {format:'module',shortCircuit:true,source:
+  'export async function recoverPiggoSpaLogin(){Promise.reject(new Error("Target page, context or browser has been closed"));await new Promise(r=>setTimeout(r,20));return {origin:"https://piggo.me",status:"logged_in",nativeTwoFactorRecovery:{accepted:true}};}'};
+ return next(url,context);
+}});`);
+  const okOut=await execute(process.execPath,['--import',pathToFileURL(benignHooks).href,path.join(root,'src/native-login.mjs'),
+    '12345','https://piggo.me',path.join(root,'synthetic-profile')],{windowsHide:true,timeout:12000});
+  assert.equal(JSON.parse(okOut.stdout).status,'logged_in');
+
+  const crashHooks=path.join(root,'crash-hooks.mjs');
+  fs.writeFileSync(crashHooks,`import {registerHooks} from 'node:module';
+registerHooks({load(url,context,next){
+ if(url===new URL('./src/native-cdp.mjs',import.meta.url).href)return {format:'module',shortCircuit:true,source:
+  'export async function connectOverCdpWithRetry(){return {contexts:()=>[{pages:()=>[{url:()=>"about:blank"}]}],close:async()=>{}};}'};
+ if(url===new URL('./src/piggo-login.mjs',import.meta.url).href)return {format:'module',shortCircuit:true,source:
+  'export async function recoverPiggoSpaLogin(){Promise.reject(new Error("SECRET_TOKEN_SHOULD_NOT_LEAK"));await new Promise(r=>setTimeout(r,20));return {origin:"https://piggo.me",status:"logged_in"};}'};
+ return next(url,context);
+}});`);
+  let err;
+  try{
+    await execute(process.execPath,['--import',pathToFileURL(crashHooks).href,path.join(root,'src/native-login.mjs'),
+      '12345','https://piggo.me',path.join(root,'synthetic-profile')],{windowsHide:true,timeout:12000});
+  }catch(e){err=e;}
+  assert.ok(err);
+  assert.equal(err.code,2);
+  const parsed=JSON.parse(err.stdout.trim());
+  assert.equal(parsed.status,'failed');
+  assert.equal(parsed.helperStage,'unhandled_rejection');
+  assert.doesNotMatch(err.stdout+err.stderr,/SECRET_TOKEN_SHOULD_NOT_LEAK/);
+});
+
 test('timeout kills the helper and its descendant before returning, despite partial output',async t=>{
   const root=temporary(t),pidFile=path.join(root,'pids.json'),script=path.join(root,'helper.mjs');
   fs.writeFileSync(script,`import fs from 'node:fs';import {spawn} from 'node:child_process';

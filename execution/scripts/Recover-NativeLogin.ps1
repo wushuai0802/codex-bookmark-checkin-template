@@ -38,11 +38,44 @@ function Invoke-PiggoLoginProcess {
             $child.Kill()
             [void]$child.WaitForExit(5000)
         }
-        if ($stdout.Wait(5000)) { Write-Output $stdout.Result }
+        $stdoutReady = $stdout.Wait(5000)
+        $stdoutText = if ($stdoutReady) { [string]$stdout.Result } else { '' }
+        if ($stdoutReady) { Write-Output $stdoutText }
         # Retain the original stdout protocol. Raw helper errors are not diagnostics.
         [void]$stderr.Wait(5000)
-        if (-not $exited) { throw 'PigGo native login helper timed out.' }
-        if ($child.ExitCode -ne 0) { throw 'PigGo native login helper did not complete.' }
+        $exitCode = if ($exited) { [int]$child.ExitCode } else { -1 }
+        $hasJson = $false
+        if ($stdoutReady -and -not [string]::IsNullOrWhiteSpace($stdoutText)) {
+            foreach ($line in @($stdoutText -split "\r?\n")) {
+                $trimmed = $line.Trim()
+                if (-not ($trimmed.StartsWith('{') -and $trimmed.EndsWith('}'))) { continue }
+                try {
+                    $parsed = $trimmed | ConvertFrom-Json -ErrorAction Stop
+                    if ($null -ne $parsed -and $parsed -isnot [System.Array] -and -not [string]::IsNullOrWhiteSpace([string]$parsed.status)) {
+                        $hasJson = $true
+                        break
+                    }
+                } catch {}
+            }
+        }
+        if (-not $exited) {
+            if (-not $hasJson) {
+                Write-Output ([pscustomobject]@{ origin = $SiteOrigin; status = 'timeout'; helperStage = 'piggo_helper_timeout'; helperExitCode = $exitCode } | ConvertTo-Json -Compress)
+            }
+            throw 'PigGo native login helper timed out.'
+        }
+        if ($exitCode -ne 0) {
+            if (-not $hasJson) {
+                $stage = if (-not $stdoutReady) { 'piggo_stdout_timeout' } else { 'piggo_helper_nonzero' }
+                Write-Output ([pscustomobject]@{ origin = $SiteOrigin; status = 'failed'; helperStage = $stage; helperExitCode = $exitCode } | ConvertTo-Json -Compress)
+            }
+            throw 'PigGo native login helper did not complete.'
+        }
+        if (-not $stdoutReady -or -not $hasJson) {
+            $stage = if (-not $stdoutReady) { 'piggo_stdout_timeout' } else { 'piggo_stdout_empty' }
+            Write-Output ([pscustomobject]@{ origin = $SiteOrigin; status = 'failed'; helperStage = $stage; helperExitCode = 0 } | ConvertTo-Json -Compress)
+            throw 'PigGo native login helper returned no structured result.'
+        }
     }
     finally {
         if ($started -and -not $child.HasExited) { $child.Kill(); [void]$child.WaitForExit(5000) }

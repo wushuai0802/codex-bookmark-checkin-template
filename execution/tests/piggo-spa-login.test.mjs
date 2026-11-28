@@ -526,3 +526,66 @@ test('Recover-NativeLogin finally cleanup guards HasExited and matches exact --u
   assert.match(source,/function Test-ChromeProcessUsesProfile/);
   assert.match(source,/\[regex\]::Escape/);
 });
+
+test('installPiggoCalendarFirewall absorbs close-race route/WebSocket rejections and fails closed on frame errors',async t=>{
+  const f=fixture(t);
+  let routeHandler,wsHandler;
+  const context={
+    route:async(_pattern,handler)=>{routeHandler=handler;},
+    routeWebSocket:async(_pattern,handler)=>{wsHandler=handler;},
+    unroute:async()=>{throw new Error('Target page, context or browser has been closed');},
+  };
+  const firewall=await installPiggoCalendarFirewall(context,{clock:f.clock,allowAuthLanding:true});
+  let aborted=0,continued=0;
+  await routeHandler({
+    request:()=>({url:()=>'https://foreign.example/x',method:()=>'GET'}),
+    abort:async()=>{aborted++;throw new Error('Target page, context or browser has been closed');},
+    continue:async()=>{continued++;},
+  });
+  assert.equal(aborted,1);assert.equal(continued,0);
+
+  // Throwing request.frame() on authLanding must fail closed (abort, never continue or reject).
+  aborted=0;continued=0;
+  await routeHandler({
+    request:()=>({url:()=>'https://piggo.me/',method:()=>'GET',isNavigationRequest:()=>true,resourceType:()=>'document',
+      frame:()=>{throw new Error('Frame for this navigation request is not available');}}),
+    abort:async()=>{aborted++;},
+    continue:async()=>{continued++;},
+  });
+  assert.equal(aborted,1);assert.equal(continued,0);
+
+  let wsClosed=0;
+  await wsHandler({close:async()=>{wsClosed++;throw new Error('Target closed');}});
+  assert.equal(wsClosed,1);
+  await firewall.dispose();
+
+  // If routeWebSocket fails during install, the HTTP route must be rolled back.
+  let rolledBack=false;
+  const brokenContext={
+    route:async()=>{},
+    routeWebSocket:async()=>{throw new Error('ws install failed');},
+    unroute:async()=>{rolledBack=true;},
+  };
+  await assert.rejects(()=>installPiggoCalendarFirewall(brokenContext,{clock:f.clock}),/ws install failed/);
+  assert.equal(rolledBack,true);
+});
+
+test('loginHelperOutcome projects only fixed sanitized helperStage and bounded helperExitCode',()=>{
+  const ok=loginHelperOutcome(JSON.stringify({
+    origin:'https://piggo.me',status:'failed',helperStage:'piggo_helper_nonzero',helperExitCode:1,
+  }));
+  assert.equal(ok.status,'failed');
+  assert.equal(ok.helperStage,'piggo_helper_nonzero');
+  assert.equal(ok.helperExitCode,1);
+
+  const dirty=loginHelperOutcome(JSON.stringify({
+    origin:'https://piggo.me',status:'failed',helperStage:'unlisted_custom_stage',helperExitCode:9999999999999,
+  }));
+  assert.equal(dirty.helperStage,undefined);
+  assert.equal(dirty.helperExitCode,undefined);
+
+  const loggedIn=loginHelperOutcome(JSON.stringify({
+    origin:'https://piggo.me',status:'logged_in',helperExitCode:0,
+  }));
+  assert.equal(loggedIn.helperExitCode,undefined);
+});
