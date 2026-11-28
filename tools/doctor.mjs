@@ -111,6 +111,42 @@ function counts(value,names){
   return result;
 }
 
+function latestProfileBackup(options){
+  const candidates=[
+    ...(typeof options.profileBackupRoot==='string'&&options.profileBackupRoot.trim()?[options.profileBackupRoot]:[]),
+    path.join(options.backupRoot,'profiles'),
+    path.join(path.dirname(path.resolve(options.backupRoot)),'profiles')
+  ];
+  const seen=new Set();
+  let latest=null;
+  for(const rawDir of candidates){
+    const dir=path.resolve(rawDir);
+    const key=process.platform==='win32'?dir.toLowerCase():dir;
+    if(seen.has(key))continue;
+    seen.add(key);
+    let entries;
+    try{entries=fs.readdirSync(dir,{withFileTypes:true});}
+    catch{continue;}
+    for(const entry of entries){
+      if(!entry.isDirectory()||entry.isSymbolicLink()||!/^profiles-\d{8}-\d{6}(?:-\d{3})?$/.test(entry.name))continue;
+      const manifestFile=path.join(dir,entry.name,'manifest.json');
+      let manifest;
+      try{
+        if(fs.statSync(manifestFile).size>1_048_576)continue;
+        manifest=json(manifestFile);
+      }
+      catch{continue;}
+      if(manifest?.schemaVersion!==1||manifest?.kind!=='chrome_profile_backup')continue;
+      if(!count(manifest.profileCount)||typeof manifest.createdAt!=='string'||!Number.isFinite(Date.parse(manifest.createdAt)))continue;
+      const createdMs=Date.parse(manifest.createdAt);
+      const verified=typeof manifest.verifiedAt==='string'&&Number.isFinite(Date.parse(manifest.verifiedAt));
+      if(!latest||(verified&&!latest.verified)||((verified===latest.verified)&&createdMs>latest.createdMs))
+        latest={createdAt:new Date(createdMs).toISOString(),createdMs,profileCount:manifest.profileCount,verified};
+    }
+  }
+  return latest;
+}
+
 function publicHealthCodes(){
   const script=fs.readFileSync(path.join(source,'execution/scripts/Test-CheckinHealth.ps1'),'utf8');
   const block=script.match(/^\$checks = \[ordered\]@\{\r?\n([\s\S]*?)^\}/m)?.[1];
@@ -308,6 +344,28 @@ export async function runDoctor(options,{projectSource=source,clock=()=>new Date
     return {summary:Object.entries(projected).filter(([,value])=>typeof value==='number').map(([name,value])=>name+'='+value).join('，')+
       (projected.status?'；状态 '+Object.entries(projected.status).map(([name,value])=>name+'='+value).join('，'):''),counts:projected};
   });
+  await section('hygiene','运维卫生',()=>{
+    let extraWorktrees=null;
+    try{
+      const output=gitExec('git',['worktree','list','--porcelain'],{cwd:projectSource,encoding:'utf8',windowsHide:true,timeout:5_000,
+        maxBuffer:1_000_000,stdio:['ignore','pipe','ignore'],env:{...process.env,GIT_OPTIONAL_LOCKS:'0'}});
+      const worktreeLines=String(output).split(/\r?\n/).filter(line=>line.startsWith('worktree '));
+      if(worktreeLines.length>0)extraWorktrees=Math.max(0,worktreeLines.length-1);
+    }catch{}
+    const backup=latestProfileBackup(options);
+    const backupAgeDays=backup?Math.max(0,Math.floor((now-backup.createdMs)/86_400_000)):null;
+    const notes=[];
+    if(extraWorktrees!==null)notes.push(`额外 worktree ${extraWorktrees} 个`+(extraWorktrees>2?'（建议清理已合并副本）':''));
+    if(backup){
+      notes.push(`Profile 备份 ${backupAgeDays} 天前（含 ${backup.profileCount} 个 Profile，${backup.verified?'清单标记已校验':'未校验'}）`+
+        (backupAgeDays>7||!backup.verified?'（建议重新备份并校验）':''));
+    }else{
+      notes.push('Profile 备份 尚无记录（建议执行 Backup-CheckinProfiles.ps1）');
+    }
+    const advisory=(extraWorktrees!==null&&extraWorktrees>2)||!backup||backupAgeDays>7||!backup.verified;
+    return {status:advisory?'info':'ok',summary:notes.join('；'),extraWorktrees,
+      profileBackup:backup?{createdAt:backup.createdAt,ageDays:backupAgeDays,profileCount:backup.profileCount,verified:backup.verified}:null};
+  });
   result.exitCode=toolUnavailable?2:result.attention.length?1:0;
   result.status=({0:'normal',1:'attention',2:'error'})[result.exitCode];
   if(toolUnavailable)result.errors.push({section:'tools',code:'tool_unavailable'});
@@ -316,7 +374,7 @@ export async function runDoctor(options,{projectSource=source,clock=()=>new Date
 
 export function formatDoctor(result){
   const labels={versions:'版本',audit:'文件与依赖',pending:'待发布',nas:'NAS',tasks:'调度',sync:'同步',
-    health:'健康',gate:'发布门槛',verify:'发布后核验',daily:'今日结果',pt:'今日 PT'};
+    health:'健康',gate:'发布门槛',verify:'发布后核验',daily:'今日结果',pt:'今日 PT',hygiene:'运维卫生'};
   const lines=['只读体检：'+({0:'正常',1:'需要关注',2:'体检失败'})[result.exitCode]+'（退出码 '+result.exitCode+'）'];
   if(result.exitCode===2&&result.sections.versions===undefined)lines.push('配置缺失、不可读或不完整，或体检工具不可用。');
   for(const [name,label] of Object.entries(labels)){
