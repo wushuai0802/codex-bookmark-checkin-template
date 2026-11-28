@@ -118,9 +118,9 @@ test('a fully paused main run and resume stay terminal without preflight or page
   }
   assert.deepEqual(f.lines('tmp/preflight-calls.jsonl'), []);
   noBrowserPages(f);
-  await t.test('a fully paused run avoids launching a browser context', {
-    todo: 'index.runGlobalTarget awaits getSharedContext before runOneTarget applies configuredTargetSkip',
-  }, () => assert.deepEqual(f.lines('tmp/browser-calls.jsonl'), []));
+  await t.test('a fully paused run avoids launching a browser context', () => {
+    assert.deepEqual(f.lines('tmp/browser-calls.jsonl'), []);
+  });
 });
 
 test('a real native gate decision survives the real preflight writer and index without replaying a pending intent', {timeout: 30000}, async t => {
