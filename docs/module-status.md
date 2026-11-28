@@ -422,6 +422,20 @@
 | `observation/src/pt-site-execution.mjs:88` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/doctor.mjs:258` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 | `tools/private-value-scan.mjs:138` | node-process | 是 | 子进程命令/参数由函数或配置提供，不能静态展开 |
+| `tools/test-runner.mjs:15` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:16` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:17` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:18` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:19` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:20` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:21` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:22` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:23` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:24` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:25` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:26` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:31` | literal-script | 否 | 路径根或目标不唯一 |
+| `tools/test-runner.mjs:77` | node-process | 否 | 子进程命令/参数由函数或配置提供，不能静态展开 |
 
 ## 结构围栏
 

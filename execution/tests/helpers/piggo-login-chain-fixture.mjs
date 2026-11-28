@@ -186,13 +186,18 @@ await fetch('/v1/web/login',{method:'POST',body:'{}'}).catch(()=>{});
     await intercepted.fulfill({status,contentType,headers:{date:new Date().toUTCString()},
       body:typeof body==='string'?body:JSON.stringify(body)});
   };
+  const waitForLocalState=async(file,timeoutMs=2000)=>{
+    const deadline=Date.now()+timeoutMs;
+    while(!fs.existsSync(file)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+    return fs.existsSync(file);
+  };
   const launchContext=async port=>{
     context=await chromium.launchPersistentContext(profile,{channel:'chrome',headless:true,serviceWorkers:'block',
       proxy:{server:config.ptReadOnlyPolicies[origin].proxyServer},
       args:[`--remote-debugging-port=${port}`,'--remote-debugging-address=127.0.0.1',
         '--host-resolver-rules=MAP * ~NOTFOUND','--disable-background-networking','--enable-automation']});
     assert.deepEqual(context.pages().map(page=>page.url()),['about:blank']);
-    assert.ok(fs.existsSync(path.join(profile,'Local State')));
+    assert.ok(await waitForLocalState(path.join(profile,'Local State')));
     await context.route('**/*',route=>serve(route).catch(async error=>{errors.push(error);await route.abort().catch(()=>{});}));
   };
   fixtureServer=http.createServer(async(request,response)=>{
